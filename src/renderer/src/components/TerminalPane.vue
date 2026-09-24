@@ -20,6 +20,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
+import PaneChannelButton from './PaneChannelButton.vue'
 import CliRiskPill from './CliRiskPill.vue'
 import { cliRiskKey } from '../composables/useResourceUsage'
 import RestoredPanePlaceholder from './RestoredPanePlaceholder.vue'
@@ -686,6 +687,7 @@ onMounted(() => {
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
         <UsageBadge v-if="agentKey" :agent-key="agentKey" :cli-profiles="cliProfiles" />
+        <PaneChannelButton :pane-id="paneId" :pane-name="title" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
     </header>
@@ -801,6 +803,12 @@ onMounted(() => {
   position: absolute;
   top: 5px;
   z-index: 10;
+}
+/* The chat-channel connect button sits in the header row but is the same
+   icon button as its two corner neighbours. */
+.minimize-btn,
+.rebuild-btn,
+.header-main :deep(.pch-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -824,23 +832,31 @@ onMounted(() => {
 .rebuild-btn {
   right: 26px;
 }
-.rebuild-btn svg {
+.rebuild-btn svg,
+.header-main :deep(.pch-btn svg) {
   width: 14px;
   height: 14px;
 }
 .minimize-btn:hover,
-.rebuild-btn:hover:not(:disabled) {
+.rebuild-btn:hover:not(:disabled),
+.header-main :deep(.pch-btn:hover) {
   color: var(--text-primary);
   background: var(--bg-muted);
 }
 .minimize-btn:focus-visible,
-.rebuild-btn:focus-visible {
+.rebuild-btn:focus-visible,
+.header-main :deep(.pch-btn:focus-visible) {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .rebuild-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* In flow, a 20px button would make the header row taller than the badges. */
+.header-main :deep(.pch-btn) {
+  flex-shrink: 0;
+  margin: -3px 0;
 }
 .pane-header {
   container: cli-pane-header / inline-size;

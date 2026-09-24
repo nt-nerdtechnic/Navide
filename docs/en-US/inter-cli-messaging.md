@@ -784,3 +784,97 @@ still never persisted.
 | Delivery outcome and hold, as an MCP caller reads them | `backend/agent_team_backend/mcp_server/server.py` |
 | The protocol text handed to agents | `src/renderer/src/data/stages.ts` |
 | The delivery log UI | `src/renderer/src/components/AgentMessagesPanel.vue` |
+
+## Chat channels
+
+Chat channels let you drive a pane from a chat app on your phone: a message in
+a bound chat topic is delivered to the pane exactly like a `cli_send`, and the
+pane's reply at the end of its turn is posted back to the same topic. Everything
+runs on this machine — no public IP and no Navide-Server are needed.
+
+### Platforms
+
+| Platform | Connection | A pane maps to | Edit status | Typing | Buttons |
+|---|---|---|---|---|---|
+| Telegram | Bot API `getUpdates` long polling | a forum topic | yes | yes | yes |
+| Discord | Gateway WebSocket | a thread in a channel | yes | yes | yes |
+| Slack | Socket Mode | a thread (`thread_ts`) | yes | no | yes |
+| Feishu / Lark | long connection (WebSocket) | a topic reply thread | yes | no | no |
+| DingTalk | Stream mode | a group (no threads) | no | no | no |
+| Matrix | `/sync` long polling | a room or thread | yes | yes | no |
+| Mattermost | WebSocket API | a thread (`root_id`) | yes | yes | no |
+| iMessage (macOS) | local `chat.db` + AppleScript | a conversation | no | no | no |
+
+Platforms that need a public webhook (LINE, Teams, WhatsApp Cloud, SMS) are out of scope.
+
+### Setting up
+
+1. **Settings → Channels**: enter the platform's credentials (a Telegram bot
+   token, a Discord bot token, Slack app + bot tokens, …). Secrets go to the OS
+   keychain as one single-line entry (`channel-<platform>`); only non-secret
+   settings are stored in `navide.db`. The card shows the connection lifecycle
+   (`starting` / `ready` / `recovering` / `blocked` / `stopped`) and the last error.
+2. **Pane quick-connect**: on a pane, choose *Connect chat* → a configured
+   platform → *new topic (named after the pane)* or *use an existing chat*. A
+   bound pane shows a chip; its ✕ unbinds. With no platform configured the
+   button opens Settings → Channels.
+
+One pane ↔ one location. A binding survives window reloads, pane rebuilds,
+group detach and workspace switches; it ends only when you unbind it (or close
+the pane for real). A message for a bound pane that is not currently open is
+answered with "pane 目前不在線上" and the binding is kept.
+
+### Who may talk to a pane
+
+Access is gated on the **sender id**, never on the chat: being in a group does
+not grant access.
+
+- An unknown sender in a direct message receives an 8-character pairing code
+  (alphabet without look-alikes, valid 1 hour, at most 3 pending per platform).
+  Approve it under Settings → Channels to add the sender to the allowlist.
+- An unknown sender in a group is dropped silently.
+- **Global kill switch**: *Disable all* in Settings → Channels stops every
+  connection immediately; nothing is received or sent until it is re-enabled.
+
+### Message flow
+
+- Inbound messages are de-duplicated by platform message id. Lines from one
+  sender to one topic arriving within 500 ms are joined into one message.
+- `stop`, `停止`, `/stop` or `esc` interrupts the pane (same as `cli_interrupt`)
+  instead of being delivered.
+- A busy pane queues the message as usual (holds, rate limit and the Messages
+  panel are unchanged); the chat gets "已收到，等 pane 空檔…" right away. At most
+  20 chat messages may wait per pane.
+- While the pane works, one status message is edited in place (at most once a
+  second, abandoned after 3 failed edits) and a typing indicator is refreshed
+  every 4 s. After 30 minutes without a turn end the indicators stop; the reply
+  is still posted when the turn ends.
+- The reply is the text of the first `turn_complete` after the message was
+  injected, chunked per platform (Telegram 4000, Discord 2000 / ~17 lines with
+  balanced code fences, Slack 8000, Feishu 4000) and always posted to the bound
+  location — the model never chooses the destination. For vendors whose turn
+  end is inferred from ~8 s of silence (kimi, pi, qwen), a long tool chain can
+  produce an early partial reply.
+- Delivery failures (pane gone, not ready, queued too long) are reported in the
+  chat instead of being dropped silently.
+
+### Permission relay (on by default)
+
+Unless `permission_relay` is turned off for a platform, a pane waiting on a permission
+prompt or a question posts the prompt with a 5-letter request id (a–z without
+`l`) and, where supported, buttons. Reply `yes <id>` / `no <id>`, or
+`<option number> <id>` for a question. Answers are handled before the message
+queue, only from allowlisted senders, only in the chat the request was posted
+to; each id is single-use and expires when the pane leaves the prompt or after
+30 minutes. Only vendor-known answer keystrokes are sent — never raw text.
+
+**Security note:** anyone on the allowlist can approve tool calls on your
+machine while the relay is on. Keep the allowlist short and turn the relay off
+for platforms you share with others.
+
+### Same bot token, one consumer
+
+A Telegram bot has exactly one `getUpdates` consumer. Do not give the same bot
+to Claude Code `--channels` or any other program: Navide reports the conflict
+(409) and backs off, but the two will steal each other's messages. Navide also
+refuses the same token on two platforms/accounts at once.

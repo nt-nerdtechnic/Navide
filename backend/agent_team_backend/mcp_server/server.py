@@ -1623,7 +1623,7 @@ async def _send_to_group(
 
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
-    reply_to: str = "", kind: str = "",
+    reply_to: str = "", kind: str = "", from_display: str = "",
 ) -> str:
     """Hand one message to the windows and record it; returns its msg_key.
 
@@ -1660,7 +1660,8 @@ async def _dispatch_delivery(
                 "target_name": entry.name,
                 "target_agent_key": entry.agent_key,
                 "from_pane_id": me,
-                "from_display": agent_messaging.sender_display(
+                # A chat channel names the chat sender ("telegram:alice") instead.
+                "from_display": from_display or agent_messaging.sender_display(
                     me, "an external client" if caller.kind == "external" else "a host client"
                 ),
                 "from_workspace_path": sender.workspace_path if sender else "",

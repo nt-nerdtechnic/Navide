@@ -40,6 +40,13 @@ SINGLE_WRITERS = {
     # frame kinds (JSON events vs binary terminal-output frames).
     "app.py": [("Session", "send_json"), ("Session", "send_bytes")],
     "server_link.py": [("ServerLink", "_send_frame"), (None, "account_request")],
+    # Chat-channel adapters dial out to their platform; each serializes its
+    # writes (acks, pings) behind one lock in one method.
+    "dingtalk.py": [("DingTalkAdapter", "_ws_send")],
+    "feishu.py": [("FeishuAdapter", "_ws_send")],
+    "discord.py": [("DiscordAdapter", "_ws_send")],
+    "slack.py": [("SlackAdapter", "_ws_send")],
+    "mattermost.py": [("MattermostAdapter", "_ws_send")],
 }
 
 

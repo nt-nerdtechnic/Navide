@@ -681,3 +681,56 @@ Agent 不必有 Messages 面板可看，也能讀到同一個原因 ——
 | 投遞結果與保留原因，以 MCP 呼叫端讀到的形式 | `backend/agent_team_backend/mcp_server/server.py` |
 | 交給 Agent 的協定文字 | `src/renderer/src/data/stages.ts` |
 | 投遞記錄 UI | `src/renderer/src/components/AgentMessagesPanel.vue` |
+
+## 聊天軟體串接（Chat channels）
+
+聊天軟體串接讓你用手機上的聊天 App 操作 pane：在已綁定的聊天主題裡傳訊息，會像 `cli_send` 一樣送進 pane；pane 回合結束時的回覆會貼回同一個主題。全部在本機執行，不需要公網 IP，也不需要 Navide-Server。
+
+### 支援平台
+
+| 平台 | 連線方式 | 一個 pane 對應 | 編輯狀態訊息 | 輸入中 | 按鈕 |
+|---|---|---|---|---|---|
+| Telegram | Bot API `getUpdates` 長輪詢 | 論壇主題 | 有 | 有 | 有 |
+| Discord | Gateway WebSocket | 頻道下的 thread | 有 | 有 | 有 |
+| Slack | Socket Mode | thread（`thread_ts`） | 有 | 無 | 有 |
+| 飛書／Lark | 長連線（WebSocket） | 話題回覆串 | 有 | 無 | 無 |
+| 釘釘 | Stream 模式 | 群組（無討論串） | 無 | 無 | 無 |
+| Matrix | `/sync` 長輪詢 | room 或 thread | 有 | 有 | 無 |
+| Mattermost | WebSocket API | thread（`root_id`） | 有 | 有 | 無 |
+| iMessage（macOS） | 本機 `chat.db`＋AppleScript | 一個對話 | 無 | 無 | 無 |
+
+需要公網 webhook 的平台（LINE、Teams、WhatsApp Cloud、SMS）不在範圍內。
+
+### 設定
+
+1. **Settings → Channels**：填入平台憑證（Telegram bot token、Discord bot token、Slack App＋Bot token…）。機密存進系統鑰匙圈（`channel-<platform>`，單行），`navide.db` 只存非機密設定。平台卡片會顯示連線狀態（`starting`／`ready`／`recovering`／`blocked`／`stopped`）與最近的錯誤。
+2. **pane 快速連接**：在 pane 上按「連接聊天室」→ 選已設定的平台 →「新開主題（以 pane 名稱）」或「使用既有聊天室」。已連接的 pane 會顯示標記，按 ✕ 解除。尚未設定任何平台時，按鈕會直接開啟 Settings → Channels。
+
+一個 pane 對一個位置。綁定在視窗重新載入、pane 重建、群組分離、切換 workspace 後都會保留，只有手動解除（或真正關閉 pane）才會結束。訊息送到目前沒開著的已綁定 pane 時，會回覆「pane 目前不在線上」，綁定保留。
+
+### 誰可以對 pane 說話
+
+把關看的是**寄件者 id**，不是聊天室：在群組裡不代表有權限。
+
+- 陌生人私訊 bot 會收到 8 碼配對碼（去掉易混淆字元、1 小時有效、每平台最多 3 筆待核准），在 Settings → Channels 核准後加入 allowlist。
+- 陌生人在群組裡發言會被靜默丟棄。
+- **全部停用**：Settings → Channels 的「全部停用」會立即停止所有連線，重新啟用前不收不發。
+
+### 訊息流程
+
+- 入站訊息依平台訊息 id 去重；同一寄件者對同一主題在 500 ms 內連發的多行會合併成一則。
+- `stop`、`停止`、`/stop`、`esc` 會中斷 pane（等同 `cli_interrupt`），不會送進 pane。
+- pane 忙碌時照常排隊（hold、rate limit、Messages 面板都不變），聊天室會立刻收到「已收到，等 pane 空檔…」；每個 pane 最多 20 則聊天訊息排隊。
+- pane 執行中只編輯一則狀態訊息（每秒最多一次、連續失敗 3 次就停止），輸入中指示每 4 秒刷新。30 分鐘沒有回合結束會停止這些指示，但回合結束時仍會回覆。
+- 回覆是訊息送進 pane 之後第一個 `turn_complete` 的文字，依平台切段（Telegram 4000、Discord 2000／約 17 行且 code fence 成對、Slack 8000、飛書 4000），一律貼回綁定的位置，不由模型決定目的地。回合結束靠約 8 秒靜默推斷的廠商（kimi、pi、qwen）在長工具鏈中可能提早送出半段回覆。
+- 送達失敗（pane 已消失、未就緒、排隊過久）會在聊天室回報，不會靜默吞掉。
+
+### 權限提示轉發（預設開啟）
+
+除非某平台關閉了 `permission_relay`，否則 pane 卡在權限提示或問題時，會把提示連同 5 碼 request id（a–z 去掉 `l`）貼到聊天室，平台支援時附按鈕。回覆 `yes <id>`／`no <id>`，問題則回 `<選項編號> <id>`。答覆在排隊之前處理，只接受 allowlist 裡的寄件者、只接受原聊天室；每個 id 只能用一次，pane 離開提示或 30 分鐘後失效。只會送出各廠商已知的回答鍵序，絕不把原文當按鍵送出。
+
+**安全提醒：** 轉發開啟時，allowlist 裡任何人都能核准你電腦上的工具呼叫。allowlist 盡量精簡，與他人共用的平台請把轉發關閉。
+
+### 同一個 bot token 只能一個消費者
+
+Telegram bot 的 `getUpdates` 只允許一個收訊者。不要把同一個 bot 同時給 Claude Code `--channels` 或其他程式使用：Navide 會回報衝突（409）並退避，但兩邊會互搶訊息。Navide 也會拒絕兩個平台／帳號同時使用同一個 token。

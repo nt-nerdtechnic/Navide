@@ -6442,6 +6442,7 @@
         "workbench_action_openPreviousEditor": "Open Previous Editor",
         "workbench_action_openSettings": "Open Settings",
         "workbench_action_openSettingsAccounts": "Open Settings Accounts",
+        "workbench_action_openSettingsChannels": "Open Settings Channels",
         "workbench_action_problems_focus": "Problems Focus",
         "workbench_action_quickOpen": "Quick Open File",
         "workbench_action_rebuildFocusedPane": "Rebuild Focused Pane",
@@ -8752,5 +8753,113 @@
     "err-generic": "Something went wrong. Please try again.",
     "token-stored": "A token is stored on this device",
     "token-linked": "Linked with a token"
+  },
+  "channels": {
+    "nav": "Channels",
+    "platform": {
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "slack": "Slack",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "matrix": "Matrix",
+      "mattermost": "Mattermost",
+      "imessage": "iMessage"
+    },
+    "status": {
+      "not-configured": "Not set up",
+      "disabled": "Off"
+    },
+    "lifecycle": {
+      "stopped": "Stopped",
+      "starting": "Connecting…",
+      "ready": "Connected",
+      "recovering": "Reconnecting…",
+      "blocked": "Blocked — check the credentials"
+    },
+    "global": {
+      "title": "Chat channels",
+      "desc": "Turning this off disconnects every platform immediately."
+    },
+    "single-receiver-hint": "This bot can deliver messages to only one program. If Claude Code --channels or another bot program also uses it, the two will steal each other's messages.",
+    "section": {
+      "platforms": "Platforms"
+    },
+    "pending-count": "{n} pending",
+    "cancel": "Cancel",
+    "desc": {
+      "telegram": "Bot created with {'@'}BotFather",
+      "discord": "Bot application in your server",
+      "slack": "Socket Mode app in your workspace",
+      "feishu": "Custom app on Feishu or Lark",
+      "dingtalk": "Internal robot in Stream mode",
+      "matrix": "Bot user on any homeserver",
+      "mattermost": "Bot account on your server",
+      "imessage": "Messages on this Mac"
+    },
+    "error": {
+      "generic": "The request failed.",
+      "missing": "Fill in: {fields}"
+    },
+    "enable-platform": "Enable {platform}",
+    "manage": "Manage",
+    "connect": "Connect",
+    "needs": "Needs: {fields}",
+    "imessage-note": "No token needed. macOS only.",
+    "field": {
+      "token": "Bot token",
+      "app_token": "App-level token",
+      "bot_token": "Bot token",
+      "app_id": "App ID",
+      "app_secret": "App Secret",
+      "client_id": "Client ID",
+      "client_secret": "Client Secret",
+      "access_token": "Access token",
+      "server_url": "Server URL",
+      "homeserver": "Homeserver URL",
+      "domain": "Region",
+      "robot_code": "Robot code"
+    },
+    "secret-stored": "Stored ••••••••  (leave empty to keep)",
+    "relay": {
+      "title": "Relay permission prompts",
+      "desc": "Lets allowlisted senders answer a pane's permission prompts and questions from chat."
+    },
+    "remove": "Remove",
+    "save": "Save",
+    "pairing": {
+      "title": "Pending pairing requests",
+      "hint": "An unknown sender who messages the bot directly gets a code. Approve it here to let them talk to panes.",
+      "empty": "No pending requests.",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
+    "allow": {
+      "title": "Allowed senders",
+      "empty": "No one is allowed yet.",
+      "remove": "Remove"
+    },
+    "pane": {
+      "connect": "Connect to a chat",
+      "unbind": "Disconnect from chat",
+      "where": "Connect where?",
+      "loading": "Loading chats…",
+      "no-locations": "The bot has not seen any chat yet. Add it to a chat and send a message first.",
+      "new-topic": "New topic “{name}”",
+      "use-existing": "Use this chat",
+      "open-settings": "Channel settings…"
+    },
+    "option": {
+      "feishu": "Feishu (China)",
+      "lark": "Lark (international)"
+    },
+    "optional": "(optional)",
+    "hint": {
+      "discord": "Turn on Message Content Intent for the bot in the Discord Developer Portal.",
+      "slack": "The app-level token starts with xapp- (connections:write); the bot token starts with xoxb-. Both are required.",
+      "feishu": "In groups the bot only receives messages that {'@'}mention it, unless the app has the permission to read all group messages.",
+      "dingtalk": "DingTalk has no threads: one group is one pane.",
+      "imessage": "Needs Full Disk Access (System Settings → Privacy & Security). The first reply triggers a macOS prompt to allow controlling Messages."
+    }
   }
 }

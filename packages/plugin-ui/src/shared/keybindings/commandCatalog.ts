@@ -300,6 +300,7 @@ export const COMMAND_IDS: readonly string[] = [
   'workbench.action.openPreviousEditor',
   'workbench.action.openSettings',
   'workbench.action.openSettingsAccounts',
+  'workbench.action.openSettingsChannels',
   'workbench.action.problems.focus',
   'workbench.action.quickOpen',
   'workbench.action.rebuildFocusedPane',

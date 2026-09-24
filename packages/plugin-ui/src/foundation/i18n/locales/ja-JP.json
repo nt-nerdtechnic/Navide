@@ -6442,6 +6442,7 @@
         "workbench_action_openPreviousEditor": "前のエディターを開く",
         "workbench_action_openSettings": "設定を開く",
         "workbench_action_openSettingsAccounts": "アカウント設定を開く",
+        "workbench_action_openSettingsChannels": "チャット連携設定を開く",
         "workbench_action_problems_focus": "問題パネルにフォーカス",
         "workbench_action_quickOpen": "ファイルをクイックオープン",
         "workbench_action_rebuildFocusedPane": "フォーカス中のペインを再構築",
@@ -8752,5 +8753,113 @@
     "err-generic": "問題が発生しました。もう一度お試しください。",
     "token-stored": "このデバイスにトークンが保存されています",
     "token-linked": "トークンで接続済み"
+  },
+  "channels": {
+    "nav": "チャット連携",
+    "platform": {
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "slack": "Slack",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "matrix": "Matrix",
+      "mattermost": "Mattermost",
+      "imessage": "iMessage"
+    },
+    "status": {
+      "not-configured": "未設定",
+      "disabled": "無効"
+    },
+    "lifecycle": {
+      "stopped": "停止",
+      "starting": "接続中…",
+      "ready": "接続済み",
+      "recovering": "再接続中…",
+      "blocked": "ブロック中 — 認証情報を確認してください"
+    },
+    "global": {
+      "title": "チャット連携",
+      "desc": "オフにするとすべてのプラットフォームの接続を直ちに切断します。"
+    },
+    "single-receiver-hint": "この bot のメッセージを受け取れるのは 1 つのプログラムだけです。Claude Code --channels や他の bot プログラムと同時に使うと、互いにメッセージを奪い合います。",
+    "section": {
+      "platforms": "プラットフォーム"
+    },
+    "pending-count": "{n} 件のペアリング待ち",
+    "cancel": "キャンセル",
+    "desc": {
+      "telegram": "{'@'}BotFather で作成した bot",
+      "discord": "サーバー内の bot アプリケーション",
+      "slack": "ワークスペースの Socket Mode アプリ",
+      "feishu": "Feishu または Lark のカスタムアプリ",
+      "dingtalk": "Stream モードの社内ロボット",
+      "matrix": "任意の homeserver 上の bot ユーザー",
+      "mattermost": "サーバー上の bot アカウント",
+      "imessage": "この Mac の「メッセージ」"
+    },
+    "error": {
+      "generic": "操作に失敗しました。",
+      "missing": "入力してください：{fields}"
+    },
+    "enable-platform": "{platform} を有効化",
+    "manage": "管理",
+    "connect": "接続",
+    "needs": "必要なもの：{fields}",
+    "imessage-note": "トークン不要。macOS のみ。",
+    "field": {
+      "token": "Bot トークン",
+      "app_token": "App-level トークン",
+      "bot_token": "Bot トークン",
+      "app_id": "App ID",
+      "app_secret": "App Secret",
+      "client_id": "Client ID",
+      "client_secret": "Client Secret",
+      "access_token": "アクセストークン",
+      "server_url": "サーバー URL",
+      "homeserver": "Homeserver URL",
+      "domain": "リージョン",
+      "robot_code": "Robot code"
+    },
+    "secret-stored": "保存済み ••••••••（空欄のままなら変更なし）",
+    "relay": {
+      "title": "権限プロンプトの転送",
+      "desc": "許可リストの送信者がチャットから pane の権限プロンプトや質問に回答できます。"
+    },
+    "remove": "削除",
+    "save": "保存",
+    "pairing": {
+      "title": "承認待ちのペアリング",
+      "hint": "未知の送信者が bot に DM するとコードが届きます。ここで承認すると pane と会話できます。",
+      "empty": "承認待ちはありません。",
+      "approve": "承認",
+      "reject": "拒否"
+    },
+    "allow": {
+      "title": "許可リスト",
+      "empty": "まだ誰も許可されていません。",
+      "remove": "削除"
+    },
+    "pane": {
+      "connect": "チャットに接続",
+      "unbind": "チャットとの接続を解除",
+      "where": "どこに接続しますか？",
+      "loading": "チャットを読み込み中…",
+      "no-locations": "bot はまだどのチャットも見ていません。bot をチャットに追加してメッセージを送ってください。",
+      "new-topic": "新しいトピック「{name}」",
+      "use-existing": "このチャットを使う",
+      "open-settings": "チャット連携の設定…"
+    },
+    "option": {
+      "feishu": "Feishu（中国）",
+      "lark": "Lark（国際版）"
+    },
+    "optional": "（任意）",
+    "hint": {
+      "discord": "Discord Developer Portal で bot の Message Content Intent を有効にしてください。",
+      "slack": "App-level トークンは xapp- で始まり（connections:write が必要）、Bot トークンは xoxb- で始まります。両方必須です。",
+      "feishu": "グループでは bot を {'@'}メンションしたメッセージしか届きません（アプリに「グループ内の全メッセージを読む」権限がある場合を除く）。",
+      "dingtalk": "DingTalk にはスレッドがありません。1 グループ＝1 pane です。",
+      "imessage": "フルディスクアクセス（システム設定 → プライバシーとセキュリティ）が必要です。最初の送信時に「メッセージの自動操作」の許可ダイアログが表示されます。"
+    }
   }
 }

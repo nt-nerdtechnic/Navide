@@ -10396,3 +10396,10 @@ handler("voice.start")(voice_handlers.voice_start)
 handler("voice.chunk")(voice_handlers.voice_chunk)
 handler("voice.stop")(voice_handlers.voice_stop)
 handler("voice.cancel")(voice_handlers.voice_cancel)
+
+
+# ── Chat channels (channels.*) ──────────────────────────────────────────────
+# Logic lives in channels/ (manager + adapters); these are thin wrappers.
+from .channels import ws_api as channels_ws_api  # noqa: E402
+
+handler(*channels_ws_api.MESSAGE_TYPES)(channels_ws_api.handle)

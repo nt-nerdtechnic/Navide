@@ -21,6 +21,8 @@ import { flattenSidebarOrder, resolveFocusedPane } from './lib/paneFocus'
 import { formatBytes } from './lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/resourceSampling'
 import { cliRiskKey, useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
+import { channelsKey, useChannels } from './composables/useChannels'
+import { awaitingPromptText, parseMenuOptions, resolveAnswerKeys, type PaneAnswer } from './lib/paneAnswerKeys'
 import ResourceSummaryPanel, { type ResourceSummaryRow } from './components/ResourceSummaryPanel.vue'
 import ResourceManagerModal from './components/ResourceManagerModal.vue'
 import TurnStatsModal from './components/TurnStatsModal.vue'
@@ -6285,6 +6287,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     // exactly what the replacement is about to claim.
     if (opts.replacePaneId !== id) {
       unregisterPaneMessaging(opts.replacePaneId, { keepPersisted: true })
+      useChannels(backend).paneReplaced(opts.replacePaneId, id)
     }
     const idx = panes.value.findIndex(p => p.id === opts.replacePaneId)
     if (idx >= 0) panes.value.splice(idx, 1, pane)
@@ -7038,6 +7041,9 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
   })
   delete paneRefs[paneId]
   unregisterPaneMessaging(paneId)
+  // Only a real close releases a chat-channel binding; rebuild and idle-reclaim
+  // keep the seat, and workspace close / teardown restore the pane later.
+  if (markRemoved && !keepInList) useChannels(backend).paneClosed(paneId)
   paneMsgProcessedAt.delete(paneId)
   paneMsgProcessedFingerprint.delete(paneId)
   // The auto-name guard is per pane id and pane ids are never reused, so a
@@ -8056,7 +8062,7 @@ watch(currentWorkspace, (workspacePath) => {
 // alone is not enough: asking for the tab you are already on leaves the prop
 // unchanged, so the modal's watcher never fires and the request is dropped.
 const settingsTabRequest = ref(0)
-const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts'>('general')
+const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels'>('general')
 // Needed to retarget an already-open modal: initialTab is only honoured on mount
 // and by its own watcher, so re-issuing the same tab is a no-op without this.
 const settingsModalRef = ref<{
@@ -8568,6 +8574,7 @@ registerCommand('workbench.action.closeActivePane', () => {
 })
 registerCommand('workbench.action.openSettings', () => { showSettings.value = true })
 registerCommand('workbench.action.openSettingsAccounts', () => openSettingsAccounts())
+registerCommand('workbench.action.openSettingsChannels', () => openSettingsAt('channels'))
 registerCommand('workbench.action.openPipelineManager', () => { openPipelineManager() })
 registerCommand('workbench.action.openDebug', () => { openDebugModal() })
 registerCommand('workbench.action.closeModal', () => {
@@ -8967,7 +8974,7 @@ registerCommand('ui.pane.getStatus', (args) => {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) throw new Error(`ui.pane.getStatus: pane "${paneId}" not found`)
   const ref = paneRefs[paneId]
-  return buildPaneStatusReply(
+  const reply = buildPaneStatusReply(
     pane,
     ref
       ? {
@@ -8977,6 +8984,32 @@ registerCommand('ui.pane.getStatus', (args) => {
         }
       : null,
   )
+  // What the pane is waiting on, for the chat-channel permission relay.
+  const screen = ref?.displayStatus === 'awaiting' ? (ref.readScreenTail?.(AWAITING_SCREEN_LINES) as string | undefined) ?? '' : ''
+  if (!screen.trim()) return reply
+  const options = parseMenuOptions(screen)
+  return { ...reply, awaitingPrompt: awaitingPromptText(screen), ...(options.length ? { awaitingOptions: options } : {}) }
+})
+// Chat-channel permission relay: answer an awaiting pane with the vendor's own
+// keys only (lib/paneAnswerKeys). Refusals are results, not throws, so the
+// backend can relay the reason to the chat.
+registerCommand('ui.pane.sendKeys', async (args) => {
+  const a = (args ?? {}) as { paneId?: string; answer?: PaneAnswer }
+  if (!a.paneId) throw new Error(`ui.pane.sendKeys requires ${PANE_ID_HINT}`)
+  const pane = panes.value.find((p) => p.id === a.paneId)
+  if (!pane) throw new Error(`ui.pane.sendKeys: pane "${a.paneId}" not found`)
+  const ref = paneRefs[a.paneId]
+  if (!pane.realized || !ref?.sessionId || !a.answer) return { ok: false, sent: false, error: 'pane is not ready' }
+  const resolved = resolveAnswerKeys({
+    agentKey: pane.agentKey,
+    displayStatus: ref.displayStatus as string | undefined,
+    awaitingKind: ref.awaitingKind as string | null | undefined,
+    screen: (ref.readScreenTail?.(AWAITING_SCREEN_LINES) as string | undefined) ?? '',
+    answer: a.answer,
+  })
+  if (!resolved.ok) return { ok: false, sent: false, error: resolved.error }
+  const resp = await backend.send('terminal.input', { terminal_session_id: ref.sessionId as string, data: resolved.keys })
+  return resp.ok ? { ok: true, sent: true } : { ok: false, sent: false, error: resp.error?.message ?? 'terminal.input failed' }
 })
 // Diagnostics recorded by uiDiagnostics (e.g. injectText resends) — lets an
 // external MCP client see an in-window anomaly a "ok: true" reply hid. See
@@ -17359,6 +17392,7 @@ const resourceUsage = useResourceUsage({
   panelOpen: resourcePanelOpen,
 })
 provide(cliRiskKey, resourceUsage)
+provide(channelsKey, useChannels(backend))
 
 const resourceRows = computed<ResourceSummaryRow[]>(() => {
   const statusById = new Map(paneViews.value.map((v) => [v.id, v.status]))

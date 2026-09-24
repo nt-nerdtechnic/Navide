@@ -6442,6 +6442,7 @@
         "workbench_action_openPreviousEditor": "上一個編輯器分頁",
         "workbench_action_openSettings": "開啟設定",
         "workbench_action_openSettingsAccounts": "開啟帳號設定",
+        "workbench_action_openSettingsChannels": "開啟聊天室設定",
         "workbench_action_problems_focus": "聚焦問題面板",
         "workbench_action_quickOpen": "快速開啟檔案",
         "workbench_action_rebuildFocusedPane": "重建目前 pane",
@@ -8752,5 +8753,113 @@
     "err-generic": "發生錯誤，請再試一次。",
     "token-stored": "這台裝置已儲存權杖",
     "token-linked": "已用權杖連結"
+  },
+  "channels": {
+    "nav": "聊天室",
+    "platform": {
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "slack": "Slack",
+      "feishu": "飛書",
+      "dingtalk": "釘釘",
+      "matrix": "Matrix",
+      "mattermost": "Mattermost",
+      "imessage": "iMessage"
+    },
+    "status": {
+      "not-configured": "未設定",
+      "disabled": "已停用"
+    },
+    "lifecycle": {
+      "stopped": "已停止",
+      "starting": "連線中…",
+      "ready": "已連線",
+      "recovering": "重新連線中…",
+      "blocked": "已封鎖，請檢查憑證"
+    },
+    "global": {
+      "title": "聊天室連線",
+      "desc": "關閉後立即中斷所有平台的連線。"
+    },
+    "single-receiver-hint": "這個 bot 只能由一個程式接收訊息；若同時給 Claude Code --channels 或其他 bot 程式使用，雙方會互搶訊息。",
+    "section": {
+      "platforms": "平台"
+    },
+    "pending-count": "{n} 個待配對",
+    "cancel": "取消",
+    "desc": {
+      "telegram": "用 {'@'}BotFather 建立的 bot",
+      "discord": "伺服器裡的 bot 應用程式",
+      "slack": "工作區裡的 Socket Mode 應用程式",
+      "feishu": "飛書或 Lark 的自建應用",
+      "dingtalk": "Stream 模式的企業內部機器人",
+      "matrix": "任一 homeserver 上的 bot 使用者",
+      "mattermost": "你的伺服器上的 bot 帳號",
+      "imessage": "這台 Mac 的「訊息」"
+    },
+    "error": {
+      "generic": "操作失敗。",
+      "missing": "請填寫：{fields}"
+    },
+    "enable-platform": "啟用 {platform}",
+    "manage": "管理",
+    "connect": "連接",
+    "needs": "需要：{fields}",
+    "imessage-note": "不需要 token，僅限 macOS。",
+    "field": {
+      "token": "Bot token",
+      "app_token": "App-level token",
+      "bot_token": "Bot token",
+      "app_id": "App ID",
+      "app_secret": "App Secret",
+      "client_id": "Client ID",
+      "client_secret": "Client Secret",
+      "access_token": "Access token",
+      "server_url": "伺服器 URL",
+      "homeserver": "Homeserver URL",
+      "domain": "區域",
+      "robot_code": "Robot code"
+    },
+    "secret-stored": "已儲存 ••••••••（留空則保留原值）",
+    "relay": {
+      "title": "權限提示轉發",
+      "desc": "允許名單內的寄件者可在聊天室回答 pane 的權限提示與提問。"
+    },
+    "remove": "移除",
+    "save": "儲存",
+    "pairing": {
+      "title": "待核准配對",
+      "hint": "陌生人私訊 bot 會收到配對碼，在這裡核准後才能與 pane 對話。",
+      "empty": "沒有待核准的配對。",
+      "approve": "核准",
+      "reject": "拒絕"
+    },
+    "allow": {
+      "title": "允許名單",
+      "empty": "尚未允許任何人。",
+      "remove": "移除"
+    },
+    "pane": {
+      "connect": "連接聊天室",
+      "unbind": "中斷聊天室連接",
+      "where": "連到哪裡？",
+      "loading": "載入聊天室中…",
+      "no-locations": "bot 還沒看過任何聊天室。請先把 bot 加入聊天室並發一則訊息。",
+      "new-topic": "新開主題「{name}」",
+      "use-existing": "使用此聊天室",
+      "open-settings": "聊天室設定…"
+    },
+    "option": {
+      "feishu": "飛書（中國）",
+      "lark": "Lark（國際版）"
+    },
+    "optional": "（選填）",
+    "hint": {
+      "discord": "需在 Discord Developer Portal 為 bot 開啟 Message Content Intent。",
+      "slack": "App-level token 以 xapp- 開頭（需 connections:write），Bot token 以 xoxb- 開頭，兩者都必填。",
+      "feishu": "飛書群組預設要 {'@'}bot 才收得到訊息，除非 app 開了「讀取群內所有訊息」權限。",
+      "dingtalk": "釘釘沒有討論串：一個群組＝一個 pane。",
+      "imessage": "需要「完整磁碟取用權限」（系統設定 → 隱私權與安全性）；第一次送出時 macOS 會跳出「自動化控制 Messages」授權。"
+    }
   }
 }

@@ -114,6 +114,7 @@ from . import fs_service
 from . import pty_registry
 from . import search_service
 from . import server_link
+from . import channels
 from . import editor_service
 from . import onboarding_deps
 from . import plan_history
@@ -1116,6 +1117,9 @@ def _cap_activity_text(text: str) -> str:
 # text is kept only for turn_complete (agent_active only ever carries a short
 # prompt snippet, not meant for replay outside pane naming).
 _pane_activity: dict[str, dict[str, Any]] = {}
+# Observers of the table above (chat channels): called as (pane_id, entry) on
+# every record and (pane_id, None) when a closed pane is forgotten. Must not raise.
+pane_activity_listeners: list[Callable[[str, dict[str, Any] | None], None]] = []
 
 
 def _current_pane_id(pane_id: str) -> str:
@@ -1167,11 +1171,15 @@ def _record_pane_activity(
         # ``model_usage_exhausted``) — kept only for turn ends, bounded.
         "detail": (detail or "")[:200] if event_type == "turn_complete" else "",
     }
+    for listener in pane_activity_listeners:
+        listener(key, _pane_activity[key])
 
 
 def forget_pane_activity(pane_id: str) -> None:
     """Drop a closed pane's entry so the cache tracks live panes only."""
     _pane_activity.pop(pane_id, None)
+    for listener in pane_activity_listeners:
+        listener(pane_id, None)
     hook_drain.forget_pane(pane_id)
     push_delivery.forget_pane(pane_id)
     portable_credentials.forget_launch(pane_id)
@@ -2160,6 +2168,8 @@ async def _start_log_watcher() -> None:
     # address it. Does nothing at all when no server URL / access token is
     # configured, which is every single-machine install.
     await server_link.start()
+    # Chat channels (Telegram, Discord, ...): adapters start in the background.
+    await channels.start()
 
     # Start MCP servers in the background so they're ready for the first pipeline run.
     asyncio.create_task(mcp_manager.startup())
@@ -2265,6 +2275,7 @@ async def _stop_log_watcher() -> None:
         _git_watcher.stop()
     if _credential_watcher is not None:
         _credential_watcher.stop()
+    await channels.stop()
     await server_link.stop()
     await mcp_manager.shutdown()
     try:
