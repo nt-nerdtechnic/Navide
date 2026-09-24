@@ -178,6 +178,31 @@ class TestPaneGitSnapshot:
         assert snap["fetchedAt"] == "2026-09-21T15:13:20Z"
 
     @pytest.mark.asyncio
+    async def test_panes_in_different_folders_of_one_checkout_share_the_work(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # A cold cache cannot know two folders share a checkout until git says
+        # so, but only that one rev-parse may be per pane — not the whole snapshot.
+        _init_repo(tmp_path)
+        folders = [tmp_path / f"dir{i}" for i in range(10)]
+        for folder in folders:
+            folder.mkdir()
+        calls: list[list[str]] = []
+        real = git_service.run_allowlisted_text
+
+        async def counting(args, cwd, **kwargs):
+            calls.append(list(args))
+            return await real(args, cwd, **kwargs)
+
+        monkeypatch.setattr(git_service, "run_allowlisted_text", counting)
+        cache = git_service.PaneGitSnapshots()
+        snaps = await asyncio.gather(*(cache.get(str(folder)) for folder in folders))
+
+        assert {_real(snap["worktreeRoot"]) for snap in snaps} == {_real(tmp_path)}
+        status_calls = [args for args in calls if "status" in args]
+        assert len(status_calls) < len(folders)
+
+    @pytest.mark.asyncio
     async def test_non_repository_is_all_none(self, tmp_path: Path) -> None:
         snap = await git_service.pane_git_snapshot(str(tmp_path))
         assert snap == {key: None for key in SNAPSHOT_KEYS}

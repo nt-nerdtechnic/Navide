@@ -404,6 +404,24 @@ async def pane_git_snapshot(path: str) -> dict[str, Any]:
     if rc != 0 or len(lines) < 3:
         return snapshot
     toplevel, git_dir, common_dir = lines[0], lines[1], lines[2]
+    # Panes in different folders of one checkout each get here on a cold cache,
+    # but the rest depends only on the checkout, so concurrent reads share it.
+    key = (asyncio.get_running_loop(), toplevel)
+    task = _checkout_snapshots_inflight.get(key)
+    if task is None:
+        task = asyncio.ensure_future(_checkout_snapshot(toplevel, git_dir, common_dir))
+        _checkout_snapshots_inflight[key] = task
+        task.add_done_callback(lambda _task: _checkout_snapshots_inflight.pop(key, None))
+    return dict(await asyncio.shield(task))
+
+
+_checkout_snapshots_inflight: dict[
+    tuple[asyncio.AbstractEventLoop, str], asyncio.Future[dict[str, Any]]
+] = {}
+
+
+async def _checkout_snapshot(toplevel: str, git_dir: str, common_dir: str) -> dict[str, Any]:
+    snapshot = _empty_pane_git_snapshot()
     snapshot["worktreeRoot"] = toplevel
     snapshot["isLinkedWorktree"] = os.path.realpath(git_dir) != os.path.realpath(common_dir)
 
