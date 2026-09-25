@@ -2979,11 +2979,11 @@ async def test_poll_leaves_an_expired_parked_slot_to_the_switch(
 
     monkeypatch.setattr(dr, "attempt", fake_attempt)
 
-    async def fake_claude(oauth):
+    async def fake_claude(home):
         return us._snapshot("claude", "ok",
                             windows=[us._window("session", "Session", 10, None)])
 
-    monkeypatch.setattr(us, "fetch_claude_oauth", fake_claude)
+    monkeypatch.setattr(us, "fetch_claude", fake_claude)
     for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
                  "kilo", "pi", "copilot", "cursor"):
         monkeypatch.setattr(

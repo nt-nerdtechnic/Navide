@@ -279,6 +279,9 @@ async def test_a_missing_binary_is_its_own_status(monkeypatch, tmp_path, caplog)
     monkeypatch.setattr(cu, "read_claude_credentials", creds)
     monkeypatch.setattr(ai_chat_cli_engine, "resolve_cli_binary", lambda name: "")
     monkeypatch.setenv("PATH", "/nowhere/bin")
+    # fetch_claude goes through the guarded read; with no credentials read
+    # and no binary found, the real one has nothing it could spawn.
+    monkeypatch.setattr(cu, "fetch_claude_usage_via_cli", _REAL_FETCH)
 
     with caplog.at_level(logging.WARNING):
         snap = await cu.fetch_claude(tmp_path)

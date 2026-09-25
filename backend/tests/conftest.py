@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -31,24 +32,80 @@ from agent_team_backend import app, ws_handlers
 from agent_team_backend.credential_vault import CredentialVault
 
 
+# Executables of the agent CLIs this app drives. A test may start a fake one it
+# wrote under the temp dir; one found anywhere else is the developer's real
+# install, signed in to their real account.
+_REAL_CLI_NAMES = frozenset({
+    "claude", "codex", "gemini", "kimi", "grok", "qwen", "opencode", "kilo",
+    "kilocode", "cursor-agent", "copilot", "pi", "droid", "aider", "agy",
+    "antigravity", "muse", "mcode",
+})
+_TEMP_ROOTS = tuple({
+    os.path.realpath(tempfile.gettempdir()) + os.sep,
+    os.path.realpath("/tmp") + os.sep,
+})
+
+
+def _real_cli_in(args, env) -> str | None:
+    """The real agent CLI `args` would start, or None.
+
+    Looks at the first few words, so `cmd /c claude` or `node claude` count."""
+    if isinstance(args, (str, bytes, os.PathLike)):
+        words = os.fsdecode(args).split()
+    else:
+        words = [os.fsdecode(a) for a in args]
+    for word in words[:3]:
+        stem = os.path.splitext(os.path.basename(word))[0].lower()
+        if stem not in _REAL_CLI_NAMES:
+            continue
+        found = word if os.path.dirname(word) else shutil.which(word, path=(env or os.environ).get("PATH"))
+        if found and not os.path.realpath(found).startswith(_TEMP_ROOTS):
+            return os.path.realpath(found)
+    return None
+
+
 @pytest.fixture(autouse=True)
 def _no_real_claude_cli(monkeypatch):
-    """Never let a test start the developer's Claude Code.
+    """Never let a test start the developer's Claude Code — or any real CLI.
 
     Claude quota is read by driving the CLI's own ``/usage`` panel, so an
     unstubbed poll would spawn a real Claude Code — seconds per test, the
     user's MCP servers, and their live account read for no reason. Tests that
-    care about the numbers stub ``usage_service.fetch_claude``; this only makes
-    the accident impossible."""
-    from agent_team_backend import claude_cli_usage
+    care about the numbers stub ``usage_service.fetch_claude``; this makes the
+    accident impossible, and loud: the poll swallows a failed read, so every
+    refusal is recorded and fails the test at teardown even when the code under
+    test caught the exception.
+
+    Two layers. The /usage read is stubbed where ``fetch_claude`` looks it up
+    (``cli_vendors.claude``; ``claude_cli_usage`` is only a re-export shim, and
+    patching the shim changed nothing), so it never reaches the Keychain
+    either. And ``subprocess.Popen`` — which ``asyncio`` subprocesses go through
+    as well — refuses any real agent CLI outside the temp dir."""
+    from agent_team_backend.cli_vendors import claude as claude_vendor
+
+    refused: list[str] = []
 
     async def _refuse(*_args, **_kwargs):
+        refused.append("the Claude /usage read (cli_vendors.claude.fetch_claude_usage_via_cli)")
         raise AssertionError(
             "a test tried to read Claude usage through the real CLI; "
             "stub usage_service.fetch_claude instead"
         )
 
-    monkeypatch.setattr(claude_cli_usage, "fetch_claude_usage_via_cli", _refuse)
+    monkeypatch.setattr(claude_vendor, "fetch_claude_usage_via_cli", _refuse)
+
+    class _GuardedPopen(subprocess.Popen):
+        def __init__(self, args, *rest, **kwargs):
+            real = _real_cli_in(args, kwargs.get("env"))
+            if real:
+                refused.append(f"a real CLI spawn: {real}")
+                raise PermissionError(f"a test tried to start the real CLI {real}; use a fake under tmp_path")
+            super().__init__(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _GuardedPopen)
+    yield refused
+    if refused:
+        pytest.fail("test reached a real agent CLI: " + "; ".join(refused), pytrace=False)
 
 
 @pytest.fixture(autouse=True)
