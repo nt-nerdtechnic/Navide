@@ -6,10 +6,12 @@ ORDER, and every field of every agent_cli entry, so the per-vendor relocation
 (spec.install_dep) is provably a pure move. Update it only when an entry is
 deliberately changed.
 
-`platforms` and `install_cmds` were added to `Dep` for the Linux port and are
-empty for every agent CLI — their install commands (npm, curl) are the same
-everywhere. A vendor that quietly became platform-specific would change one
-of these two, which is exactly what this snapshot is here to catch.
+`platforms` and `install_cmds` were added to `Dep` for the Linux port. Nine
+agent CLIs carry a `win32` entry since 2026-09-25: their default install is a
+POSIX `curl … | bash` (or brew) that cannot run in PowerShell, so Windows gets
+the vendor's own Windows command. A vendor that quietly became
+platform-specific would change one of these two, which is exactly what this
+snapshot is here to catch.
 
 `identity_regex` was added 2026-09-18 for the one binary name another vendor
 also ships (`agent`: Cursor's, and xAI grok's symlink to itself). It is empty
@@ -78,7 +80,7 @@ SNAPSHOT = [{'id': 'claude',
   'install_cmd': 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
   'needs_terminal': True,
   'optional': True,
-  'docs_url': 'https://antigravity.google/docs/cli-getting-started',
+  'docs_url': 'https://antigravity.google/docs/getting-started?tab=cli',
   'requires_binaries': ['curl'],
   'update_cmd': 'agy update',
   'doctor_cmd': '',
@@ -88,7 +90,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': '',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'irm https://antigravity.google/cli/install.ps1 | iex', 'requires_binaries': (), 'needs_terminal': True}}},
  {'id': 'grok',
   'label': 'Grok Build (SpaceXAI)',
   # Deliberate 2026-09-14 change: xAI's own grok-build CLI replaced the
@@ -104,7 +106,7 @@ SNAPSHOT = [{'id': 'claude',
   'install_cmd': 'curl -fsSL https://x.ai/cli/install.sh | bash',
   'needs_terminal': True,
   'optional': True,
-  'docs_url': 'https://docs.x.ai/build/cli/reference',
+  'docs_url': 'https://docs.x.ai/build/overview',
   'requires_binaries': ['curl'],
   'update_cmd': 'grok update',
   'doctor_cmd': '',
@@ -114,7 +116,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': '',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'irm https://x.ai/cli/install.ps1 | iex', 'requires_binaries': (), 'needs_terminal': True}}},
  {'id': 'kimi',
   'label': 'Kimi Code CLI (Moonshot AI)',
   'description': 'Moonshot AI Kimi Code CLI',
@@ -137,7 +139,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': '',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'irm https://code.kimi.com/kimi-code/install.ps1 | iex', 'requires_binaries': (), 'needs_terminal': True}}},
  {'id': 'opencode',
   'label': 'OpenCode (Anomaly)',
   'description': 'OpenCode terminal coding agent',
@@ -160,7 +162,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': 'OPENCODE_DISABLE_AUTOUPDATE',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'npm install -g opencode-ai', 'requires_binaries': ('npm',), 'needs_terminal': True}}},
  {'id': 'kilo',
   'label': 'Kilo Code CLI',
   'description': 'Kilo Code terminal coding agent (OpenCode fork)',
@@ -252,7 +254,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': 'COPILOT_AUTO_UPDATE',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'winget install GitHub.Copilot', 'requires_binaries': ('winget',), 'needs_terminal': True}}},
  {'id': 'cursor',
   'label': 'Cursor CLI',
   'description': 'Cursor terminal coding agent CLI',
@@ -275,7 +277,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': '',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': "irm 'https://cursor.com/install?win32=true' | iex", 'requires_binaries': (), 'needs_terminal': True}}},
  {'id': 'aider',
   'label': 'Aider',
   'description': 'Aider AI pair-programming CLI',
@@ -298,7 +300,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': 'AIDER_CHECK_UPDATE',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'powershell -ExecutionPolicy ByPass -c "irm https://aider.chat/install.ps1 | iex"', 'requires_binaries': (), 'needs_terminal': True}}},
  # Appended after the snapshot was taken: muse is absent from
  # _AGENT_CLI_ORDER, so it sorts last in registry order.
  {'id': 'droid',
@@ -323,7 +325,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '.factory',
   'autoupdate_env': '',
   'platforms': [],
-  'install_cmds': {}},
+  'install_cmds': {'win32': {'command': 'irm https://app.factory.ai/cli/windows | iex', 'requires_binaries': (), 'needs_terminal': True}}},
  {'id': 'mcode',
   'label': 'MiniMax Code',
   'description': 'MiniMax terminal coding agent',
@@ -359,7 +361,7 @@ SNAPSHOT = [{'id': 'claude',
   'install_cmd': 'curl -fsSL https://dev.meta.ai/install.sh | sh',
   'needs_terminal': True,
   'optional': True,
-  'docs_url': 'https://developer.meta.com/ai/products/muse-code/',
+  'docs_url': 'https://dev.meta.ai/products/muse-code',
   'requires_binaries': ['curl'],
   'update_cmd': '',
   'doctor_cmd': '',
@@ -369,7 +371,7 @@ SNAPSHOT = [{'id': 'claude',
   'config_home_default': '',
   'autoupdate_env': '',
   'platforms': [],
-  'install_cmds': {}}]
+  'install_cmds': {'win32': {'command': 'irm https://dev.meta.ai/install.ps1 | iex', 'requires_binaries': (), 'needs_terminal': True}}}]
 
 
 def test_agent_cli_install_entries_unchanged():

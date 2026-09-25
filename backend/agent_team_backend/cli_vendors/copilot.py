@@ -113,6 +113,7 @@ import time
 
 from .. import osplat
 from .base import (
+    PlatformInstall,
     AccountSwitchSpec,
     Dep,
     McpServerConfig,
@@ -1533,6 +1534,11 @@ SPEC = VendorSpec(
         install_cmd="brew install --cask copilot-cli",
         needs_terminal=True, requires_binaries=("brew",), optional=True,
         docs_url="https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli",
+        # Windows: WinGet, per
+        # https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli
+        # (running it needs PowerShell 6+, which the same page states).
+        install_cmds={"win32": PlatformInstall(
+            "winget install GitHub.Copilot", ("winget",), needs_terminal=True)},
         update_cmd="copilot update",
         npm_package="@github/copilot",
         config_home_env="COPILOT_HOME",

@@ -334,8 +334,10 @@ describe('openInExternalTerminal', () => {
       const [exe, argv, opts] = spawnMock.mock.calls[0]
       expect(exe).toBe(join(bin, 'wt.exe'))
       // argv form: the command reaches PowerShell unmangled, and -NoExit
-      // keeps the window open the way Terminal.app's `do script` does.
-      expect(argv).toEqual(['powershell.exe', '-NoExit', '-Command', command])
+      // keeps the window open the way Terminal.app's `do script` does. The
+      // process-scoped Bypass lets npm.ps1 and other .ps1 shims load under
+      // the default Restricted / AllSigned policy, as the embedded run does.
+      expect(argv).toEqual(['powershell.exe', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', command])
       expect(opts).toMatchObject({ detached: true, stdio: 'ignore' })
     })
 
@@ -347,10 +349,30 @@ describe('openInExternalTerminal', () => {
 
       const [exe, argv, opts] = spawnMock.mock.calls[0]
       expect(exe).toBe('cmd.exe')
-      expect(argv).toEqual(['/c', 'start', 'powershell.exe', '-NoExit', '-Command', 'x'])
+      expect(argv).toEqual(['/c', 'start', 'powershell.exe', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', 'x'])
       // The launcher cmd.exe must not flash its own console; the PowerShell
       // window `start` opens is a new console and is unaffected.
       expect(opts).toMatchObject({ detached: true, stdio: 'ignore', windowsHide: true })
+    })
+
+    it('calls a quoted binary through `&`, as the embedded run does', async () => {
+      // A resolved binary comes back quoted (`'C:\\...\\claude.cmd' update`),
+      // which PowerShell reads as a string plus a stray token; mirrors
+      // onboarding_deps.run_argv (test_run_argv_windows_calls_a_quoted_binary).
+      on('win32')
+      spawnMock.mockImplementation(() => fakeChild('spawn'))
+      for (const quoted of ["'C:\\npm\\claude.cmd' update", '"C:\\npm\\claude.cmd" update']) {
+        spawnMock.mockClear()
+        await terminal.openInExternalTerminal(quoted, plainDirWith())
+        expect(spawnMock.mock.calls[0][1].at(-1)).toBe(`& ${quoted}`)
+      }
+    })
+
+    it('leaves an unquoted command as it is', async () => {
+      on('win32')
+      spawnMock.mockImplementation(() => fakeChild('spawn'))
+      await terminal.openInExternalTerminal('npm install -g @openai/codex', plainDirWith())
+      expect(spawnMock.mock.calls[0][1].at(-1)).toBe('npm install -g @openai/codex')
     })
 
     it('falls through to conhost when Windows Terminal is present but will not start', async () => {

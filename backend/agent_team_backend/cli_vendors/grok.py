@@ -58,7 +58,7 @@ from urllib.parse import quote, unquote
 from uuid import UUID
 
 from .. import osplat
-from .base import AccountSwitchSpec, Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
+from .base import AccountSwitchSpec, Dep, PlatformInstall, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
 from ..usage_common import _num, _snapshot, _window
 from ..log_readers.base import (
     ActivityEvent,
@@ -857,6 +857,11 @@ SPEC = VendorSpec(
         ["grok", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://x.ai/cli/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
-        docs_url="https://docs.x.ai/build/cli/reference",
+        docs_url="https://docs.x.ai/build/overview",
+        # Windows: the official PowerShell installer, per
+        # https://github.com/xai-org/grok-build (README) and
+        # https://docs.x.ai/build/overview
+        install_cmds={"win32": PlatformInstall(
+            "irm https://x.ai/cli/install.ps1 | iex", needs_terminal=True)},
         update_cmd="grok update"),
 )

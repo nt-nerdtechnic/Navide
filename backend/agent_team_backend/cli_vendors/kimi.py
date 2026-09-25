@@ -21,7 +21,7 @@ from pathlib import Path
 
 import re
 
-from .base import AccountSwitchSpec, Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import AccountSwitchSpec, Dep, PlatformInstall, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
 from ..log_readers.base import (
     ActivityEvent,
@@ -664,6 +664,11 @@ SPEC = VendorSpec(
         needs_terminal=True, requires_binaries=("curl",), optional=True,
         # kimi-cli's docs site is being wound down in favour of kimi-code.
         docs_url="https://moonshotai.github.io/kimi-code/",
+        # Windows: the official PowerShell installer, per
+        # https://moonshotai.github.io/kimi-code/en/guides/getting-started
+        # (kimi then needs Git for Windows at first launch, not to install).
+        install_cmds={"win32": PlatformInstall(
+            "irm https://code.kimi.com/kimi-code/install.ps1 | iex", needs_terminal=True)},
         update_cmd="kimi upgrade",
         doctor_cmd="kimi doctor"),
 )
