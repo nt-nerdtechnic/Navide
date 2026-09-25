@@ -95,8 +95,9 @@ export interface VoiceWiringHost {
   /** A pane's messaging handle and whether a CLI is running behind it. */
   paneInfo: (paneId: string) => { realized: boolean; messagingName?: string } | undefined
   /** Type text into a pane's input the way a ⌘V paste does, then press Enter
-   *  when `submit`; false when the pane has no terminal to type into. */
-  insertText: (paneId: string, text: string, opts: { submit: boolean }) => boolean
+   *  when `submit` and tell `onSubmit` whether it went; false when the pane
+   *  has no terminal to type into. */
+  insertText: (paneId: string, text: string, opts: { submit: boolean; onSubmit?: (sent: boolean) => void }) => boolean
   /** A non-blocking notice (a toast), for a pre-warm that failed. */
   hint?: (text: string) => void
   /** The fn (🌐) key relay (macOS); absent where there is none. */

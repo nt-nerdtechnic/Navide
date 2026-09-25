@@ -157,6 +157,7 @@
       "stop-transcribe-failed": "Transcription failed",
       "stop-failed": "Transcription failed",
       "no-speech": "No speech detected",
+      "not-sent": "The text is in the input box but was not sent — press Enter",
       "insert-failed": "Could not type the text into this pane",
       "mic-silent": "The microphone is not picking up any sound — allow Navide in System Settings → Privacy & Security → Microphone, or choose another microphone in the voice settings (a Bluetooth headset may be asleep)",
       "mic-silent-device": "The microphone “{device}” is not picking up any sound — if it is a headset, put it on to wake it, or choose another microphone in the voice settings",

@@ -90,6 +90,7 @@ export const VOICE_ERROR_CODES = [
   'backend',
   'no-speech',
   'insert-failed',
+  'not-sent',
   'start-sidecar-missing',
   'start-model-missing',
   'start-sidecar-failed',
@@ -142,8 +143,13 @@ export interface VoiceDeps {
   resolveTarget: (paneId: string) => VoiceTarget
   /** Type `text` into the pane's input as a paste, never through the
    *  messaging queue; with `submit`, followed by the Enter a person would
-   *  press. False when the pane had nothing to type into. */
-  insert: (paneId: string, text: string, opts: { submit: boolean }) => boolean
+   *  press, and `onSubmit` told later whether that Enter went. False when the
+   *  pane had nothing to type into. */
+  insert: (
+    paneId: string,
+    text: string,
+    opts: { submit: boolean; onSubmit?: (sent: boolean) => void },
+  ) => boolean
   now?: () => number
   /** One diagnostic line per take (default console.info). */
   log?: (line: string) => void
@@ -251,12 +257,19 @@ export function useVoiceInput(deps: VoiceDeps) {
 
   /** The take's one diagnostic line; later calls for the same take are no-ops. */
   function logTake(outcome: string): void {
+    detachTake()(outcome)
+  }
+
+  /** Claims the take's log line now, to be written once its outcome is known
+   *  (after the take's state is gone). A no-op when already claimed. */
+  function detachTake(): (outcome: string) => void {
     const s = stats
-    if (!s) return
+    if (!s) return () => {}
     stats = null
+    const mode = state.handsFree ? 'hands-free' : 'hold'
     const at = (t: number | undefined): string => (t === undefined ? '-' : `${Math.round(t - s.t0)}ms`)
-    log(
-      `[voice] outcome=${outcome} end=${s.end || '-'} mode=${state.handsFree ? 'hands-free' : 'hold'}` +
+    return (outcome) => log(
+      `[voice] outcome=${outcome} end=${s.end || '-'} mode=${mode}` +
         ` mic=${at(s.mic)} capture=${at(s.capture)} session=${at(s.session)} release=${at(s.release)}` +
         ` stop=${at(s.stop)} audio=${Math.round(s.samples / 16)}ms chunks=${s.chunks} peak=${s.peak}`,
     )
@@ -495,10 +508,28 @@ export function useVoiceInput(deps: VoiceDeps) {
     const paneId = state.paneId ?? ''
     const target = deps.resolveTarget(paneId)
     if (!target.ok) return fail(target.reason === 'asleep' ? 'pane-asleep' : 'not-cli', undefined, text)
-    if (!deps.insert(paneId, text, { submit: submitAfter })) return fail('insert-failed', undefined, text)
-    logTake(submitAfter ? 'sent' : 'text')
-    take++
+    if (!submitAfter) {
+      if (!deps.insert(paneId, text, { submit: false })) return fail('insert-failed', undefined, text)
+      logTake('text')
+      take++
+      return reset()
+    }
+    // Whether the Enter went is known only later (the paste has to land
+    // first): logged then, and said out loud when it did not go, since the
+    // user asked for a send and would otherwise believe it happened.
+    let onSubmit: ((sent: boolean) => void) | null = null
+    const inserted = deps.insert(paneId, text, { submit: true, onSubmit: (sent) => onSubmit?.(sent) })
+    if (!inserted) return fail('insert-failed', undefined, text)
+    const logOutcome = detachTake()
+    const after = ++take
     reset()
+    onSubmit = (sent) => {
+      logOutcome(sent ? 'sent' : 'inserted-not-sent')
+      // Not over a newer take or message.
+      if (sent || take !== after || state.phase !== 'idle') return
+      state.paneId = paneId
+      fail('not-sent')
+    }
   }
 
   /**

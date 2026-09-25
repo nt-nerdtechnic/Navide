@@ -157,6 +157,7 @@
       "stop-transcribe-failed": "轉錄失敗",
       "stop-failed": "轉錄失敗",
       "no-speech": "沒有偵測到語音",
+      "not-sent": "文字已放進輸入框，但沒有送出——請按 Enter",
       "insert-failed": "無法把文字填入這個 pane",
       "mic-silent": "麥克風沒有收到聲音——請到 系統設定→隱私權與安全性→麥克風 允許，或在語音設定換一支麥克風（藍牙耳機可能在休眠）",
       "mic-silent-device": "麥克風「{device}」沒有收到聲音——若是耳機請戴上喚醒，或在語音設定改用其他麥克風",

@@ -24,6 +24,8 @@ describe('voice wiring', () => {
   /** `submit` of every insertText call. */
   let submits: boolean[]
   let stopBody: Record<string, unknown>
+  /** What the pane reports about a requested Enter. */
+  let enterWent: boolean
   let listeners: Map<string, (payload: unknown) => void>
   let idle: boolean
   let prewarmBody: Record<string, unknown>
@@ -43,6 +45,7 @@ describe('voice wiring', () => {
     delivered = []
     inserted = []
     submits = []
+    enterWent = true
     stopBody = { ok: true, text: '列出所有測試', ms: 5, durationMs: 800 }
     listeners = new Map()
     idle = true
@@ -87,6 +90,8 @@ describe('voice wiring', () => {
         paneInfo: (id) => (id === 'pane-a' ? { realized: true, messagingName: 'claude-1' } : { realized: false, messagingName: 'sleepy' }),
         insertText: (paneId, text, opts) => {
           submits.push(opts.submit)
+          const went = enterWent
+          if (opts.submit) queueMicrotask(() => opts.onSubmit?.(went))
           inserted.push({ paneId, text })
           return true
         },
@@ -401,6 +406,21 @@ describe('voice wiring', () => {
     expect(delivered).toEqual([])
     expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(false)
     expect(submits).toEqual([true])
+  })
+
+  it('an Enter the pane could not press shows "not sent" on the capsule, and Enter is the CLI\'s again', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    enterWent = false
+    await start()
+    keydown({ key: 'Enter' })
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(inserted).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+    expect(voice.state.phase).toBe('error')
+    expect(voice.state.error?.key).toBe('not-sent')
+    expect(i18n.global.t('voice.error.not-sent')).not.toBe('voice.error.not-sent')
+    // The user's own Enter now sends what is in the box.
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(false)
   })
 
   it('hold: Enter while the chord is still held sends the take too', async () => {

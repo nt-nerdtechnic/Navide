@@ -25,6 +25,9 @@ interface Harness {
   inserted: Array<{ paneId: string; text: string }>
   /** `submit` of every insert call, taken or not. */
   submits: boolean[]
+  /** What the pane reports about a requested Enter (after a microtask);
+   *  null: never reports. */
+  submitResult: boolean | null
   insertOk: boolean
   onChunk: ((pcm: Int16Array) => void) | null
   onEnded: (() => void) | null
@@ -41,6 +44,7 @@ function harness(): Harness {
     requests: [],
     inserted: [],
     submits: [],
+    submitResult: true,
     insertOk: true,
     onChunk: null,
     onEnded: null,
@@ -74,6 +78,8 @@ function harness(): Harness {
     resolveTarget: (paneId) => h.targets[paneId] ?? { ok: false, reason: 'not-cli' },
     insert: (paneId, text, opts) => {
       h.submits.push(opts.submit)
+      const result = h.submitResult
+      if (h.insertOk && opts.submit && result !== null) queueMicrotask(() => opts.onSubmit?.(result))
       if (h.insertOk) h.inserted.push({ paneId, text })
       return h.insertOk
     },
@@ -830,6 +836,71 @@ describe('useVoiceInput — Enter ends the take and sends it', () => {
     v.press('p1')
     expect(v.state.phase).toBe('error')
     expect(v.submit()).toBe(false)
+  })
+
+  it('an Enter the pane could not press is said out loud and logged as not sent; the text stays in the box', async () => {
+    const h = harness()
+    h.submitResult = null
+    let report!: (sent: boolean) => void
+    const insert = h.deps.insert
+    h.deps.insert = (paneId, text, opts) => {
+      report = opts.onSubmit!
+      return insert(paneId, text, opts)
+    }
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    v.submit()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    // Typed in; whether it went is not known yet, so nothing is logged.
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '幫我跑測試' }])
+    expect(v.state.phase).toBe('idle')
+    expect(h.logs.some((l) => l.includes('outcome='))).toBe(false)
+    report(false)
+    expect(h.logs.at(-1)).toContain('outcome=inserted-not-sent end=enter')
+    expect(v.state.phase).toBe('error')
+    expect(v.state.paneId).toBe('p1')
+    // A notice, not a kept transcript: the text is already in the input box.
+    expect(v.state.error).toEqual({ key: 'not-sent', params: undefined })
+    expect(h.inserted).toHaveLength(1)
+    vi.advanceTimersByTime(ERROR_VISIBLE_MS)
+    expect(v.state.phase).toBe('idle')
+  })
+
+  it('an Enter that went is logged as sent, with no message', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    v.submit()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(h.logs.at(-1)).toContain('outcome=sent end=enter')
+    expect(v.state.phase).toBe('idle')
+  })
+
+  it('a late "not sent" does not cover a newer take', async () => {
+    const h = harness()
+    h.submitResult = null
+    let report!: (sent: boolean) => void
+    const insert = h.deps.insert
+    h.deps.insert = (paneId, text, opts) => {
+      if (opts.onSubmit) report = opts.onSubmit
+      return insert(paneId, text, opts)
+    }
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    v.submit()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    v.press('p1')
+    await settle()
+    expect(v.state.phase).toBe('recording')
+    report(false)
+    expect(v.state.phase).toBe('recording')
+    expect(h.logs.at(-1)).toContain('outcome=inserted-not-sent')
   })
 
   it('Esc after Enter still cancels: nothing is typed in', async () => {

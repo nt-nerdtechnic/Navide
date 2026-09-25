@@ -166,6 +166,9 @@ const PASTE_ACK_TIMEOUT_MS = 60_000
  *  CLI that tells a paste from typing by timing would otherwise read a CR in
  *  the same burst as a newline inside the paste. */
 const SUBMIT_AFTER_PASTE_MS = 150
+/** How long a dictated paste may wait for its acks before its Enter is given
+ *  up on: a late Enter could land on whatever the user typed meanwhile. */
+const SUBMIT_ACK_WAIT_MS = 3_000
 
 /** Why a paste chunk never got a positive ack. */
 type PasteChunkFailure =
@@ -4527,29 +4530,41 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    *
    * `submit` then presses Enter for the user, once every chunk of the paste is
    * acked and SUBMIT_AFTER_PASTE_MS has passed — so the CR arrives after the
-   * bracketed-paste end, never inside it. A paste that lost or has not yet
-   * acked a chunk is left in the input box unsent.
+   * bracketed-paste end, never inside it. A paste that lost a chunk, or is
+   * not fully acked within SUBMIT_ACK_WAIT_MS, is left in the input box
+   * unsent. `onSubmit` hears which of the two happened.
    */
-  function insertText(text: string, { submit = false }: { submit?: boolean } = {}): boolean {
+  function insertText(
+    text: string,
+    { submit = false, onSubmit }: { submit?: boolean; onSubmit?: (sent: boolean) => void } = {}
+  ): boolean {
     if (!text || _stdinGated || !inputTransportReady()) return false
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') return false
     const written = pasteFromClipboard(text)
     if (submit) {
-      void written.then((ok) => {
-        if (ok) setTimeout(submitAsTyped, SUBMIT_AFTER_PASTE_MS)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), SUBMIT_ACK_WAIT_MS) })
+      void Promise.race([written, late]).then((ok) => {
+        clearTimeout(timer)
+        if (!ok) {
+          onSubmit?.(false)
+          return
+        }
+        setTimeout(() => onSubmit?.(submitAsTyped()), SUBMIT_AFTER_PASTE_MS)
       })
     }
     return true
   }
 
   /** The Enter a person would type: the same bytes and bookkeeping as a CR
-   *  through term.onData, sent as human input. */
-  function submitAsTyped(): void {
-    if (_stdinGated || isDisposed) return
-    if (!pasteText('\r', HUMAN_KEY)) return
+   *  through term.onData, sent as human input. False when it could not go. */
+  function submitAsTyped(): boolean {
+    if (_stdinGated || isDisposed) return false
+    if (!pasteText('\r', HUMAN_KEY)) return false
     if (isStopped.value) { isStopped.value = false; opts?.onUserResume?.() }
     inputBuffer = ''
     syncDraft()
+    return true
   }
 
   /** Returns whether the interrupt was actually issued. The two early exits

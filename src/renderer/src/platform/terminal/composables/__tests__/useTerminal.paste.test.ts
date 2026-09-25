@@ -318,11 +318,14 @@ describe('useTerminal — manual paste', () => {
     it('with submit, presses Enter as the user once the paste has landed', async () => {
       const { mock, scope, terminal } = await spawnedTerminal('claude')
       captured.bracketedPasteMode = true
-      expect(terminal.insertText('幫我跑測試', { submit: true })).toBe(true)
+      const reports: boolean[] = []
+      expect(terminal.insertText('幫我跑測試', { submit: true, onSubmit: (sent) => reports.push(sent) })).toBe(true)
       await settle()
       expect(pastedData(mock)).toBe('\x1b[200~幫我跑測試\x1b[201~')
+      expect(reports).toEqual([])
       await wait(200)
       expect(pastedData(mock)).toBe('\x1b[200~幫我跑測試\x1b[201~\r')
+      expect(reports).toEqual([true])
       const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
       expect(sent.at(-1)).toMatchObject({ data: '\r', human: true })
       for (const p of sent) expect(p).toMatchObject({ human: true })
@@ -352,10 +355,51 @@ describe('useTerminal — manual paste', () => {
         ok: false,
         error: { code: 'BAD_REQUEST', message: 'no such terminal session' }
       })
-      terminal.insertText('幫我跑測試', { submit: true })
+      const reports: boolean[] = []
+      terminal.insertText('幫我跑測試', { submit: true, onSubmit: (sent) => reports.push(sent) })
       await wait(200)
       expect(pastedData(mock)).not.toContain('\r')
+      expect(reports).toEqual([false])
       scope.stop()
+    })
+
+    it('with submit, reports an ack that timed out as not sent', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      // Rejected on a socket that is still up: the ack deadline passed.
+      mock.setRejection('terminal.input', 'request timed out')
+      const reports: boolean[] = []
+      terminal.insertText('幫我跑測試', { submit: true, onSubmit: (sent) => reports.push(sent) })
+      await wait(200)
+      expect(reports).toEqual([false])
+      mock.clearRejection('terminal.input')
+      expect(pastedData(mock)).not.toContain('\r')
+      scope.stop()
+    })
+
+    it('with submit, gives up on an ack still missing after a few seconds, and never presses Enter late', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      let ack!: () => void
+      const input = mock.backend.input
+      mock.backend.input = ((...args: Parameters<typeof input>) => {
+        void input(...args)
+        return new Promise((resolve) => { ack = () => resolve({ ok: true } as never) })
+      }) as typeof input
+      vi.useFakeTimers()
+      try {
+        const reports: boolean[] = []
+        terminal.insertText('幫我跑測試', { submit: true, onSubmit: (sent) => reports.push(sent) })
+        await vi.advanceTimersByTimeAsync(2_999)
+        expect(reports).toEqual([])
+        await vi.advanceTimersByTimeAsync(1)
+        expect(reports).toEqual([false])
+        ack()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(reports).toEqual([false])
+        expect(pastedData(mock)).toBe('幫我跑測試')
+      } finally {
+        vi.useRealTimers()
+        scope.stop()
+      }
     })
   })
 
