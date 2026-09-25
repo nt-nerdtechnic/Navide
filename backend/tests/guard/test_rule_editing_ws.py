@@ -88,7 +88,7 @@ async def test_every_rule_id_classify_can_report_is_in_the_table():
     import re
     from pathlib import Path
 
-    src = Path(importlib.import_module("agent_team_backend.guard.classify").__file__).read_text()
+    src = Path(importlib.import_module("agent_team_backend.guard.classify").__file__).read_text(encoding="utf-8")
     emitted = set(re.findall(r'(?:hit\("[a-z]+", |opaque\()"([a-z-]+)"', src))
     assert emitted and emitted == {r.id for r in BUILTIN_RULES}
 
