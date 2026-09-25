@@ -24,6 +24,12 @@ pub enum Request {
         segments: bool,
         /// Chinese script the text and segments are converted to.
         script: Script,
+        /// Run the encoder over the submitted audio only, not a padded 30 s
+        /// window. Cheaper per run (ggml-base on an M4: 1–4 s windows ~40%
+        /// faster when idle), but on short windows whisper then hallucinates
+        /// repetitions more often, each costing a temperature-fallback
+        /// re-decode, so Navide's backend does not send it (2026-09-25).
+        fit_audio_ctx: bool,
     },
     Ping {
         id: String,
@@ -50,6 +56,7 @@ struct RawRequest {
     initial_prompt: Option<String>,
     segments: Option<bool>,
     script: Option<String>,
+    fit_audio_ctx: Option<bool>,
     target: Option<String>,
 }
 
@@ -106,6 +113,7 @@ pub fn parse_request(line: &str) -> Option<Request> {
                     .unwrap_or_else(|| DEFAULT_INITIAL_PROMPT.to_string()),
                 segments: raw.segments.unwrap_or(false),
                 script,
+                fit_audio_ctx: raw.fit_audio_ctx.unwrap_or(false),
             },
             _ => Request::Invalid {
                 id: Some(id),
@@ -177,6 +185,7 @@ mod tests {
                 initial_prompt: DEFAULT_INITIAL_PROMPT.into(),
                 segments: false,
                 script: Script::None,
+                fit_audio_ctx: false,
             })
         );
     }
@@ -195,6 +204,7 @@ mod tests {
                 initial_prompt: String::new(),
                 segments: false,
                 script: Script::None,
+                fit_audio_ctx: false,
             })
         );
     }
@@ -205,6 +215,12 @@ mod tests {
         assert!(matches!(req, Some(Request::Transcribe { segments: true, .. })));
         let req = parse_request(r#"{"id":"s","op":"transcribe","pcm_path":"/p","segments":false}"#);
         assert!(matches!(req, Some(Request::Transcribe { segments: false, .. })));
+    }
+
+    #[test]
+    fn parses_fit_audio_ctx_flag() {
+        let req = parse_request(r#"{"id":"f","op":"transcribe","pcm_path":"/p","fit_audio_ctx":true}"#);
+        assert!(matches!(req, Some(Request::Transcribe { fit_audio_ctx: true, .. })));
     }
 
     #[test]

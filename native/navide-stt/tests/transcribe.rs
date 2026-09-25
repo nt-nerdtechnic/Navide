@@ -66,6 +66,19 @@ fn transcribes_fixture_over_json_lines() {
     assert_eq!(joined.trim(), reply["text"].as_str().unwrap());
     assert!(segments.iter().all(|s| s["t1_ms"].as_i64() >= s["t0_ms"].as_i64()));
 
+    // With the encoder fitted to the audio, the reply keeps the same shape.
+    let request = serde_json::json!({"id": "t5", "op": "transcribe", "pcm_path": pcm_path, "segments": true, "fit_audio_ctx": true});
+    writeln!(stdin, "{request}").unwrap();
+    let reply = next();
+    assert_eq!(reply["ok"], true, "{reply}");
+    let segments = reply["segments"].as_array().expect("segments");
+    let joined: String = segments.iter().map(|s| s["text"].as_str().unwrap()).collect();
+    assert_eq!(joined.trim(), reply["text"].as_str().unwrap());
+    eprintln!("fit_audio_ctx transcript: {:?} in {} ms", reply["text"], reply["ms"]);
+    if let Ok(expect) = std::env::var("NAVIDE_STT_TEST_EXPECT") {
+        assert!(reply["text"].as_str().unwrap().contains(&expect), "{reply}");
+    }
+
     // A cancel sent right behind a request aborts it (or, on a fast machine,
     // lands after it finished); either way the next request still works.
     let long = std::env::temp_dir().join(format!("navide-stt-long-{}.pcm", std::process::id()));

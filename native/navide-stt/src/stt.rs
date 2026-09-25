@@ -15,6 +15,14 @@ pub const SAMPLE_RATE: usize = 16_000;
 /// whisper.cpp skips input under 1.0 s outright; pad to a little over that.
 const MIN_SAMPLES: usize = SAMPLE_RATE * 11 / 10;
 
+/// Encoder positions per second of audio (the model's 1500 cover 30 s).
+const AUDIO_CTX_PER_S: usize = 50;
+/// Smallest fitted context (7.7 s of audio): keeps very short windows closer
+/// to the 30 s the model was trained on.
+const MIN_AUDIO_CTX: usize = 384;
+/// Slack past the last sample, so the final word is never at the very edge.
+const AUDIO_CTX_SLACK: usize = 32;
+
 /// Holds a loaded whisper model. Created once, reused across transcriptions.
 pub struct Transcriber {
     ctx: WhisperContext,
@@ -66,7 +74,7 @@ impl Transcriber {
 
     /// Transcribe 16 kHz mono f32 samples into one trimmed string.
     pub fn transcribe(&self, samples: &[f32], language: &str, initial_prompt: &str) -> Result<String> {
-        let segments = self.transcribe_segments(samples, language, initial_prompt, false, &|| false)?;
+        let segments = self.transcribe_segments(samples, language, initial_prompt, false, false, &|| false)?;
         Ok(join_segments(&segments))
     }
 
@@ -76,13 +84,16 @@ impl Transcriber {
     /// each segment is further split after clause punctuation, timed by token
     /// timestamps (whisper emits one segment for many seconds of Chinese).
     /// whisper.cpp polls `should_abort` between encoder/decoder steps and
-    /// fails the run once it returns true.
+    /// fails the run once it returns true. With `fit_audio_ctx` the encoder
+    /// only runs over the audio actually submitted (see `fitted_audio_ctx`)
+    /// instead of a full 30 s window, which is most of the cost of a short one.
     pub fn transcribe_segments(
         &self,
         samples: &[f32],
         language: &str,
         initial_prompt: &str,
         clauses: bool,
+        fit_audio_ctx: bool,
         should_abort: &dyn Fn() -> bool,
     ) -> Result<Vec<Segment>> {
         if samples.is_empty() {
@@ -109,6 +120,9 @@ impl Transcriber {
         params.set_no_context(true);
         params.set_n_threads(self.n_threads);
         params.set_token_timestamps(clauses);
+        if fit_audio_ctx {
+            params.set_audio_ctx(fitted_audio_ctx(samples.len(), self.ctx.model_n_audio_ctx() as usize) as c_int);
+        }
         if !initial_prompt.is_empty() {
             params.set_initial_prompt(initial_prompt);
         }
@@ -169,6 +183,14 @@ impl Transcriber {
         }
         Ok(out)
     }
+}
+
+/// Encoder context covering `n_samples` of audio plus some slack, never under
+/// `MIN_AUDIO_CTX` nor over the model's own context. Audio longer than the
+/// model's window gets the full context: whisper then seeks window by window.
+fn fitted_audio_ctx(n_samples: usize, model_ctx: usize) -> usize {
+    let needed = (n_samples * AUDIO_CTX_PER_S).div_ceil(SAMPLE_RATE) + AUDIO_CTX_SLACK;
+    needed.max(MIN_AUDIO_CTX).min(model_ctx)
 }
 
 /// True for a token that ends a clause (Chinese or Latin punctuation).
@@ -233,7 +255,7 @@ fn remove_non_speech(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_s16le, ends_clause, join_segments, strip_non_speech};
+    use super::{decode_s16le, ends_clause, fitted_audio_ctx, join_segments, strip_non_speech, SAMPLE_RATE};
     use crate::protocol::Segment;
 
     #[test]
@@ -265,6 +287,15 @@ mod tests {
         assert_eq!(join_segments(&[seg(" Hello"), seg(" world")]), "Hello world");
         assert_eq!(join_segments(&[seg("你好"), seg("世界 ")]), "你好世界");
         assert_eq!(join_segments(&[]), "");
+    }
+
+    #[test]
+    fn audio_ctx_fits_the_window() {
+        assert_eq!(fitted_audio_ctx(SAMPLE_RATE, 1500), 384);
+        assert_eq!(fitted_audio_ctx(SAMPLE_RATE * 10, 1500), 532);
+        assert_eq!(fitted_audio_ctx(SAMPLE_RATE * 10 + 1, 1500), 533);
+        assert_eq!(fitted_audio_ctx(SAMPLE_RATE * 29, 1500), 1482);
+        assert_eq!(fitted_audio_ctx(SAMPLE_RATE * 60, 1500), 1500);
     }
 
     #[test]

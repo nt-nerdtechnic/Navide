@@ -110,13 +110,14 @@ fn main() -> ExitCode {
                 initial_prompt,
                 segments,
                 script,
+                fit_audio_ctx,
             } => {
                 let started = Instant::now();
                 let result = std::fs::read(&pcm_path)
                     .map_err(|e| format!("cannot read pcm_path: {e}"))
                     .and_then(|bytes| {
                         transcriber
-                            .transcribe_segments(&decode_s16le(&bytes), &language, &initial_prompt, segments, &|| {
+                            .transcribe_segments(&decode_s16le(&bytes), &language, &initial_prompt, segments, fit_audio_ctx, &|| {
                                 is_cancelled(&id)
                             })
                             .map_err(|e| format!("{e:#}"))
