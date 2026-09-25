@@ -95,7 +95,7 @@ describe('useChannels', () => {
     })
     expect(mock.sent.filter((s) => s.type === 'channels.configure')[1].payload).not.toHaveProperty('secret')
     expect(types).toEqual(expect.arrayContaining(['channels.bind', 'channels.unbind', 'channels.pairing.approve', 'channels.set_global_enabled']))
-    expect(mock.sent.find((s) => s.type === 'channels.unbind')?.payload).toEqual({ pane_id: 'p1' })
+    expect(mock.sent.find((s) => s.type === 'channels.unbind')?.payload).toEqual({ pane_id: 'p1', pane_name: '' })
 
     mock.setResponse('channels.remove', { ok: false, error: 'nope' })
     expect(await store.remove('telegram')).toEqual({ ok: false, error: 'nope' })
@@ -116,7 +116,7 @@ describe('useChannels', () => {
     store.paneClosed('p1')
     expect(mock.sent).toEqual([
       expect.objectContaining({ type: 'channels.rebind', payload: { from_pane_id: 'p1', to_pane_id: 'p1b' } }),
-      expect.objectContaining({ type: 'channels.unbind', payload: { pane_id: 'p1' } }),
+      expect.objectContaining({ type: 'channels.unbind', payload: { pane_id: 'p1', reason: 'closed' } }),
     ])
   })
 

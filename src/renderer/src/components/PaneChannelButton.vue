@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { executeCommand } from '@navide/plugin-ui/shared'
 import {
@@ -11,6 +11,7 @@ import {
 } from '../composables/useChannels'
 import { guardKey, type GuardStore } from '../composables/useGuard'
 import { vendorRunsYolo } from '../lib/guardYolo'
+import { useAgentMessaging } from '../composables/useAgentMessaging'
 
 /**
  * Pane-header entry to chat channels. Unbound: a small button that opens a
@@ -79,6 +80,26 @@ function unavailableText(p: ChannelPlatformState): string {
   if (!p.enabled || !store?.enabled.value) return t('channels.status.disabled')
   if (p.status.connected) return ''
   return t(`channels.lifecycle.${p.status.lifecycle}`)
+}
+
+const messaging = useAgentMessaging()
+
+// A refresh (channels.changed: a new chat seen, a platform reconnecting) replaces
+// the platform list; reload an open picker so it never shows a stale "no chats".
+watch(
+  () => store?.platforms.value,
+  () => {
+    if (open.value) void loadGroups()
+  }
+)
+
+/** Name of another pane already connected to this chat, or '' when it is free.
+ *  A chat serves one pane at a time; unbinding there frees it here. */
+function holderOf(platform: string, chatId: string): string {
+  const held = store?.bindings.value.find(
+    (b) => b.platform === platform && b.chat_id === chatId && !b.thread_id && b.pane_id !== props.paneId
+  )
+  return held ? (messaging.nameOf(held.pane_id) ?? held.title ?? held.pane_id) : ''
 }
 
 async function loadGroups(): Promise<void> {
@@ -179,7 +200,7 @@ async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new'
 async function unbind(): Promise<void> {
   if (!store) return
   busy.value = true
-  await store.unbind(props.paneId)
+  await store.unbind(props.paneId, props.paneName)
   busy.value = false
 }
 
@@ -247,13 +268,15 @@ function openSettings(): void {
             <button
               type="button"
               class="pch-row"
+              :class="{ 'pch-row-taken': holderOf(g.platform, loc.chat_id) }"
               data-testid="channel-bind-existing"
-              :disabled="busy"
-              :title="t('channels.pane.use-existing')"
+              :disabled="busy || !!holderOf(g.platform, loc.chat_id)"
+              :title="holderOf(g.platform, loc.chat_id) ? t('channels.pane.taken-hint') : t('channels.pane.use-existing')"
               @click="bind(g.platform, loc, 'existing')"
             >
               <span class="pch-loc-title pch-ellipsis">{{ loc.title || loc.chat_id }}</span>
-              <span class="pch-kind">{{ kindLabel(loc) }}</span>
+              <span v-if="holderOf(g.platform, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, loc.chat_id) }) }}</span>
+              <span v-else class="pch-kind">{{ kindLabel(loc) }}</span>
             </button>
             <button
               v-if="loc.supports_topics && canCreate(g.platform)"
@@ -302,6 +325,9 @@ function openSettings(): void {
 .pch-row-off { color: var(--text-secondary); opacity: 0.6; cursor: default; }
 .pch-loc-title { color: var(--text-bright); }
 .pch-kind { flex-shrink: 0; color: var(--text-secondary); font-size: var(--font-3xs); }
+/* Taken by another pane: shown, not selectable, until that pane unbinds. */
+.pch-row-taken:disabled { opacity: 0.7; }
+.pch-taken { flex-shrink: 1; min-width: 0; max-width: 60%; color: var(--attention-fg); }
 .pch-new { flex-shrink: 0; font: inherit; font-size: var(--font-3xs); color: var(--accent-fg); background: transparent; border: 1px solid var(--accent-muted); border-radius: var(--radius-xs); padding: 0 6px; cursor: pointer; }
 .pch-new:hover:not(:disabled) { background: var(--accent-subtle); }
 .pch-new:disabled { opacity: 0.5; cursor: default; }

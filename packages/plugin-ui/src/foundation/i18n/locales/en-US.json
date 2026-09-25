@@ -8940,7 +8940,9 @@
       "kind-direct": "DM",
       "new-topic-short": "New topic",
       "no-chats-yet": "Send the bot a message in a chat and it will show up here.",
-      "manage-chats": "Manage chat settings"
+      "manage-chats": "Manage chat settings",
+      "taken-by": "Connected to {pane}",
+      "taken-hint": "Connected to another pane. Unbind it there to use this chat here."
     },
     "option": {
       "feishu": "Feishu (China)",

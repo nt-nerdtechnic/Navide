@@ -8940,7 +8940,9 @@
       "kind-direct": "DM",
       "new-topic-short": "新しいトピック",
       "no-chats-yet": "チャットで bot にメッセージを送ると、ここに表示されます",
-      "manage-chats": "チャット連携の設定を管理"
+      "manage-chats": "チャット連携の設定を管理",
+      "taken-by": "接続中：{pane}",
+      "taken-hint": "別の pane に接続済みです。そちらで接続を解除すると選べます。"
     },
     "option": {
       "feishu": "Feishu（中国）",

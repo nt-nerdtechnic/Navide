@@ -422,6 +422,67 @@ async def test_second_message_not_rearmed_after_unbind(env: Env) -> None:
     assert "orphan reply" not in env.tg.texts()
 
 
+async def test_unbind_tells_the_chat_it_was_disconnected(env: Env) -> None:
+    await env.m.unbind("pane-1", pane_name="api-refactor")
+    await _until(lambda: any(t.startswith("🔌") for t in env.tg.texts()))
+    assert "🔌 這個聊天室已和 pane「api-refactor」中斷連接，之後的訊息不會再送進 pane。" in env.tg.texts()
+    assert env.store.bindings() == []
+
+
+async def test_bind_tells_the_chat_which_pane_it_drives(env: Env) -> None:
+    await env.m.unbind("pane-1")
+    res = await env.m.bind("pane-2", "api-refactor", "telegram", "existing", "-100", "50")
+    assert res["ok"] is True
+    await _until(lambda: any(t.startswith("🔗") for t in env.tg.texts()))
+    assert "🔗 已連接 pane「api-refactor」，在這裡傳的訊息會送進這個 pane；傳 stop 可以中斷。" in env.tg.texts()
+
+
+async def test_unbind_on_close_says_the_pane_closed(env: Env) -> None:
+    await env.m.unbind("pane-1", reason="closed", pane_name="api-refactor")
+    await _until(lambda: any(t.startswith("🔌") for t in env.tg.texts()))
+    assert "🔌 pane「api-refactor」已關閉，這個聊天室已中斷連接。" in env.tg.texts()
+
+
+async def test_unbind_of_an_unbound_pane_posts_nothing(env: Env) -> None:
+    await env.m.unbind("no-such-pane")
+    await asyncio.sleep(0.05)
+    assert not any(t.startswith("🔌") for t in env.tg.texts())
+
+
+async def test_seen_chats_survive_a_restart(env: Env, tmp_path) -> None:
+    await env.inbound("hi", chat="-200", thread="")
+    assert [c["chat_id"] for c in env.m.locations("telegram")["locations"]] == ["-200"]
+    # A fresh manager over the same database (a backend restart) still lists it.
+    again = ChannelManager(ChannelStore(env.db), env.fake.seams(), factory_for=lambda _p: None)
+    assert [c["chat_id"] for c in again.locations("telegram")["locations"]] == ["-200"]
+
+
+async def test_a_newly_seen_chat_announces_a_change_once(env: Env) -> None:
+    env.fake.events.clear()
+    await env.inbound("hi", chat="-300", thread="")
+    await env.inbound("again", chat="-300", thread="")
+    assert [e for e, _ in env.fake.events].count("channels.changed") == 1
+
+
+async def test_approved_pairing_lists_the_dm_without_another_message(env: Env) -> None:
+    await env.inbound("hello", sender="99", chat="99", thread="", direct=True)
+    code = env.store.list_pairing("telegram")[0].code
+    await env.m.pairing_approve("telegram", code)
+    locs = env.m.locations("telegram")["locations"]
+    assert {"chat_id": "99", "kind": "direct"}.items() <= next(c for c in locs if c["chat_id"] == "99").items()
+
+
+async def test_a_chat_held_by_another_pane_is_refused_until_released(env: Env) -> None:
+    # pane-1 holds telegram -100 / thread 50 (fixture); pane-2 must not take it silently.
+    res = await env.m.bind("pane-2", "b", "telegram", "existing", "-100", "50")
+    assert res["ok"] is False and res["holder_pane_id"] == "pane-1"
+    assert [b.pane_id for b in env.store.bindings()] == ["pane-1"]
+    await env.m.unbind("pane-1")
+    res = await env.m.bind("pane-2", "b", "telegram", "existing", "-100", "50")
+    assert res["ok"] is True
+    assert [b.pane_id for b in env.store.bindings()] == ["pane-2"]
+
+
 async def test_running_watch_is_capped_but_late_reply_still_sent(clocked) -> None:
     env, clock = clocked
     await env.inbound("long job")

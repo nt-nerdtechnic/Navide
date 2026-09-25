@@ -42,7 +42,7 @@ def test_migration_is_idempotent(tmp_path) -> None:
     db = Database(tmp_path / "n.db")
     ChannelStore(db)
     ChannelStore(db)
-    assert db.schema_version("channels") == 1
+    assert db.schema_version("channels") == 2
     db.close()
 
 

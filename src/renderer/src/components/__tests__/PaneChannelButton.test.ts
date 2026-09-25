@@ -23,6 +23,7 @@ function seed(opts: {
   bound?: boolean
   extra?: Record<string, unknown>[]
   locations?: Record<string, unknown>[]
+  bindings?: Record<string, unknown>[]
 }): void {
   mock.setResponse('channels.list', {
     ok: true,
@@ -40,9 +41,9 @@ function seed(opts: {
   })
   mock.setResponse('channels.bindings', {
     ok: true,
-    bindings: opts.bound
+    bindings: opts.bindings ?? (opts.bound
       ? [{ pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor' }]
-      : [],
+      : []),
   })
   mock.setResponse('channels.pairing.list', { ok: true, requests: [] })
   mock.setResponse('channels.allow.list', { ok: true, entries: [] })
@@ -61,8 +62,11 @@ async function openPopover(w: VueWrapper): Promise<void> {
   await flushPromises()
 }
 
+let lastStore: ReturnType<typeof useChannels> | null = null
+
 async function render(): Promise<VueWrapper> {
   const store = useChannels(mock.backend)
+  lastStore = store
   wrapper = mount(PaneChannelButton, {
     props: { paneId: 'p1', paneName: 'api-refactor', store },
     global: { plugins: [i18n] },
@@ -249,6 +253,38 @@ describe('PaneChannelButton', () => {
     expect(w.get('[data-testid="channel-chip"]').text()).toContain('Telegram · api-refactor')
     await w.get('[data-testid="channel-unbind"]').trigger('click')
     await flushPromises()
-    expect(mock.sent.find((s) => s.type === 'channels.unbind')?.payload).toEqual({ pane_id: 'p1' })
+    expect(mock.sent.find((s) => s.type === 'channels.unbind')?.payload).toEqual({ pane_id: 'p1', pane_name: 'api-refactor' })
+  })
+
+  it('shows a chat held by another pane as taken, and offers it again once released', async () => {
+    seed({
+      configured: true,
+      locations: [{ chat_id: '555', title: 'neillu123', kind: 'direct', supports_topics: false }],
+      bindings: [{ pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: '555', thread_id: '', title: 'other-pane' }],
+    })
+    const w = await render()
+    await openPopover(w)
+    const row = q('[data-testid="channel-bind-existing"]') as HTMLButtonElement
+    expect(row.disabled).toBe(true)
+    expect(q('[data-testid="channel-taken"]')?.textContent).toContain('other-pane')
+    lastStore!.bindings.value = []
+    await flushPromises()
+    expect((q('[data-testid="channel-bind-existing"]') as HTMLButtonElement).disabled).toBe(false)
+    expect(q('[data-testid="channel-taken"]')).toBeNull()
+  })
+
+  it('reloads an open picker when a new chat shows up', async () => {
+    seed({ configured: true, locations: [] })
+    const w = await render()
+    await openPopover(w)
+    expect(q('[data-testid="channel-no-chats"]')).not.toBeNull()
+    mock.setResponse('channels.locations', {
+      ok: true,
+      locations: [{ chat_id: '555', title: 'neillu123', kind: 'private', supports_topics: false }],
+    })
+    await lastStore!.refresh()
+    await flushPromises()
+    expect(q('[data-testid="channel-no-chats"]')).toBeNull()
+    expect(q('[data-testid="channel-bind-existing"]')?.textContent).toContain('neillu123')
   })
 })

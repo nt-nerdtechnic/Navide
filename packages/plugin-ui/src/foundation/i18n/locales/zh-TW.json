@@ -8940,7 +8940,9 @@
       "kind-direct": "私訊",
       "new-topic-short": "新開主題",
       "no-chats-yet": "先在聊天室傳一則訊息給 bot，這裡就會出現",
-      "manage-chats": "管理聊天室設定"
+      "manage-chats": "管理聊天室設定",
+      "taken-by": "已連接：{pane}",
+      "taken-hint": "已連接到另一個 pane，請先在那個 pane 解除連接才能選。"
     },
     "option": {
       "feishu": "飛書（中國）",

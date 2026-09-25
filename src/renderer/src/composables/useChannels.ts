@@ -256,7 +256,7 @@ function createChannelsStore(backend: Backend) {
     locations: async (platform: ChannelPlatform): Promise<ChannelResult<{ locations: ChannelLocation[] }>> =>
       call<{ locations: ChannelLocation[] }>('channels.locations', { platform }),
     bind: (req: BindRequest) => mutate('channels.bind', { ...req }),
-    unbind: (paneId: string) => mutate('channels.unbind', { pane_id: paneId }),
+    unbind: (paneId: string, paneName = '') => mutate('channels.unbind', { pane_id: paneId, pane_name: paneName }),
     rebind: (fromPaneId: string, toPaneId: string) =>
       mutate('channels.rebind', { from_pane_id: fromPaneId, to_pane_id: toPaneId }),
     /** A pane really closed. The backend no longer unbinds on unregister (a
@@ -264,7 +264,7 @@ function createChannelsStore(backend: Backend) {
      *  that releases the binding. Skipped for panes known to be unbound. */
     paneClosed(paneId: string): void {
       if (loaded.value && !bindingByPane.value.has(paneId)) return
-      void call('channels.unbind', { pane_id: paneId })
+      void call('channels.unbind', { pane_id: paneId, reason: 'closed' })
     },
     /** A rebuild replaced a pane under a new id: carry its binding over. */
     paneReplaced(fromPaneId: string, toPaneId: string): void {

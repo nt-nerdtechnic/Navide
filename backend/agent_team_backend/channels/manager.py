@@ -59,6 +59,10 @@ MSG_RECEIVED_BUSY = "已收到，等 pane 空檔…"
 MSG_WORKING = "⏳ pane 處理中…"
 MSG_NOT_BOUND = "此主題尚未連接 pane"
 MSG_INTERRUPTED = "⏹ 已送出中斷"
+MSG_UNBOUND = "🔌 這個聊天室已和 pane「{name}」中斷連接，之後的訊息不會再送進 pane。"
+MSG_BOUND = "🔗 已連接 pane「{name}」，在這裡傳的訊息會送進這個 pane；傳 stop 可以中斷。"
+MSG_CHAT_TAKEN = "這個聊天室已連接到另一個 pane，請先在那個 pane 解除連接"
+MSG_UNBOUND_CLOSED = "🔌 pane「{name}」已關閉，這個聊天室已中斷連接。"
 MSG_QUEUE_FULL = "⚠️ 這個 pane 已有太多訊息在排隊，請稍後再傳"
 MSG_EMPTY_REPLY = "（pane 回合結束，沒有文字輸出）"
 MSG_STILL_RUNNING = "⏳ 仍在執行，完成時會再回覆"
@@ -174,7 +178,6 @@ class ChannelManager:
         self._dedup: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._pending: dict[str, _Pending] = {}
         self._queued: dict[str, set[str]] = {}  # pane_id -> msg_keys still queued
-        self._seen_chats: dict[str, dict[str, dict[str, Any]]] = {}
         self._last_status: dict[str, dict[str, Any]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._status_task: asyncio.Task[None] | None = None
@@ -467,7 +470,6 @@ class ChannelManager:
             await self._seams.write_secret(_secret_name(platform), None)
             self._errors.pop(platform, None)
             self._secret_hints.pop(platform, None)
-            self._seen_chats.pop(platform, None)
             for pane_id, p in list(self._pending.items()):
                 if p.loc.platform == platform:
                     self._drop_pending(pane_id)
@@ -483,6 +485,8 @@ class ChannelManager:
         req = self.gate.approve(platform, code)
         if req is None:
             return {"ok": False, "error": "配對碼不存在或已過期 (unknown or expired code)"}
+        # The approved sender's DM is a chat the pane picker can offer right away.
+        self.store.remember_chat(platform, req.chat_id, req.sender_name, "direct", False, int(time.time()))
         adapter = self._adapters.get(platform)
         if adapter is not None:
             try:
@@ -507,7 +511,7 @@ class ChannelManager:
         return {"ok": removed, **({} if removed else {"error": "not found"})}
 
     def locations(self, platform: str) -> dict[str, Any]:
-        merged: dict[str, dict[str, Any]] = dict(self._seen_chats.get(platform, {}))
+        merged: dict[str, dict[str, Any]] = {c["chat_id"]: c for c in self.store.chats(platform)}
         adapter = self._adapters.get(platform)
         known = getattr(adapter, "known_locations", None)
         if callable(known):
@@ -538,17 +542,31 @@ class ChannelManager:
                 return {"ok": False, "error": str(exc)}
         elif mode == "existing":
             loc = Location(platform, account, str(chat_id), str(thread_id or ""), title or pane_name)
+            # A chat belongs to one pane at a time: never silently take it from another.
+            holder = next((b for b in self.store.bindings()
+                           if b.location().key() == loc.key() and b.pane_id != pane_id), None)
+            if holder is not None:
+                return {"ok": False, "error": MSG_CHAT_TAKEN, "holder_pane_id": holder.pane_id}
         else:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
         binding = self.store.bind(pane_id, loc)
         await self._changed()
+        # Tell the chat which pane it now drives; off the request path like unbind.
+        self._spawn(self._notice(adapter, loc, MSG_BOUND.format(name=pane_name or loc.title or pane_id)))
         return {"ok": True, "binding": binding.public()}
 
-    async def unbind(self, pane_id: str) -> dict[str, Any]:
+    async def unbind(self, pane_id: str, *, reason: str = "", pane_name: str = "") -> dict[str, Any]:
         removed = self.store.unbind(pane_id)
         self._drop_pending(pane_id)
         if removed:
             await self._changed()
+            # Tell the chat it is no longer connected; off the request path so the
+            # window's unbind returns without waiting on the platform.
+            adapter = self._adapters.get(removed.platform)
+            if adapter is not None:
+                name = pane_name or removed.title or pane_id
+                text = (MSG_UNBOUND_CLOSED if reason == "closed" else MSG_UNBOUND).format(name=name)
+                self._spawn(self._notice(adapter, removed.location(), text))
         return {"ok": True, "removed": removed is not None}
 
     async def rebind(self, from_pane_id: str, to_pane_id: str) -> dict[str, Any]:
@@ -640,14 +658,12 @@ class ChannelManager:
             self._dedup.popitem(last=False)
         return False
 
-    def _remember_chat(self, msg: InboundMessage) -> None:
-        chats = self._seen_chats.setdefault(msg.platform, {})
-        entry = chats.setdefault(msg.chat_id, {
-            "chat_id": msg.chat_id, "title": msg.sender_name if msg.is_direct else msg.chat_id,
-            "kind": "direct" if msg.is_direct else "group", "supports_topics": False,
-        })
-        if msg.thread_id:
-            entry["supports_topics"] = True
+    def _remember_chat(self, msg: InboundMessage) -> bool:
+        # Persisted: the pane picker must still list the chat after a restart.
+        return self.store.remember_chat(
+            msg.platform, msg.chat_id, msg.sender_name if msg.is_direct else msg.chat_id,
+            "direct" if msg.is_direct else "group", bool(msg.thread_id), int(time.time()),
+        )
 
     def _binding_for(self, msg: InboundMessage) -> Binding | None:
         key = msg.location_key()
@@ -689,7 +705,8 @@ class ChannelManager:
         if not self.gate.is_allowed(msg.platform, msg.sender_id):
             await self._pairing_reply(msg)  # only DMs get this far
             return
-        self._remember_chat(msg)
+        if self._remember_chat(msg):
+            await self._changed()  # an open pane picker lists the new chat right away
         # Relay answers go before any queueing: the pane is blocked on exactly this.
         if self._relay_enabled(msg.platform):
             answer = relay.parse_answer(msg.text, msg.callback_data)

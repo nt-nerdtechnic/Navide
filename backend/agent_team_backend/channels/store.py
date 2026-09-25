@@ -49,6 +49,16 @@ def _v1(cur: sqlite3.Cursor) -> None:
     )
 
 
+def _v2(cur: sqlite3.Cursor) -> None:
+    # Chats a bot has seen, so the pane picker survives a backend restart.
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS channel_chats ("
+        " platform TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',"
+        " kind TEXT NOT NULL DEFAULT 'group', supports_topics INTEGER NOT NULL DEFAULT 0,"
+        " last_seen INTEGER NOT NULL, PRIMARY KEY (platform, chat_id))"
+    )
+
+
 @dataclass
 class PairingRequest:
     platform: str
@@ -85,6 +95,7 @@ class ChannelStore:
     def __init__(self, db: Database) -> None:
         self._db = db
         db.migrate(COMPONENT, 1, _v1)
+        db.migrate(COMPONENT, 2, _v2)
 
     def _rows(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._db.transaction() as cur:
@@ -136,8 +147,33 @@ class ChannelStore:
     def remove_platform(self, platform: str) -> None:
         with self._db.transaction() as cur:
             for table in ("channel_accounts", "channel_pairing_requests", "channel_allow",
-                          "channel_bindings", "channel_offsets"):
+                          "channel_bindings", "channel_offsets", "channel_chats"):
                 cur.execute(f"DELETE FROM {table} WHERE platform = ?", (platform,))
+
+    # --- seen chats -----------------------------------------------------------
+
+    def remember_chat(self, platform: str, chat_id: str, title: str, kind: str,
+                      supports_topics: bool, now: int) -> bool:
+        """Upsert a seen chat; True when it (or its topic support) is new."""
+        with self._db.transaction() as cur:
+            prev = cur.execute("SELECT supports_topics FROM channel_chats WHERE platform = ? AND chat_id = ?",
+                               (platform, chat_id)).fetchone()
+            cur.execute(
+                "INSERT INTO channel_chats (platform, chat_id, title, kind, supports_topics, last_seen)"
+                " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(platform, chat_id) DO UPDATE SET"
+                " title = CASE WHEN excluded.title != '' THEN excluded.title ELSE channel_chats.title END,"
+                " kind = excluded.kind,"
+                " supports_topics = MAX(channel_chats.supports_topics, excluded.supports_topics),"
+                " last_seen = excluded.last_seen",
+                (platform, chat_id, title, kind, int(bool(supports_topics)), now),
+            )
+        return prev is None or (bool(supports_topics) and not prev["supports_topics"])
+
+    def chats(self, platform: str) -> list[dict[str, Any]]:
+        return [{"chat_id": r["chat_id"], "title": r["title"], "kind": r["kind"],
+                 "supports_topics": bool(r["supports_topics"])}
+                for r in self._rows("SELECT * FROM channel_chats WHERE platform = ?"
+                                    " ORDER BY last_seen DESC", (platform,))]
 
     # --- pairing --------------------------------------------------------------
 
