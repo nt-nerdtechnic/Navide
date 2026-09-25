@@ -295,6 +295,9 @@ async def voice_start(session: "Session", msg_id: str, msg_type: str, payload: d
     if _active is not None and _active.owner is not session and not _active.stale():
         await _reply(session, msg_id, msg_type, {"ok": False, "reason": "busy"})
         return
+    sidecar = stt_service.peek_sidecar()
+    if sidecar is None or not sidecar.running:
+        await stt_service.run_blocking(_sweep_stale_pcm)
     rec = _Recording(id=uuid.uuid4().hex, owner=session)
     language = payload.get("language")
     if isinstance(language, str) and language:
@@ -391,9 +394,40 @@ def _write_pcm(path: Path, pcm: bytes) -> None:
             fh.write(pcm)
 
 
+# Windows also refuses while another process has the file open without
+# FILE_SHARE_DELETE — a virus scanner or indexer looking at the fresh file, or
+# a reader that has not closed it yet. Those hold it briefly, so the delete is
+# retried for this long rather than leaving the speech on disk.
+_REMOVE_RETRY_S = 2.0
+
+
 def _remove(path: Path) -> None:
-    with _pcm_io_lock, contextlib.suppress(OSError):
-        path.unlink()
+    deadline = time.monotonic() + _REMOVE_RETRY_S
+    delay = 0.01
+    while True:
+        try:
+            with _pcm_io_lock:
+                path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                log.warning("voice: cannot delete %s; it is swept later", path.name)
+                return
+        except OSError as err:
+            log.warning("voice: cannot delete %s: %s", path.name, err)
+            return
+        time.sleep(delay)
+        delay = min(delay * 2, 0.2)
+
+
+def _sweep_stale_pcm() -> None:
+    """Delete temp audio a failed _remove left behind. Only files older than
+    any request could still be reading, so another Navide's take is safe."""
+    cutoff = time.time() - stt_service.REQUEST_TIMEOUT_S
+    for path in Path(tempfile.gettempdir()).glob("navide-voice-*.pcm"):
+        with contextlib.suppress(OSError):
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
 
 
 def _pcm_range(rec: _Recording, start: int, end: int) -> bytes:
@@ -707,6 +741,9 @@ async def shutdown() -> None:
     """Backend exit: stop any download and the sidecar."""
     global _download_task
     _release_active()
+    if stt_service.peek_sidecar() is not None:  # voice was used this run
+        with contextlib.suppress(Exception):
+            await stt_service.run_blocking(_sweep_stale_pcm)
     task, _download_task = _download_task, None
     if task is not None and not task.done():
         task.cancel()

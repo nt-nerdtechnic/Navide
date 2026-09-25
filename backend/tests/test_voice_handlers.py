@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -58,6 +59,28 @@ async def voice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(voice_handlers, "_disabled", False)
     yield temp_dir
     await sidecar.stop()
+
+
+@pytest.fixture
+def windows_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows delete semantics: a file another process holds open (without
+    FILE_SHARE_DELETE, as scanners and Python's open() do) cannot be deleted.
+    The fake sidecar marks the files it holds open with a ``.held`` sibling."""
+    unlink = Path.unlink
+
+    def refuse_while_held(self: Path, missing_ok: bool = False) -> None:
+        if Path(f"{self}.held").exists():
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process", str(self))
+        unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse_while_held)
+
+
+@pytest.fixture(autouse=True)
+def _emulate_windows_delete(request: pytest.FixtureRequest) -> None:
+    # NAVIDE_EMULATE_WINDOWS_DELETE=1 runs the whole module with it.
+    if os.environ.get("NAVIDE_EMULATE_WINDOWS_DELETE") == "1":
+        request.getfixturevalue("windows_delete")
 
 
 LOUD = 4096  # s16 sample value well above SILENT_PEAK
@@ -698,10 +721,44 @@ async def test_cancel_aborts_the_in_flight_partial_and_leaves_no_audio(
     await _send(session, "voice.cancel", {"sessionId": sid})
     with pytest.raises(asyncio.CancelledError):
         await partial
-    # The sidecar aborted it (a ping answers at once) and the temp file is gone.
-    assert (await asyncio.wait_for(stt_service.get_sidecar().ping(), 2))["ok"] is True
-    await asyncio.sleep(0.1)
+    # The partial deletes its audio before it ends, and the sidecar aborted it
+    # (a ping answers at once).
     assert not list(voice.glob("navide-voice-*.pcm"))
+    assert (await asyncio.wait_for(stt_service.get_sidecar().ping(), 2))["ok"] is True
+
+
+async def test_cancel_deletes_audio_the_sidecar_still_holds_open(
+    stream: Path, voice: Path, windows_delete: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Cancel lands while the sidecar has the file open: on Windows the first
+    # delete fails, and the raw speech must not be left in the temp dir.
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "5")
+    monkeypatch.setenv("FAKE_STT_HOLD_S", "0.5")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8), pause=0.0)
+    deadline = time.monotonic() + 30
+    while not list(voice.glob("navide-voice-*.pcm.held")):
+        if time.monotonic() > deadline:
+            pytest.fail("the sidecar never opened a partial's audio")
+        await asyncio.sleep(0.005)
+    partial = voice_handlers._active.partial
+    await _send(session, "voice.cancel", {"sessionId": sid})
+    with pytest.raises(asyncio.CancelledError):
+        await partial
+    assert not list(voice.glob("navide-voice-*.pcm"))
+
+
+async def test_start_sweeps_audio_a_failed_delete_left_behind(voice: Path) -> None:
+    stale = voice / "navide-voice-stale.pcm"
+    fresh = voice / "navide-voice-fresh.pcm"
+    stale.write_bytes(b"\1" * 64)
+    fresh.write_bytes(b"\1" * 64)
+    old = time.time() - stt_service.REQUEST_TIMEOUT_S - 10
+    os.utime(stale, (old, old))
+    await _send(_Session(), "voice.start", {})
+    # Only audio no request could still be reading (another Navide's is fresh).
+    assert not stale.exists() and fresh.exists()
 
 
 async def test_switch_off_ends_partials(stream: Path) -> None:

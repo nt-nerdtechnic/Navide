@@ -18,6 +18,9 @@ FAKE_STT_LOG names a file that gets one JSON line per transcribe request.
 FAKE_STT_STARTED names a file that gets the request id once the audio has
 been read and the request is running (before FAKE_STT_DELAY_S), so a test
 can wait for a request to be truly in flight.
+FAKE_STT_HOLD_S keeps the audio file open that long after reading it, the way
+a Windows scanner or indexer can; while it is open a ``<pcm_path>.held``
+sibling exists, so a test can refuse to delete it as Windows would.
 FAKE_STT_VARIANTS=1 hears every character of odd-numbered requests as its
 "Simplified" variant chr(0x5E00 + v % 1000), like whisper switching script
 between runs; a request with ``script`` "hant-tw" converts those back to the
@@ -96,6 +99,7 @@ def main() -> int:
     decoding = os.environ.get("FAKE_STT_DECODE") == "1"
     tail_noise = os.environ.get("FAKE_STT_TAIL_NOISE") or ""
     delay = float(os.environ.get("FAKE_STT_DELAY_S") or 0)
+    hold = float(os.environ.get("FAKE_STT_HOLD_S") or 0)
     skew = int(os.environ.get("FAKE_STT_SKEW_MS") or 0)
     variants = os.environ.get("FAKE_STT_VARIANTS") == "1"
     log_path = os.environ.get("FAKE_STT_LOG")
@@ -129,8 +133,14 @@ def main() -> int:
             try:
                 # Read up front, as the real sidecar does: the caller may
                 # delete the file once it has cancelled the request.
-                with open(req["pcm_path"], "rb") as fh:
-                    data = fh.read()
+                held = req["pcm_path"] + ".held"
+                open(held, "wb").close()
+                try:
+                    with open(req["pcm_path"], "rb") as fh:
+                        data = fh.read()
+                        time.sleep(hold)
+                finally:
+                    os.remove(held)
                 size = len(data)
             except OSError as err:
                 send({"id": req["id"], "ok": False, "error": str(err)})
