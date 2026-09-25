@@ -4466,10 +4466,12 @@ async def cli_send_and_wait(
             await asyncio.sleep(_WAIT_IDLE_POLL_S)
 
     while True:
-        left = remaining()
-        if left <= 0:
-            break
-        waited = await cli_wait_idle(to, ctx, timeout_s=left, pane_id=pane_id)
+        # Look before giving up. The budget can be gone by the time the new
+        # turn is first seen — the grace window runs to the deadline whenever
+        # timeout_s is under its cap, and a stalled host spends it early — and
+        # a turn already seen is the answer, not "never_started". With no time
+        # left cli_wait_idle still checks once.
+        waited = await cli_wait_idle(to, ctx, timeout_s=max(remaining(), 0.0), pane_id=pane_id)
         if waited.get("ok") is False:
             return target_lost(waited)
         if not waited.get("idle"):

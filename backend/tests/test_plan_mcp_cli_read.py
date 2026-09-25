@@ -744,6 +744,14 @@ def _seed_pair() -> None:
     agent_messaging.register("pw", "worker", "/ws/alpha", agent_key="claude")
 
 
+# The budget for a send_and_wait whose reply is scripted to follow the send.
+# Only a ceiling — these return the moment the turn ends — but the scripted
+# reply's clock starts at the tool's first await, AFTER the send's synchronous
+# part (the Guard taint write into navide.db), so a host that stalls there
+# (Windows CI) spends a tight budget before the reply can exist.
+_REPLY_BUDGET_S = 10.0
+
+
 def _deliver_when_sent(
     broadcasts: list[dict[str, Any]], ok: bool = True, reason: str = ""
 ) -> "asyncio.Task[None]":
@@ -802,7 +810,7 @@ async def test_send_and_wait_returns_the_turn_that_followed_the_send(
 
     delivery = _deliver_when_sent(broadcasts)
     task = asyncio.create_task(worker_replies())
-    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=2.0)
+    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=_REPLY_BUDGET_S)
     await task
     await delivery
 
@@ -830,7 +838,7 @@ async def test_send_and_wait_settles_on_quiet_for_a_cli_with_no_turn_complete(
 
     delivery = _deliver_when_sent(broadcasts)
     task = asyncio.create_task(worker_stirs())
-    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=2.0)
+    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=_REPLY_BUDGET_S)
     await task
     await delivery
 
@@ -1121,7 +1129,7 @@ async def test_send_and_wait_by_pane_id_reaches_the_twin_a_name_cannot(
     delivery = _deliver_when_sent(broadcasts)
     task = asyncio.create_task(the_second_twin_replies())
     result = await plan_mcp.cli_send_and_wait(
-        "", "go", _ctx(pane_id="other"), timeout_s=2.0, pane_id="pw2"
+        "", "go", _ctx(pane_id="other"), timeout_s=_REPLY_BUDGET_S, pane_id="pw2"
     )
     await task
     await delivery
@@ -1158,7 +1166,7 @@ async def test_send_and_wait_ignores_a_blank_pane_id(
     delivery = _deliver_when_sent(broadcasts)
     task = asyncio.create_task(worker_replies())
     result = await plan_mcp.cli_send_and_wait(
-        "worker", "go", _ctx(), timeout_s=2.0, pane_id="   "
+        "worker", "go", _ctx(), timeout_s=_REPLY_BUDGET_S, pane_id="   "
     )
     await task
     await delivery
@@ -1166,3 +1174,31 @@ async def test_send_and_wait_ignores_a_blank_pane_id(
     assert result["ok"] is True
     assert result["idle"] is True
     assert broadcasts[0]["payload"]["target_pane_id"] == "pw"
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_does_not_call_a_turn_seen_at_the_deadline_never_started(
+    monkeypatch: pytest.MonkeyPatch, broadcasts: list[dict[str, Any]]
+) -> None:
+    """With timeout_s under the grace cap the grace window IS the budget, so a
+    reply landing between its last poll and the deadline is first seen after
+    the deadline. Seeing it and still answering "never_started" tells the
+    caller its message was never picked up — an invitation to send it twice."""
+    monkeypatch.setattr(plan_mcp, "_WAIT_IDLE_POLL_S", 0.2)
+    _seed_pair()
+    app._record_pane_activity("pw", "turn_complete", "stale")
+
+    async def worker_replies() -> None:
+        # After the grace poll at ~0.2s, before the deadline at 0.3s.
+        await asyncio.sleep(0.25)
+        app._record_pane_activity("pw", "turn_complete", "fresh")
+
+    delivery = _deliver_when_sent(broadcasts)
+    task = asyncio.create_task(worker_replies())
+    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=0.3)
+    await task
+    await delivery
+
+    assert result["idle"] is True
+    assert result["source"] == "turn_complete"
+    assert result["last_activity"]["text"] == "fresh"
