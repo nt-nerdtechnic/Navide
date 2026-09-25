@@ -10849,7 +10849,6 @@ export class FrontendPluginManager {
     reason: NativeReceiverCloseReason,
   ): Promise<{ ok: true; id: string } | { ok: false; reason: Exclude<DetailCloseResult, { closed: true }>['reason'] }> {
     if (hostWindow.isDestroyed()) return { ok: false, reason: 'unavailable' }
-    if (this.pendingWindowCloses.has(String(hostWindow.id))) return { ok: false, reason: 'busy' }
     const plans: Array<{ receiver: RunningPlugin; receiverId: string; itemIds: string[] }> = []
     for (const { registration, receiver } of this.activeReceiverRegistrationsForWindow(hostWindow)) {
       const itemIds = [...this.receiverItems.values()]
