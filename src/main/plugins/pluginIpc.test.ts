@@ -1819,6 +1819,37 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('activates a backend-only update over a package with a frontend', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildBackendPkg('1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-frontend-to-backend-only-update-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+
+      await expect(restart(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.1' })
+      expect(manager.getDescriptor('acme.demo')).toBeUndefined()
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.1' },
+        previous: { packageVersion: '1.0.0' },
+      })
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('completes a rollback to a backend-only package while a view of the current version is open', async () => {
     const first = buildBackendPkg('1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')

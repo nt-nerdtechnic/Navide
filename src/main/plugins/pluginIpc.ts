@@ -1055,6 +1055,10 @@ export function registerPluginIpc(
         })
       }
       options.onActivationChange?.({ pluginId: id, activation })
+      if (restartTransaction && !scanned.descriptor) {
+        manager.completePackageRestartWithoutFrontend(restartTransaction)
+        restartTransaction = undefined
+      }
       if (restartTransaction) {
         const report = await manager.restorePackageRestart(
           restartTransaction,
