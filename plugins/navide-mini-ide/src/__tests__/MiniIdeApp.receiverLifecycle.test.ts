@@ -81,9 +81,10 @@ const nav = {
 
 let MiniIdeApp: typeof import('../MiniIdeApp.vue').default
 
+// Importing the full MiniIdeApp is slow when the whole suite runs in parallel.
 beforeAll(async () => {
   MiniIdeApp = (await import('../MiniIdeApp.vue')).default
-})
+}, 60_000)
 
 beforeEach(() => {
   state.offerListener = null
@@ -135,7 +136,7 @@ async function offer(offerId: string, contributionKey = 'acme.provider.left', lo
   await flushPromises()
 }
 
-describe('MiniIdeApp receiver item lifecycle', () => {
+describe('MiniIdeApp receiver item lifecycle', { timeout: 30_000 }, () => {
   it('removes only the closed receiver item and preserves a sibling host', async () => {
     const wrapper = shallowMiniIde()
     await flushPromises()

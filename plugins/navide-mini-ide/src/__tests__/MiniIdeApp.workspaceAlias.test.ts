@@ -53,7 +53,9 @@ async function mountWithQuery(query: string): Promise<VueWrapper> {
   return wrapper
 }
 
-describe('MiniIdeApp workspace alias', () => {
+// Each test imports and mounts the full MiniIdeApp, which is slow under a
+// parallel full-suite run.
+describe('MiniIdeApp workspace alias', { timeout: 60_000 }, () => {
   it('titles the window and the Explorer with the alias the host passed', async () => {
     const w = await mountWithQuery('workspace_path=%2Fws%2Fagent-team&workspace_display_name=%20Navide%20')
 

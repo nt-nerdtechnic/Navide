@@ -49,9 +49,10 @@ const nav = {
 
 let MiniIdeApp: typeof import('../MiniIdeApp.vue').default
 
+// Importing the full MiniIdeApp is slow when the whole suite runs in parallel.
 beforeAll(async () => {
   MiniIdeApp = (await import('../MiniIdeApp.vue')).default
-})
+}, 60_000)
 
 let wrapper: VueWrapper | null = null
 const originalLocale = i18n.global.locale.value
@@ -97,7 +98,7 @@ function shownDialog(): { title: string; message: string; confirmText: string } 
   return { title: d!.title, message: d!.message, confirmText: d!.confirmText }
 }
 
-describe('MiniIdeApp dirty-close prompts follow the UI language', () => {
+describe('MiniIdeApp dirty-close prompts follow the UI language', { timeout: 30_000 }, () => {
   it('asks in Japanese before closing the editor window with unsaved files', async () => {
     i18n.global.locale.value = 'ja-JP'
     await mountWithDirtyFile()
