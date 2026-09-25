@@ -208,7 +208,7 @@ def blobs(tmp_path):
 
 def _big_skill(store: SkillsStore) -> dict[str, bytes]:
     store.create_skill("big", "d", consent=True)
-    files = {"clip.bin": os.urandom(300 * 1024), "notes/a.md": b"# notes\n", "run.sh": b"#!/bin/sh\necho hi\n"}
+    files = {"clip.bin": b"\0" + os.urandom(300 * 1024), "notes/a.md": b"# notes\n", "run.sh": b"#!/bin/sh\necho hi\n"}
     for rel, data in files.items():
         (store.root / "big" / rel).parent.mkdir(parents=True, exist_ok=True)
         (store.root / "big" / rel).write_bytes(data)
@@ -234,7 +234,10 @@ def test_a_large_skill_reaches_another_device_whole(tmp_path, monkeypatch, blobs
     landed = b.store.root / "big"
     for rel, data in files.items():
         assert (landed / rel).read_bytes() == data
-    assert (landed / "run.sh").stat().st_mode & stat.S_IXUSR
+    if os.name != "nt":  # Windows has no executable bit; the record still carries it
+        assert (landed / "run.sh").stat().st_mode & stat.S_IXUSR
+    manifest = b.adapter.snapshot()["big"]["files"]
+    assert manifest["run.sh"].get("x") is True and "x" not in manifest["clip.bin"]
     skill = b.store.get_skill("big")["skill"]
     assert skill["enabled"] is False and skill["targets"] == ["codex"]
     # b now names the same files the same way: nothing to send back.
@@ -242,6 +245,70 @@ def test_a_large_skill_reaches_another_device_whole(tmp_path, monkeypatch, blobs
     _run(b.settle(monkeypatch))
     assert server.pushes == pushes
     assert not any(b.adapter._staging().iterdir())
+
+
+@pytest.fixture
+def windows_modes(monkeypatch):
+    """Windows semantics on a POSIX file system: chmod only toggles read-only
+    and a mode never says a file is executable. Returns a switch."""
+    real = Path.chmod
+
+    def chmod(self, mode, *args, **kwargs):
+        return real(self, 0o644 if mode & stat.S_IWRITE else 0o444, *args, **kwargs)
+
+    def on(enabled: bool) -> None:
+        if enabled:
+            monkeypatch.setattr(Path, "chmod", chmod)
+        else:
+            monkeypatch.setattr(Path, "chmod", real)
+        monkeypatch.setattr(sync_scopes, "_EXEC_BITS", not enabled and os.name != "nt", raising=False)
+
+    return on
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the receiving side needs a POSIX file system")
+def test_an_executable_that_passes_through_windows_keeps_its_flag(tmp_path, monkeypatch, blobs, account_key, windows_modes) -> None:  # noqa: F811
+    server = FakeServer()
+    a = Device(tmp_path, "a", server, blobs)
+    b = Device(tmp_path, "b", server, blobs)
+    files = _big_skill(a.store)
+    (a.store.root / "big" / "clip.bin").chmod(0o755)  # a binary: no shebang to go by
+    _run(a.settle(monkeypatch))
+    pushes = server.pushes
+
+    windows_modes(True)
+    _run(b.settle(monkeypatch))
+    manifest = b.adapter.snapshot()["big"]["files"]
+    assert manifest["clip.bin"].get("x") is True and manifest["run.sh"].get("x") is True
+    assert manifest["notes/a.md"].get("x") is None
+    _run(b.settle(monkeypatch))
+    assert server.pushes == pushes  # b sends back nothing that drops the flags
+
+    windows_modes(False)
+    c = Device(tmp_path, "c", server, blobs)
+    _run(c.settle(monkeypatch))
+    for rel in files:
+        executable = bool((c.store.root / "big" / rel).stat().st_mode & stat.S_IXUSR)
+        assert executable is (rel in {"clip.bin", "run.sh"}), rel
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the receiving side needs a POSIX file system")
+def test_a_script_written_on_windows_lands_executable(tmp_path, monkeypatch, blobs, account_key, windows_modes) -> None:  # noqa: F811
+    server = FakeServer()
+    a = Device(tmp_path, "a", server, blobs)
+    b = Device(tmp_path, "b", server, blobs)
+    windows_modes(True)
+    files = _big_skill(a.store)
+    for rel in files:
+        assert not (a.store.root / "big" / rel).stat().st_mode & 0o111
+    _run(a.settle(monkeypatch))
+
+    windows_modes(False)
+    _run(b.settle(monkeypatch))
+    landed = b.store.root / "big"
+    assert (landed / "run.sh").stat().st_mode & stat.S_IXUSR
+    assert not (landed / "clip.bin").stat().st_mode & stat.S_IXUSR
+    assert not (landed / "notes" / "a.md").stat().st_mode & stat.S_IXUSR
 
 
 def test_a_removal_elsewhere_never_deletes_files_here(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811

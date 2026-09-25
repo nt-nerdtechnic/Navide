@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -51,6 +52,8 @@ def enabled_scopes() -> dict[str, bool]:
 
 #: Internal scopes and the switch each one rides with.
 _RIDES_WITH = {"skill-files": "skills"}
+#: Whether file modes carry the executable bit here. Windows has no such bit.
+_EXEC_BITS = os.name != "nt"
 
 
 def scope_enabled(scope: str) -> bool:
@@ -482,10 +485,21 @@ class SkillFilesScope:
         entries: dict[str, Any] = {}
         for relative, path in sorted(files.items()):
             entry = cache.ref_for(path).to_manifest()
-            if path.stat().st_mode & 0o111:
+            if self._is_executable(path):
                 entry["x"] = True
             entries[relative] = entry
         return {"v": _MANIFEST_VERSION, "files": entries}
+
+    def _is_executable(self, path: Any) -> bool:
+        if _EXEC_BITS:
+            return bool(path.stat().st_mode & 0o111)
+        # No mode bit to read: keep the flag a synced file landed with, and
+        # take a script written here by its shebang, so neither is dropped
+        # for the devices that can run it.
+        if self._digest_cache().is_executable(path):
+            return True
+        with open(path, "rb") as fh:
+            return fh.read(2) == b"#!"
 
     def snapshot(self) -> dict[str, Any]:
         if self._layout is None:
@@ -658,6 +672,9 @@ class SkillFilesScope:
                 source.unlink(missing_ok=True)
         if not landed:
             return False
+        if not _EXEC_BITS:
+            for rel, path in (store.list_files(item_id) or {}).items():
+                self._digest_cache().set_executable(path, rel in executable)
         # The settings arrived through ``skills`` and may have been waiting in
         # the intent map for these files; without applying them now, the next
         # ``skills`` snapshot would read the defaults off the fresh copy.

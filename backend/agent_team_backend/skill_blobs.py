@@ -207,6 +207,10 @@ def _schema_v1(cur: Any) -> None:
     )
 
 
+def _schema_v2(cur: Any) -> None:
+    cur.execute("CREATE TABLE IF NOT EXISTS skill_file_executable (path TEXT PRIMARY KEY)")
+
+
 class DigestCache:
     """Blob names of files already hashed, keyed by path, size and mtime.
 
@@ -218,6 +222,7 @@ class DigestCache:
     def __init__(self, db: Database) -> None:
         self._db = db
         self._db.migrate(_COMPONENT, 1, _schema_v1)
+        self._db.migrate(_COMPONENT, 2, _schema_v2)
 
     def ref_for(self, path: Path) -> BlobRef:
         st = path.stat()
@@ -241,6 +246,20 @@ class DigestCache:
                     (str(path), ref.size, st.st_mtime_ns, ref.kid, ref.blob_id),
                 )
         return ref
+
+    def is_executable(self, path: Path) -> bool:
+        """Whether *path* last landed marked executable, on a file system whose
+        modes cannot say so themselves."""
+        with self._db.transaction() as cur:
+            row = cur.execute("SELECT 1 FROM skill_file_executable WHERE path = ?", (str(path),)).fetchone()
+        return row is not None
+
+    def set_executable(self, path: Path, executable: bool) -> None:
+        with self._db.transaction() as cur:
+            if executable:
+                cur.execute("INSERT OR IGNORE INTO skill_file_executable (path) VALUES (?)", (str(path),))
+            else:
+                cur.execute("DELETE FROM skill_file_executable WHERE path = ?", (str(path),))
 
 
 # ── upload ────────────────────────────────────────────────────────────
