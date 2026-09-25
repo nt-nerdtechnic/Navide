@@ -38,6 +38,9 @@ DONE = "ci-windows-tests.done"
 # a faster runner an hour earlier. Every layer above this has to stay longer
 # than it or the cap stops being the thing that decides: the waiting step polls
 # for 34 minutes with a 35-minute step timeout, inside a 45-minute job.
+# By 2026-09-25 the whole suite took 1109-1880 s on one runner depending on the
+# host (8400 tests), so CI splits it in two with `--shard K/N` rather than
+# stretching the cap again: each half needs about half of it.
 CAP_SECONDS = 30 * 60
 REPORT_EVERY = 60
 RESULT_RE = re.compile(r" (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)")
@@ -189,7 +192,7 @@ def _detach() -> int:
             os.remove(stale)
         except OSError:
             pass
-    runner = _spawn_detached("--run", WRAPPER_LOG)
+    runner = _spawn_detached("--run", WRAPPER_LOG, *_shard_args())
     print(f"--- detached runner pid {runner.pid}; log in {WRAPPER_LOG}, marker {DONE}")
     return 0
 
@@ -208,6 +211,13 @@ def _spawn_detached(mode: str, log_path: str, *extra: str) -> subprocess.Popen:
 
 
 
+def _shard_args() -> list[str]:
+    """`--shard K/N` from our own argv, passed on as-is."""
+    if "--shard" not in sys.argv:
+        return []
+    return ["--shard", sys.argv[sys.argv.index("--shard") + 1]]
+
+
 def main() -> int:
     if "--detach" in sys.argv:
         return _detach()
@@ -218,12 +228,12 @@ def main() -> int:
     args = [
         sys.executable, "-X", "faulthandler", "-m", "pytest", "backend/tests", "-v",
         "-p", "no:cacheprovider", "--timeout=90", "--timeout-method=thread",
-        "-o", "faulthandler_timeout=120",
+        "-o", "faulthandler_timeout=120", *_shard_args(),
     ]
     with open(LOG, "wb") as log:
         # close_fds restricts the child's handle list to exactly these three.
         child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True)
-    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s", flush=True)
+    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s, {' '.join(_shard_args()) or 'no shard'}", flush=True)
 
     started = time.monotonic()
     rc: int | None = None

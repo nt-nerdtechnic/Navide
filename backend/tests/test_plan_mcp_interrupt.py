@@ -325,11 +325,16 @@ async def test_a_pane_cannot_interrupt_itself() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_self_guard_does_not_block_a_namesake_elsewhere() -> None:
+async def test_the_self_guard_does_not_block_a_namesake_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Refusing must key on identity, not on the name matching. A pane in
     another workspace that happens to share your name is a different pane."""
     _seed()
     agent_messaging.register("pother", "caller", "/ws/beta")
+    # Nothing answers a real UI request here; unstubbed it sat out the full
+    # UI timeout (15 s) before returning.
+    _fake_ui(monkeypatch, {"ok": True, "result": {"sent": True, "status": "running"}})
 
     result = await plan_mcp.cli_interrupt("beta/caller", _ctx())
 

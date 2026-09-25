@@ -268,3 +268,25 @@ def setsid_grandchild():
             parent.wait(timeout=2)
         except Exception:
             pass
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard", default=None, metavar="K/N",
+        help="run only every Nth collected test, starting at the Kth (1-based); CI splits the Windows suite this way",
+    )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    # Round-robin over the collected order, not whole files: the slow files
+    # (real git, PTY and subprocess spawns) then land on every shard evenly
+    # instead of on whichever shard drew them.
+    shard = config.getoption("--shard")
+    if not shard:
+        return
+    k, n = (int(part) for part in shard.split("/"))
+    if not 1 <= k <= n:
+        raise pytest.UsageError(f"--shard {shard}: want K/N with 1 <= K <= N")
+    config.hook.pytest_deselected(items=[item for i, item in enumerate(items) if i % n != k - 1])
+    items[:] = items[k - 1 :: n]
