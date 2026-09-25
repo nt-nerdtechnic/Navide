@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from agent_team_backend import codex_session_hooks as hooks
 
@@ -168,10 +169,15 @@ def test_native_hook_posts_unicode_payload_and_launch_header(tmp_path, monkeypat
 
     if hooks.osplat.paths.resolve_program('curl') is None:
         pytest.skip('curl is unavailable for the Codex hook')
-    entry = {'command':hooks.hook_command()}
+    # Launched the way Codex launches a hook: its command runner hands the
+    # text to %COMSPEC% /C on Windows (codex-rs/hooks command_runner.rs,
+    # build_command). Wrapping it in `powershell -Command` instead started
+    # PowerShell twice, and two cold starts overran the budget on the arm64
+    # release runner.
     if hooks.osplat.platform_id == 'win32':
-        entry['shell'] = 'powershell'
-    argv = hook_shell.shell_argv(entry)
+        argv = [os.environ.get('COMSPEC') or 'cmd.exe', '/C', hooks.hook_command()]
+    else:
+        argv = hook_shell.shell_argv({'command':hooks.hook_command()})
     received = []
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -180,7 +186,9 @@ def test_native_hook_posts_unicode_payload_and_launch_header(tmp_path, monkeypat
             self.end_headers()
         def log_message(self, *_): pass
     server = HTTPServer(('127.0.0.1',0),Handler)
-    server.timeout = 8
+    # The same room test_claude_hooks gives powershell.exe to start on a busy
+    # Windows runner; a passing run returns long before it.
+    server.timeout = 45
     port = tmp_path/'backend.port'
     port.write_text(str(server.server_address[1]))
     auth = tmp_path/'auth'
@@ -192,8 +200,8 @@ def test_native_hook_posts_unicode_payload_and_launch_header(tmp_path, monkeypat
     thread=threading.Thread(target=server.handle_request,daemon=True)
     thread.start()
     try:
-        result = _run_to_completion(argv,json.dumps(payload,ensure_ascii=False),timeout=10)
-        thread.join(timeout=9)
+        result = _run_to_completion(argv,json.dumps(payload,ensure_ascii=False),timeout=45)
+        thread.join(timeout=46)
     finally:
         server.server_close()
     assert result.returncode == 0
