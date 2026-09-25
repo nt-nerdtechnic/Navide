@@ -4396,13 +4396,13 @@ async def cli_send_and_wait(
     target_pane_id = resolved.pane.pane_id
 
     baseline = app.pane_activity(target_pane_id)
-    baseline_ts = baseline["ts_monotonic"] if baseline else None
 
     def has_new_activity() -> bool:
+        # Identity, not timestamps: every recorded event is a new dict, while
+        # two events inside one tick of a coarse monotonic clock (15.6 ms on
+        # Windows) carry the same ts_monotonic and would read as no change.
         current = app.pane_activity(target_pane_id)
-        if current is None:
-            return False
-        return baseline_ts is None or current["ts_monotonic"] > baseline_ts
+        return current is not None and current is not baseline
 
     started = time.monotonic()
     timeout = min(max(float(timeout_s), 0.0), _WAIT_IDLE_MAX_TIMEOUT_S)

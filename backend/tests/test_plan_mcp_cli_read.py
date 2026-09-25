@@ -4,6 +4,7 @@ state through the Plan MCP server (Phase C)."""
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1183,19 +1184,72 @@ async def test_send_and_wait_does_not_call_a_turn_seen_at_the_deadline_never_sta
     """With timeout_s under the grace cap the grace window IS the budget, so a
     reply landing between its last poll and the deadline is first seen after
     the deadline. Seeing it and still answering "never_started" tells the
-    caller its message was never picked up — an invitation to send it twice."""
-    monkeypatch.setattr(plan_mcp, "_WAIT_IDLE_POLL_S", 0.2)
+    caller its message was never picked up — an invitation to send it twice.
+
+    The tool runs on a virtual clock that only its own sleeps advance, so where
+    the reply lands relative to the deadline is scripted, not raced: a host that
+    stalls in the send's synchronous part cannot push it past the budget."""
+    budget = _REPLY_BUDGET_S
+    clock = SimpleNamespace(now=0.0)
+    real_sleep = asyncio.sleep
+
+    async def virtual_sleep(delay: float) -> None:
+        # The reply lands inside the poll interval that crosses the deadline.
+        if clock.now < budget <= clock.now + delay:
+            app._record_pane_activity("pw", "turn_complete", "fresh")
+        clock.now += delay
+        await real_sleep(0)
+
+    monkeypatch.setattr(plan_mcp, "time", SimpleNamespace(monotonic=lambda: clock.now, time=time.time))
+
+    class VirtualAsyncio:
+        sleep = staticmethod(virtual_sleep)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(asyncio, name)
+
+    monkeypatch.setattr(plan_mcp, "asyncio", VirtualAsyncio())
+    _seed_pair()
+    app._record_pane_activity("pw", "turn_complete", "stale")
+
+    delivery = _deliver_when_sent(broadcasts)
+    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=budget)
+    await delivery
+
+    assert clock.now >= budget
+    assert result["idle"] is True
+    assert result["source"] == "turn_complete"
+    assert result["last_activity"]["text"] == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_sees_a_reply_recorded_in_the_same_clock_tick(
+    monkeypatch: pytest.MonkeyPatch, broadcasts: list[dict[str, Any]]
+) -> None:
+    """Windows' monotonic clock ticks every 15.6 ms, so the reply can carry the
+    very timestamp of the activity on record at the send. It is still a new
+    event, and calling it "never_started" invites a resend."""
+    monkeypatch.setattr(plan_mcp, "_WAIT_IDLE_POLL_S", 0.005)
+
+    class FrozenTime:
+        @staticmethod
+        def monotonic() -> float:
+            return 100.0
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(time, name)
+
+    monkeypatch.setattr(app, "time", FrozenTime())
     _seed_pair()
     app._record_pane_activity("pw", "turn_complete", "stale")
 
     async def worker_replies() -> None:
-        # After the grace poll at ~0.2s, before the deadline at 0.3s.
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.02)
         app._record_pane_activity("pw", "turn_complete", "fresh")
 
     delivery = _deliver_when_sent(broadcasts)
     task = asyncio.create_task(worker_replies())
-    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=0.3)
+    result = await plan_mcp.cli_send_and_wait("worker", "go", _ctx(), timeout_s=_REPLY_BUDGET_S)
     await task
     await delivery
 
