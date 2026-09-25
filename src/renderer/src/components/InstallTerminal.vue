@@ -133,6 +133,9 @@ onUnmounted(teardown)
         <code class="it-command" :title="run.command">{{ run.command }}</code>
       </header>
       <div ref="host" class="it-screen" />
+      <p v-if="run.inputError" class="it-error" role="alert" data-testid="install-terminal-input-error">
+        {{ t('install-terminal.input-lost', { error: run.inputError }) }}
+      </p>
       <footer class="it-foot">
         <span
           class="it-status"
@@ -234,6 +237,8 @@ onUnmounted(teardown)
   font-size: 12px;
 }
 .it-error {
+  margin: 0;
+  font-size: 12px;
   color: var(--color-danger, #f85149);
 }
 </style>

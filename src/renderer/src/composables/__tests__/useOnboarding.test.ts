@@ -210,6 +210,36 @@ describe('useOnboarding', () => {
     scope.stop()
   })
 
+  it('holds a bounded amount of other panes\' output while the start is pending', async () => {
+    // Every pane's output arrives before the reply naming this run; a busy
+    // window used to pile all of it up for up to the 30s start budget.
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    let answer: (v: unknown) => void = () => {}
+    const reply = new Promise((resolve) => { answer = resolve })
+    const send = mock.backend.send
+    ;(mock.backend as unknown as { send: typeof send }).send = (async (type: string, payload?: Record<string, unknown>, t?: number) =>
+      type === 'onboarding.run' ? reply : send(type, payload, t)) as typeof send
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    const big = new Uint8Array(1_000_000)
+    // Held past the cap: pushed out by the 5 MB that follows it.
+    mock.emit('terminal.output', { terminal_session_id: 'run-1', data: new TextEncoder().encode('oldest') })
+    for (let i = 0; i < 5; i++) mock.emit('terminal.output', { terminal_session_id: `pane-${i}`, data: big })
+    // This run's own output is the newest by the time its id arrives.
+    mock.emit('terminal.output', { terminal_session_id: 'run-1', data: new TextEncoder().encode('mine') })
+    answer({ id: 't', type: 'onboarding.run', ok: true, payload: { ok: true, run_id: 'run-1', command: 'x' }, error: null, timestamp: '' })
+    await flush()
+    const seen: string[] = []
+    result.attachRunOutput((d) => seen.push(new TextDecoder().decode(d)))
+    expect(seen).toEqual(['mine'])
+    await exitRun(mock, 0)
+    await pending
+    scope.stop()
+  })
+
   it('cancel kills the run and reports it as cancelled', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({ cli: false }))

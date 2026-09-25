@@ -33,7 +33,14 @@ function statusWith(health: CliHealthStatus): OnboardStatus {
   return { complete: true, install_prompt_dismissed: [], cli_health: health } as unknown as OnboardStatus
 }
 
-function harness(first: OnboardStatus, second: OnboardStatus, legacy: Record<string, string>) {
+type SelectReply = () => Promise<unknown>
+
+function harness(
+  first: OnboardStatus,
+  second: OnboardStatus,
+  legacy: Record<string, string>,
+  selectReply: SelectReply = async () => ({ ok: true, payload: { ok: true } }),
+) {
   const start = source.indexOf('async function checkOnboarding(')
   const fnSource = source.slice(start, source.indexOf('\n}\n', start) + 2)
   const javascript = ts.transpileModule(fnSource, {
@@ -43,7 +50,7 @@ function harness(first: OnboardStatus, second: OnboardStatus, legacy: Record<str
   const statuses = [first, second]
   const send = vi.fn(async (type: string, _payload?: unknown) => type === 'onboarding.status'
     ? { ok: true, payload: statuses.shift() }
-    : { ok: true, payload: { ok: true } })
+    : selectReply())
   const cliHealthGuide = { value: null as CliHealthStatus | null }
   const deps = {
     backend: { send },
@@ -57,11 +64,13 @@ function harness(first: OnboardStatus, second: OnboardStatus, legacy: Record<str
     cliHealthGuideForLaunch,
     cliHealthGuide,
     scheduleOnboardingRetry: vi.fn(),
+    notifyRestore: { toast: vi.fn() },
+    i18n: { global: { t: (key: string, params?: Record<string, unknown>) => `${key} ${JSON.stringify(params ?? {})}` } },
   }
   const checkOnboarding = new Function(...Object.keys(deps), `${javascript}; return checkOnboarding`)(
     ...Object.values(deps),
   ) as () => Promise<void>
-  return { checkOnboarding, send, settings, cliHealthGuide }
+  return { checkOnboarding, send, settings, cliHealthGuide, toast: deps.notifyRestore.toast }
 }
 
 describe('legacy agentTeam.cliBinary.<key> values move to the backend', () => {
@@ -105,8 +114,8 @@ describe('legacy agentTeam.cliBinary.<key> values move to the backend', () => {
     expect(cliHealthGuide.value).toBeNull()
   })
 
-  it('keeps a value the backend refused, and does not re-read status for nothing', async () => {
-    const { checkOnboarding, send, settings } = harness(statusWith(noFindings), statusWith(noFindings), {
+  it('keeps a value whose install is not found, says it is not in use, and does not re-read status', async () => {
+    const { checkOnboarding, send, settings, toast } = harness(statusWith(noFindings), statusWith(noFindings), {
       'agentTeam.cliBinary.claude': '/gone/claude',
     })
 
@@ -114,6 +123,42 @@ describe('legacy agentTeam.cliBinary.<key> values move to the backend', () => {
 
     expect(send.mock.calls.map(([type]) => type)).toEqual(['onboarding.status'])
     expect(settings).toEqual({ 'agentTeam.cliBinary.claude': '/gone/claude' })
+    // Spawns no longer read the setting: silence would leave the user on the
+    // default install without knowing their choice stopped applying.
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast.mock.calls[0][0]).toContain('cli-health.override-missing')
+    expect(toast.mock.calls[0][0]).toContain('/gone/claude')
+  })
+
+  it('says why when the backend refuses the choice, and drops the dead value', async () => {
+    const { checkOnboarding, settings, toast } = harness(
+      statusWith(noFindings), statusWith(noFindings),
+      { 'agentTeam.cliBinary.claude': '/b/claude' },
+      async () => ({ ok: true, payload: { ok: false, error: 'not executable' } }),
+    )
+
+    await checkOnboarding()
+
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast.mock.calls[0][0]).toContain('cli-health.override-refused')
+    expect(toast.mock.calls[0][0]).toContain('not executable')
+    expect(settings).toEqual({})
+  })
+
+  it('keeps the value for the next launch when the request itself failed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { checkOnboarding, settings, toast } = harness(
+      statusWith(noFindings), statusWith(noFindings),
+      { 'agentTeam.cliBinary.claude': '/b/claude' },
+      async () => { throw new Error('ws not open') },
+    )
+
+    await checkOnboarding()
+
+    expect(settings).toEqual({ 'agentTeam.cliBinary.claude': '/b/claude' })
+    expect(toast).not.toHaveBeenCalled()
+    expect(warn.mock.calls.flat().join(' ')).toContain('migration failed')
+    warn.mockRestore()
   })
 })
 

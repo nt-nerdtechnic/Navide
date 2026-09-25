@@ -173,6 +173,9 @@ export interface ActiveRun {
   cancelled: boolean
   /** The connection dropped mid-run: the backend killed it, no exit arrived. */
   lost: boolean
+  /** Why typed input last failed to reach the command ('' = none): a sudo
+   *  password that never arrived must not look like a hung prompt. */
+  inputError: string
 }
 
 /** A resolved command whose embedded terminal could not start. */
@@ -353,7 +356,7 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
     runBytes = 0
     run.value = {
       key, label, command: '', runId: '', state: 'starting',
-      exitCode: null, signal: '', cancelled: false, lost: false,
+      exitCode: null, signal: '', cancelled: false, lost: false, inputError: '',
     }
     let runId = ''
     let settle: (exit: RunExit) => void = () => {}
@@ -366,11 +369,23 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
       settle({ ...exit, cancelled: run.value.cancelled })
     }
     // Subscribed before the request: a fast command can print and exit before
-    // the reply naming its id arrives, so early events wait here for it.
+    // the reply naming its id arrives, so early events wait here for it. Every
+    // pane's output arrives meanwhile, so the held output is capped, oldest
+    // dropped first — this run's own output is the newest by then.
     const early: Array<['out', TerminalOutputEvent] | ['exit', TerminalExitEvent]> = []
+    let earlyBytes = 0
     const onOutput = (p: TerminalOutputEvent): void => {
-      if (!runId) early.push(['out', p])
-      else if (p.terminal_session_id === runId) keepRunOutput(p.data)
+      if (runId) {
+        if (p.terminal_session_id === runId) keepRunOutput(p.data)
+        return
+      }
+      early.push(['out', p])
+      earlyBytes += p.data.byteLength
+      while (earlyBytes > RUN_OUTPUT_CAP_BYTES) {
+        const i = early.findIndex(([kind]) => kind === 'out')
+        earlyBytes -= (early[i][1] as TerminalOutputEvent).data.byteLength
+        early.splice(i, 1)
+      }
     }
     const onExit = (p: TerminalExitEvent): void => {
       if (!runId) early.push(['exit', p])
@@ -445,14 +460,26 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   function runInput(data: string): void {
     const current = run.value
     if (!current || current.state !== 'running') return
-    void backend.send('terminal.input', { terminal_session_id: current.runId, data }).catch(() => {})
+    const lost = (error: string): void => {
+      log(`✗ Input did not reach ${current.label}: ${error}`)
+      if (run.value?.runId === current.runId) run.value = { ...run.value, inputError: error }
+    }
+    void backend.send<{ ok?: boolean; error?: string }>(
+      'terminal.input', { terminal_session_id: current.runId, data },
+    ).then((resp) => {
+      if (!resp.ok) lost(resp.error?.message || 'refused')
+      else if (resp.payload?.ok === false) lost(resp.payload.error || 'refused')
+    }, (e) => lost(e instanceof Error ? e.message : String(e)))
   }
 
   function runResize(cols: number, rows: number): void {
     runSize = { cols, rows }
     const current = run.value
     if (!current || current.state !== 'running') return
-    void backend.send('terminal.resize', { terminal_session_id: current.runId, cols, rows }).catch(() => {})
+    // Cosmetic: the next resize corrects it, so the log is enough.
+    void backend.send('terminal.resize', { terminal_session_id: current.runId, cols, rows }).catch((e) => {
+      log(`✗ Resize did not reach ${current.label}: ${e instanceof Error ? e.message : String(e)}`)
+    })
   }
 
   /** Close a finished run's terminal. */

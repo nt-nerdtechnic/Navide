@@ -84,6 +84,29 @@ describe('InstallTerminal', () => {
     expect(wrapper.find('[data-testid="install-terminal-close"]').exists()).toBe(false)
   })
 
+  it('says so when typed input (a sudo password) never reached the command', async () => {
+    wrapper = await startRun()
+    expect(wrapper.find('[data-testid="install-terminal-input-error"]').exists()).toBe(false)
+    mock.setRejection('terminal.input', 'ws not open')
+
+    onboarding.runInput('hunter2\r')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="install-terminal-input-error"]').text())
+      .toBe(i18n.global.t('install-terminal.input-lost', { error: 'ws not open' }))
+  })
+
+  it('says so when the backend refuses typed input', async () => {
+    wrapper = await startRun()
+    mock.setResponse('terminal.input', { ok: false, error: 'no such terminal' })
+
+    onboarding.runInput('y')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="install-terminal-input-error"]').text())
+      .toBe(i18n.global.t('install-terminal.input-lost', { error: 'no such terminal' }))
+  })
+
   it('reports a clean exit', async () => {
     wrapper = await startRun()
     await exitRun({ exit_code: 0 })

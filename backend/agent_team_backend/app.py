@@ -897,6 +897,9 @@ async def _active_emit(event: dict[str, Any] | bytes) -> None:
     session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
     if session_id and event.get("type") == "terminal.exit":
         sess = _PTY_OWNERS.pop(session_id, None)
+        if sess is not None:
+            # An ended onboarding run needs no kill on disconnect.
+            sess._onboarding_runs.discard(session_id)
     else:
         sess = _PTY_OWNERS.get(session_id) if session_id else None
     if sess is None:

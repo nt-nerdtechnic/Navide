@@ -7996,6 +7996,7 @@
     "overridden": "{label}: {keys} was accepted but then replaced by Navide's own setting, so your value is not in effect in this pane."
   },
   "install-terminal": {
+    "input-lost": "Typing did not reach the command: {error}. Anything typed since (e.g. a password) was not received.",
     "running": "Running — if it asks for a password or a confirmation, type it here.",
     "exited-ok": "Finished (exit code 0).",
     "exited-fail": "Failed with exit code {code}. The output above says why.",
@@ -8125,6 +8126,8 @@
     }
   },
   "cli-health": {
+    "override-missing": "The {label} install you chose ({path}) was not found, so Navide launches the default one. Choose again in Settings → CLI Agents.",
+    "override-refused": "Navide could not keep the {label} install you chose ({path}): {error}. It launches the default one; choose again in Settings → CLI Agents.",
     "kicker": "CLI health check",
     "title": "Navide found an agent CLI setup issue",
     "step": {

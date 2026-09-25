@@ -6223,6 +6223,15 @@ async def onboarding_run(session: "Session", msg_id: str, msg_type: str, payload
     """
     from . import app
 
+    try:
+        cols = int(payload.get("cols") or 100)
+        rows = int(payload.get("rows") or 24)
+    except (TypeError, ValueError):
+        # A malformed request, not a PTY failure: no external-terminal fallback.
+        await session.send_json(make_error(
+            msg_id, msg_type, "BAD_REQUEST", "cols and rows must be integers",
+        ))
+        return
     # Offloaded: pull_model's reachability check shells out to `ollama list`.
     resolved = await asyncio.to_thread(app.onboarding_deps.resolve_run, payload)
     if not resolved.get("ok"):
@@ -6235,8 +6244,8 @@ async def onboarding_run(session: "Session", msg_id: str, msg_type: str, payload
             agent_key=ONBOARDING_RUN_AGENT_KEY,
             command=app.onboarding_deps.run_argv(command),
             cwd=str(Path.home()),
-            cols=int(payload.get("cols") or 100),
-            rows=int(payload.get("rows") or 24),
+            cols=cols,
+            rows=rows,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         # The command is still returned: the window offers it in an external

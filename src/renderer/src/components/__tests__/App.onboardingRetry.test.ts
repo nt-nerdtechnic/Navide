@@ -22,10 +22,14 @@ function fn(name: string): string {
 
 describe('a failed onboarding check can still show the wizard later', () => {
   const check = fn('checkOnboarding')
-  const catchBlock = check.slice(check.lastIndexOf('} catch {'))
+  const catchBlock = check.slice(check.lastIndexOf('} catch (e) {'))
 
   it('still fails open, so the shell is not blocked', () => {
     expect(catchBlock).toContain('onboardingComplete.value = true')
+  })
+
+  it('logs why it failed open instead of swallowing the error', () => {
+    expect(catchBlock).toContain('console.warn(')
   })
 
   it('remembers that the open gate is only a fallback', () => {
@@ -33,7 +37,7 @@ describe('a failed onboarding check can still show the wizard later', () => {
   })
 
   it('forgets the failure once a check succeeds', () => {
-    const tryBlock = check.slice(0, check.lastIndexOf('} catch {'))
+    const tryBlock = check.slice(0, check.lastIndexOf('} catch (e) {'))
     expect(tryBlock).toContain('onboardingCheckFailed.value = false')
   })
 

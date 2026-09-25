@@ -1155,11 +1155,15 @@ def resolve_run(request: dict[str, Any]) -> dict[str, Any]:
 # PowerShell's own exit status is 0 after a failed native command unless the
 # script says otherwise; this carries the last native exit code (or a cmdlet
 # failure) out as the process exit code the window reports.
+# `$?` is judged first: it describes the command's last statement, while
+# $LASTEXITCODE keeps the code of whichever native program ran last — inside
+# an `irm ... | iex` installer that can be a probe that returned non-zero
+# before the install went on to succeed.
 _POWERSHELL_EXIT_TAIL = (
     "\n$navideOk = $?; $navideCode = $LASTEXITCODE\n"
+    "if ($navideOk) { exit 0 }\n"
     "if ($navideCode) { exit $navideCode }\n"
-    "if (-not $navideOk) { exit 1 }\n"
-    "exit 0"
+    "exit 1"
 )
 
 

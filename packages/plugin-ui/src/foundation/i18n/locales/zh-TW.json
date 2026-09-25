@@ -7996,6 +7996,7 @@
     "overridden": "{label}：{keys} 收下了，但被 Navide 自己的設定蓋過去，所以這個 pane 裡實際沒有生效。"
   },
   "install-terminal": {
+    "input-lost": "輸入沒有送達指令：{error}。之後輸入的內容（例如密碼）都沒有被收到。",
     "running": "執行中——如果要求輸入密碼或確認，直接在這裡輸入。",
     "exited-ok": "已完成（結束碼 0）。",
     "exited-fail": "失敗，結束碼 {code}。原因請看上方輸出。",
@@ -8125,6 +8126,8 @@
     }
   },
   "cli-health": {
+    "override-missing": "找不到你選擇的 {label} 安裝（{path}），Navide 改用預設的那一個。請到設定 → CLI Agents 重新選擇。",
+    "override-refused": "Navide 無法保留你選擇的 {label} 安裝（{path}）：{error}。改用預設的那一個；請到設定 → CLI Agents 重新選擇。",
     "kicker": "CLI 健康檢查",
     "title": "Navide 發現 Agent CLI 設定問題",
     "step": {

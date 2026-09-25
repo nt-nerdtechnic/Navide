@@ -502,19 +502,41 @@ async function checkOnboarding(): Promise<void> {
     // there — whether or not a finding is currently shown — and the setting is
     // dropped once persisted, so a stale value can never overwrite a later
     // choice made in CLI management.
+    // Spawns no longer read the old setting, so a choice that does not move is
+    // no longer in effect: the user is told, never left on a silent default.
     let migrated = false
     for (const entry of resp.payload?.cli_health?.entries ?? []) {
       const settingKey = `agentTeam.cliBinary.${entry.agent_key}`
       const selectedPath = settingsGet(settingKey, '').trim()
-      if (!selectedPath || !entry.candidates.some((candidate) => candidate.path === selectedPath)) continue
-      const persisted = await backend.send<{ ok: boolean }>('onboarding.cli_health.select_binary', {
-        agent_key: entry.agent_key,
-        path: selectedPath,
-      }).catch(() => null)
-      if (persisted?.ok && persisted.payload?.ok !== false) {
+      if (!selectedPath) continue
+      const notice = { label: entry.label, path: selectedPath }
+      if (!entry.candidates.some((candidate) => candidate.path === selectedPath)) {
+        // Kept: an unmounted volume can bring the install back next launch.
+        console.warn(`[onboarding] ${entry.agent_key} binary override ${selectedPath} not found; not migrated`)
+        notifyRestore.toast(i18n.global.t('cli-health.override-missing', notice), { type: 'error' })
+        continue
+      }
+      let persisted: Awaited<ReturnType<typeof backend.send<{ ok: boolean; error?: string }>>>
+      try {
+        persisted = await backend.send<{ ok: boolean; error?: string }>('onboarding.cli_health.select_binary', {
+          agent_key: entry.agent_key,
+          path: selectedPath,
+        })
+      } catch (e) {
+        // Transport trouble: the setting stays and the next launch retries.
+        console.warn(`[onboarding] ${entry.agent_key} binary override migration failed:`, e)
+        continue
+      }
+      if (persisted.ok && persisted.payload?.ok !== false) {
         settingsRemove(settingKey)
         migrated = true
+        continue
       }
+      // A definitive refusal: retrying cannot help, so the stale value goes.
+      const error = persisted.payload?.error || persisted.error?.message || 'unknown'
+      console.warn(`[onboarding] ${entry.agent_key} binary override ${selectedPath} refused: ${error}`)
+      notifyRestore.toast(i18n.global.t('cli-health.override-refused', { ...notice, error }), { type: 'error' })
+      settingsRemove(settingKey)
     }
     // An override resolves that CLI's findings, so the status read above is
     // stale for the guide once anything moved.
@@ -522,7 +544,8 @@ async function checkOnboarding(): Promise<void> {
       resp = await backend.send<OnboardStatus>('onboarding.status', {}, ONBOARDING_STATUS_TIMEOUT_MS)
     }
     cliHealthGuide.value = cliHealthGuideForLaunch(resp.payload)
-  } catch {
+  } catch (e) {
+    console.warn('[onboarding] status check failed; failing open and retrying:', e)
     // If the check fails, don't lock the user out — fail open.
     //
     // Failing open is right for the wizard and wrong for the opt-out list:

@@ -104,7 +104,11 @@ async function run(dep: OnboardDep, action: MaintenanceAction): Promise<void> {
   if (!result) return
   if (result.ok) message.value = t('cli-manage.run-finished', { command: result.command })
   else if (result.run_id) message.value = t('cli-manage.run-failed', { command: result.command, error: result.error })
-  else if (result.unanswered) message.value = t('cli-manage.start-failed', { label: dep.label, error: result.error })
+  // An install refusal carries the reason (e.g. a missing prerequisite); the
+  // generic text below fits only an action the vendor never shipped.
+  else if (result.unanswered || (action === 'install' && result.error)) {
+    message.value = t('cli-manage.start-failed', { label: dep.label, error: result.error })
+  }
   // A PTY that could not start shows its external-terminal fallback below.
   else if (!result.spawn_failed) message.value = t('cli-manage.command-unavailable', { label: dep.label })
 }

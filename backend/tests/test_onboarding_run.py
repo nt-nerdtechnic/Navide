@@ -128,6 +128,18 @@ async def test_a_pty_that_cannot_start_still_returns_the_command(
 
 
 @pytest.mark.asyncio
+async def test_a_non_numeric_size_is_a_bad_request_not_a_spawn_failure() -> None:
+    # spawn_failed makes the window offer the external terminal; a malformed
+    # request has nothing to fall back to.
+    terminals = _RecordingTerminals()
+    session = _session(terminals)
+    reply = await _send(session, "onboarding.run", {"kind": "install", "dep_id": "python", "cols": "wide"})
+    assert reply["ok"] is False
+    assert reply["error"]["code"] == "BAD_REQUEST"
+    assert terminals.created == []
+
+
+@pytest.mark.asyncio
 async def test_a_renderer_cannot_open_a_pane_under_the_reserved_key() -> None:
     terminals = _RecordingTerminals()
     reply = await _send(_session(terminals), "terminal.create", {
@@ -165,7 +177,22 @@ def test_run_argv_windows_carries_the_native_exit_code(monkeypatch: pytest.Monke
     assert "-NoExit" not in argv  # the run must end for its exit code to arrive
     script = argv[-1]
     assert script.startswith("winget install --id OpenJS.NodeJS.LTS -e\n")
-    assert "exit $navideCode" in script and script.endswith("exit 0")
+    assert "exit $navideCode" in script and script.endswith("exit 1")
+
+
+def test_run_argv_windows_trusts_success_over_a_stale_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    # $LASTEXITCODE outlives the native program that set it: an `irm | iex`
+    # installer that probed something (exit 1) and then installed fine must
+    # exit 0. So success ($?) is judged before the native code is consulted.
+    monkeypatch.setattr(ob.osplat, "platform_id", "win32")
+    script = ob.run_argv("irm https://x.ai/cli/install.ps1 | iex")[-1]
+    tail = script.split("\n")[1:]
+    assert tail == [
+        "$navideOk = $?; $navideCode = $LASTEXITCODE",
+        "if ($navideOk) { exit 0 }",
+        "if ($navideCode) { exit $navideCode }",
+        "exit 1",
+    ]
 
 
 def test_run_argv_windows_calls_a_quoted_binary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,3 +281,24 @@ async def test_a_closed_connection_kills_its_runs(monkeypatch: pytest.MonkeyPatc
     assert exit_event["reason"] == "killed"
     assert session._onboarding_runs == set()
     app_mod._PTY_OWNERS.pop(run_id, None)
+
+
+@posix_only
+@pytest.mark.asyncio
+async def test_a_run_that_ends_by_itself_leaves_the_kill_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Routed through the app's real output sink, which is where the exit
+    # releases the PTY's owner.
+    events: list[Any] = []
+
+    async def emit(event: Any) -> None:
+        events.append(event)
+        await app_mod._active_emit(event)
+
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    monkeypatch.setattr(ob, "resolve_run", lambda _r: {"ok": True, "command": "exit 0"})
+    session = _session(TerminalService(emit))
+    reply = await _send(session, "onboarding.run", {"kind": "install", "dep_id": "x"})
+    run_id = reply["payload"]["run_id"]
+    await _wait_for_exit(events)
+    assert session._onboarding_runs == set()
+    assert run_id not in app_mod._PTY_OWNERS
