@@ -8812,7 +8812,7 @@ const voiceInput = setupVoiceInput({
   backend,
   focusedPaneId: () => effectiveFocusPaneId.value,
   paneInfo: (paneId) => panes.value.find((p) => p.id === paneId),
-  insertText: (paneId, text) => paneRefs[paneId]?.insertText(text) ?? false,
+  insertText: (paneId, text, opts) => paneRefs[paneId]?.insertText(text, opts) ?? false,
   hint: (text) => notifyRestore.toast(text, { type: 'info' }),
 })
 

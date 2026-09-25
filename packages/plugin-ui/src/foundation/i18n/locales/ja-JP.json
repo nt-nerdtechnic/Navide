@@ -129,7 +129,7 @@
       "recording": "録音中 — 離すと入力",
       "recording-hands-free": "ハンズフリーで録音中 — もう一度ショートカットで入力",
       "cap-left": "残り {s} 秒",
-      "esc-cancel": "Esc でキャンセル",
+      "enter-send-esc-cancel": "Enter で送信・Esc でキャンセル",
       "dismiss": "閉じる",
       "copy": "コピー",
       "copied": "コピーしました",

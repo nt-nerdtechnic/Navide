@@ -12,8 +12,9 @@ import { int16ToBase64 } from '../voice/pcm'
  * While recording, the backend's voice.partial events show the text so far in
  * the capsule. Release → RELEASE_TAIL_MS more audio, then voice.stop returns
  * the final transcript, which is typed into the target pane's input box like a
- * paste — never submitted: the user reviews it and presses Enter themselves
- * (see VoiceDeps.insert).
+ * paste — not submitted: the user reviews it and presses Enter themselves
+ * (see VoiceDeps.insert). Pressing Enter during the take instead (submit())
+ * ends it the same way and then sends what was typed in.
  *
  * Inert while the setting is off: every entry point checks `enabled()` first,
  * so no mic, no voice.* request and no listener runs.
@@ -139,9 +140,10 @@ export interface VoiceDeps {
   savedDeviceLabel?: () => string
   /** Whether a pane can take dictated text right now. */
   resolveTarget: (paneId: string) => VoiceTarget
-  /** Type `text` into the pane's input as a paste: no Enter, no messaging
-   *  queue. False when the pane had nothing to type into. */
-  insert: (paneId: string, text: string) => boolean
+  /** Type `text` into the pane's input as a paste, never through the
+   *  messaging queue; with `submit`, followed by the Enter a person would
+   *  press. False when the pane had nothing to type into. */
+  insert: (paneId: string, text: string, opts: { submit: boolean }) => boolean
   now?: () => number
   /** One diagnostic line per take (default console.info). */
   log?: (line: string) => void
@@ -195,6 +197,8 @@ export function useVoiceInput(deps: VoiceDeps) {
   let capture: VoiceCapture | null = null
   let seq = 0
   let released = false
+  // Enter ended (or will end) the take: its text is sent once typed in.
+  let submitAfter = false
   // Chunks captured before voice.start answered, sent in order once it does.
   let pending: Int16Array[] = []
   let sessionWaiter: ((sid: string | null) => void) | null = null
@@ -331,6 +335,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     }
     const mine = ++take
     released = false
+    submitAfter = false
     seq = 0
     stats = { t0: now(), end: '', samples: 0, peak: 0, chunks: 0 }
     state.phase = 'starting'
@@ -419,8 +424,8 @@ export function useVoiceInput(deps: VoiceDeps) {
       maxTimer = null
       if (mine !== take || state.phase !== 'recording') return
       if (stats && !stats.end) stats.end = 'cap'
-      // Dictation never sends, so a capped take (even a hands-free one nobody
-      // is watching) is inserted like any other; the user reviews it.
+      // A capped take (even a hands-free one nobody is watching) is inserted
+      // unsent like any other; the user reviews it.
       void finish(mine)
     }, Math.max(0, state.capEndsAt - now()))
   }
@@ -473,7 +478,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     sessionId = null
     if (!res.ok || !res.payload?.ok) return fail(`stop-${res.payload?.reason ?? 'failed'}`)
     // One line: a line break reaches a PTY as CR, which a CLI not in
-    // bracketed paste takes as Enter — and dictation never submits.
+    // bracketed paste takes as Enter — and only submit() may send it.
     const text = (res.payload.text ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim()
     if (!text) {
       const durationMs = res.payload.durationMs ?? Math.round((stats?.samples ?? 0) / 16)
@@ -490,10 +495,23 @@ export function useVoiceInput(deps: VoiceDeps) {
     const paneId = state.paneId ?? ''
     const target = deps.resolveTarget(paneId)
     if (!target.ok) return fail(target.reason === 'asleep' ? 'pane-asleep' : 'not-cli', undefined, text)
-    if (!deps.insert(paneId, text)) return fail('insert-failed', undefined, text)
-    logTake('text')
+    if (!deps.insert(paneId, text, { submit: submitAfter })) return fail('insert-failed', undefined, text)
+    logTake(submitAfter ? 'sent' : 'text')
     take++
     reset()
+  }
+
+  /**
+   * Enter during a take: end it like a release (or, while transcribing, let it
+   * finish) and send the text once it is typed in. Nothing is sent when the
+   * take ends with no text or the pane does not take it. Returns true when
+   * the key was the take's.
+   */
+  function submit(): boolean {
+    if (state.phase !== 'starting' && state.phase !== 'recording' && state.phase !== 'transcribing') return false
+    submitAfter = true
+    release('enter')
+    return true
   }
 
   /**
@@ -542,7 +560,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     reset()
   }
 
-  return { state, visible, press, lock, release, partial, cancel, dismiss, disable }
+  return { state, visible, press, lock, release, submit, partial, cancel, dismiss, disable }
 }
 
 export type VoiceInput = ReturnType<typeof useVoiceInput>

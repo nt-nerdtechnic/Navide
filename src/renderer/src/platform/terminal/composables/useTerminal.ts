@@ -162,6 +162,10 @@ const PASTE_CHUNK = 512
  * handler's first line, long before the ack gets its turn.
  */
 const PASTE_ACK_TIMEOUT_MS = 60_000
+/** Pause between a dictated paste landing and the Enter that submits it: a
+ *  CLI that tells a paste from typing by timing would otherwise read a CR in
+ *  the same burst as a newline inside the paste. */
+const SUBMIT_AFTER_PASTE_MS = 150
 
 /** Why a paste chunk never got a positive ack. */
 type PasteChunkFailure =
@@ -4422,8 +4426,11 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    *
    * Chunking at 512 bytes is the same thing App.vue's injectText does, to keep
    * large pastes off the tty's write limits.
+   *
+   * Resolves true once every chunk is acked as written; false when anything
+   * was dropped, refused or is still un-acked at the deadline.
    */
-  function pasteFromClipboard(text: string): void {
+  function pasteFromClipboard(text: string): Promise<boolean> {
     // Both rejections below are silent by design, and that is what made "the
     // paste vanished" unanswerable: an empty clipboard (a copy that never
     // landed — see the Cmd+C path above and menu.ts) and a still-preparing
@@ -4435,7 +4442,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         `pane=${paneId} paste ignored — no text to send`,
         'empty'
       )
-      return
+      return Promise.resolve(false)
     }
     // The pane gates stdin while it is still preparing, and a paste respects
     // that too. Rejected rather than buffered: a clipboard paste is a discrete
@@ -4446,7 +4453,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         'preparing',
         text.length
       )
-      return
+      return Promise.resolve(false)
     }
     // Same gate pasteText applies. Checked up front so a paste into a dead pane
     // cannot clear `isStopped` (and fire onUserResume) while sending nothing.
@@ -4456,7 +4463,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         'no-session',
         text.length
       )
-      return
+      return Promise.resolve(false)
     }
     // Same normalization xterm applies: a PTY expects CR, never CRLF/LF.
     const normalized = text.replace(/\r?\n/g, '\r')
@@ -4482,7 +4489,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     const chunks = chunkForPty(payload, PASTE_CHUNK)
     // ⌘V and a file drop are the person at the keyboard; injection never
     // comes through here (App.vue's injectText has its own path).
-    void Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk, HUMAN_KEY))).then((outcomes) => {
+    const written = Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk, HUMAN_KEY))).then((outcomes) => {
       const lost = outcomes.filter((o) => o === 'transport' || o === 'refused').length
       const late = outcomes.filter((o) => o === 'timeout').length
       // A late ack is not a lost chunk: the backend writes the bytes into the
@@ -4496,18 +4503,20 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
           `un-acked after ${PASTE_ACK_TIMEOUT_MS}ms (bytes were written)`,
           'warning'
         )
-        return
+        return false
       }
-      if (!lost) return
+      if (!lost) return true
       _clipboardFailure(
         `pane=${paneId} paste truncated — ${lost}/${chunks.length} chunk(s) never left` +
         (late ? ` (${late} more un-acked)` : ''),
         lost === chunks.length ? 'send-failed-all' : 'send-failed',
         normalized.length
       )
+      return false
     })
     term.scrollToBottom()
     term.clearSelection()
+    return written
   }
 
   /**
@@ -4515,12 +4524,32 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    * false, with nothing sent, when the paste would be dropped — the pane is
    * still preparing, has no live session, or the transport is down — so the
    * caller can keep the text instead of losing it.
+   *
+   * `submit` then presses Enter for the user, once every chunk of the paste is
+   * acked and SUBMIT_AFTER_PASTE_MS has passed — so the CR arrives after the
+   * bracketed-paste end, never inside it. A paste that lost or has not yet
+   * acked a chunk is left in the input box unsent.
    */
-  function insertText(text: string): boolean {
+  function insertText(text: string, { submit = false }: { submit?: boolean } = {}): boolean {
     if (!text || _stdinGated || !inputTransportReady()) return false
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') return false
-    pasteFromClipboard(text)
+    const written = pasteFromClipboard(text)
+    if (submit) {
+      void written.then((ok) => {
+        if (ok) setTimeout(submitAsTyped, SUBMIT_AFTER_PASTE_MS)
+      })
+    }
     return true
+  }
+
+  /** The Enter a person would type: the same bytes and bookkeeping as a CR
+   *  through term.onData, sent as human input. */
+  function submitAsTyped(): void {
+    if (_stdinGated || isDisposed) return
+    if (!pasteText('\r', HUMAN_KEY)) return
+    if (isStopped.value) { isStopped.value = false; opts?.onUserResume?.() }
+    inputBuffer = ''
+    syncDraft()
   }
 
   /** Returns whether the interrupt was actually issued. The two early exits

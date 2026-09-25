@@ -129,7 +129,7 @@
       "recording": "錄音中，放開即填入",
       "recording-hands-free": "免持錄音中，再按一次快捷鍵填入",
       "cap-left": "剩 {s} 秒",
-      "esc-cancel": "Esc 取消",
+      "enter-send-esc-cancel": "Enter 送出・Esc 取消",
       "dismiss": "關閉",
       "copy": "複製",
       "copied": "已複製",

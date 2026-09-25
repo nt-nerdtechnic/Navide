@@ -23,6 +23,8 @@ interface Harness {
   deps: VoiceDeps
   requests: Array<{ type: string; payload: Record<string, unknown> }>
   inserted: Array<{ paneId: string; text: string }>
+  /** `submit` of every insert call, taken or not. */
+  submits: boolean[]
   insertOk: boolean
   onChunk: ((pcm: Int16Array) => void) | null
   onEnded: (() => void) | null
@@ -38,6 +40,7 @@ function harness(): Harness {
   const h: Harness = {
     requests: [],
     inserted: [],
+    submits: [],
     insertOk: true,
     onChunk: null,
     onEnded: null,
@@ -69,7 +72,8 @@ function harness(): Harness {
       }
     },
     resolveTarget: (paneId) => h.targets[paneId] ?? { ok: false, reason: 'not-cli' },
-    insert: (paneId, text) => {
+    insert: (paneId, text, opts) => {
+      h.submits.push(opts.submit)
       if (h.insertOk) h.inserted.push({ paneId, text })
       return h.insertOk
     },
@@ -699,5 +703,144 @@ describe('voice error sentences', () => {
 
   it('an unknown reason falls back to the generic sentence', () => {
     expect(voiceErrorI18nKey('stop-something-new')).toBe('voice.error.generic')
+  })
+})
+
+describe('useVoiceInput — Enter ends the take and sends it', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('Enter while recording: one insert that submits, after the tail', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    expect(v.submit()).toBe(true)
+    // Key repeat of the Enter changes nothing.
+    expect(v.submit()).toBe(true)
+    expect(v.state.phase).toBe('recording')
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '幫我跑測試' }])
+    expect(h.submits).toEqual([true])
+    expect(v.state.phase).toBe('idle')
+    expect(h.logs.at(-1)).toContain('outcome=sent end=enter')
+  })
+
+  it('Enter while transcribing sends the text once it lands', async () => {
+    const h = harness()
+    let answer!: (v: unknown) => void
+    const base = h.deps.request
+    h.deps.request = (type, payload, t) =>
+      type === 'voice.stop'
+        ? new Promise((r) => { answer = r as never; h.requests.push({ type, payload }) })
+        : base(type, payload, t)
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    await releaseAndStop(v)
+    expect(v.state.phase).toBe('transcribing')
+    expect(v.submit()).toBe(true)
+    answer({ ok: true, payload: { ok: true, text: '跑測試' } })
+    await settle()
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '跑測試' }])
+    expect(h.submits).toEqual([true])
+  })
+
+  it('Enter while still starting ends the take with what the mic buffered, then sends it', async () => {
+    const h = harness()
+    // voice.start still loading the sidecar.
+    let answer!: () => void
+    const base = h.deps.request
+    h.deps.request = (type, payload, t) => {
+      if (type !== 'voice.start') return base(type, payload, t)
+      h.requests.push({ type, payload })
+      return new Promise((r) => { answer = () => r({ ok: true, payload: { ok: true, sessionId: 's1' } as never }) })
+    }
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    expect(v.state.phase).toBe('starting')
+    expect(v.submit()).toBe(true)
+    await settle()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    answer()
+    await settle()
+    expect(types(h)).toEqual(['voice.start', 'voice.chunk', 'voice.stop'])
+    expect(h.submits).toEqual([true])
+    expect(h.inserted).toHaveLength(1)
+  })
+
+  it('a take ended by the shortcut, or by the cap, is inserted without sending', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    await releaseAndStop(v)
+    v.press('p1')
+    await settle()
+    vi.advanceTimersByTime(MAX_RECORDING_MS)
+    await settle()
+    expect(h.submits).toEqual([false, false])
+    // An Enter from an earlier take does not carry over.
+    v.press('p1', { handsFree: true })
+    await settle()
+    v.submit()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    v.press('p1')
+    await settle()
+    await releaseAndStop(v)
+    expect(h.submits).toEqual([false, false, true, false])
+  })
+
+  it('no text, silence or a slip of the key sends nothing', async () => {
+    for (const extra of [{ durationMs: 1500, peak: 0 }, { durationMs: 1500, peak: 900 }, { durationMs: 120, peak: 0 }]) {
+      const h = harness()
+      h.stopText = ''
+      h.stopExtra = extra
+      const v = useVoiceInput(h.deps)
+      v.press('p1')
+      await settle()
+      v.submit()
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      expect(h.submits).toEqual([])
+    }
+  })
+
+  it('a pane that does not take the text keeps it, and nothing is sent', async () => {
+    const h = harness()
+    h.insertOk = false
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    v.submit()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(v.state.error).toEqual({ key: 'insert-failed', params: undefined, text: '幫我跑測試' })
+    expect(h.inserted).toEqual([])
+  })
+
+  it('is not taken with no take, or by an error capsule', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    expect(v.submit()).toBe(false)
+    h.targets = {}
+    v.press('p1')
+    expect(v.state.phase).toBe('error')
+    expect(v.submit()).toBe(false)
+  })
+
+  it('Esc after Enter still cancels: nothing is typed in', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    v.submit()
+    expect(v.cancel()).toBe(true)
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(h.submits).toEqual([])
   })
 })

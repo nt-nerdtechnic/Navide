@@ -70,9 +70,9 @@ export interface VoiceWiringHost {
   focusedPaneId: () => string | null
   /** A pane's messaging handle and whether a CLI is running behind it. */
   paneInfo: (paneId: string) => { realized: boolean; messagingName?: string } | undefined
-  /** Type text into a pane's input the way a ⌘V paste does (never submits);
-   *  false when the pane has no terminal to type into. */
-  insertText: (paneId: string, text: string) => boolean
+  /** Type text into a pane's input the way a ⌘V paste does, then press Enter
+   *  when `submit`; false when the pane has no terminal to type into. */
+  insertText: (paneId: string, text: string, opts: { submit: boolean }) => boolean
   /** A non-blocking notice (a toast), for a pre-warm that failed. */
   hint?: (text: string) => void
 }
@@ -83,7 +83,8 @@ export interface VoiceWiringHost {
  * Dictation: the final transcript is pasted into the target pane's input box
  * through the pane's own paste path — the one ⌘V uses — so it lands like text
  * the user typed: no envelope, no messaging queue or idle gate (a busy CLI
- * still takes it), and no Enter. The user submits it themselves.
+ * still takes it), and no Enter — unless the take was ended with Enter, which
+ * then submits it the way a typed Enter would.
  *
  * With the setting off: the `voiceInput` context is false, so the hotkey rule
  * never matches and the chord reaches the PTY as before; the command handler
@@ -117,7 +118,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       if (!pane.realized) return { ok: false, reason: 'asleep' }
       return { ok: true }
     },
-    insert: (paneId, text) => host.insertText(paneId, text),
+    insert: (paneId, text, opts) => host.insertText(paneId, text, opts),
   }
   const voice = useVoiceInput(deps)
   // Pushed only to the window that is recording; the take checks the session.
@@ -207,23 +208,34 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     },
   )
 
-  // ── Esc during a take ───────────────────────────────────────────────────────
+  // ── Esc / Enter during a take ───────────────────────────────────────────────
   // Listened for only while a take records or transcribes (see
-  // useVoiceInput.cancel). A failed capsule leaves Esc to the CLI — it is how
-  // a busy pane is interrupted — and offers its own button instead.
-  function onEsc(e: KeyboardEvent): void {
-    if (e.key !== 'Escape' || e.isComposing) return
-    if (!voice.cancel()) return
+  // useVoiceInput.cancel / submit). A failed capsule leaves Esc to the CLI —
+  // it is how a busy pane is interrupted — and offers its own button instead.
+  // Enter ends the take and sends its text; it is taken only bare, outside an
+  // IME composition (Enter confirms a candidate there), and only while the
+  // take's own pane has focus — Enter in another pane stays that pane's.
+  // Once the text is in and the take is over, Enter reaches the CLI as usual.
+  function onTakeKey(e: KeyboardEvent): void {
+    if (e.isComposing) return
+    if (e.key === 'Escape') {
+      if (!voice.cancel()) return
+    } else if (e.key === 'Enter') {
+      if (e.keyCode === 229 || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return
+      if (host.focusedPaneId() !== voice.state.paneId || !voice.submit()) return
+    } else {
+      return
+    }
     e.preventDefault()
     e.stopImmediatePropagation()
     disarm()
   }
-  const ESC_PHASES = new Set(['starting', 'recording', 'transcribing'])
+  const TAKE_PHASES = new Set(['starting', 'recording', 'transcribing'])
   watch(
-    () => ESC_PHASES.has(voice.state.phase),
+    () => TAKE_PHASES.has(voice.state.phase),
     (owned) => {
-      if (owned) window.addEventListener('keydown', onEsc, true)
-      else window.removeEventListener('keydown', onEsc, true)
+      if (owned) window.addEventListener('keydown', onTakeKey, true)
+      else window.removeEventListener('keydown', onTakeKey, true)
     },
   )
 
@@ -278,7 +290,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     offPartial()
     disarm()
     window.removeEventListener('focus', onFocus)
-    window.removeEventListener('keydown', onEsc, true)
+    window.removeEventListener('keydown', onTakeKey, true)
     voice.disable()
   })
 

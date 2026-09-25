@@ -21,6 +21,9 @@ describe('voice wiring', () => {
   let sent: Array<{ type: string; payload: Record<string, unknown> }>
   let delivered: Array<{ paneId: string; text: string }>
   let inserted: Array<{ paneId: string; text: string }>
+  /** `submit` of every insertText call. */
+  let submits: boolean[]
+  let stopBody: Record<string, unknown>
   let listeners: Map<string, (payload: unknown) => void>
   let idle: boolean
   let prewarmBody: Record<string, unknown>
@@ -39,6 +42,8 @@ describe('voice wiring', () => {
     sent = []
     delivered = []
     inserted = []
+    submits = []
+    stopBody = { ok: true, text: '列出所有測試', ms: 5, durationMs: 800 }
     listeners = new Map()
     idle = true
     prewarmBody = { ok: true }
@@ -68,7 +73,7 @@ describe('voice wiring', () => {
             sent.push({ type, payload })
             const body =
               type === 'voice.start' ? { ok: true, sessionId: 'S' }
-              : type === 'voice.stop' ? { ok: true, text: '列出所有測試', ms: 5, durationMs: 800 }
+              : type === 'voice.stop' ? stopBody
               : type === 'voice.prewarm' ? prewarmBody
               : { ok: true }
             return { id: 'x', type: `${type}.result`, ok: true, payload: body, error: null, timestamp: '' }
@@ -80,7 +85,8 @@ describe('voice wiring', () => {
         },
         focusedPaneId: () => focused,
         paneInfo: (id) => (id === 'pane-a' ? { realized: true, messagingName: 'claude-1' } : { realized: false, messagingName: 'sleepy' }),
-        insertText: (paneId, text) => {
+        insertText: (paneId, text, opts) => {
+          submits.push(opts.submit)
           inserted.push({ paneId, text })
           return true
         },
@@ -372,6 +378,130 @@ describe('voice wiring', () => {
     executeCommand('workbench.action.holdToTalk')
     await settle()
     expect(voice.state.phase).toBe('recording')
+  })
+
+  const keydown = (init: KeyboardEventInit): KeyboardEvent => {
+    const e = new KeyboardEvent('keydown', { cancelable: true, ...init })
+    window.dispatchEvent(e)
+    return e
+  }
+
+  it('toggle: Enter while recording ends the take and sends the text; Enter after it is the CLI\'s', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(true)
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(inserted).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+    expect(submits).toEqual([true])
+    expect(voice.state.phase).toBe('idle')
+    // Straight to the pane: never the messaging queue.
+    messaging.pump()
+    await settle()
+    expect(delivered).toEqual([])
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(false)
+    expect(submits).toEqual([true])
+  })
+
+  it('hold: Enter while the chord is still held sends the take too', async () => {
+    await start()
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(true)
+    // The chord's later keyup is no longer followed.
+    keyup({ key: 'm', code: 'KeyM' })
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(submits).toEqual([true])
+  })
+
+  it('Enter while transcribing is taken and sends the text once it lands', async () => {
+    await start()
+    keyup({ key: 'm', code: 'KeyM' })
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    expect(voice.state.phase).toBe('transcribing')
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(true)
+    await settle()
+    expect(submits).toEqual([true])
+  })
+
+  it('Enter while the take is still starting ends it once the mic opens, then sends', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    let opened!: () => void
+    openMicCapture.mockImplementationOnce((onChunk: (pcm: Int16Array) => void) =>
+      new Promise((r) => { opened = () => r({ flush: async () => { onChunk(Int16Array.from([1, 2])) }, close: () => {} }) }))
+    settings.setVoiceInputEnabled(true)
+    await nextTick()
+    executeCommand('workbench.action.holdToTalk')
+    await settle()
+    expect(voice.state.phase).toBe('starting')
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(true)
+    opened()
+    await settle()
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(submits).toEqual([true])
+  })
+
+  it('a take ended with the shortcut is inserted without sending; Esc still cancels', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    keyup({ key: 'm', code: 'KeyM' })
+    executeCommand('workbench.action.holdToTalk')
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(submits).toEqual([false])
+    executeCommand('workbench.action.holdToTalk')
+    await settle()
+    expect(keydown({ key: 'Escape' }).defaultPrevented).toBe(true)
+    await settle()
+    expect(voice.state.phase).toBe('idle')
+    expect(submits).toEqual([false])
+  })
+
+  it('no speech or a silent mic sends nothing', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    for (const extra of [{ peak: 900 }, { peak: 0 }]) {
+      stopBody = { ok: true, text: '', durationMs: 1500, ...extra }
+      await start()
+      keydown({ key: 'Enter' })
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      expect(voice.state.phase).toBe('error')
+      expect(voice.state.error?.key).toBe(extra.peak ? 'no-speech' : 'mic-silent')
+      voice.dismiss()
+    }
+    expect(submits).toEqual([])
+  })
+
+  it('an Enter confirming an IME candidate, or with a modifier, is left alone', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    expect(keydown({ key: 'Enter', isComposing: true }).defaultPrevented).toBe(false)
+    expect(keydown({ key: 'Enter', keyCode: 229 }).defaultPrevented).toBe(false)
+    for (const mod of ['shiftKey', 'ctrlKey', 'altKey', 'metaKey']) {
+      expect(keydown({ key: 'Enter', [mod]: true }).defaultPrevented).toBe(false)
+    }
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+    expect(inserted).toEqual([])
+  })
+
+  it('Enter in another pane stays that pane\'s', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    focused = 'pane-c'
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(false)
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+  })
+
+  it('setting OFF or no take: Enter is never taken', async () => {
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(false)
+    settings.setVoiceInputEnabled(true)
+    await nextTick()
+    expect(keydown({ key: 'Enter' }).defaultPrevented).toBe(false)
+    expect(inserted).toEqual([])
   })
 
   it('pre-warms only while the setting is on: at switch-on and on focus (throttled); switching off shuts down', async () => {

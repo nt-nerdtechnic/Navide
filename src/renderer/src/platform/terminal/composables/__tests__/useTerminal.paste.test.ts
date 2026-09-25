@@ -310,6 +310,53 @@ describe('useTerminal — manual paste', () => {
       expect(pastedData(mock)).toBe('')
       scope.stop()
     })
+
+    // Enter pressed during a take: the paste, then the Enter a person would
+    // type — after the bracketed-paste end, never inside it.
+    const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+    it('with submit, presses Enter as the user once the paste has landed', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      captured.bracketedPasteMode = true
+      expect(terminal.insertText('幫我跑測試', { submit: true })).toBe(true)
+      await settle()
+      expect(pastedData(mock)).toBe('\x1b[200~幫我跑測試\x1b[201~')
+      await wait(200)
+      expect(pastedData(mock)).toBe('\x1b[200~幫我跑測試\x1b[201~\r')
+      const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+      expect(sent.at(-1)).toMatchObject({ data: '\r', human: true })
+      for (const p of sent) expect(p).toMatchObject({ human: true })
+      scope.stop()
+    })
+
+    it('without submit, never presses Enter', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      terminal.insertText('幫我跑測試')
+      await wait(200)
+      expect(pastedData(mock)).toBe('幫我跑測試')
+      scope.stop()
+    })
+
+    it('with submit, sends nothing at all when the paste is refused up front', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      terminal.setDisableStdin(true)
+      expect(terminal.insertText('kept by the caller', { submit: true })).toBe(false)
+      await wait(200)
+      expect(pastedData(mock)).toBe('')
+      scope.stop()
+    })
+
+    it('with submit, leaves a paste the backend refused unsent', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      mock.setResponse('terminal.input', null, {
+        ok: false,
+        error: { code: 'BAD_REQUEST', message: 'no such terminal session' }
+      })
+      terminal.insertText('幫我跑測試', { submit: true })
+      await wait(200)
+      expect(pastedData(mock)).not.toContain('\r')
+      scope.stop()
+    })
   })
 
   // Every way a paste can come to nothing used to return silently, so they were

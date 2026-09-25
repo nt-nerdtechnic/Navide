@@ -129,7 +129,7 @@
       "recording": "Listening — release to insert",
       "recording-hands-free": "Listening hands-free — press the shortcut again to insert",
       "cap-left": "{s}s left",
-      "esc-cancel": "Esc to cancel",
+      "enter-send-esc-cancel": "Enter to send · Esc to cancel",
       "dismiss": "Dismiss",
       "copy": "Copy",
       "copied": "Copied",

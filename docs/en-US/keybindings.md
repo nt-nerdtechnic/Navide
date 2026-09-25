@@ -56,8 +56,9 @@ off the chord is not consumed and reaches the focused terminal as before.
 
 | Shortcut | Action |
 |----------|--------|
-| `⌃⌥M` (hold) | Dictate into the focused CLI pane (the recording mode in Settings decides hold, tap-to-lock or press-to-toggle). The words appear in the capsule as you speak; when the take ends, the text is typed into the pane's input box like a paste — it is **not** sent: review it and press Enter yourself. It goes straight to the pane, even while the CLI is busy. Releasing any key of the chord stops a held take. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
+| `⌃⌥M` (hold) | Dictate into the focused CLI pane (the recording mode in Settings decides hold, tap-to-lock or press-to-toggle). The words appear in the capsule as you speak; when the take ends this way, the text is typed into the pane's input box like a paste — it is **not** sent: review it and press Enter yourself. It goes straight to the pane, even while the CLI is busy. Releasing any key of the chord stops a held take. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
 | `Escape` | During a take only: cancel the recording or its transcription; nothing is typed in. Not a rule in the table — it is only listened for while a take records or transcribes |
+| `Enter` | During a take only, with its pane focused: end it and **send** — once the final text is typed in, Enter is pressed for you (after the paste, as if you typed it). Works while the take is starting, recording or transcribing, and is handiest hands-free: speak, then Enter. Nothing is sent when nothing was heard or the pane cannot take the text. An Enter that confirms an IME candidate, or one with a modifier, is left alone. Like Esc, not a rule in the table; once the take is over, Enter reaches the CLI as usual |
 
 Once the capsule shows an error, Esc is left alone so it still interrupts the
 CLI as usual; the error closes with its **✕** or by itself after a few seconds.
