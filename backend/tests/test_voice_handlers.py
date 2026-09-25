@@ -644,15 +644,18 @@ def test_strip_overlap() -> None:
 
 async def test_force_trim_when_no_agreement_at_cap(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Every segment ends in a digit that changes per request, so no two
-    # hypotheses agree: only the cap moves the window.
+    # hypotheses agree: only the cap moves the window. Fed in step with the
+    # partials: a window may pass the cap by the audio that arrived while the
+    # previous partial ran, which _speak (4x real time, against wall-clock
+    # partials) scaled with the machine's speed (5.25 s on a Windows runner).
     monkeypatch.setenv("FAKE_STT_TAIL_NOISE", "all")
     monkeypatch.setattr(voice_handlers, "WINDOW_CAP_BYTES", 3 * SECOND)
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
-    await _speak(session, sid, range(40))
+    await _speak_in_step(session, sid, range(40))
     await asyncio.sleep(0.2)
     await _settle(session)
-    assert max(r["bytes"] for r in _requests(stream) if r["segments"]) <= 4 * SECOND
+    assert max(r["bytes"] for r in _requests(stream) if r["segments"]) <= 3 * SECOND + SECOND // 2
     committed = [p["committed"] for p in _partials(session)]
     assert all(b.startswith(a) for a, b in zip(committed, committed[1:]))
     stop = await _send(session, "voice.stop", {"sessionId": sid})
