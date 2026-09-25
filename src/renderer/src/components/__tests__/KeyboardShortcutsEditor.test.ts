@@ -24,8 +24,11 @@ interface Bridge {
 let bridge: Bridge
 let wrapper: VueWrapper
 
-function mountEditor(): VueWrapper {
-  return mount(KeyboardShortcutsEditor, { attachTo: document.body, global: { plugins: [i18n] } })
+/** `initialQuery` narrows the table to the rows a test touches. A full mount
+ *  renders every command (200+ rows) and each recorder keystroke re-renders
+ *  it, which under a loaded CPU ran past the 5 s test timeout. */
+function mountEditor(initialQuery?: string): VueWrapper {
+  return mount(KeyboardShortcutsEditor, { props: { initialQuery }, attachTo: document.body, global: { plugins: [i18n] } })
 }
 
 /** The row whose command id is shown in the second line of the command cell. */
@@ -237,7 +240,7 @@ describe('recording a new shortcut', () => {
   }
 
   it('suspends the global dispatcher while recording and restores it after', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')
     expect(isKeyCaptureActive()).toBe(true)
 
@@ -248,7 +251,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('swallows the keystroke so neither the command nor the modal sees it', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     const bubbled = vi.fn()
     window.addEventListener('keydown', bubbled)
     await startRecordingOn('editor.action.save')
@@ -260,7 +263,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('ignores a modifier-only press and keeps waiting', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')
     press({ key: 'Meta', metaKey: true })
     await wrapper.vm.$nextTick()
@@ -268,7 +271,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('writes one removal and one addition when the binding is confirmed', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')
     press({ key: 's', metaKey: true, altKey: true })
     await wrapper.vm.$nextTick()
@@ -283,7 +286,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('accumulates two presses into a chord', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')
     press({ key: 'k', metaKey: true })
     press({ key: 'w', metaKey: true })
@@ -295,7 +298,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('a third press restarts the chord rather than dead-ending at three segments', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')
     press({ key: 'k', metaKey: true })
     press({ key: 'w', metaKey: true })
@@ -308,7 +311,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('bare Escape abandons the recording instead of being recorded', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await rowFor(wrapper, 'editor.action.save').find('.kse-chip-keys').trigger('click')
     expect(isKeyCaptureActive()).toBe(true)
 
@@ -323,7 +326,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('a modified Escape is still recordable', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await rowFor(wrapper, 'editor.action.save').find('.kse-chip-keys').trigger('click')
     press({ key: 'Escape', shiftKey: true })
     await wrapper.vm.$nextTick()
@@ -332,7 +335,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('explains an invalid key rather than dropping the chip in silence', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await rowFor(wrapper, 'editor.action.save').find('.kse-add').trigger('click')
     press({ key: 'k', metaKey: true })
     press({ key: 's', metaKey: true })
@@ -346,7 +349,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('refuses to add a key the row already has, and says so', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await rowFor(wrapper, 'editor.action.save').find('.kse-add').trigger('click')
     press({ key: 's', metaKey: true })
     await wrapper.vm.$nextTick()
@@ -358,7 +361,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('cancelling writes nothing and re-arms the dispatcher', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')
     press({ key: 's', metaKey: true, altKey: true })
     await wrapper.vm.$nextTick()
@@ -370,7 +373,7 @@ describe('recording a new shortcut', () => {
   })
 
   it('adds a second binding via the + button without dropping the default', async () => {
-    wrapper = mountEditor()
+    wrapper = mountEditor('editor.action.save')
     await rowFor(wrapper, 'editor.action.save').find('.kse-add').trigger('click')
     press({ key: 's', metaKey: true, altKey: true })
     await wrapper.vm.$nextTick()
