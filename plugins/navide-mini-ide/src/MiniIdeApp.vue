@@ -31,6 +31,13 @@ import type { Diagnostic } from './editor/diagnostics'
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
 const workspaceBaseName = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath
+// What the titlebar calls this workspace: the alias the user gave it, which the
+// Host resolved and passed as `workspace_display_name`, else the folder name.
+// A blank or absent param means "no alias" — that is how clearing one works.
+// KNOWN LIMITATION: a load-time snapshot. Renaming the workspace while this
+// window is open does NOT retitle it; the name is correct again the next time
+// the window opens.
+const workspaceTitleName = params.get('workspace_display_name')?.trim() || workspaceBaseName
 // Canonical spelling of the same workspace, used ONLY for comparisons — the
 // workspace stays displayed as the user opened it. A workspace reached through
 // a symlink (/tmp/wt/proj → /private/tmp/wt/proj, routine with git worktrees on
@@ -2518,7 +2525,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
     <!-- Titlebar -->
     <div v-show="!zenMode" class="ide-titlebar">
       <WindowControls />
-      <span class="ide-titlebar-name">{{ workspaceBaseName }}</span>
+      <span class="ide-titlebar-name">{{ workspaceTitleName }}</span>
     </div>
     <div class="ide-body">
     <!-- Activity bar -->
@@ -2583,6 +2590,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         ref="explorerRef"
         v-show="sidebarView === 'explorer'"
         :workspace-path="workspacePath"
+        :workspace-display-name="workspaceTitleName"
         :backend="backend"
         embedded
         :on-ask-ai-about-file="handleAskAiAboutFile"
