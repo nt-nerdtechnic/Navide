@@ -158,7 +158,7 @@ Settings は Role、Pipeline、MCP Server、Analyzer Behavior、AI Provider、Ap
 
 **Accounts** では CLI Account ごとに 1 枚のカードを扱います。CLI 自身のサインインに加えて、カードには **Portable Credential** を保持できます。これは各ベンダーが「どの Machine でも使う」ために公式に用意した値（例：Claude Code の `claude setup-token`）です。一度貼り付けると、その CLI の新しい Pane が環境変数として受け取り、CLI 自身の Login File には触れません。CLI ごとに*使用中*の Credential は 1 つで、カードがどれかを示し、ローカルの Login File が優先されてしまう場合には警告します。削除はこの Device にのみ影響します。
 
-**アカウントに名前を付ける。**内蔵の Default を含め、すべての Account に好きな名前を付けられます。Accounts でカードにカーソルを合わせて鉛筆を押すか、Quota Badge の Account 一覧の行にある鉛筆を使います。その名前は Account が表示されるあらゆる場所——Pane ヘッダー、Account 一覧、カード、切り替え通知、Turn Stats——で主表示になり、サインイン中の識別情報はその隣に残ります。欄を空にすると自動生成の名前（Account 1、Account 2…）に戻ります。Credential が識別情報を持たない CLI では、付けた名前だけが 2 つの Account を見分ける手段です。
+**アカウントに名前を付ける。**内蔵の Default を含め、すべての Account に好きな名前を付けられます。Accounts でカードにカーソルを合わせて鉛筆を押すか、Quota Badge の Account 一覧の行にある鉛筆を使います。その名前は Account が表示されるあらゆる場所——Pane ヘッダー、Account 一覧、カード、切り替え通知、Turn Stats——で主表示になり、サインイン中の識別情報はその隣に残ります。欄を空にすると自動生成の名前（Account 1、Account 2…）に戻ります。Credential が識別情報を持たない CLI では、付けた名前だけが 2 つの Account を見分ける手段です。名前はログインではなく Account のスロットに属します。そのスロットに後から別の email でサインインしても、名前はそのまま残ります。
 
 Pane ヘッダーの Quota Badge は、その数値がどの Account のものかを、パーセント表示の前の独立したセクションに示します。付けた名前、名前がない場合はサインイン中の email の `@` より前の部分です。警告と枠切れの色は数値のセクションだけに付き、読み取り中は Badge 全体が破線のままで、完全なアドレスは Tooltip にあります。Pane が狭いときは名前の 1 文字目に縮みます。名前も識別情報もなく、その CLI に見分けるべき 2 つ目の Account もない場合、Badge には何も加わらず、従来どおりの表示のままです。数値はその CLI の現在の Account のものであり、Account 切り替え前に開いた Pane については、その Pane が今動いている Account とは限りません。
 

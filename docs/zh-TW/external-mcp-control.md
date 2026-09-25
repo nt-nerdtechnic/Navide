@@ -530,6 +530,28 @@ Pipeline 的執行則不受影響。`workspace_path` 指的是「要檢查哪個
 這三個 Tool 還會回的 `error_code` 是 `not_found` 與 `invalid`（Store 拒絕了那個值）。
 任何一種失敗都不會寫入。
 
+### 排程
+
+定時對 CLI Pane 送訊息。這六個 Tool 驅動的是與排程面板「NAVIDE JOBS」區（`scheduler.*`
+WS 訊息）同一個後端排程器，所以在這裡建立的 job 會立刻出現在面板上 —— 每次變更都會廣播
+`scheduler.changed`。job **只在 Navide 執行中觸發**；App 關閉期間錯過的槽，下次啟動時補跑一次
+（`catch_up: "once"`，預設）或直接略過（`"skip"`）。無人值守會燒額度：每個 job 每日最多執行
+`max_runs_per_day` 次（預設 24），失敗時退避 30s → 1m → 5m → 15m → 60m。
+
+| Tool | 參數 | 作用 |
+|---|---|---|
+| `scheduler_list` | — | `{ok, jobs, now}` |
+| `scheduler_upsert` | `job` | 建立（不帶 `id`）或更新（帶 `id`）job；回 `{ok, job}`，定義不合法時回 `{ok: false, error}`。更新時只需傳要改的欄位：沒傳的欄位保留原值，`policy` 逐鍵合併，有傳 `action` 則整個驗證。`schedule` 是 `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}` 、`{kind: "weekly", days: [1..7], at, tz}` 或 `{kind: "once", at_ms}` —— 也接受 `{kind: "once", in_ms}`，存檔時換算成 `at_ms = now + in_ms`（最多早於現在 1 分鐘、最晚 10 年後）。once job 只跑一次，跑完不論結果都會自動停用，所以「一小時後叫醒我」要用 `{kind: "once", in_ms: 3600000}`，不是 `every`；`action` 是 `{kind: "message", workspace, pane_id?, pane_name?, text}`；`policy` 可省略，為 `{catch_up, max_runs_per_day, timeout_s}`。Pane 呼叫端省略 `workspace` 時預設為自己的 Workspace，沒指定 Pane 時目標就是呼叫者自己的 Pane |
+| `scheduler_remove` | `id` | 刪除 job 與其執行紀錄 |
+| `scheduler_set_enabled` | `id`、`enabled` | 暫停或恢復；恢復後等下一個槽，不會補跑暫停期間經過的槽。時間已過的 once job 無法恢復，會回 `{ok: false, error}`，請改設新的時間 |
+| `scheduler_run_now` | `id` | 立刻執行一次，不等結束就回 `{ok, enqueued}`；會清除失敗退避 |
+| `scheduler_runs` | `id`、`limit` | 執行紀錄，新的在前：`{id, job_id, started_at, ended_at, status, reason, detail}` |
+
+每次執行就是 `cli_send(open_target=True)`：被回收成 placeholder 的 Pane 會先被喚醒，
+正在忙的 Pane 照常排隊。`pane_id` 精確指定一個 Pane；它若已不存在，這次執行記為略過
+`target_gone`，絕不改送到同名的其他 Pane。其他略過原因 —— `no_window`、`busy`（這個 job
+上一則訊息還在排隊）、`budget` —— 都不是錯誤，也不會觸發退避。
+
 ### CLI 權限
 
 | Tool | 參數 | 功能 |

@@ -69,6 +69,12 @@ const workspaceTools = [
   'pipeline_define',
   'stage_define',
   'role_define',
+  'scheduler_list',
+  'scheduler_upsert',
+  'scheduler_remove',
+  'scheduler_set_enabled',
+  'scheduler_run_now',
+  'scheduler_runs',
   'cli_permission_settings',
 ] as const
 

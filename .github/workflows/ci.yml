@@ -442,8 +442,13 @@ jobs:
           cache-suffix: plans
 
       - name: Install dependencies
+        # Electron 44 has no postinstall: its index.js downloads and unzips
+        # the binary on first require. The gate's parallel vitest workers
+        # would each do that into the same dist/ and collide (os error 17),
+        # so fetch it once here.
         run: |
           pnpm install --frozen-lockfile
+          node node_modules/electron/install.js
           uv --project backend sync --locked
 
       - name: Packaged Plans integration gate

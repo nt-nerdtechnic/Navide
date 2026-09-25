@@ -115,7 +115,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
-import { reclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
+import { reclaimBlockedBy, namedReclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
 import { findConsecutiveQuestionBlocks, findSentinel } from '@navide/terminal'
 import {
   buildCliPaneBufferReply,
@@ -264,6 +264,11 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
+import {
+  LOOP_FAILOVER_RESUME_SETTING_KEY,
+  loopFailoverResumeStep,
+  shouldResumeLoopAfterFailover,
+} from './lib/loopFailoverResume'
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
@@ -4528,6 +4533,10 @@ interface LoopLimitWatcher {
 }
 const loopLimitWatchers = new Map<string, LoopLimitWatcher>()
 const LOOP_LIMIT_POLL_MS = 5000
+/** Panes whose loop resumes on its own once an automatic failover switch
+ *  settles (LOOP_FAILOVER_RESUME_SETTING_KEY), keyed to when they were armed.
+ *  Lives and dies with the pane's loop watcher. */
+const loopFailoverResumeArmed = new Map<string, number>()
 
 function stopLoopLimitWatcher(paneId: string): void {
   const watcher = loopLimitWatchers.get(paneId)
@@ -4535,6 +4544,7 @@ function stopLoopLimitWatcher(paneId: string): void {
     clearInterval(watcher.timer)
     loopLimitWatchers.delete(paneId)
   }
+  loopFailoverResumeArmed.delete(paneId)
   // Drop the subagent count with the watcher that reads it. A count left above
   // zero — the pane's CLI exited while a subagent was running, so its
   // SubagentStop never arrived — would otherwise gate the NEXT loop started on
@@ -4580,6 +4590,24 @@ function startLoopLimitWatcher(paneId: string): void {
       pane.loopWaitUntil = null
       pane.loopEstimateResetAt = null
       stopLoopLimitWatcher(paneId)
+      return
+    }
+    // The user opted in to resuming the loop after an automatic switch: wait
+    // for the switch to clear the exhausted account's flag and the CLI to be
+    // free at its prompt, then resume; past the timeout, offer the Continue
+    // button the switch would otherwise have offered.
+    const failoverArmedAt = loopFailoverResumeArmed.get(paneId)
+    if (failoverArmedAt !== undefined) {
+      const step = loopFailoverResumeStep({
+        armedAt: failoverArmedAt,
+        now: Date.now(),
+        limitLit: pane.usageLimitAt != null,
+        promptFree: status === 'idle' && messagingHoldKey(paneId) === null,
+      })
+      if (step === 'wait') return
+      loopFailoverResumeArmed.delete(paneId)
+      if (step === 'give-up') pane.resumeContinueAvailable = true
+      else void resumeLoopAfterFailover(paneId)
       return
     }
     // A switch can clear the old badge while quota is still unverified. Even
@@ -5016,10 +5044,42 @@ function clearPaneUsageLimit(
   // account moved, but whether the work should go on is theirs to say. The
   // parked loop keeps its wait and the pane offers the explicit continue.
   if (pane.loopActive && !opts.resumeLoop) {
-    pane.resumeContinueAvailable = true
+    if (!loopFailoverResumeArmed.has(pane.id)) pane.resumeContinueAvailable = true
     return
   }
   if (waitingOnThisLimit) void fireLoopResume(pane.id, logLabel)
+}
+
+/** Whether this committed failover switch resumes the pane's loop by itself
+ *  (the user's LOOP_FAILOVER_RESUME_SETTING_KEY opt-in) instead of offering
+ *  the Continue button. */
+function loopResumesAfterFailover(pane: ActivePane, ev: QuotaCommitEvent): boolean {
+  return shouldResumeLoopAfterFailover({
+    enabled: settingsGet<boolean>(LOOP_FAILOVER_RESUME_SETTING_KEY, false) === true,
+    policyMode: quotaFailover.state.value?.policy.mode,
+    loopActive: !!pane.loopActive,
+    commitState: ev.state,
+    switchMode: ev.switchMode,
+    restartStrategy: ev.restartStrategy,
+  })
+}
+
+/** An armed pane's switch settled: resume its loop now, through the same path
+ *  the badge click takes. A resume that could not be typed puts the loop back
+ *  where it was parked and offers the Continue button instead. */
+async function resumeLoopAfterFailover(paneId: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane?.loopActive) return
+  const parkedUntil = pane.loopWaitUntil ?? null
+  pane.resumeContinueAvailable = false
+  // fireLoopResume only resumes a parked loop, and the switch can land before
+  // the loop watcher parked this one on the limit.
+  pane.loopWaitUntil = Date.now()
+  await fireLoopResume(paneId, 'loop-failover-resume', true)
+  if (pane.loopActive && pane.loopWaitUntil != null) {
+    pane.loopWaitUntil = parkedUntil
+    pane.resumeContinueAvailable = true
+  }
 }
 
 /** Quota badge dismissed by the user (TerminalPane already confirmed). */
@@ -8067,13 +8127,32 @@ async function quotaPaneReadiness(paneId: string, opts: { needsResume: boolean }
 
 async function quotaRestartPane(pane: PrepareEventPane, ev: QuotaCommitEvent): Promise<RestartOutcome> {
   let newPaneId: string | null = null
+  // The loop lives on the pane entry the rebuild replaces. When it is to
+  // resume after the switch, carry it onto the replacement and arm it there —
+  // never on the old pane, which is still on the exhausted process.
+  const old = panes.value.find((p) => p.id === pane.paneId)
+  const carryLoop = old && loopResumesAfterFailover(old, ev)
+    ? { skillId: old.loopSkillId ?? null, turnCount: old.loopTurnCount ?? 0, maxTurns: old.loopMaxTurns ?? 0 }
+    : null
   const failure = await rebuildPaneViaResume(pane.paneId, {
     suppressBusyToast: true,
     offerContinue: true,
     preserveScrollback: true,
     quotaCommit: ev,
     quotaOriginalPaneId: pane.originalPaneId ?? pane.paneId,
-    onReplaced: (id) => { newPaneId = id },
+    onReplaced: (id) => {
+      newPaneId = id
+      const revived = carryLoop ? panes.value.find((p) => p.id === id) : undefined
+      if (!carryLoop || !revived) return
+      revived.loopActive = true
+      revived.loopSkillId = carryLoop.skillId
+      revived.loopTurnCount = carryLoop.turnCount
+      revived.loopMaxTurns = carryLoop.maxTurns
+      bumpLoopGen(id)
+      startLoopLimitWatcher(id)
+      revived.resumeContinueAvailable = false
+      loopFailoverResumeArmed.set(id, Date.now())
+    },
   })
   if (failure) return { outcome: 'failed', reason: failure }
   const id = newPaneId ?? pane.paneId
@@ -8164,7 +8243,13 @@ quotaFailover.initQuotaFailover(backend, {
       const pane = panes.value.find((p) => p.id === listed.paneId)
       if (pane) {
         pane.quotaGateIncidentId = ev.incidentId
-        if (pane.loopActive) pane.resumeContinueAvailable = true
+        // A hot swap keeps the pane, so its loop is armed here; a restart
+        // armed its replacement pane already (quotaRestartPane).
+        if (ev.switchMode === 'hot' && loopResumesAfterFailover(pane, ev)) {
+          loopFailoverResumeArmed.set(pane.id, Date.now())
+        }
+        if (loopFailoverResumeArmed.has(pane.id)) pane.resumeContinueAvailable = false
+        else if (pane.loopActive) pane.resumeContinueAvailable = true
       }
     }
   },
@@ -15188,8 +15273,11 @@ const reclaimableNowIds = computed<string[]>(() => {
  *  does measure, never uses this. */
 const RECLAIM_ESTIMATE_BYTES_PER_CLI = 250 * 1024 * 1024
 
-/** Reclaim now, by explicit request. Returns how many actually went. */
-async function reclaimPanesNow(paneIds?: string[]): Promise<number> {
+/** Reclaim now, by explicit request. Returns how many actually went.
+ *
+ *  `named` marks panes the user picked out one by one, which may include the
+ *  focused one (see namedReclaimBlockedBy). */
+async function reclaimPanesNow(paneIds?: string[], named = false): Promise<number> {
   const targets = paneIds ?? reclaimableNowIds.value
   let reclaimed = 0
   for (const paneId of targets) {
@@ -15198,7 +15286,10 @@ async function reclaimPanesNow(paneIds?: string[]): Promise<number> {
     // while it runs.
     const pane = panes.value.find((p) => p.id === paneId)
     if (!pane) continue
-    if (reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now()) !== null) continue
+    const blocked = named
+      ? namedReclaimBlockedBy(reclaimCandidate(pane), Date.now())
+      : reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now())
+    if (blocked !== null) continue
     if (await reclaimIdlePane(paneId)) reclaimed++
   }
   if (reclaimed > 0) {
@@ -17399,16 +17490,22 @@ const ctxDescendantIds = computed<string[]>(() =>
 
 // "Reclaim": the per-pane release the Resource Manager already offers, on the
 // pane that was right-clicked. Greyed out under the conditions a sweep skips a
-// pane: focused, busy, unsent text, nothing to resume from.
+// pane — busy, unsent text, nothing to resume from — except focus: the user
+// picked this pane, so being in front of them is no reason to refuse.
+function namedReclaimable(paneId: string, now: number): boolean {
+  const pane = panes.value.find((p) => p.id === paneId)
+  return !!pane && namedReclaimBlockedBy(reclaimCandidate(pane), now) === null
+}
+
 const ctxReclaimable = computed<boolean>(() => {
   const m = paneCtxMenu.value
   if (!m || ctxIsBatch.value) return false
-  return reclaimableNowIds.value.includes(m.paneId)
+  return namedReclaimable(m.paneId, Date.now())
 })
 
 const ctxReclaimableIds = computed<string[]>(() => {
-  const reclaimable = new Set(reclaimableNowIds.value)
-  return ctxTargetIds.value.filter((id) => reclaimable.has(id))
+  const now = Date.now()
+  return ctxTargetIds.value.filter((id) => namedReclaimable(id, now))
 })
 const ctxAllMuted = computed(() =>
   ctxTargetIds.value.length > 0 && ctxTargetIds.value.every((id) => isPaneMuted(id))
@@ -17422,14 +17519,14 @@ const ctxAllMuted = computed(() =>
 // than leaving a click that appears to do nothing.
 async function reclaimPaneFromMenu(paneId: string): Promise<void> {
   closePaneCtxMenu()
-  if (await reclaimPanesNow([paneId])) return
+  if (await reclaimPanesNow([paneId], true)) return
   notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
 }
 
 async function reclaimSelectedFromMenu(): Promise<void> {
   const ids = [...ctxTargetIds.value]
   closePaneCtxMenu()
-  if (await reclaimPanesNow(ids)) return
+  if (await reclaimPanesNow(ids, true)) return
   notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
 }
 

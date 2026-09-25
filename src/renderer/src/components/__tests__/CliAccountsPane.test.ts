@@ -316,6 +316,13 @@ describe('CliAccountsPane', () => {
     expect(api.rename).toHaveBeenCalledWith('p1', 'Work', 'claude')
   })
 
+  it('caps the rename field at 64 characters', async () => {
+    const api = makeApi({ profiles: [profile('p1', 'claude', 'Account 2')] })
+    const w = mountPane(api)
+    await section(w, 0).findAll('.cli-card')[1].get('.cli-card-rename-btn').trigger('click')
+    expect(w.get('input.cli-card-rename').attributes('maxlength')).toBe('64')
+  })
+
   it('renames the built-in Default card too — for a vendor with no email it is the only way to tell it apart', async () => {
     const api = makeApi()
     const w = mountPane(api)
@@ -1237,24 +1244,69 @@ describe('CliAccountsPane', () => {
     docsUrl: 'https://example.invalid/docs',
   }
 
-  it('offers a paste button only on agents with a portable interface', () => {
-    const api = makeApi({ portableSupported: ['claude'] })
+  it('offers a compact paste button only on agents with a portable interface', () => {
+    const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'ok' })
     const w = mountPane(api)
     // Section 0 is claude, section 1 is codex (CLI_AGENT_SPECS order).
-    expect(section(w, 0).find('.cli-card-portable').exists()).toBe(true)
-    expect(buttonByText(section(w, 0), 'Paste credential')).toBeDefined()
-    expect(section(w, 1).find('.cli-card-portable').exists()).toBe(false)
+    // An empty slot has no block, just the button in its action row.
+    expect(section(w, 0).find('.cli-card-portable').exists()).toBe(false)
+    expect(buttonByText(section(w, 0).find('.cli-card-actions'), 'Paste credential')).toBeDefined()
+    expect(buttonByText(section(w, 1), 'Paste credential')).toBeUndefined()
+  })
+
+  it('offers the paste button and saves while credential sync is off', async () => {
+    const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'off' })
+    const w = mountPane(api)
+    const card = section(w, 0).findAll('.cli-card')[0]
+    expect(card.find('.cli-card-portable').exists()).toBe(false)
+    await buttonByText(card.find('.cli-card-actions'), 'Paste credential')!.trigger('click')
+    await flushPromises()
+    await card.get('input.cli-portable-input').setValue('sk-ant-oat01-SYNTHETIC')
+    await card.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.portableSet).toHaveBeenCalledWith('claude', null, 'sk-ant-oat01-SYNTHETIC')
+    expect(card.get('.cli-portable-flag').text()).toBe('Set')
+    // Sync is off, so the stored credential shows no cloud column.
+    expect(card.find('.cli-portable-cloud').exists()).toBe(false)
+  })
+
+  it('keeps a stored credential manageable while credential sync is off', () => {
+    const api = makeApi({
+      portableSupported: ['claude'],
+      portable: { 'claude/__default__': { ...PORTABLE_META, configured: true, enabled: true } },
+      cloudStatus: 'off',
+    })
+    const w = mountPane(api)
+    const card = section(w, 0).findAll('.cli-card')[0]
+    expect(card.find('.cli-card-portable').exists()).toBe(true)
+    expect(buttonByText(card, 'Remove from this device')).toBeDefined()
+  })
+
+  it('opens the form from the compact button and collapses again on cancel', async () => {
+    const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'ok' })
+    const w = mountPane(api)
+    const card = section(w, 0).findAll('.cli-card')[0]
+    await buttonByText(card, 'Paste credential')!.trigger('click')
+    await flushPromises()
+    expect(card.find('input.cli-portable-input').exists()).toBe(true)
+    expect(buttonByText(card.find('.cli-card-actions'), 'Paste credential')).toBeUndefined()
+    await buttonByText(card.find('.cli-card-portable'), 'Cancel')!.trigger('click')
+    await flushPromises()
+    expect(card.find('.cli-card-portable').exists()).toBe(false)
+    expect(buttonByText(card.find('.cli-card-actions'), 'Paste credential')).toBeDefined()
   })
 
   it('sends the pasted value once and clears the input after saving', async () => {
     const api = makeApi({
       portableSupported: ['claude'],
       portable: { 'claude/__default__': PORTABLE_META },
+      cloudStatus: 'ok',
     })
     const w = mountPane(api)
     const card = section(w, 0).findAll('.cli-card')[0]
 
     await buttonByText(card, 'Paste credential')!.trigger('click')
+    await flushPromises()
     const input = card.get('input.cli-portable-input')
     expect(input.attributes('type')).toBe('password')
     expect(input.attributes('placeholder')).toContain('claude setup-token')
@@ -1276,10 +1328,11 @@ describe('CliAccountsPane', () => {
   })
 
   it('does not save an empty paste', async () => {
-    const api = makeApi({ portableSupported: ['claude'] })
+    const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'ok' })
     const w = mountPane(api)
     const card = section(w, 0).findAll('.cli-card')[0]
     await buttonByText(card, 'Paste credential')!.trigger('click')
+    await flushPromises()
     expect(card.get('button[type="submit"]').attributes('disabled')).toBeDefined()
     await card.get('form').trigger('submit')
     expect(api.portableSet).not.toHaveBeenCalled()
@@ -1309,7 +1362,7 @@ describe('CliAccountsPane', () => {
   })
 
   it('fetches the vendor descriptor for an empty slot when the form opens', async () => {
-    const api = makeApi({ portableSupported: ['claude'] })
+    const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'ok' })
     const w = mountPane(api)
     const card = section(w, 0).findAll('.cli-card')[0]
     await buttonByText(card, 'Paste credential')!.trigger('click')
@@ -1323,6 +1376,7 @@ describe('CliAccountsPane', () => {
     const api = makeApi({
       portableSupported: ['claude'],
       portable: { 'claude/__default__': PORTABLE_META },
+      cloudStatus: 'ok',
     })
     ;(api.portableSet as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: false,
@@ -1331,6 +1385,7 @@ describe('CliAccountsPane', () => {
     const w = mountPane(api)
     const card = section(w, 0).findAll('.cli-card')[0]
     await buttonByText(card, 'Paste credential')!.trigger('click')
+    await flushPromises()
     await card.get('input.cli-portable-input').setValue('sk-ant-oat01-SYNTHETIC')
     await card.get('form').trigger('submit')
     await flushPromises()
@@ -1440,11 +1495,21 @@ describe('CliAccountsPane', () => {
 
   // ── cloud column ───────────────────────────────────────────────────────────
 
-  it('says cloud sync is off rather than showing an empty cloud state', () => {
+  it('shows no cloud column for a stored credential while cloud sync is off', () => {
+    const api = makeApi({
+      portableSupported: ['claude'],
+      portable: { 'claude/__default__': { ...PORTABLE_META, configured: true, enabled: true } },
+      cloudStatus: 'off',
+    })
+    const w = mountPane(api)
+    expect(section(w, 0).find('.cli-portable-cloud').exists()).toBe(false)
+    expect(section(w, 0).text()).not.toContain('Cloud sync for credentials is off')
+  })
+
+  it('shows no cloud column for an empty slot while cloud sync is off', () => {
     const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'off' })
     const w = mountPane(api)
-    expect(section(w, 0).get('.cli-portable-cloud').text()).toContain('Cloud sync for credentials is off')
-    expect(section(w, 0).find('.cli-cloud-badge').exists()).toBe(false)
+    expect(section(w, 0).find('.cli-portable-cloud').exists()).toBe(false)
   })
 
   it('shows each cloud copy by state, with when and where it last changed', () => {

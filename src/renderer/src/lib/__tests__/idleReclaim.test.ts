@@ -6,6 +6,7 @@ import {
   focusedForReclaim,
   idleReclaimDisabled,
   idleReclaimThresholdMs,
+  namedReclaimBlockedBy,
   reclaimBlockedBy,
   RECLAIM_NOW_THRESHOLD_MS,
   type ReclaimCandidate,
@@ -236,6 +237,26 @@ describe('manual reclaim (RECLAIM_NOW_THRESHOLD_MS)', () => {
   ] as const)('still refuses a pane that is %s', (reason, over) => {
     const pane = idleForHours({ lastTouchedAt: NOW - 1_000, ...over })
     expect(reclaimBlockedBy(pane, RECLAIM_NOW_THRESHOLD_MS, NOW)).toBe(reason)
+  })
+})
+
+// Reclaiming panes the user picked out one by one: focus no longer refuses,
+// because picking the pane is the asking. Everything else still does.
+describe('namedReclaimBlockedBy', () => {
+  it('reclaims the focused pane', () => {
+    const pane = idleForHours({ lastTouchedAt: NOW - 1_000, focused: true })
+    expect(namedReclaimBlockedBy(pane, NOW)).toBeNull()
+  })
+
+  it.each([
+    ['not-idle', { displayStatus: 'awaiting' }],
+    ['has-draft', { hasDraft: true }],
+    ['no-resume-id', { resumeSessionId: '' }],
+    ['loop-active', { loopActive: true }],
+    ['has-queued-messages', { hasQueuedMessages: true }],
+  ] as const)('still refuses a focused pane that is %s', (reason, over) => {
+    const pane = idleForHours({ lastTouchedAt: NOW - 1_000, focused: true, ...over })
+    expect(namedReclaimBlockedBy(pane, NOW)).toBe(reason)
   })
 })
 

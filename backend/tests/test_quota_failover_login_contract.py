@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import app, usage_service, ws_handlers
+from agent_team_backend import app, quota_failover, usage_service, ws_handlers
 from agent_team_backend.credential_vault import LiveCredentials
 from agent_team_backend.db import Database
 from agent_team_backend.profiles_store import CliProfilesStore
@@ -607,10 +607,10 @@ async def test_a_refreshed_token_of_the_same_account_still_switches_and_is_kept(
 
 
 @pytest.mark.parametrize("agent_key", ["claude", "codex"])
-async def test_a_different_live_identity_is_drift_and_leaves_a_untouched(rig, agent_key: str) -> None:
+async def test_a_different_live_identity_does_not_block_a_manual_switch(rig, agent_key: str) -> None:
     """Someone signed in as C against the live store while the record still
-    says A: switching to (non-empty) B must be refused and A's slot must not
-    receive C's credential."""
+    says A: a manual switch to (non-empty) B still goes through — the user's
+    pick wins — and reports the drift as a warning."""
     s = session()
     a = rig.store.create(agent_key=agent_key, name="A")["id"]
     b = rig.store.create(agent_key=agent_key, name="B")["id"]
@@ -622,10 +622,10 @@ async def test_a_different_live_identity_is_drift_and_leaves_a_untouched(rig, ag
     assert rig.vault.identity(agent_key)["email"] == "c@example.com"
 
     answer = await call(s, "cli_profiles.set_default", {"agent_key": agent_key, "profile_id": b})
-    assert answer["ok"] is False and answer["error"]["code"] == "LIVE_DRIFT", answer
-    assert _tokens(rig.vault.read_slot(agent_key, a).secret) == "at-a-1"
-    assert _tokens(rig.vault.read_live(agent_key).secret) == "at-c-1"
-    assert rig.store.list()["defaults"][agent_key] == a
+    assert answer["ok"] is True, answer.get("error")
+    assert answer["payload"]["warning"] == "live-drift"
+    assert _tokens(rig.vault.read_live(agent_key).secret) == "at-b-1"
+    assert rig.store.list()["defaults"][agent_key] == b
 
 
 def _seed_identity_accounts(rig: SimpleNamespace, agent_key: str, live: LiveCredentials) -> tuple[str, str]:
@@ -702,20 +702,21 @@ async def test_codex_same_email_but_another_account_id_is_drift(rig) -> None:
     a, b = _seed_identity_accounts(rig, "codex", identity_secret("codex", "a", 2, account_id="acct-TEAM"))
     rig.vault.write_slot("codex", a, identity_secret("codex", "a", 1, account_id="acct-A"))
 
-    answer = await call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
-    assert answer["ok"] is False, "a different account id behind the same email was treated as a refresh"
-    assert answer["error"]["code"] == "LIVE_DRIFT", answer["error"]
-    assert _tokens(rig.vault.read_slot("codex", a).secret) == "at-a-1"
-    assert json.loads(rig.vault.read_slot("codex", a).secret)["tokens"]["account_id"] == "acct-A"
-    assert _tokens(rig.vault.read_live("codex").secret) == "at-a-2"
-    assert rig.store.list()["defaults"]["codex"] == a
-
     answer = await call(s, "quota_failover.switch", _failover_proposal("codex", a, b), msg_id="fo")
     if answer["ok"]:
         tx = answer["payload"]["transaction"]
         assert tx["state"] == "cancelled" and tx["swapped"] is False, tx
     assert _tokens(rig.vault.read_slot("codex", a).secret) == "at-a-1"
+    assert json.loads(rig.vault.read_slot("codex", a).secret)["tokens"]["account_id"] == "acct-A"
+    assert _tokens(rig.vault.read_live("codex").secret) == "at-a-2"
     assert rig.store.list()["defaults"]["codex"] == a
+
+    # The manual route is not gated: it switches and reports the drift.
+    answer = await call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
+    assert answer["ok"] is True, answer.get("error")
+    assert answer["payload"]["warning"] == "live-drift", "a different account id behind the same email was treated as a refresh"
+    assert _tokens(rig.vault.read_live("codex").secret) == "at-b-1"
+    assert rig.store.list()["defaults"]["codex"] == b
 
 
 async def test_claude_refresh_within_the_same_organisation_still_switches(rig) -> None:
@@ -734,20 +735,21 @@ async def test_claude_same_email_in_another_organisation_is_drift(rig) -> None:
     a, b = _seed_identity_accounts(rig, "claude", identity_secret("claude", "a", 2, account_id="org-TEAM"))
     rig.vault.write_slot("claude", a, identity_secret("claude", "a", 1, account_id="org-A"))
 
-    answer = await call(s, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": b})
-    assert answer["ok"] is False, "another organisation behind the same email was treated as a refresh"
-    assert answer["error"]["code"] == "LIVE_DRIFT", answer["error"]
-    assert _tokens(rig.vault.read_slot("claude", a).secret) == "at-a-1"
-    assert rig.vault.read_slot("claude", a).account["organizationUuid"] == "org-A"
-    assert _tokens(rig.vault.read_live("claude").secret) == "at-a-2"
-    assert rig.store.list()["defaults"]["claude"] == a
-
     answer = await call(s, "quota_failover.switch", _failover_proposal("claude", a, b), msg_id="fo")
     if answer["ok"]:
         tx = answer["payload"]["transaction"]
         assert tx["state"] == "cancelled" and tx["swapped"] is False, tx
     assert _tokens(rig.vault.read_slot("claude", a).secret) == "at-a-1"
+    assert rig.vault.read_slot("claude", a).account["organizationUuid"] == "org-A"
+    assert _tokens(rig.vault.read_live("claude").secret) == "at-a-2"
     assert rig.store.list()["defaults"]["claude"] == a
+
+    # The manual route is not gated: it switches and reports the drift.
+    answer = await call(s, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": b})
+    assert answer["ok"] is True, answer.get("error")
+    assert answer["payload"]["warning"] == "live-drift", "another organisation behind the same email was treated as a refresh"
+    assert _tokens(rig.vault.read_live("claude").secret) == "at-b-1"
+    assert rig.store.list()["defaults"]["claude"] == b
 
 
 # ── opaque credential: the manual "assume live is current" confirmation ──────
@@ -756,6 +758,12 @@ def opaque_secret(tag: str) -> LiveCredentials:
     """A codex-shaped credential carrying no identity at all (no id_token,
     no account_id): a rotated token and a foreign sign-in look alike."""
     return LiveCredentials(secret=json.dumps({"tokens": {"access_token": f"at-{tag}", "refresh_token": f"rt-{tag}"}}))
+
+
+def shown_state(rig: SimpleNamespace, agent_key: str, current: str) -> dict[str, Any]:
+    """The state a caller would bind ``assume_live_is_current`` to."""
+    return {"currentSlotId": current, "epoch": rig.service.epoch(agent_key),
+            "liveFingerprint": quota_failover.live_fingerprint(rig.vault, agent_key, None)}
 
 
 def resend_with(details: dict[str, Any], **payload: Any) -> dict[str, Any]:
@@ -769,7 +777,7 @@ def resend_with(details: dict[str, Any], **payload: Any) -> dict[str, Any]:
     return out
 
 
-async def test_opaque_drift_is_refused_until_the_user_confirms_then_switches(rig) -> None:
+async def test_opaque_drift_does_not_ask_the_user_before_a_manual_switch(rig) -> None:
     s = session()
     a = rig.store.create(agent_key="codex", name="A")["id"]
     b = rig.store.create(agent_key="codex", name="B")["id"]
@@ -779,15 +787,10 @@ async def test_opaque_drift_is_refused_until_the_user_confirms_then_switches(rig
     rig.vault.write_slot("codex", b, opaque_secret("b1"))
     rig.vault.write_live("codex", opaque_secret("a2"))  # rotated — or foreign; nobody can tell
 
-    first = await call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
-    assert first["ok"] is False and first["error"]["code"] == "LIVE_DRIFT", first
-    details = first["error"]["details"]
-    assert details["verified"] is False and details["currentSlotId"] == a
-    assert _tokens(rig.vault.read_slot("codex", a).secret) == "at-a1"  # nothing moved
-
-    confirmed = await call(s, "cli_profiles.set_default", resend_with(details, agent_key="codex", profile_id=b), msg_id="confirm")
-    assert confirmed["ok"] is True, confirmed.get("error")
-    assert _tokens(rig.vault.read_slot("codex", a).secret) == "at-a2"  # the confirmed live credential is A's
+    answer = await call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
+    assert answer["ok"] is True, answer.get("error")
+    assert answer["payload"]["warning"] == "live-drift-unverified"
+    assert _tokens(rig.vault.read_slot("codex", a).secret) == "at-a2"  # live captured as A's
     assert _tokens(rig.vault.read_live("codex").secret) == "at-b1"
     assert rig.store.list()["defaults"]["codex"] == b
 
@@ -809,9 +812,7 @@ async def test_a_stale_confirmation_after_another_window_switched_does_not_captu
     rig.vault.write_slot("codex", c, opaque_secret("c1"))
     rig.vault.write_live("codex", opaque_secret("a2"))
 
-    first = await call(w1, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": c})
-    assert first["ok"] is False and first["error"]["code"] == "LIVE_DRIFT", first
-    details = first["error"]["details"]
+    details = shown_state(rig, "codex", a)
 
     # Window 2 confirms and switches to B in the meantime.
     ok2 = await call(w2, "cli_profiles.set_default", resend_with(details, agent_key="codex", profile_id=b), msg_id="w2")
@@ -833,7 +834,9 @@ async def test_a_confirmation_without_the_state_it_confirms_cannot_assume(rig) -
     """``assume_live_is_current`` on its own is not a confirmation: the
     re-send must name the state the user saw — current slot, epoch AND the
     live fingerprint. Each row below has everything right except one thing,
-    so each guard is exercised on its own; nothing moves in any of them."""
+    so each guard is exercised on its own; nothing moves in any of them. (The
+    fingerprint's value is no longer compared: the manual route does not ask
+    for the word, so a stale echo just switches.)"""
     s = session()
     a = rig.store.create(agent_key="codex", name="A")["id"]
     b = rig.store.create(agent_key="codex", name="B")["id"]
@@ -842,9 +845,7 @@ async def test_a_confirmation_without_the_state_it_confirms_cannot_assume(rig) -
     rig.vault.capture("codex", a)
     rig.vault.write_slot("codex", b, opaque_secret("b1"))
     rig.vault.write_live("codex", opaque_secret("a2"))
-    first = await call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
-    assert first["ok"] is False and first["error"]["code"] == "LIVE_DRIFT", first
-    details = first["error"]["details"]
+    details = shown_state(rig, "codex", a)
     assert details.get("liveFingerprint"), details
     good = resend_with(details, agent_key="codex", profile_id=b)
 
@@ -864,21 +865,7 @@ async def test_a_confirmation_without_the_state_it_confirms_cannot_assume(rig) -
     answer = await call(s, "cli_profiles.set_default", no_fp, msg_id="no-fp")
     assert answer["ok"] is False, ("a confirmation without the live fingerprint was accepted", answer)
     untouched("no-fp")
-    # 3) current and epoch right, fingerprint wrong
-    answer = await call(s, "cli_profiles.set_default", {**good, "live_fingerprint": "not-what-was-shown"}, msg_id="wrong-fp")
-    assert answer["ok"] is False, answer
-    assert answer["error"]["code"] in ("LIVE_DRIFT", "STALE_STATE"), answer["error"]
-    untouched("wrong-fp")
-    # 4) everything as shown, but the live credential changed again while the
-    #    dialog was open (same current slot, same epoch): the fingerprint is
-    #    the only thing that can catch it.
-    rig.vault.write_live("codex", opaque_secret("c1"))
-    answer = await call(s, "cli_profiles.set_default", good, msg_id="live-moved")
-    assert answer["ok"] is False, ("a confirmation for a2 was applied to c1", answer)
-    assert answer["error"]["code"] in ("LIVE_DRIFT", "STALE_STATE"), answer["error"]
-    untouched("live-moved", live="at-c1")
-    # 5) the honest re-send, against the state it confirms
-    rig.vault.write_live("codex", opaque_secret("a2"))
+    # 3) the honest re-send, against the state it confirms
     answer = await call(s, "cli_profiles.set_default", good, msg_id="honest")
     assert answer["ok"] is True, answer.get("error")
     assert _tokens(rig.vault.read_slot("codex", a).secret) == "at-a2"
@@ -900,9 +887,7 @@ async def test_a_confirmation_is_stale_after_a_round_trip_that_lands_on_the_same
     rig.vault.write_slot("codex", c, opaque_secret("c1"))
     rig.vault.write_live("codex", opaque_secret("a2"))
 
-    first = await call(w1, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
-    assert first["ok"] is False and first["error"]["code"] == "LIVE_DRIFT", first
-    details = first["error"]["details"]
+    details = shown_state(rig, "codex", a)
 
     # Window 2: confirm, go to C, then come back to A (a plain switch).
     ok2 = await call(w2, "cli_profiles.set_default", resend_with(details, agent_key="codex", profile_id=c), msg_id="to-c")

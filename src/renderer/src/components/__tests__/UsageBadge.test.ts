@@ -87,6 +87,7 @@ function makeCliProfiles(
     opts.setDefault ?? vi.fn(async (): Promise<SetDefaultResult> => ({ ok: true }))
   const rename = opts.rename ?? vi.fn(async (): Promise<CliProfile | null> => null)
   const fake = {
+    error: ref(''),
     hasProfiles: vi.fn(() => profiles.length > 0),
     profilesForAgent: vi.fn(() => profiles),
     defaultProfileId: vi.fn(() => opts.defaultId ?? null),
@@ -1115,6 +1116,142 @@ describe('UsageBadge – renaming from the account list', () => {
   })
 })
 
+describe('UsageBadge – rename failures and focus', () => {
+  /** Open the pencil of the first profile row and type into its field. */
+  async function editFirstProfile(w: VueWrapper, value: string) {
+    await w.findAll('.usage-acct-row')[1].get('.usage-acct-edit').trigger('click')
+    const input = w.get('input.usage-acct-rename')
+    await input.setValue(value)
+    return input
+  }
+
+  it('keeps the field and its draft and alerts when the rename fails', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: null })
+    fake.rename.mockImplementation(async () => {
+      fake.error.value = 'account name is longer than 64 characters'
+      return null
+    })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    const input = await editFirstProfile(wrapper, 'Work')
+    await input.trigger('keydown.enter')
+    await settle()
+
+    expect(notify.alert).toHaveBeenCalledWith(
+      'account name is longer than 64 characters',
+      expect.objectContaining({ title: expect.any(String) }),
+    )
+    const field = wrapper.find('input.usage-acct-rename')
+    expect(field.exists()).toBe(true)
+    expect((field.element as HTMLInputElement).value).toBe('Work')
+  })
+
+  it('closes the field after renaming the built-in Default, whose reply carries no profile', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: 'p1' })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await wrapper.findAll('.usage-acct-row')[0].get('.usage-acct-edit').trigger('click')
+    const input = wrapper.get('input.usage-acct-rename')
+    await input.setValue('Main')
+    await input.trigger('keydown.enter')
+    await settle()
+
+    expect(notify.alert).not.toHaveBeenCalled()
+    expect(wrapper.find('input.usage-acct-rename').exists()).toBe(false)
+  })
+
+  it('stays open when the pointer leaves while a row is being renamed', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: null })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await editFirstProfile(wrapper, 'Wo')
+    await wrapper.get('.usage-pop').trigger('mouseleave')
+    await vi.advanceTimersByTimeAsync(500)
+    await nextTick()
+
+    expect(wrapper.find('.usage-pop').exists()).toBe(true)
+    expect(wrapper.find('input.usage-acct-rename').exists()).toBe(true)
+  })
+
+  it('Esc in the rename field cancels the rename but keeps the popover open', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake, rename } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: null })
+    wrapper = mountBadge(fake, { attach: true })
+    await openPopover(wrapper)
+
+    await editFirstProfile(wrapper, 'Work')
+    // Dispatched on the attached field so the document-level Esc listener sees it too.
+    wrapper
+      .get('input.usage-acct-rename')
+      .element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await settle()
+
+    expect(rename).not.toHaveBeenCalled()
+    expect(wrapper.find('input.usage-acct-rename').exists()).toBe(false)
+    expect(wrapper.find('.usage-pop').exists()).toBe(true)
+  })
+
+  it('caps both rename fields at 64 characters', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: null })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await wrapper.findAll('.usage-acct-row')[0].get('.usage-acct-edit').trigger('click')
+    expect(wrapper.get('input.usage-acct-rename').attributes('maxlength')).toBe('64')
+    await wrapper.get('input.usage-acct-rename').trigger('keydown.esc')
+    await editFirstProfile(wrapper, 'x')
+    expect(wrapper.get('input.usage-acct-rename').attributes('maxlength')).toBe('64')
+  })
+})
+
+describe('UsageBadge – telling same-named accounts apart', () => {
+  it('shows the email under a row that has a custom name', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake } = makeCliProfiles({
+      profiles: [
+        { ...profile('p1', 'Work'), nameIsCustom: true },
+        { ...profile('p2', 'Work'), nameIsCustom: true },
+      ],
+      defaultId: null,
+      defaultName: 'Home',
+      identities: {
+        __default__: { email: 'me@home.com', signedIn: true },
+        p1: { email: 'a@work.com', signedIn: true },
+        p2: { email: 'b@work.com', signedIn: true },
+      },
+    })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    const rows = wrapper.findAll('.usage-acct-row')
+    expect(rows[0].get('.usage-acct-email').text()).toBe('me@home.com')
+    expect(rows[1].get('.usage-acct-name').text()).toBe('Work')
+    expect(rows[1].get('.usage-acct-email').text()).toBe('a@work.com')
+    expect(rows[2].get('.usage-acct-email').text()).toBe('b@work.com')
+  })
+
+  it('adds no email line when the row already reads as its email', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake } = makeCliProfiles({
+      profiles: [profile('p1', 'Account 2')],
+      defaultId: null,
+      identities: { p1: { email: 'a@work.com', signedIn: true } },
+    })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    expect(wrapper.findAll('.usage-acct-row')[1].get('.usage-acct-name').text()).toBe('a@work.com')
+    expect(wrapper.find('.usage-acct-email').exists()).toBe(false)
+  })
+})
+
 describe('UsageBadge – clearing an alias', () => {
   /** A fake whose rename does what the backend does with an empty name: the
    *  custom flag goes and the generated "Account N" comes back. Reactive, so
@@ -1129,6 +1266,7 @@ describe('UsageBadge – clearing an alias', () => {
       return next
     })
     const fake = {
+      error: ref(''),
       hasProfiles: vi.fn(() => profiles.value.length > 0),
       profilesForAgent: vi.fn(() => profiles.value),
       defaultProfileId: vi.fn(() => 'p1'),

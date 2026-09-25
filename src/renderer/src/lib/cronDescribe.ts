@@ -118,9 +118,22 @@ export function describeCron(schedule: string, t: Translate): string {
   if (fields.length !== 5) return schedule
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields
 
+  const everyDay = dayOfMonth === '*' && month === '*' && dayOfWeek === '*'
+  if (minute === '*' && hour === '*' && everyDay) return t('executions.cron.every-minute')
+
   const stepped = /^\*\/(\d+)$/.exec(minute)
-  if (stepped && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+  if (stepped && hour === '*' && everyDay) {
     return t('executions.cron.every-minutes', { n: Number(stepped[1]) })
+  }
+
+  // A fixed minute of every hour, or of every Nth hour.
+  const atMinute = intField(minute, 0, 59)
+  if (atMinute !== null && everyDay) {
+    if (hour === '*') return t('executions.cron.hourly-at', { minute: pad2(atMinute) })
+    const steppedHour = /^\*\/(\d+)$/.exec(hour)
+    if (steppedHour) {
+      return t('executions.cron.every-hours-at', { n: Number(steppedHour[1]), minute: pad2(atMinute) })
+    }
   }
 
   // Everything below needs a concrete time-of-day and an unrestricted month.

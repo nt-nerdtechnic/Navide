@@ -62,7 +62,25 @@
     "allow-ip": "Allow this IP for {vendor}",
     "reveal": "Reveal in folder",
     "action-failed": "Could not save this decision. Try again.",
-    "reveal-failed": "Could not reveal this path in the file manager."
+    "reveal-failed": "Could not reveal this path in the file manager.",
+    "shared-cdn-field": "Shared CDN",
+    "shared-cdn": "{label} (shared CDN; the site cannot be identified)",
+    "ranges-title": "Shared CDN address ranges",
+    "ranges-hint": "Connections to an address inside an enabled range are recorded but never light the risk pill; per-IP Ignore and Allow are unaffected. Built-in ranges come from the lists Cloudflare and Fastly publish; they can be disabled but not deleted.",
+    "ranges-cidr": "CIDR",
+    "ranges-cidr-placeholder": "e.g. 192.0.2.0/24 or 2001:db8::/32",
+    "ranges-label": "Label",
+    "ranges-source": "Source",
+    "ranges-source-builtin": "Built-in",
+    "ranges-source-user": "Custom",
+    "ranges-enabled": "Enabled",
+    "ranges-toggle": "Enable {cidr}",
+    "ranges-add": "Add",
+    "ranges-delete": "Delete",
+    "ranges-invalid-cidr": "Invalid CIDR, e.g. 192.0.2.0/24.",
+    "ranges-label-required": "A label is required.",
+    "ranges-load-failed": "Could not load the address ranges.",
+    "ranges-save-failed": "Could not save the change. Try again."
   },
   "spawn": {
     "model": {
@@ -994,6 +1012,10 @@
         "general-quota-failover": {
           "title": "Account switch when quota runs out",
           "summary": "Off / notify / automatic, and what each CLI can do"
+        },
+        "general-quota-failover-loop": {
+          "title": "Resume a loop right after switching when quota runs out",
+          "summary": "Looping panes switch account and continue without waiting for the reset"
         },
         "accounts": {
           "title": "Git Accounts",
@@ -1944,7 +1966,7 @@
             "text": "Electron's built-in whole-window zoom (<em>Zoom In</em> / <em>Zoom Out</em> / <em>Actual Size</em>) was removed, because Navide has two zoom axes of its own: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change the terminal <strong>content</strong> font size, and <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> change the <strong>interface scale</strong> (Settings ▸ Appearance ▸ Interface Scale). Left in place, the native roles' accelerators would fire ahead of both. <kbd class=\"syh-kbd\">⌘R</kbd> was also changed to \"rebuild the focused pane\", and reloading the whole window moved to <kbd class=\"syh-kbd\">⇧⌘R</kbd>, with a <em>Reload Window</em> item in the menu that carries no shortcut. <kbd class=\"syh-kbd\">⌘W</kbd> is reserved for \"close tab\" on macOS, so closing a window is left to the traffic lights or <kbd class=\"syh-kbd\">⌘Q</kbd>."
           },
           "h3": "Schedule — not a standalone window",
-          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. On macOS there are three sections; on Linux only the crontab section applies; on Windows the tab lists nothing by design — Navide never creates scheduled jobs of its own, and Task Scheduler already manages the machine's tasks.",
+          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. Navide's own jobs, your crontab and the macOS launchd jobs share one list: first <strong>Up next</strong>: the rows whose next run can be computed exactly, in time order, and below a thin <strong>Fixed interval</strong> divider the rows that repeat every few minutes or on a schedule with no exact time, shown as their interval rather than a clock time, most frequent first; then <strong>Always on / on demand</strong> and <strong>Disabled</strong>, folded by default. On Linux only the crontab source applies; on Windows only Navide's own jobs are listed — Task Scheduler already manages the machine's tasks.",
           "scheduleTable": {
             "section": "Section",
             "source": "Source",
@@ -1957,14 +1979,14 @@
             },
             "agents": {
               "source": "~/Library/LaunchAgents and /Library/LaunchAgents",
-              "actions": "Only your own entries in ~/Library/LaunchAgents get ⏸ / ▶ and 🗑; system-level ones are shown without buttons"
+              "actions": "Only your own entries in ~/Library/LaunchAgents get ⏸ / ▶ and a ⋯ menu; system-level ones are shown without buttons"
             },
             "daemons": {
               "source": "/Library/LaunchDaemons",
-              "actions": "The whole section is read-only"
+              "actions": "All read-only"
             }
           },
-          "p2": "The system level is read-only because touching it needs root, and Navide never asks for it — the backend blocks it too, not just the interface. That is also why daemons get their own section: their state can usually only be shown as <code>State unknown (requires root)</code>. Every row expands to show Schedule / Command / Raw line, or Label / Scope / Plist path / Last exit code / State. Removing a LaunchAgent <strong>unloads it and permanently deletes its plist</strong>, and asks for confirmation first.",
+          "p2": "The system level is read-only because touching it needs root, and Navide never asks for it — the backend blocks it too, not just the interface. Daemons in particular can usually only show their state as <code>State unknown (requires root)</code>. Every row expands to show Schedule / Command / Raw line, or Label / Scope / Plist path / Last exit code / State. Remove sits in each row's ⋯ menu; removing a LaunchAgent <strong>unloads it and permanently deletes its plist</strong>, and asks for confirmation first.",
           "note2": "There is <strong>no \"run now\" and no \"reveal in Finder\"</strong> here, only disable/enable and remove. Above them are <em>Rescan</em> and the time of the last scan.",
           "h4": "The other windows opened from the UI",
           "otherTable": {
@@ -4049,7 +4071,7 @@
         },
         "s1": {
           "title": "Direction 1: the tools Navide gives CLI agents",
-          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>53</strong> of them today (47 core, plus the 6 the plans plugin registers), alongside 3 read-only resources and 3 prompt templates.",
+          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>59</strong> of them today (53 core, plus the 6 the plans plugin registers), alongside 3 read-only resources and 3 prompt templates.",
           "h1": "Plan documents",
           "planTools": {
             "plan_list": "List every plan in this workspace, with its stage and todo progress",
@@ -4076,6 +4098,12 @@
             "pipeline_define": "Create / rename / delete a pipeline, set the active one, reset the built-ins; delete and set_active are refused while a run is in progress",
             "stage_define": "Add, edit, delete, reorder or reset stages; all four are refused while a run is using that pipeline",
             "role_define": "Add, edit, rename, delete or reset roles; a rename rewrites every slot referencing it, and a role still referenced cannot be deleted",
+            "scheduler_list": "List Navide's scheduled jobs; they fire only while Navide is running — nothing wakes the machine or the app",
+            "scheduler_upsert": "Create a scheduled job, or update one by passing its id: on a timetable (every N minutes, daily or weekly at HH:MM in a time zone) wake a CLI pane and send it an instruction. Unattended runs spend quota, so each job is capped per day and failures back off; a pane that names no target schedules itself",
+            "scheduler_remove": "Delete a scheduled job together with its run history",
+            "scheduler_set_enabled": "Pause or resume a scheduled job; resuming never fires a slot that passed while it was paused",
+            "scheduler_run_now": "Run a job once right now, outside its timetable; answers as soon as the run starts, clears a failure backoff and leaves the next scheduled slot where it was",
+            "scheduler_runs": "A job's run history, newest first: ok, error or skipped with its reason — a skip (no window, busy, daily cap or quota, a vanished target) is not an error",
             "cli_permission_settings": "Read and write the CLI permission-bypass flag (yolo). It is a global setting, not pipeline-specific, and only affects panes opened afterwards; whether a given CLI actually carries the flag is in the returned agents[].skipFlag, not the global value alone",
             "workspace_open": "Open a project as a workspace in Navide; whether that is a new window or one that already has the project open is Navide's decision",
             "workspace_switch": "Switch my own window to another project it already holds; panes of the project being left keep running. Refused while a pipeline is running in that window, because switching would abort it",
@@ -5444,7 +5472,7 @@
           "win": {
             "signing": "<strong>The installer is not code-signed.</strong> Every new version is flagged by SmartScreen again, and in-app updates are installed without signature verification for the same reason.",
             "symlinks": "<strong>Per-pane CLI homes and managed skills are built from symbolic links</strong>, which Windows does not let an ordinary process create. Either turn on Windows Developer Mode (<em>Settings ▸ For developers</em>) or run Navide elevated. Without it nothing fails silently: the affected pane prints a yellow <code>[mcp]</code> line explaining why once it starts. This only reaches the CLIs whose MCP wiring is a file in their config directory — Antigravity CLI, Grok CLI and Kimi Code.",
-            "schedule": "<strong>The Schedule tab lists nothing.</strong> Navide reads the user crontab and macOS launchd jobs, and Windows has neither; Task Scheduler (taskschd.msc) is deliberately not integrated, because Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's. The screen says so rather than showing you an empty list."
+            "schedule": "<strong>The Schedule tab lists only Navide's own jobs (Navide Jobs).</strong> Navide reads the user crontab and macOS launchd jobs, and Windows has neither; Task Scheduler (taskschd.msc) is deliberately not integrated, because Navide never creates OS scheduled jobs and Task Scheduler already manages the machine's. The screen says so rather than showing you an empty list."
           },
           "h2": "Linux",
           "linux": {
@@ -7590,6 +7618,7 @@
     "actual-size": "Actual size",
     "pdf-unavailable": "The embedded PDF viewer is not available in this window.",
     "raw-error": "Could not load this file for preview.",
+    "retry": "Retry",
     "hex-loading": "Loading hex dump…",
     "hex-error": "Failed to load file contents.",
     "hex-truncated": "Showing the first 64 KB of {total}.",
@@ -7952,6 +7981,8 @@
     "settings-hint": "Shows CLI quota for 11 providers: claude, codex, kimi, grok, antigravity, opencode, qwen, kilo, pi, copilot and cursor. Most read local CLI credentials to query that provider's own usage API — read-only, credentials are never written. Claude is different: it drives the Claude CLI's built-in /usage panel instead of reading credentials.",
     "failover-title": "Account switch when quota runs out",
     "failover-hint": "What Navide does when a CLI account hits its quota: do nothing, list the accounts it could switch to (default), or switch automatically — at most 3 automatic switches per 5 hours per CLI, never back to the exhausted account on its own. The table shows what each CLI can do; the switch itself is decided by the backend.",
+    "failover-loop-title": "Resume a loop right after switching when quota runs out",
+    "failover-loop-hint": "When a pane running a loop runs out of quota, switch to an account that still has quota and send continue right away instead of waiting for the reset. Requires \"Switch automatically\" above.",
     "failover-mode-off": "Off",
     "failover-mode-notify": "Notify me",
     "failover-mode-auto": "Switch automatically",
@@ -8052,22 +8083,40 @@
     "rescan": "Rescan",
     "scanning": "Scanning…",
     "scan-failed": "Scan failed: {message}",
-    "count": "{count} items",
-    "empty": "Nothing here",
+    "retry": "Retry",
+    "failing": "{count} failing",
+    "only-failing": "Only failing",
+    "show-all": "Show all",
+    "create-first": "Create one",
+    "backend-outdated": "The backend is older than this window — restart Navide to load scheduled jobs.",
+    "timeline": {
+      "title": "Up next",
+      "empty": "Nothing scheduled ahead"
+    },
+    "bucket": {
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "week": "This week",
+      "later": "Later",
+      "interval": "Fixed interval"
+    },
+    "group": {
+      "other": "Always on / on demand",
+      "disabled": "Disabled"
+    },
+    "interval": {
+      "seconds": "{n}s",
+      "minutes": "{n}m",
+      "hours": "{n}h"
+    },
     "unsupported": "Not supported on this platform",
-    "no-source": "Nothing to list on this platform: Navide reads the user crontab and macOS launchd jobs, and this system has neither. Navide never creates scheduled jobs of its own, so nothing is missing here.",
+    "no-source": "Nothing to list on this platform: Navide reads the user crontab and macOS launchd jobs, and this system has neither. Navide never creates OS scheduled jobs, so nothing is missing here; its own jobs are listed above.",
     "no-source-windows": "Windows keeps its scheduled tasks in Task Scheduler (taskschd.msc), which lists, enables, disables and removes them; Navide does not integrate it by design.",
     "crontab": {
-      "title": "System crontab",
-      "filter-all": "All",
-      "filter-enabled": "Enabled",
-      "filter-disabled": "Disabled"
+      "title": "System crontab"
     },
     "launchagents": {
-      "title": "macOS Agents",
-      "filter-all": "All",
-      "filter-running": "Running",
-      "filter-stopped": "Stopped"
+      "title": "macOS Agents"
     },
     "daemons": {
       "title": "macOS Daemons"
@@ -8078,7 +8127,6 @@
       "system-daemon": "Daemon"
     },
     "tag": {
-      "disabled": "Disabled",
       "pid": "PID {pid}",
       "exit": "exit {code}"
     },
@@ -8090,7 +8138,10 @@
     "action": {
       "enable": "Enable",
       "disable": "Disable",
-      "remove": "Remove"
+      "remove": "Remove",
+      "more": "More actions",
+      "copy-raw": "Copy crontab line",
+      "copy-label": "Copy label"
     },
     "detail": {
       "schedule": "Schedule",
@@ -8121,6 +8172,9 @@
       "monthly": "Every month",
       "yearly": "Every year",
       "every-minutes": "Every {n} minutes",
+      "every-minute": "Every minute",
+      "hourly-at": "Every hour at :{minute}",
+      "every-hours-at": "Every {n} hours at :{minute}",
       "daily-at": "Every day at {time}",
       "weekly-at": "Every {weekday} at {time}",
       "monthly-at": "Day {day} of every month at {time}"
@@ -8134,7 +8188,7 @@
       "keep-alive": "Resident service (KeepAlive)",
       "run-at-load": "Runs at load (RunAtLoad)",
       "calendar": "On a calendar schedule (see the plist)",
-      "unknown": "—"
+      "unknown": "On demand"
     },
     "weekday-0": "Sunday",
     "weekday-1": "Monday",
@@ -8143,6 +8197,76 @@
     "weekday-4": "Thursday",
     "weekday-5": "Friday",
     "weekday-6": "Saturday"
+  },
+  "scheduler": {
+    "add": "+ New",
+    "empty": "No scheduled jobs yet",
+    "list-failed": "Could not load jobs: {message}",
+    "edit": "Edit",
+    "failed": "Failed ×{n}",
+    "repair": "Repair",
+    "enable": "Enable",
+    "disable": "Disable",
+    "run-now": "Run now",
+    "when-backoff": "backoff until {time}",
+    "target": "→ wake and send to pane \"{name}\"",
+    "target-with-id": "→ wake and send to pane \"{name}\" (#{id})",
+    "retarget": "Retarget",
+    "every-minutes": "Every {n} min",
+    "every-hours": "Every {n} h",
+    "daily-at": "Daily at {time}",
+    "weekly-at": "Every {days} at {time}",
+    "day-separator": ", ",
+    "once-at": "Once: {time}",
+    "once-done": "Done (ran once)",
+    "skip": {
+      "no_window": "Skipped: no window",
+      "busy": "Skipped: pane busy",
+      "budget": "Skipped: limit or quota reached",
+      "target_gone": "Target pane no longer exists",
+      "missed": "Skipped: missed slot",
+      "interrupted": "Skipped: interrupted",
+      "unknown": "Skipped"
+    },
+    "editor": {
+      "title-new": "New scheduled job",
+      "title-edit": "Edit scheduled job",
+      "name": "Name",
+      "frequency": "Frequency",
+      "freq-every": "Every N min",
+      "freq-daily": "Daily",
+      "freq-weekly": "Weekly",
+      "freq-once": "Once",
+      "minutes": "minutes",
+      "workspace": "Workspace",
+      "pick-workspace": "Choose a workspace",
+      "target": "Target pane",
+      "pick-pane": "Choose a pane",
+      "pane-option": "{name} · {agent} · #{id}",
+      "pane-by-name": "{name} (by name)",
+      "pane-missing": "{name} #{id} (gone)",
+      "text": "Instruction",
+      "text-placeholder": "What to send to this pane when the time comes…",
+      "catch-up": "If missed",
+      "catch-up-once": "Run once",
+      "catch-up-skip": "Skip",
+      "max-runs": "Daily limit (runs)",
+      "next-preview": "Next run: {time} ({schedule})",
+      "err-name": "Enter a name",
+      "err-every": "Enter a whole number of minutes from 1 to {max}",
+      "err-time": "Time must be HH:MM",
+      "err-tz": "Invalid time zone (use an IANA name such as Asia/Taipei)",
+      "err-days": "Pick at least one day",
+      "err-once": "Pick a date and time in the future",
+      "err-workspace": "Choose a workspace",
+      "err-target": "Choose a target pane",
+      "err-text": "Enter an instruction",
+      "err-max-runs": "Daily limit must be a whole number from 1 to {max}",
+      "remove": "Delete",
+      "remove-confirm": "Delete this scheduled job?",
+      "cancel": "Cancel",
+      "save": "Save"
+    }
   },
   "turn-stats": {
     "title": "Turn Stats",

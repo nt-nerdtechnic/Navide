@@ -1782,23 +1782,11 @@ async def test_live_drift_parks_the_fresh_sign_in_instead_of_overwriting_the_act
     assert h.vault.slot_secrets[("kilo", a)] == '{"token":"A"}'
     assert h.vault.slot_secrets[("kilo", b)] == '{"token":"B"}'
     assert h.store.list()["defaults"]["kilo"] == b
-    # With a NON-empty target the live credential could be anyone's: refuse —
-    # and a known foreign identity is refused even when the user "assumes".
+    # With a NON-empty target the live credential could be anyone's: the
+    # failover route stops (ok frame, cancelled tx) — a manual switch does not
+    # (test_manual_switch_proceeds_when_the_live_credential_drifted_...).
     h.vault.live_secrets["kilo"] = '{"token":"X"}'
     c = h.profile("kilo", "C", secret='{"token":"C"}')
-    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kilo", "profile_id": c})
-    assert not got["ok"] and got["error"]["code"] == "LIVE_DRIFT"
-    assert got["error"]["details"]["verified"] is True
-    assert got["error"]["details"]["liveIdentity"]["email"] == "x@x"
-    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kilo", "profile_id": c,
-                                                      "assume_live_is_current": True,
-                                                      "expected_current_slot_id": b,
-                                                      "expected_epoch": got["error"]["details"]["epoch"],
-                                                      "live_fingerprint": got["error"]["details"]["liveFingerprint"]})
-    assert not got["ok"] and got["error"]["code"] == "LIVE_DRIFT"
-    assert h.vault.switch_calls == [] and h.vault.slot_secrets[("kilo", b)] == '{"token":"B"}'
-    # And the failover route stops the same way (ok frame, cancelled tx).
-    h.vault.live_secrets["kilo"] = '{"token":"X"}'
     fp = qf.live_fingerprint(h.vault, "kilo", None)
     tx = await h.service.begin_switch({
         "agent_key": "kilo", "to_slot_id": c, "expected_current_slot_id": b,
@@ -1906,7 +1894,7 @@ def test_stable_account_id_beats_the_email_when_judging_drift(h: Harness) -> Non
 
 
 @pytest.mark.asyncio
-async def test_unverifiable_live_credential_needs_the_users_word_on_both_routes(
+async def test_unverifiable_live_credential_needs_the_users_word_on_the_failover_route(
     h: Harness, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(ws_handlers, "_switch_history", {})
@@ -1917,10 +1905,6 @@ async def test_unverifiable_live_credential_needs_the_users_word_on_both_routes(
     b = h.profile("kimi", "B", secret='{"token":"B"}')
     h.vault.live_secrets = {"kimi": '{"token":"A2"}'}  # rotated — or foreign
     s = h.session()
-    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kimi", "profile_id": b})
-    assert not got["ok"] and got["error"]["code"] == "LIVE_DRIFT"
-    assert got["error"]["details"]["verified"] is False
-    assert h.vault.switch_calls == [] and h.vault.slot_secrets[("kimi", a)] == '{"token":"A1"}'
     tx = await h.service.begin_switch({
         "agent_key": "kimi", "to_slot_id": b, "expected_current_slot_id": a,
         "expected_epoch": 0, "idempotency_key": "k1", "automatic": False,
@@ -1943,14 +1927,13 @@ async def test_unverifiable_live_credential_needs_the_users_word_on_both_routes(
             "assume_live_is_current": True,
         })
     assert err.value.code == "STALE_EPOCH"
-    details = got["error"]["details"]
-    fingerprint = details["liveFingerprint"]
+    fingerprint = qf.live_fingerprint(h.vault, "kimi", None)
     assert fingerprint and tx.live_fingerprint == fingerprint
-    assert details["currentSlotId"] == a and details["epoch"] == h.service.epoch("kimi") == 0
-    # The word alone is not enough: it answers the state the user was shown.
-    # Missing expected_* → BAD_REQUEST; another account → STALE_STATE; same
-    # account but the epoch moved (A -> C -> A) → STALE_EPOCH; a stale
-    # fingerprint echo → asked again. None of these touches a credential.
+    assert h.service.epoch("kimi") == 0
+    # The manual route never asks for the word, but a caller that sends it
+    # must still bind it to a state: missing expected_* → BAD_REQUEST;
+    # another account → STALE_STATE; same account but the epoch moved
+    # (A -> C -> A) → STALE_EPOCH. None of these touches a credential.
     got = await _call(s, "cli_profiles.set_default", {"agent_key": "kimi", "profile_id": b,
                                                       "assume_live_is_current": True})
     assert not got["ok"] and got["error"]["code"] == "BAD_REQUEST"
@@ -1975,23 +1958,6 @@ async def test_unverifiable_live_credential_needs_the_users_word_on_both_routes(
                                                       "expected_current_slot_id": a,
                                                       "expected_epoch": 0})
     assert not got["ok"] and got["error"]["code"] == "BAD_REQUEST"
-    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kimi", "profile_id": b,
-                                                      "assume_live_is_current": True,
-                                                      "expected_current_slot_id": a,
-                                                      "expected_epoch": 0,
-                                                      "live_fingerprint": "nope"})
-    assert not got["ok"] and got["error"]["code"] == "LIVE_DRIFT"
-    # Same current, same epoch, but the live store now holds C's credential:
-    # the fingerprint alone refuses, and nothing is captured anywhere.
-    h.vault.live_secrets["kimi"] = '{"token":"A3"}'  # changed again under the dialog
-    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kimi", "profile_id": b,
-                                                      "assume_live_is_current": True,
-                                                      "expected_current_slot_id": a,
-                                                      "expected_epoch": 0,
-                                                      "live_fingerprint": fingerprint})
-    assert not got["ok"] and got["error"]["code"] == "LIVE_DRIFT"
-    assert got["error"]["details"]["epoch"] == 0 and got["error"]["details"]["currentSlotId"] == a
-    fingerprint = got["error"]["details"]["liveFingerprint"]
     assert h.vault.switch_calls == [] and getattr(h.vault, "captures", []) == []
     assert h.vault.slot_secrets[("kimi", a)] == '{"token":"A1"}'
     # Same state as shown: a normal switch, and A's slot keeps the rotated
@@ -2047,6 +2013,99 @@ async def test_unverifiable_live_credential_needs_the_users_word_on_both_routes(
         "assume_live_is_current": True, "live_fingerprint": tx3.live_fingerprint,
     })
     assert tx5.state in ("committed", "preparing") and h.vault.switch_calls[-1] == ("kimi", a, b, None)
+
+
+@pytest.mark.asyncio
+async def test_manual_switch_proceeds_when_the_live_credential_drifted_and_the_target_is_not_empty(
+    h: Harness, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A switch the user picked by hand is never refused for drift: the
+    reconcile gate belongs to the quota failover transaction alone."""
+    monkeypatch.setattr(ws_handlers, "_switch_history", {})
+    monkeypatch.setattr(usage_service, "start_login_watch", lambda *a: None)
+    h.vault.global_login_vendors = {"kilo"}
+    h.vault.emails = {'{"token":"A"}': "a@x", '{"token":"B"}': "b@x", '{"token":"X"}': "x@x"}
+    a = h.profile("kilo", "A", secret='{"token":"A"}')
+    h.store.set_default("kilo", a)
+    b = h.profile("kilo", "B", secret='{"token":"B"}')
+    h.vault.live_secrets = {"kilo": '{"token":"X"}'}  # someone else signed in
+    s = h.session()
+    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kilo", "profile_id": b})
+    assert got["ok"], got
+    assert got["payload"]["warning"] == "live-drift"
+    assert [c[:3] for c in h.vault.switch_calls] == [("kilo", a, b)]
+    assert h.store.list()["defaults"]["kilo"] == b
+    # The failover transaction in the same situation still refuses.
+    h.vault.live_secrets["kilo"] = '{"token":"X"}'
+    tx = await h.service.begin_switch({
+        "agent_key": "kilo", "to_slot_id": a, "expected_current_slot_id": b,
+        "expected_epoch": h.service.epoch("kilo"), "idempotency_key": "k", "automatic": False,
+    })
+    assert tx.state == "cancelled" and tx.reason == "live-drift"
+    assert [c[:3] for c in h.vault.switch_calls] == [("kilo", a, b)]
+
+
+@pytest.mark.asyncio
+async def test_manual_switch_does_not_ask_to_confirm_an_unverifiable_live_credential(
+    h: Harness, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ws_handlers, "_switch_history", {})
+    monkeypatch.setattr(usage_service, "start_login_watch", lambda *a: None)
+    h.vault.emails = {}  # an opaque credential: nothing names the account
+    a = h.profile("kimi", "A", secret='{"token":"A1"}')
+    h.store.set_default("kimi", a)
+    b = h.profile("kimi", "B", secret='{"token":"B"}')
+    h.vault.live_secrets = {"kimi": '{"token":"A2"}'}  # rotated — or foreign
+    s = h.session()
+    got = await _call(s, "cli_profiles.set_default", {"agent_key": "kimi", "profile_id": b})
+    assert got["ok"], got
+    assert got["payload"]["warning"] == "live-drift-unverified"
+    assert h.vault.switch_calls == [("kimi", a, b, None)]
+    assert h.store.list()["defaults"]["kimi"] == b
+
+
+@pytest.mark.asyncio
+async def test_manual_switch_works_under_the_auto_policy(
+    h: Harness, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ws_handlers, "_switch_history", {})
+    monkeypatch.setattr(usage_service, "start_login_watch", lambda *a: None)
+    await h.service.set_policy("auto")
+    h.vault.emails = {'{"token":"A"}': "a@x", '{"token":"B"}': "b@x", '{"token":"X"}': "x@x"}
+    a = h.profile("codex", "A", secret='{"token":"A"}')
+    h.store.set_default("codex", a)
+    b = h.profile("codex", "B", secret='{"token":"B"}')
+    h.vault.live_secrets = {"codex": '{"token":"X"}'}
+    s = h.session()
+    got = await _call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
+    assert got["ok"], got
+    assert h.store.list()["defaults"]["codex"] == b
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drift", ["drifted", "unverifiable", "unknown", "none"])
+async def test_manual_switch_never_runs_a_failover_gate_without_an_exhaustion_event(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, drift: str,
+) -> None:
+    """With no exhaustion incident, whatever the drift reading says, the manual
+    route opens no failover transaction and refuses nothing."""
+    monkeypatch.setattr(ws_handlers, "_switch_history", {})
+    monkeypatch.setattr(usage_service, "start_login_watch", lambda *a: None)
+    monkeypatch.setattr(qf, "live_drift", lambda *a, **k: drift)
+
+    async def no_transaction(*a: Any, **k: Any) -> None:
+        raise AssertionError("the manual route opened a failover transaction")
+
+    monkeypatch.setattr(h.service, "begin_switch", no_transaction)
+    a = h.profile("codex", "A", secret='{"token":"A"}')
+    h.store.set_default("codex", a)
+    b = h.profile("codex", "B", secret='{"token":"B"}')
+    h.vault.live_secrets = {"codex": '{"token":"A"}'}
+    s = h.session()
+    got = await _call(s, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b})
+    assert got["ok"], got
+    assert h.vault.switch_calls == [("codex", a, b, None)]
+    assert h.service.incidents == {} and h.service.transactions == {}
 
 
 @pytest.mark.asyncio

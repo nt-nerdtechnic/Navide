@@ -10,6 +10,7 @@ import {
   LOOP_DONE_INSTRUCTION,
   withLoopDoneInstruction,
   DEFAULT_LOOP_PROMPT,
+  formatLoopTime,
 } from '../loopPrompt'
 import { turnEndsWithSentinel } from '../completion'
 
@@ -198,5 +199,32 @@ describe('the injected marker instruction', () => {
 
   it('keeps the two markers distinct strings', () => {
     expect(LOOP_WAIT_MARKER).not.toBe(LOOP_DONE_MARKER)
+  })
+})
+
+describe('lib/loopPrompt formatLoopTime', () => {
+  // Local-time constructors keep these timezone-independent.
+  const now = new Date(2026, 8, 23, 22, 0).getTime()
+  const clock = (ms: number): string =>
+    new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+
+  it('shows only the clock for a time later the same local day', () => {
+    const at = new Date(2026, 8, 23, 23, 46).getTime()
+    expect(formatLoopTime(at, now)).toBe(clock(at))
+  })
+
+  it('prefixes M/D for a time tomorrow', () => {
+    const at = new Date(2026, 8, 24, 1, 46).getTime()
+    expect(formatLoopTime(at, now)).toBe(`9/24 ${clock(at)}`)
+  })
+
+  it('prefixes M/D for a reset several days out (weekly limit)', () => {
+    const at = new Date(2026, 8, 28, 1, 46).getTime()
+    expect(formatLoopTime(at, now)).toBe(`9/28 ${clock(at)}`)
+  })
+
+  it('prefixes M/D across a month boundary', () => {
+    const at = new Date(2026, 9, 2, 9, 5).getTime()
+    expect(formatLoopTime(at, now)).toBe(`10/2 ${clock(at)}`)
   })
 })
