@@ -354,8 +354,13 @@ describe('voice wiring', () => {
     await start()
     expect(voice.state.handsFree).toBe(true)
     expect(voice.state.capEndsAt - Date.now()).toBe(HANDS_FREE_MAX_MS)
-    // Key repeat of the starting press.
-    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
+    // Key repeat of the starting press: with no keyup seen yet the command
+    // cannot tell it from a fresh press, so it declines and the armed keydown
+    // listener, which sees `repeat`, swallows it.
+    expect(executeCommand('workbench.action.holdToTalk')).toBe(false)
+    const repeat = new KeyboardEvent('keydown', { key: 'µ', code: 'KeyM', ctrlKey: true, altKey: true, repeat: true, cancelable: true })
+    window.dispatchEvent(repeat)
+    expect(repeat.defaultPrevented).toBe(true)
     await settle()
     expect(voice.state.phase).toBe('recording')
     vi.advanceTimersByTime(5_000)

@@ -185,6 +185,92 @@ describe('voice wiring: single keys and the fn key', () => {
     })
   })
 
+  describe('a ⌘ chord in toggle mode (⌘⇧D)', () => {
+    const CMD_SHIFT_D: KeyboardEventInit = { key: 'd', code: 'KeyD', metaKey: true, shiftKey: true }
+
+    /** A keydown the way the dispatcher handles it: the command runs first,
+     *  and a key it consumed goes no further. */
+    function dispatch(init: KeyboardEventInit = {}): { consumed: boolean; event: KeyboardEvent } {
+      const event = new KeyboardEvent('keydown', { ...CMD_SHIFT_D, ...init, cancelable: true })
+      const rule = new KeyResolver([...defaults, ...getUserRules()]).resolve(event, { ...getContext(), paneStage: true })
+      const consumed = rule ? executeCommand(rule.command, rule.args) : false
+      if (!consumed) window.dispatchEvent(event)
+      return { consumed, event }
+    }
+    const starts = () => sent.filter((t) => t === 'voice.start').length
+
+    beforeEach(async () => {
+      // Open Plans owns ⌘⇧D by default; the user unbound it first.
+      setUserRules([
+        { key: 'ctrl+alt+m', command: `-${HOLD_TO_TALK_COMMAND}` },
+        { key: 'cmd+shift+d', command: '-workbench.action.openPlans' },
+        { key: 'cmd+shift+d', command: HOLD_TO_TALK_COMMAND, when: 'paneStage && voiceInput && !modalOpen' },
+      ])
+      settings.setVoiceRecordingMode('toggle')
+      settings.setVoiceInputEnabled(true)
+      await settle()
+    })
+
+    it('starts on keydown and stops on the next fresh keydown, with no keyup in between; repeats do nothing', async () => {
+      expect(dispatch().consumed).toBe(true)
+      await settle()
+      expect(voice.state.phase).toBe('recording')
+      expect(voice.state.handsFree).toBe(true)
+      // Held: key repeat, and macOS never sends the D keyup while ⌘ is down.
+      for (let i = 0; i < 3; i++) {
+        const { consumed, event } = dispatch({ repeat: true })
+        expect(consumed).toBe(false)
+        expect(event.defaultPrevented).toBe(true)
+      }
+      vi.advanceTimersByTime(RELEASE_TAIL_MS * 4)
+      await settle()
+      expect(voice.state.phase).toBe('recording')
+      // D pressed again, ⌘⇧ still held: a keydown only.
+      expect(dispatch().event.defaultPrevented).toBe(true)
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      expect(inserted).toEqual(['hello'])
+      expect(starts()).toBe(1)
+    })
+
+    it('repeats of the stopping press do not start another take', async () => {
+      dispatch()
+      await settle()
+      dispatch()
+      for (let i = 0; i < 5; i++) {
+        expect(dispatch({ repeat: true }).event.defaultPrevented).toBe(true)
+        vi.advanceTimersByTime(RELEASE_TAIL_MS)
+        await settle()
+      }
+      expect(inserted).toEqual(['hello'])
+      expect(starts()).toBe(1)
+      expect(voice.state.phase).not.toBe('recording')
+    })
+
+    it('after the stop, a fresh press starts the next take, with or without letting go first', async () => {
+      dispatch()
+      await settle()
+      dispatch()
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      // Still holding ⌘⇧: D again.
+      dispatch()
+      await settle()
+      expect(starts()).toBe(2)
+      expect(voice.state.phase).toBe('recording')
+      dispatch()
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      // Let go of ⌘⇧ this time (their keyups do arrive), then press again.
+      keyup({ key: 'Shift', code: 'ShiftLeft', metaKey: true })
+      keyup({ key: 'Meta', code: 'MetaLeft' })
+      expect(dispatch().consumed).toBe(true)
+      await settle()
+      expect(starts()).toBe(3)
+      expect(inserted).toEqual(['hello', 'hello'])
+    })
+  })
+
   describe('a function key (F13)', () => {
     beforeEach(async () => {
       bind('f13')

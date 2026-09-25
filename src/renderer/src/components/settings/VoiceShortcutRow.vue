@@ -3,16 +3,18 @@
 // look for it. It edits the same user rules as Settings → Shortcuts
 // (buildRows / setRowKeys / resetRow over getUserRules / saveUserRules), so
 // both views always show one binding.
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   buildRows,
+  canonicalizeKeySpec,
   commandI18nKey,
   conflictsByRow,
   getUserRules,
   keySpecToTokens,
   formatKeySpec,
   onUserRulesChanged,
+  parseKeySpec,
   resetRow,
   saveUserRules,
   setRowKeys,
@@ -22,8 +24,8 @@ import {
 } from '@navide/plugin-ui/shared'
 import SettingRow from './SettingRow.vue'
 import { useKeyChordRecorder } from '../../composables/useKeyChordRecorder'
-import { HOLD_TO_TALK_COMMAND } from '../../voice/voiceSettings'
-import { holdToTalkKeyProblem } from '../../voice/holdToTalkKey'
+import { HOLD_TO_TALK_COMMAND, useVoiceSettings } from '../../voice/voiceSettings'
+import { holdToTalkKeyProblem, reservedChordAction, suggestHoldToTalkKeys } from '../../voice/holdToTalkKey'
 
 const emit = defineEmits<{ 'open-shortcuts': [command: string] }>()
 const { t, te } = useI18n()
@@ -37,20 +39,38 @@ onUnmounted(stopWatching)
 const rows = computed(() => buildRows(userRules.value))
 const row = computed(() => rows.value.find((r) => r.command === HOLD_TO_TALK_COMMAND) ?? null)
 const error = ref('')
+// Free keys offered after a chord was refused.
+const suggestions = ref<string[]>([])
+// Keys are judged against the recording mode: a ⌘ chord is fine only in toggle.
+const { voiceRecordingMode } = useVoiceSettings()
+watch(voiceRecordingMode, () => {
+  error.value = ''
+  suggestions.value = []
+})
 
 // Hold-to-talk is held down, so it is one key combination, never a sequence;
 // it may be a single modifier on its own (Right Option).
 const recorder = useKeyChordRecorder({ maxSegments: 1, allowLoneModifier: true })
 
-/** Why `spec` cannot be the dictation key (see holdToTalkKey.ts), or ''. */
+/** Why `spec` cannot be the dictation key in the current mode (see holdToTalkKey.ts), or ''. */
 function problemText(spec: string, mode: 'refused' | 'warning'): string {
-  const problem = holdToTalkKeyProblem(spec)
+  const problem = holdToTalkKeyProblem(spec, voiceRecordingMode.value)
+  const key = formatKeySpec(spec)
   if (problem === 'meta') {
-    return mode === 'refused' ? t('settings.voice.shortcut-meta-refused', { key: formatKeySpec(spec) }) : t('settings.voice.shortcut-meta-warning')
+    return mode === 'refused' ? t('settings.voice.shortcut-meta-refused', { key }) : t('settings.voice.shortcut-meta-warning')
   }
-  if (problem === 'meta-alone') return t('settings.voice.shortcut-meta-alone-refused', { key: formatKeySpec(spec) })
-  if (problem === 'typing-key') return t('settings.voice.shortcut-typing-refused', { key: formatKeySpec(spec) })
+  if (problem === 'meta-alone') return t('settings.voice.shortcut-meta-alone-refused', { key })
+  if (problem === 'macos-reserved') {
+    return t('settings.voice.shortcut-reserved-refused', { key, action: t(`settings.voice.reserved.${reservedChordAction(spec)}`) })
+  }
+  if (problem === 'menu') return t('settings.voice.shortcut-menu-refused', { key })
+  if (problem === 'typing-key') return t('settings.voice.shortcut-typing-refused', { key })
   return ''
+}
+
+/** Every key the rule table binds right now, to any command. */
+function takenKeys(): Set<string> {
+  return new Set(rows.value.flatMap((r) => r.keys.map((k) => k.key)))
 }
 
 function labelFor(r: BindingRow): string {
@@ -58,18 +78,30 @@ function labelFor(r: BindingRow): string {
   return te(key) ? t(key) : r.label
 }
 
+/** The other commands sharing a key with the dictation row in `all`, by name. */
+function rivalNames(all: BindingRow[], r: BindingRow): string[] {
+  const rivals = (conflictsByRow(all).get(r.id) ?? [])
+    .flatMap((c) => c.rows)
+    .filter((other) => other.id !== r.id)
+  return [...new Set(rivals.map(labelFor))]
+}
+
 const conflictNote = computed(() => {
   const r = row.value
   if (!r) return ''
-  const rivals = (conflictsByRow(rows.value).get(r.id) ?? [])
-    .flatMap((c) => c.rows)
-    .filter((other) => other.id !== r.id)
-  return rivals.length ? t('settings.voice.shortcut-conflict', { commands: [...new Set(rivals.map(labelFor))].join(', ') }) : ''
+  const names = rivalNames(rows.value, r)
+  return names.length ? t('settings.voice.shortcut-conflict', { commands: names.join(', ') }) : ''
 })
 
-// A refused key can still arrive from keybindings.json or the Shortcuts tab.
+// A refused key can still arrive from keybindings.json or the Shortcuts tab,
+// or become one when the recording mode changes (a ⌘ chord left behind by
+// toggle mode): it is flagged, never changed behind the user's back.
 const boundProblem = computed(() => row.value?.keys.map((k) => problemText(k.key, 'warning')).find(Boolean) ?? '')
 const warning = computed(() => error.value || boundProblem.value)
+// The bound key stopped working in this mode: offer the two ways out.
+const boundMetaInHold = computed(
+  () => !error.value && !!row.value?.keys.some((k) => holdToTalkKeyProblem(k.key, voiceRecordingMode.value) === 'meta'),
+)
 
 async function commit(next: KeybindingRule[]): Promise<void> {
   userRules.value = next
@@ -79,7 +111,13 @@ async function commit(next: KeybindingRule[]): Promise<void> {
 
 function startRecording(): void {
   error.value = ''
+  suggestions.value = []
   recorder.start()
+}
+
+function refuse(spec: string, message: string): void {
+  error.value = message
+  suggestions.value = suggestHoldToTalkKeys(spec, voiceRecordingMode.value, takenKeys())
 }
 
 async function save(): Promise<void> {
@@ -87,9 +125,10 @@ async function save(): Promise<void> {
   const spec = recorder.spec.value
   recorder.stop()
   if (!r || !spec) return
+  suggestions.value = []
   const refused = problemText(spec, 'refused')
   if (refused) {
-    error.value = refused
+    refuse(spec, refused)
     return
   }
   // setRowKeys drops a key validateKeySpec rejects; say why instead.
@@ -97,7 +136,26 @@ async function save(): Promise<void> {
     error.value = t('settings.keybindings.invalid-key', { key: formatKeySpec(spec) })
     return
   }
-  await commit(setRowKeys(userRules.value, r, [spec]))
+  const next = setRowKeys(userRules.value, r, [spec])
+  // A ⌘ chord (toggle mode) must not take a key another command already has:
+  // most of them are Navide's own everyday shortcuts.
+  if (parseKeySpec(spec).some((k) => k.meta)) {
+    const nextRow = buildRows(next).find((x) => x.id === r.id)
+    const names = nextRow ? rivalNames(buildRows(next), nextRow) : []
+    if (names.length) {
+      refuse(spec, t('settings.voice.shortcut-taken-refused', { key: formatKeySpec(spec), commands: names.join(', ') }))
+      return
+    }
+  }
+  await commit(next)
+}
+
+async function useSuggestion(spec: string): Promise<void> {
+  const r = row.value
+  if (!r) return
+  error.value = ''
+  suggestions.value = []
+  await commit(setRowKeys(userRules.value, r, [canonicalizeKeySpec(spec)]))
 }
 
 async function reset(): Promise<void> {
@@ -105,6 +163,7 @@ async function reset(): Promise<void> {
   if (!r) return
   recorder.stop()
   error.value = ''
+  suggestions.value = []
   await commit(resetRow(userRules.value, r))
 }
 </script>
@@ -150,8 +209,26 @@ async function reset(): Promise<void> {
       >{{ t('settings.voice.shortcut-reset') }}</button>
     </template>
   </SettingRow>
-  <p v-if="warning" class="vs-message vs-message--warning" data-testid="voice-shortcut-warning">{{ warning }}</p>
+  <p v-if="warning" class="vs-message vs-message--warning" data-testid="voice-shortcut-warning">
+    {{ warning }}
+    <template v-if="boundMetaInHold">
+      <button type="button" class="vs-btn" data-testid="voice-shortcut-warning-reset" @click="reset">{{ t('settings.voice.shortcut-reset') }}</button>
+      <button type="button" class="vs-btn" data-testid="voice-shortcut-warning-rebind" @click="startRecording">{{ t('settings.voice.shortcut-rebind') }}</button>
+    </template>
+  </p>
   <p v-else-if="conflictNote" class="vs-message">{{ conflictNote }}</p>
+  <p v-if="suggestions.length" class="vs-message" data-testid="voice-shortcut-suggestions">
+    {{ t('settings.voice.shortcut-suggest') }}
+    <button
+      v-for="spec in suggestions"
+      :key="spec"
+      type="button"
+      class="vs-btn vs-suggest"
+      :data-suggest="spec"
+      :title="t('settings.voice.shortcut-use', { key: formatKeySpec(spec) })"
+      @click="useSuggestion(spec)"
+    ><kbd v-for="(tok, i) in keySpecToTokens(spec)[0]" :key="i">{{ tok }}</kbd></button>
+  </p>
   <p class="vs-open">
     <a href="#" data-testid="voice-shortcut-open" @click.prevent="emit('open-shortcuts', HOLD_TO_TALK_COMMAND)">
       {{ t('settings.voice.shortcut-open') }}
@@ -213,5 +290,10 @@ async function reset(): Promise<void> {
   color: var(--text-secondary);
 }
 .vs-message--warning { color: var(--warning-fg); }
+.vs-suggest kbd {
+  font-family: inherit;
+  font-size: var(--font-2xs);
+  padding: 0 4px;
+}
 .vs-open a { color: var(--accent-fg); }
 </style>

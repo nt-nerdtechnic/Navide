@@ -56,7 +56,7 @@ off the chord is not consumed and reaches the focused terminal as before.
 
 | Shortcut | Action |
 |----------|--------|
-| `⌃⌥M` (hold) | Dictate into the focused CLI pane (the recording mode in Settings decides hold, tap-to-lock or press-to-toggle). The words appear in the capsule as you speak; when the take ends this way, the text is typed into the pane's input box like a paste — it is **not** sent: review it and press Enter yourself. It goes straight to the pane, even while the CLI is busy. Releasing any key of the chord stops a held take. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
+| `⌃⌥M` (hold) | Dictate into the focused CLI pane (the recording mode in Settings decides hold, tap-to-lock or press-to-toggle). The words appear in the capsule as you speak; when the take ends this way, the text is typed into the pane's input box like a paste — it is **not** sent: review it and press Enter yourself. It goes straight to the pane, even while the CLI is busy. Releasing any key of the chord stops a held take. `⌘` chords only in the press-to-toggle mode: macOS drops the key-up of a key held with Cmd, so a held `⌘` chord could never be released |
 | `Escape` | During a take only: cancel the recording or its transcription; nothing is typed in. Not a rule in the table — it is only listened for while a take records or transcribes |
 | `Enter` | During a take only, with its pane focused: end it and **send** — once the final text is typed in, Enter is pressed for you (after the paste, as if you typed it). Works while the take is starting, recording or transcribing, and is handiest hands-free: speak, then Enter. Nothing is sent when nothing was heard or the pane cannot take the text; if the text went in but its Enter could not follow (the paste was not confirmed within a few seconds), the capsule says so and the text waits in the input box for your own Enter. An Enter that confirms an IME candidate, or one with a modifier, is left alone. Like Esc, not a rule in the table; once the take is over, Enter reaches the CLI as usual |
 
@@ -70,9 +70,22 @@ single key works too:
 
 | Accepted | Refused |
 |----------|---------|
-| A function key on its own (`F13`–`F19` are unused by macOS and ideal; `F1`–`F24` all work) | A key that types or edits — a letter, digit, space, punctuation, `Enter`, `Tab`, `Backspace`, `Delete`, `Escape` — with no `⌃` or `⌥` (`⇧` alone still types). Holding it would type into the CLI, and Enter / Esc already mean send / cancel |
-| One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`… (recorded by pressing and releasing it alone) | `⌘` in a combination: macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
-| Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | `⌘` by itself: its own key-up does arrive, but every `⌘` shortcut (`⌘C`, `⌘V`…) starts with it, so each would start a take |
+| A function key on its own (`F13`–`F19` are unused by macOS and ideal; `F1`–`F24` all work) | A key that types or edits — a letter, digit, space, punctuation, `Enter`, `Tab`, `Backspace`, `Delete`, `Escape` — with no `⌃`, `⌥` or `⌘` (`⇧` alone still types). Holding it would type into the CLI, and Enter / Esc already mean send / cancel |
+| One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`… (recorded by pressing and releasing it alone) | `⌘` in a combination while the recording mode is "Hold to talk" or "Hold, or tap to lock": macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
+| Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | `⌘` by itself, in every mode: its own key-up does arrive, but every `⌘` shortcut (`⌘C`, `⌘V`…) starts with it, so each would start a take |
+| A combination with `⌘` (`⌘⇧D`…), **only while the recording mode is "Press to start, press again to stop"**: that mode needs no key-up — the second press, a key-down, stops the take, and key repeat is ignored | A `⌘` combination another Navide command already has — the row names it. `⌘⇧D` is Open Plans by default: unbind that under Shortcuts first to use it here |
+| | A chord macOS keeps for itself — `⌘Q`, `⌘W`, `⌘H`, `⌥⌘H`, `⌘M`, `⌘Tab`, `⌘Space`, `` ⌘` ``, `⌘,`, `⇧⌘Q`, `⌃⌘Q`, `⌥⌘Esc`, `⌃⌘F`, `⌥⌘D`, `⇧⌘3`/`4`/`5`… — named with what macOS does with it, and any key the application menu takes before Navide sees it |
+
+When a key is refused, the row offers two or three free keys that do work in
+the current recording mode — near the refused one first (its letter under other
+modifiers; `⌘` ones only in toggle mode), then `F13`–`F19` and a lone right
+modifier — none bound to any command, reserved by macOS or taken by the menu.
+One click saves it.
+
+The recording mode is checked live. Switching it from toggle to a hold mode
+while the shortcut is a `⌘` chord does **not** change the binding: the row
+warns that it will not stop a held take and offers **Reset to default** and
+**Rebind** (or switch the mode back).
 
 A lone modifier cannot tell on key-down whether it will be held alone or used
 for a combination, so the take starts at once and is dropped quietly — nothing

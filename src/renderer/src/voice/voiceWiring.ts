@@ -8,6 +8,7 @@ import {
   isLoneModifierKey,
   isRemovalRule,
   LONE_MODIFIER_KEYS,
+  matchesEvent,
   parseKeySpec,
   registerCommand,
   removalTarget,
@@ -169,6 +170,15 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   // held alone or used for a combination, so the take starts at once and is
   // dropped, quietly, as soon as another key goes down while it is held.
   //
+  // A hands-free take whose chord was let go is stopped by the next press.
+  // Until a keyup shows that, a keydown of the chord may be key repeat or a
+  // fresh press: with a ⌘ chord (allowed in toggle mode) macOS withholds the
+  // letter's keyup while ⌘ is held, so ⌘⇧D, then D again, never shows one.
+  // The resolver hands its command no event, so the command declines then,
+  // and onArmedKeyDown, which sees `e.repeat`, stops the take on a fresh
+  // press. That chord is still held after the stop, so a repeat guard keeps
+  // its repeats from starting the next take until a key of it is let go.
+  //
   // The fn key (optional, macOS) presses and releases the same way, but its
   // events come from the main process, which sees fn system-wide: a press is
   // taken only while this window has focus, and its release is fn's own up
@@ -185,7 +195,16 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     e.stopImmediatePropagation()
     letGo(`keyup:${e.code || e.key}`)
   }
-  function onHeldKeyDown(e: KeyboardEvent): void {
+  function onArmedKeyDown(e: KeyboardEvent): void {
+    if (voice.state.handsFree && !chordUp && chords.some((c) => matchesEvent(c, e))) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (e.repeat) return
+      disarm()
+      voice.release('toggle')
+      startRepeatGuard()
+      return
+    }
     if (chordUp || !isLoneModifierCombo(e, chords)) return
     // Left alone: the combination is the user's, not ours.
     disarm()
@@ -200,14 +219,44 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     if (!armed) return
     armed = false
     window.removeEventListener('keyup', onKeyUp, true)
-    window.removeEventListener('keydown', onHeldKeyDown, true)
+    window.removeEventListener('keydown', onArmedKeyDown, true)
     window.removeEventListener('blur', onBlur)
+  }
+
+  let repeatGuard = false
+  function onGuardKeyDown(e: KeyboardEvent): void {
+    if (!chords.some((c) => matchesEvent(c, e))) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    if (e.repeat) return
+    endRepeatGuard()
+    press('key')
+  }
+  function onGuardKeyUp(e: KeyboardEvent): void {
+    if (isChordKeyUp(e, chords)) endRepeatGuard()
+  }
+  function startRepeatGuard(): void {
+    repeatGuard = true
+    window.addEventListener('keydown', onGuardKeyDown, true)
+    window.addEventListener('keyup', onGuardKeyUp, true)
+    window.addEventListener('blur', endRepeatGuard)
+  }
+  function endRepeatGuard(): void {
+    if (!repeatGuard) return
+    repeatGuard = false
+    window.removeEventListener('keydown', onGuardKeyDown, true)
+    window.removeEventListener('keyup', onGuardKeyUp, true)
+    window.removeEventListener('blur', endRepeatGuard)
   }
 
   /** The hotkey or fn went down. False: not consumed. */
   function press(from: 'key' | 'fn'): boolean {
     if (!settings.voiceInputEnabled.value) return false
+    // onGuardKeyDown owns the chord's keydowns until it is let go.
+    if (from === 'key' && repeatGuard) return false
     if (armed) {
+      // onArmedKeyDown owns this keydown (it can see whether it is a repeat).
+      if (from === 'key' && source === 'key' && voice.state.handsFree && !chordUp && chords.length > 0) return false
       // A fresh press of a hands-free take stops it; anything else is key repeat.
       if (voice.state.handsFree && chordUp) {
         disarm()
@@ -226,7 +275,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       if (from === 'key') {
         window.addEventListener('keyup', onKeyUp, true)
         window.addEventListener('blur', onBlur)
-        if (chords.some((c) => isLoneModifierKey(c.key))) window.addEventListener('keydown', onHeldKeyDown, true)
+        window.addEventListener('keydown', onArmedKeyDown, true)
       }
     }
     return true
@@ -373,6 +422,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       }
       window.removeEventListener('focus', onFocus)
       disarm()
+      endRepeatGuard()
       voice.disable()
       if (was) void host.backend.send('voice.shutdown', {}, 10_000).catch(() => {})
     },
@@ -383,6 +433,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     offPartial()
     fnListen(false)
     disarm()
+    endRepeatGuard()
     window.removeEventListener('focus', onFocus)
     window.removeEventListener('keydown', onTakeKey, true)
     voice.disable()
