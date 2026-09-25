@@ -26,6 +26,9 @@ export type VoiceRecordingMode = (typeof VOICE_RECORDING_MODES)[number]
 export const VOICE_SCRIPT_KEY = 'agentTeam.voiceChineseScript'
 export const VOICE_SCRIPTS = ['hant-tw', 'hans', 'none'] as const
 export type VoiceScript = (typeof VOICE_SCRIPTS)[number]
+// macOS: the fn (🌐) key also works as the dictation key, through a native
+// helper that runs only while this is on (default off).
+export const VOICE_FN_KEY_KEY = 'agentTeam.voiceFnKeyEnabled'
 
 function read(key: string): boolean {
   return settingsGet<boolean>(key, false) === true
@@ -52,6 +55,7 @@ const voiceInputDeviceId = ref(readString(VOICE_INPUT_DEVICE_KEY))
 const voiceInputDeviceLabel = ref(readString(VOICE_INPUT_DEVICE_LABEL_KEY))
 const voiceRecordingMode = ref<VoiceRecordingMode>(readMode())
 const voiceScript = ref<VoiceScript>(readScript())
+const voiceFnKeyEnabled = ref(read(VOICE_FN_KEY_KEY))
 
 let unsubscribe: (() => void) | null = null
 
@@ -65,6 +69,7 @@ function ensureSubscription(): void {
     if (keys.includes(VOICE_INPUT_DEVICE_LABEL_KEY)) voiceInputDeviceLabel.value = readString(VOICE_INPUT_DEVICE_LABEL_KEY)
     if (keys.includes(VOICE_RECORDING_MODE_KEY)) voiceRecordingMode.value = readMode()
     if (keys.includes(VOICE_SCRIPT_KEY)) voiceScript.value = readScript()
+    if (keys.includes(VOICE_FN_KEY_KEY)) voiceFnKeyEnabled.value = read(VOICE_FN_KEY_KEY)
   })
 }
 
@@ -75,11 +80,13 @@ export function useVoiceSettings(): {
   voiceInputDeviceLabel: Readonly<Ref<string>>
   voiceRecordingMode: Readonly<Ref<VoiceRecordingMode>>
   voiceScript: Readonly<Ref<VoiceScript>>
+  voiceFnKeyEnabled: Readonly<Ref<boolean>>
   setVoiceInputEnabled: (on: boolean) => void
   setVoiceReadbackEnabled: (on: boolean) => void
   setVoiceInputDevice: (id: string, label: string) => void
   setVoiceRecordingMode: (mode: VoiceRecordingMode) => void
   setVoiceScript: (script: VoiceScript) => void
+  setVoiceFnKeyEnabled: (on: boolean) => void
 } {
   ensureSubscription()
   return {
@@ -89,6 +96,7 @@ export function useVoiceSettings(): {
     voiceInputDeviceLabel,
     voiceRecordingMode,
     voiceScript,
+    voiceFnKeyEnabled,
     setVoiceInputEnabled: (on) => {
       voiceInputEnabled.value = on
       settingsSet(VOICE_INPUT_ENABLED_KEY, on)
@@ -110,6 +118,10 @@ export function useVoiceSettings(): {
     setVoiceScript: (script) => {
       voiceScript.value = script
       settingsSet(VOICE_SCRIPT_KEY, script)
+    },
+    setVoiceFnKeyEnabled: (on) => {
+      voiceFnKeyEnabled.value = on
+      settingsSet(VOICE_FN_KEY_KEY, on)
     },
   }
 }

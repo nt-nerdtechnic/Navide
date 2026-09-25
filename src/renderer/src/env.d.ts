@@ -5,6 +5,7 @@ type UpdateSettingsResult = import('../../shared/updater').UpdateSettingsResult
 type UpdaterSettings = import('../../shared/updater').UpdaterSettings
 type UpdateState = import('../../shared/updater').UpdateState
 type ExecutionPolicyApi = import('../../shared/executionPolicy').ExecutionPolicyApi
+type FnKeyApi = import('../../shared/fnKey').FnKeyApi
 type ManifestPermissionsSummary = import('../../shared/executionPolicy').ManifestPermissionsSummary
 type PackageVersionGrantSummary = import('../../shared/executionPolicy').PackageVersionGrantSummary
 type LegacyPlansPreferenceProjection = import('../../shared/plansPreferences').LegacyPlansPreferenceProjection
@@ -354,6 +355,7 @@ declare global {
       media?: {
         askMicrophone: () => Promise<{ granted: boolean; status: string; prompted?: boolean }>
       }
+      fnKey?: FnKeyApi
       executionPolicy?: ExecutionPolicyApi
       plugins?: {
         listInstalled: () => Promise<InstalledPluginSummary[]>

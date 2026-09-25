@@ -7,6 +7,7 @@ import {
   parseKeySpec,
   eventToParsedKey,
   formatParsedKey,
+  MODIFIER_KEYS,
 } from './parseKey'
 
 interface ResolvedBinding {
@@ -49,8 +50,9 @@ export class KeyResolver {
     e: KeyboardEvent,
     ctx: Record<string, boolean | string>,
   ): KeybindingRule | null {
-    // Ignore bare modifier key presses.
-    if (['Meta', 'Control', 'Shift', 'Alt'].includes(e.key)) return null
+    // A bare modifier press only ever matches a lone-modifier binding
+    // ('rightalt'), and never disturbs a chord waiting for its second key.
+    if (MODIFIER_KEYS.has(e.key)) return this.chordState ? null : this.resolveSingle(e, ctx)
 
     if (this.chordState) {
       const first = this.chordState

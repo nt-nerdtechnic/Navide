@@ -59,6 +59,43 @@ export function parsedKeyEquals(a: ParsedKey, b: ParsedKey): boolean {
     a.alt === b.alt && a.key === b.key
 }
 
+// ── A modifier as a key of its own ────────────────────────────────────────────
+// 'rightalt' is Right Option pressed by itself. Only a key that is held (the
+// hold-to-talk key) has a use for this; the side comes from `e.code`. It
+// matches only with no other modifier down, so Right Option is never mistaken
+// for part of ⌃⌥M.
+
+type ModifierFlag = 'meta' | 'ctrl' | 'alt' | 'shift'
+
+export const LONE_MODIFIER_KEYS: Readonly<Record<string, { code: string; flag: ModifierFlag }>> = {
+  leftctrl: { code: 'ControlLeft', flag: 'ctrl' },
+  rightctrl: { code: 'ControlRight', flag: 'ctrl' },
+  leftalt: { code: 'AltLeft', flag: 'alt' },
+  rightalt: { code: 'AltRight', flag: 'alt' },
+  leftshift: { code: 'ShiftLeft', flag: 'shift' },
+  rightshift: { code: 'ShiftRight', flag: 'shift' },
+  leftcmd: { code: 'MetaLeft', flag: 'meta' },
+  rightcmd: { code: 'MetaRight', flag: 'meta' },
+}
+
+export function isLoneModifierKey(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(LONE_MODIFIER_KEYS, key)
+}
+
+/** The lone-modifier key an event is about ('rightalt' for Right Option), or
+ *  null. Any other modifier held at the same time disqualifies it. `own`
+ *  says whether the event still reports the key's own flag: true on keydown,
+ *  false on keyup. */
+export function eventLoneModifier(e: KeyboardEvent, own: boolean): string | null {
+  for (const [key, { code, flag }] of Object.entries(LONE_MODIFIER_KEYS)) {
+    if (e.code !== code) continue
+    const flags: Record<ModifierFlag, boolean> = { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey }
+    const othersUp = (Object.keys(flags) as ModifierFlag[]).every((f) => f === flag || !flags[f])
+    return othersUp && (!own || flags[flag]) ? key : null
+  }
+  return null
+}
+
 function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
   if (e.key.toLowerCase() === expectedKey) return true
 
@@ -96,7 +133,7 @@ function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
 // mirrored here: a recorded Option+Z has to become 'alt+z' (never 'alt+Ω'), and
 // a digit recorded under an IME has to become the digit (never 'Process').
 
-const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Shift', 'Alt'])
+export const MODIFIER_KEYS: ReadonlySet<string> = new Set(['Meta', 'Control', 'Shift', 'Alt'])
 // e.key values that carry no usable character; the physical code is the only
 // signal left.
 const OPAQUE_KEYS = new Set(['process', 'unidentified', 'dead'])
@@ -170,8 +207,13 @@ export function validateKeySpec(spec: string): { ok: true } | KeySpecError {
     // A base key is a single character, a known named key, or f1..f24. Anything
     // else is a typo like 'cmmd+s', which would parse into a key nothing emits.
     const named = /^(escape|enter|tab|backspace|delete|space|home|end|pageup|pagedown|arrow(up|down|left|right)|f([1-9]|1[0-9]|2[0-4]))$/
-    if (parsed.key.length !== 1 && !named.test(parsed.key) && parsed.key !== ' ') {
+    if (parsed.key.length !== 1 && !named.test(parsed.key) && parsed.key !== ' ' && !isLoneModifierKey(parsed.key)) {
       return { ok: false, reason: 'unknown-key', detail: parsed.key }
+    }
+    // A lone modifier is the whole key: 'ctrl+rightalt' or a chord ending in
+    // one would never match.
+    if (isLoneModifierKey(parsed.key) && (segments.length > 1 || parsed.meta || parsed.ctrl || parsed.alt || parsed.shift)) {
+      return { ok: false, reason: 'unknown-key', detail: segment }
     }
   }
   return { ok: true }
@@ -192,6 +234,9 @@ export function eventToKeyString(e: KeyboardEvent): string | null {
 }
 
 export function matchesEvent(parsed: ParsedKey, e: KeyboardEvent): boolean {
+  if (isLoneModifierKey(parsed.key)) {
+    return !parsed.meta && !parsed.ctrl && !parsed.alt && !parsed.shift && eventLoneModifier(e, true) === parsed.key
+  }
   if (parsed.meta !== e.metaKey) return false
   if (parsed.ctrl !== e.ctrlKey) return false
   if (parsed.shift !== e.shiftKey) return false

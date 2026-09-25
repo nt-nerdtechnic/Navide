@@ -6,6 +6,7 @@ import SettingsCard from './SettingsCard.vue'
 import SettingRow from './SettingRow.vue'
 import ToggleSwitch from './ToggleSwitch.vue'
 import VoiceShortcutRow from './VoiceShortcutRow.vue'
+import VoiceFnKeyRow from './VoiceFnKeyRow.vue'
 import {
   useVoiceSettings,
   VOICE_RECORDING_MODES,
@@ -230,6 +231,8 @@ const canDownload = computed(
       </SettingRow>
 
       <VoiceShortcutRow v-if="voiceInputEnabled" @open-shortcuts="(command) => $emit('open-shortcuts', command)" />
+
+      <VoiceFnKeyRow v-if="voiceInputEnabled" />
 
       <SettingRow
         v-if="voiceInputEnabled"

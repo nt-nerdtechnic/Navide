@@ -24,7 +24,20 @@ const KEY_GLYPHS: Record<string, string> = {
   pagedown: 'PgDn',
 }
 
-function displayKey(key: string): string {
+const LONE_MODIFIER_LABELS: Record<string, [side: 'left' | 'right', mod: 'meta' | 'ctrl' | 'alt' | 'shift']> = {
+  leftctrl: ['left', 'ctrl'],
+  rightctrl: ['right', 'ctrl'],
+  leftalt: ['left', 'alt'],
+  rightalt: ['right', 'alt'],
+  leftshift: ['left', 'shift'],
+  rightshift: ['right', 'shift'],
+  leftcmd: ['left', 'meta'],
+  rightcmd: ['right', 'meta'],
+}
+
+function displayKey(key: string, mac: boolean): string {
+  const lone = LONE_MODIFIER_LABELS[key]
+  if (lone) return `${lone[0] === 'left' ? 'Left' : 'Right'} ${(mac ? MAC_MODIFIERS : PC_MODIFIERS)[lone[1]]}`
   const glyph = KEY_GLYPHS[key]
   if (glyph) return glyph
   if (/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) return key.toUpperCase()
@@ -40,7 +53,7 @@ export function segmentToTokens(pk: ParsedKey, mac = isMacPlatform()): string[] 
   if (pk.ctrl) tokens.push(mods.ctrl)
   if (pk.alt) tokens.push(mods.alt)
   if (pk.shift) tokens.push(mods.shift)
-  tokens.push(displayKey(pk.key))
+  tokens.push(displayKey(pk.key, mac))
   return tokens
 }
 

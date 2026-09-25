@@ -8814,6 +8814,7 @@ const voiceInput = setupVoiceInput({
   paneInfo: (paneId) => panes.value.find((p) => p.id === paneId),
   insertText: (paneId, text, opts) => paneRefs[paneId]?.insertText(text, opts) ?? false,
   hint: (text) => notifyRestore.toast(text, { type: 'info' }),
+  fnKey: window.agentTeam?.fnKey,
 })
 
 // ── External UI action bus (MCP-driven) ─────────────────────────────────────

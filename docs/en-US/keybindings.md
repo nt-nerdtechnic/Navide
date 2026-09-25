@@ -65,7 +65,43 @@ CLI as usual; the error closes with its **✕** or by itself after a few seconds
 A pane that is asleep (not yet started) refuses dictation — open it first.
 
 The chord can also be changed in **Settings → Voice Input → Shortcut**, which
-edits the same rule as the Shortcuts tab and refuses a chord with `⌘`.
+edits the same rule as the Shortcuts tab. It takes one key combination, and a
+single key works too:
+
+| Accepted | Refused |
+|----------|---------|
+| A function key on its own (`F13`–`F19` are unused by macOS and ideal; `F1`–`F24` all work) | A key that types or edits — a letter, digit, space, punctuation, `Enter`, `Tab`, `Backspace`, `Delete`, `Escape` — with no `⌃` or `⌥` (`⇧` alone still types). Holding it would type into the CLI, and Enter / Esc already mean send / cancel |
+| One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`… (recorded by pressing and releasing it alone) | `⌘` in a combination: macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
+| Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | `⌘` by itself: its own key-up does arrive, but every `⌘` shortcut (`⌘C`, `⌘V`…) starts with it, so each would start a take |
+
+A lone modifier cannot tell on key-down whether it will be held alone or used
+for a combination, so the take starts at once and is dropped quietly — nothing
+typed, no error — the moment another key goes down while it is held
+(`Right ⌥` + `E` still types `é`). In rule files a lone modifier is written
+`leftctrl`, `rightctrl`, `leftalt`, `rightalt`, `leftshift`, `rightshift`
+(`leftcmd` / `rightcmd` parse but the voice row refuses them). A key refused
+here can still be written into `keybindings.json` or the Shortcuts tab; the
+voice row then shows a warning.
+
+#### The fn (🌐) key (macOS, optional)
+
+**Settings → Voice Input → Use the fn (🌐) key** (off by default, hidden off
+macOS) makes fn behave exactly like the shortcut: hold to talk, and a quick
+tap follows the recording mode. The browser never receives fn, so while this
+is on — and only then — Navide runs a small native helper
+(`Contents/Resources/bin/navide-fn-key`) with a listen-only event tap; turning
+the setting (or voice input) off, or quitting, stops it.
+
+- Only a **lone** fn press counts: fn pressed with another key or modifier
+  (fn+arrow, fn+Delete, ⌃fn…) drops the take and starts nothing.
+- A press is taken only while a Navide window has focus; fn's own release ends
+  it (window blur does not).
+- It needs **Input Monitoring** (System Settings → Privacy & Security → Input
+  Monitoring). Without it the row says so and offers the settings pane and a
+  re-check.
+- If **System Settings → Keyboard → "Press 🌐 key to"** is anything but
+  **Do Nothing**, macOS also switches the input source / opens Emoji /
+  starts Dictation on every press; the row points this out.
 
 ### Quick Open
 

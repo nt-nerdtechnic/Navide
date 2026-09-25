@@ -13,7 +13,6 @@ import {
   keySpecToTokens,
   formatKeySpec,
   onUserRulesChanged,
-  parseKeySpec,
   resetRow,
   saveUserRules,
   setRowKeys,
@@ -24,6 +23,7 @@ import {
 import SettingRow from './SettingRow.vue'
 import { useKeyChordRecorder } from '../../composables/useKeyChordRecorder'
 import { HOLD_TO_TALK_COMMAND } from '../../voice/voiceSettings'
+import { holdToTalkKeyProblem } from '../../voice/holdToTalkKey'
 
 const emit = defineEmits<{ 'open-shortcuts': [command: string] }>()
 const { t, te } = useI18n()
@@ -38,13 +38,19 @@ const rows = computed(() => buildRows(userRules.value))
 const row = computed(() => rows.value.find((r) => r.command === HOLD_TO_TALK_COMMAND) ?? null)
 const error = ref('')
 
-// Hold-to-talk is held down, so it is one key combination, never a sequence.
-const recorder = useKeyChordRecorder({ maxSegments: 1 })
+// Hold-to-talk is held down, so it is one key combination, never a sequence;
+// it may be a single modifier on its own (Right Option).
+const recorder = useKeyChordRecorder({ maxSegments: 1, allowLoneModifier: true })
 
-/** macOS does not deliver the keyup of a key held together with ⌘, so a take
- *  started by such a chord could never be let go of. */
-function usesMeta(spec: string): boolean {
-  return parseKeySpec(spec).some((k) => k.meta)
+/** Why `spec` cannot be the dictation key (see holdToTalkKey.ts), or ''. */
+function problemText(spec: string, mode: 'refused' | 'warning'): string {
+  const problem = holdToTalkKeyProblem(spec)
+  if (problem === 'meta') {
+    return mode === 'refused' ? t('settings.voice.shortcut-meta-refused', { key: formatKeySpec(spec) }) : t('settings.voice.shortcut-meta-warning')
+  }
+  if (problem === 'meta-alone') return t('settings.voice.shortcut-meta-alone-refused', { key: formatKeySpec(spec) })
+  if (problem === 'typing-key') return t('settings.voice.shortcut-typing-refused', { key: formatKeySpec(spec) })
+  return ''
 }
 
 function labelFor(r: BindingRow): string {
@@ -61,9 +67,9 @@ const conflictNote = computed(() => {
   return rivals.length ? t('settings.voice.shortcut-conflict', { commands: [...new Set(rivals.map(labelFor))].join(', ') }) : ''
 })
 
-// A ⌘ binding can still arrive from keybindings.json or the Shortcuts tab.
-const boundWithMeta = computed(() => row.value?.keys.some((k) => usesMeta(k.key)) ?? false)
-const warning = computed(() => error.value || (boundWithMeta.value ? t('settings.voice.shortcut-meta-warning') : ''))
+// A refused key can still arrive from keybindings.json or the Shortcuts tab.
+const boundProblem = computed(() => row.value?.keys.map((k) => problemText(k.key, 'warning')).find(Boolean) ?? '')
+const warning = computed(() => error.value || boundProblem.value)
 
 async function commit(next: KeybindingRule[]): Promise<void> {
   userRules.value = next
@@ -81,8 +87,9 @@ async function save(): Promise<void> {
   const spec = recorder.spec.value
   recorder.stop()
   if (!r || !spec) return
-  if (usesMeta(spec)) {
-    error.value = t('settings.voice.shortcut-meta-refused', { key: formatKeySpec(spec) })
+  const refused = problemText(spec, 'refused')
+  if (refused) {
+    error.value = refused
     return
   }
   // setRowKeys drops a key validateKeySpec rejects; say why instead.

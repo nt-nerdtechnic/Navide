@@ -136,6 +136,7 @@ import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
 import { isMac } from '../shared/osplat'
 import { installMediaPermissionHandlers } from './media-permissions'
+import { registerFnKeyIpc } from './fn-key-ipc'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -4056,6 +4057,11 @@ app.whenReady().then(async () => {
   installMediaPermissionHandlers(session.defaultSession, (wc) =>
     wc !== null && [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
   )
+  // The fn (🌐) key helper for voice input; spawned only on a renderer's request.
+  const fnKey = registerFnKeyIpc((wc) =>
+    [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
+  )
+  app.on('will-quit', () => fnKey.dispose())
   if (gitRecoveryEnabled) {
     const recovery = registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,

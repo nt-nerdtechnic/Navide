@@ -3,8 +3,11 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import {
   canonicalizeKeySpec,
   defaults,
+  eventLoneModifier,
   getUserRules,
+  isLoneModifierKey,
   isRemovalRule,
+  LONE_MODIFIER_KEYS,
   parseKeySpec,
   registerCommand,
   removalTarget,
@@ -15,6 +18,7 @@ import type { useBackend } from '../composables/useBackend'
 import { useVoiceInput, voiceErrorI18nKey, type VoiceDeps, type VoicePartial, type VoiceTarget } from '../composables/useVoiceInput'
 import { openMicCapture } from './micCapture'
 import { HOLD_TO_TALK_COMMAND as HOLD_TO_TALK, useVoiceSettings } from './voiceSettings'
+import type { FnKeyApi } from '../../../shared/fnKey'
 
 /** A press let go sooner than this is a tap: in hold-tap mode it locks the take hands-free. */
 export const TAP_LOCK_MS = 350
@@ -50,17 +54,37 @@ function isMainKey(key: string, e: KeyboardEvent): boolean {
 /**
  * Whether a keyup lets go of a hold-to-talk chord: its main key, one of its
  * modifiers, or any key arriving with one of its modifiers already up (that
- * modifier's own keyup was missed, e.g. while the window was blurred). With no
- * binding (invoked some other way) any keyup counts.
+ * modifier's own keyup was missed, e.g. while the window was blurred). A lone
+ * modifier ('rightalt') is let go by its own keyup, or by any keyup arriving
+ * with its modifier already up. With no binding (invoked some other way) any
+ * keyup counts.
  */
 export function isChordKeyUp(e: KeyboardEvent, chords: readonly ParsedKey[]): boolean {
   if (chords.length === 0) return true
   const mod = MODIFIER_OF[e.key]
   return chords.some((c) => {
+    const lone = LONE_MODIFIER_KEYS[c.key]
+    if (lone) return e.code === lone.code || !modifierHeld(e, lone.flag)
     if (mod) return c[mod]
     if (isMainKey(c.key, e)) return true
     return (c.ctrl && !e.ctrlKey) || (c.alt && !e.altKey) || (c.shift && !e.shiftKey) || (c.meta && !e.metaKey)
   })
+}
+
+function modifierHeld(e: KeyboardEvent, flag: 'ctrl' | 'alt' | 'shift' | 'meta'): boolean {
+  return flag === 'ctrl' ? e.ctrlKey : flag === 'alt' ? e.altKey : flag === 'shift' ? e.shiftKey : e.metaKey
+}
+
+/**
+ * Whether a keydown during a take held by a lone modifier shows that modifier
+ * is being used for a combination (Right Option + E), not held to dictate.
+ * The modifier's own repeats do not count, nor do Enter and Esc, which
+ * belong to the take itself: dropping it would lose what was said.
+ */
+export function isLoneModifierCombo(e: KeyboardEvent, chords: readonly ParsedKey[]): boolean {
+  const lone = chords.filter((c) => isLoneModifierKey(c.key))
+  if (lone.length === 0 || e.key === 'Enter' || e.key === 'Escape') return false
+  return !lone.some((c) => eventLoneModifier(e, true) === c.key)
 }
 
 /** What the main window must hand over to wire voice input. */
@@ -75,6 +99,8 @@ export interface VoiceWiringHost {
   insertText: (paneId: string, text: string, opts: { submit: boolean }) => boolean
   /** A non-blocking notice (a toast), for a pre-warm that failed. */
   hint?: (text: string) => void
+  /** The fn (🌐) key relay (macOS); absent where there is none. */
+  fnKey?: FnKeyApi
 }
 
 /**
@@ -137,20 +163,32 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   // Blur ends a held take (a keyup that happens elsewhere never arrives here),
   // except while it is still starting — the first-time macOS mic dialog takes
   // focus — and never a hands-free one.
+  //
+  // A lone modifier (Right Option) cannot know on keydown whether it will be
+  // held alone or used for a combination, so the take starts at once and is
+  // dropped, quietly, as soon as another key goes down while it is held.
+  //
+  // The fn key (optional, macOS) presses and releases the same way, but its
+  // events come from the main process, which sees fn system-wide: a press is
+  // taken only while this window has focus, and its release is fn's own up
+  // (keyups and blur are not followed). A CHORD (fn+arrow...) drops the take.
   let armed = false
   let chordUp = false
   let pressedAt = 0
   let chords: ParsedKey[] = []
+  let source: 'key' | 'fn' = 'key'
 
   function onKeyUp(e: KeyboardEvent): void {
     if (chordUp || !isChordKeyUp(e, chords)) return
     e.preventDefault()
     e.stopImmediatePropagation()
-    chordUp = true
-    if (voice.state.handsFree) return
-    if (settings.voiceRecordingMode.value === 'hold-tap' && Date.now() - pressedAt < TAP_LOCK_MS && voice.lock()) return
+    letGo(`keyup:${e.code || e.key}`)
+  }
+  function onHeldKeyDown(e: KeyboardEvent): void {
+    if (chordUp || !isLoneModifierCombo(e, chords)) return
+    // Left alone: the combination is the user's, not ours.
     disarm()
-    voice.release(`keyup:${e.code || e.key}`)
+    voice.cancel()
   }
   function onBlur(): void {
     if (voice.state.handsFree || voice.state.phase === 'starting') return
@@ -161,10 +199,12 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     if (!armed) return
     armed = false
     window.removeEventListener('keyup', onKeyUp, true)
+    window.removeEventListener('keydown', onHeldKeyDown, true)
     window.removeEventListener('blur', onBlur)
   }
 
-  registerCommand(HOLD_TO_TALK, () => {
+  /** The hotkey or fn went down. False: not consumed. */
+  function press(from: 'key' | 'fn'): boolean {
     if (!settings.voiceInputEnabled.value) return false
     if (armed) {
       // A fresh press of a hands-free take stops it; anything else is key repeat.
@@ -180,12 +220,64 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       armed = true
       chordUp = false
       pressedAt = Date.now()
-      chords = holdToTalkChords()
-      window.addEventListener('keyup', onKeyUp, true)
-      window.addEventListener('blur', onBlur)
+      source = from
+      chords = from === 'key' ? holdToTalkChords() : []
+      if (from === 'key') {
+        window.addEventListener('keyup', onKeyUp, true)
+        window.addEventListener('blur', onBlur)
+        if (chords.some((c) => isLoneModifierKey(c.key))) window.addEventListener('keydown', onHeldKeyDown, true)
+      }
     }
     return true
-  })
+  }
+
+  /** The hotkey or fn was let go. */
+  function letGo(reason: string): void {
+    chordUp = true
+    if (voice.state.handsFree) return
+    if (settings.voiceRecordingMode.value === 'hold-tap' && Date.now() - pressedAt < TAP_LOCK_MS && voice.lock()) return
+    disarm()
+    voice.release(reason)
+  }
+
+  registerCommand(HOLD_TO_TALK, () => press('key'))
+
+  // ── fn (🌐) key ─────────────────────────────────────────────────────────────
+  // Subscribed only while voice input and the fn setting are both on: the
+  // main process runs its helper only while someone is subscribed.
+  let offFnEvent: (() => void) | null = null
+  function onFnEvent(type: 'down' | 'up' | 'chord'): void {
+    if (type === 'down') {
+      if (document.hasFocus()) press('fn')
+      return
+    }
+    if (!armed || source !== 'fn' || chordUp) return
+    if (type === 'up') {
+      letGo('fn-up')
+      return
+    }
+    disarm()
+    voice.cancel()
+  }
+  function fnListen(on: boolean): void {
+    const api = host.fnKey
+    if (!api || on === (offFnEvent !== null)) return
+    if (on) {
+      offFnEvent = api.onEvent((e) => onFnEvent(e.type))
+      void api.subscribe().catch(() => {})
+      return
+    }
+    offFnEvent?.()
+    offFnEvent = null
+    void api.unsubscribe().catch(() => {})
+    // Its up can no longer arrive.
+    if (armed && source === 'fn' && !chordUp) letGo('fn-off')
+  }
+  watch(
+    () => settings.voiceInputEnabled.value && settings.voiceFnKeyEnabled.value,
+    (on) => fnListen(on),
+    { immediate: true },
+  )
 
   // Listeners live exactly as long as the take records (the cap, Esc or a
   // failure can end it without a key).
@@ -288,6 +380,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
 
   onScopeDispose(() => {
     offPartial()
+    fnListen(false)
     disarm()
     window.removeEventListener('focus', onFocus)
     window.removeEventListener('keydown', onTakeKey, true)

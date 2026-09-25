@@ -14,6 +14,7 @@ import type {
 import type { LegacyPlansPreferenceProjection } from '../shared/plansPreferences'
 import { LEGAL_LINKS, type LegalRoute } from '../shared/legalLinks'
 import type { NewWorkspaceResult } from '../shared/workspaceCreate'
+import { FN_KEY_EVENT_CHANNEL, FN_KEY_STATUS_CHANNEL, type FnKeyApi } from '../shared/fnKey'
 
 /** Which Electron-owned cache groups to clear. Never touches user state. */
 export interface ClearElectronCachesOptions {
@@ -807,6 +808,24 @@ contextBridge.exposeInMainWorld('agentTeam', {
     askMicrophone: (): Promise<{ granted: boolean; status: string; prompted?: boolean }> =>
       ipcRenderer.invoke('media:ask-microphone'),
   },
+  // The fn (🌐) key for voice input (macOS); see src/main/fn-key-helper.ts.
+  fnKey: {
+    subscribe: () => ipcRenderer.invoke('voice:fn-key-subscribe'),
+    unsubscribe: () => ipcRenderer.invoke('voice:fn-key-unsubscribe'),
+    status: () => ipcRenderer.invoke('voice:fn-key-status'),
+    requestPermission: () => ipcRenderer.invoke('voice:fn-key-request-permission'),
+    openSettings: (which) => ipcRenderer.invoke('voice:fn-key-open-settings', which),
+    onEvent: (handler) => {
+      const listener = (_e: unknown, payload: Parameters<typeof handler>[0]): void => handler(payload)
+      ipcRenderer.on(FN_KEY_EVENT_CHANNEL, listener)
+      return () => ipcRenderer.removeListener(FN_KEY_EVENT_CHANNEL, listener)
+    },
+    onStatus: (handler) => {
+      const listener = (_e: unknown, payload: Parameters<typeof handler>[0]): void => handler(payload)
+      ipcRenderer.on(FN_KEY_STATUS_CHANNEL, listener)
+      return () => ipcRenderer.removeListener(FN_KEY_STATUS_CHANNEL, listener)
+    },
+  } satisfies FnKeyApi,
   executionPolicy: {
     inspect: (workspacePath?: string): ReturnType<ExecutionPolicyApi['inspect']> =>
       ipcRenderer.invoke('execution-policy:inspect', workspacePath),
