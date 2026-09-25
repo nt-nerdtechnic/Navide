@@ -134,7 +134,8 @@
       "copy": "Copy",
       "copied": "Copied",
       "transcribing": "Transcribing…",
-      "device-fallback": "Chosen microphone unavailable — using the system default"
+      "device-fallback": "Chosen microphone unavailable — using the system default",
+      "device-fallback-device": "Chosen microphone unavailable — using “{device}”"
     },
     "error": {
       "generic": "Voice input failed ({code})",
@@ -143,6 +144,7 @@
       "mic-denied": "Microphone access denied — allow Navide in System Settings → Privacy & Security → Microphone",
       "mic-failed": "Could not open the microphone: {error}",
       "mic-disconnected": "The microphone was disconnected — reconnect it or choose another one in the voice settings",
+      "mic-disconnected-device": "The microphone “{device}” was disconnected — reconnect it or choose another one in the voice settings",
       "backend": "The backend is not responding",
       "start-sidecar-missing": "The speech engine is not installed in this build",
       "start-model-missing": "Speech model not downloaded — Settings → General → Voice input",
@@ -157,6 +159,7 @@
       "no-speech": "No speech detected",
       "insert-failed": "Could not type the text into this pane",
       "mic-silent": "The microphone is not picking up any sound — allow Navide in System Settings → Privacy & Security → Microphone, or choose another microphone in the voice settings (a Bluetooth headset may be asleep)",
+      "mic-silent-device": "The microphone “{device}” is not picking up any sound — if it is a headset, put it on to wake it, or choose another microphone in the voice settings",
       "mic-authorized": "Microphone allowed — hold the shortcut again to speak"
     }
   },
@@ -1373,6 +1376,18 @@
       "device-unnamed": "Microphone {n}",
       "device-hint": "Device names appear after the first voice use.",
       "device-missing-note": "The chosen microphone is not connected; the system default will be used.",
+      "shortcut": "Shortcut",
+      "shortcut-hint": "The key to hold (or press) to dictate. Changing it here also changes it under Shortcuts.",
+      "shortcut-change": "Change",
+      "shortcut-press": "Press the new keys…",
+      "shortcut-save": "Save",
+      "shortcut-cancel": "Cancel",
+      "shortcut-reset": "Reset to default",
+      "shortcut-open": "Open Shortcuts",
+      "shortcut-unbound": "No shortcut — voice input cannot be started from the keyboard",
+      "shortcut-meta-refused": "{key} cannot be used: macOS does not report letting go of a key held with ⌘, so the recording would never stop. Pick a chord without ⌘, such as ⌃⌥M.",
+      "shortcut-meta-warning": "This shortcut uses ⌘: macOS does not report letting go of it, so a held recording will not stop. Pick a chord without ⌘.",
+      "shortcut-conflict": "Also bound to: {commands}",
       "mode": "Recording mode",
       "mode-hold-tap": "Hold, or tap to lock",
       "mode-hold-tap-hint": "Hold the shortcut to talk and let go to insert the text; a quick tap keeps listening hands-free until you press it again (up to 5 minutes).",

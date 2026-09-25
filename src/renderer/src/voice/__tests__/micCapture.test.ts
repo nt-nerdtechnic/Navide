@@ -111,4 +111,12 @@ describe('openMicCapture device choice', () => {
     const fallback = await openMicCapture(() => {}, 'mic-1')
     expect(fallback.fellBack).toBe(true)
   })
+
+  it('names the device that is actually recording', async () => {
+    getUserMedia.mockResolvedValueOnce({ getTracks: () => [{ stop, label: 'Neil’s AirPods 4' }] })
+    const named = await openMicCapture(() => {})
+    expect(named.deviceLabel).toBe('Neil’s AirPods 4')
+    const unnamed = await openMicCapture(() => {})
+    expect(unnamed.deviceLabel).toBe('')
+  })
 })

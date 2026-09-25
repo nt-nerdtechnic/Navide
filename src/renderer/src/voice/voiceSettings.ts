@@ -5,6 +5,8 @@ import { onSettingsChanged, settingsGet, settingsSet } from '@navide/plugin-ui/s
 // the feature runs — no mic, no voice.* requests, no hotkey (its `when`
 // context stays false).
 
+/** The command the dictation shortcut runs (bound in keybindings/defaults.ts). */
+export const HOLD_TO_TALK_COMMAND = 'workbench.action.holdToTalk'
 export const VOICE_INPUT_ENABLED_KEY = 'agentTeam.voiceInputEnabled'
 export const VOICE_READBACK_ENABLED_KEY = 'agentTeam.voiceReadbackEnabled'
 // Chosen microphone: '' is the system default. The label is saved with it

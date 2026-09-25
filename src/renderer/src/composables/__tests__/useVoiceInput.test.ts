@@ -581,6 +581,54 @@ describe('useVoiceInput — capture during start-up, endings and diagnostics', (
     expect(v.state.deviceFallback).toBe(false)
   })
 
+  it('names the recording microphone in the silent and disconnected errors', async () => {
+    const withLabel = (h: Harness, deviceLabel: string, fellBack = false): void => {
+      const open = h.deps.openCapture
+      h.deps.openCapture = async (onChunk, onEnded) => ({ ...(await open(onChunk, onEnded)), deviceLabel, fellBack })
+    }
+    const silent = harness()
+    silent.stopText = ''
+    silent.stopExtra = { durationMs: 1500, peak: 0 }
+    withLabel(silent, 'Neil’s AirPods 4')
+    const v1 = useVoiceInput(silent.deps)
+    v1.press('p1')
+    await settle()
+    expect(v1.state.deviceLabel).toBe('Neil’s AirPods 4')
+    await releaseAndStop(v1)
+    expect(v1.state.error).toEqual({ key: 'mic-silent-device', params: { device: 'Neil’s AirPods 4' } })
+
+    const unplugged = harness()
+    withLabel(unplugged, 'USB Mic')
+    const v2 = useVoiceInput(unplugged.deps)
+    v2.press('p1', { handsFree: true })
+    await settle()
+    unplugged.onEnded?.()
+    expect(v2.state.error).toEqual({ key: 'mic-disconnected-device', params: { device: 'USB Mic' } })
+  })
+
+  it('falls back to the saved device label, never for a fallback capture, and keeps the plain sentence when unnamed', async () => {
+    const saved = harness()
+    saved.stopText = ''
+    saved.stopExtra = { durationMs: 1500, peak: 0 }
+    saved.deps.savedDeviceLabel = () => 'Studio Mic'
+    const v1 = useVoiceInput(saved.deps)
+    v1.press('p1')
+    await settle()
+    await releaseAndStop(v1)
+    expect(v1.state.error).toEqual({ key: 'mic-silent-device', params: { device: 'Studio Mic' } })
+
+    const fellBack = harness()
+    fellBack.deps.savedDeviceLabel = () => 'Studio Mic'
+    const open = fellBack.deps.openCapture
+    fellBack.deps.openCapture = async (onChunk, onEnded) => ({ ...(await open(onChunk, onEnded)), fellBack: true })
+    const v2 = useVoiceInput(fellBack.deps)
+    v2.press('p1')
+    await settle()
+    expect(v2.state.deviceLabel).toBe('')
+    fellBack.onEnded?.()
+    expect(v2.state.error).toEqual({ key: 'mic-disconnected', params: undefined })
+  })
+
   it('logs one line per take with timings, end reason, audio length and peak', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)

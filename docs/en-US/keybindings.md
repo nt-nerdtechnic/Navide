@@ -63,6 +63,9 @@ Once the capsule shows an error, Esc is left alone so it still interrupts the
 CLI as usual; the error closes with its **✕** or by itself after a few seconds.
 A pane that is asleep (not yet started) refuses dictation — open it first.
 
+The chord can also be changed in **Settings → Voice Input → Shortcut**, which
+edits the same rule as the Shortcuts tab and refuses a chord with `⌘`.
+
 ### Quick Open
 
 | Shortcut | Action |

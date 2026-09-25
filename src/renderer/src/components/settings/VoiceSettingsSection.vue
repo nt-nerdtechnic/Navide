@@ -5,6 +5,7 @@ import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingRow from './SettingRow.vue'
 import ToggleSwitch from './ToggleSwitch.vue'
+import VoiceShortcutRow from './VoiceShortcutRow.vue'
 import {
   useVoiceSettings,
   VOICE_RECORDING_MODES,
@@ -19,6 +20,7 @@ import type { useBackend } from '../../composables/useBackend'
 // sent to the backend.
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
+defineEmits<{ 'open-shortcuts': [command: string] }>()
 const { t } = useI18n()
 const {
   voiceInputEnabled,
@@ -226,6 +228,8 @@ const canDownload = computed(
           />
         </template>
       </SettingRow>
+
+      <VoiceShortcutRow v-if="voiceInputEnabled" @open-shortcuts="(command) => $emit('open-shortcuts', command)" />
 
       <SettingRow
         v-if="voiceInputEnabled"

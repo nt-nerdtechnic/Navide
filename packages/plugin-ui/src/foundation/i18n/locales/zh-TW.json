@@ -134,7 +134,8 @@
       "copy": "複製",
       "copied": "已複製",
       "transcribing": "轉錄中…",
-      "device-fallback": "找不到選定的麥克風，改用系統預設麥克風"
+      "device-fallback": "找不到選定的麥克風，改用系統預設麥克風",
+      "device-fallback-device": "找不到選定的麥克風，改用「{device}」"
     },
     "error": {
       "generic": "語音輸入失敗（{code}）",
@@ -143,6 +144,7 @@
       "mic-denied": "麥克風權限被拒，請到 系統設定 → 隱私權與安全性 → 麥克風 允許 Navide",
       "mic-failed": "無法開啟麥克風：{error}",
       "mic-disconnected": "麥克風已中斷連線——請重新接上，或在語音設定換一支麥克風",
+      "mic-disconnected-device": "麥克風「{device}」已中斷連線——請重新接上，或在語音設定換一支麥克風",
       "backend": "後端沒有回應",
       "start-sidecar-missing": "此版本未安裝語音引擎",
       "start-model-missing": "尚未下載語音模型 — 設定 → 一般 → 語音輸入",
@@ -157,6 +159,7 @@
       "no-speech": "沒有偵測到語音",
       "insert-failed": "無法把文字填入這個 pane",
       "mic-silent": "麥克風沒有收到聲音——請到 系統設定→隱私權與安全性→麥克風 允許，或在語音設定換一支麥克風（藍牙耳機可能在休眠）",
+      "mic-silent-device": "麥克風「{device}」沒有收到聲音——若是耳機請戴上喚醒，或在語音設定改用其他麥克風",
       "mic-authorized": "已允許麥克風，請再按住快捷鍵說話"
     }
   },
@@ -1373,6 +1376,18 @@
       "device-unnamed": "麥克風 {n}",
       "device-hint": "首次使用語音後會顯示裝置名稱",
       "device-missing-note": "選擇的麥克風未連接，將改用系統預設麥克風。",
+      "shortcut": "快捷鍵",
+      "shortcut-hint": "按住（或按下）這組按鍵開始聽寫。在這裡更改，快捷鍵設定頁也會一起更新。",
+      "shortcut-change": "更改",
+      "shortcut-press": "請按下新的按鍵…",
+      "shortcut-save": "儲存",
+      "shortcut-cancel": "取消",
+      "shortcut-reset": "還原預設",
+      "shortcut-open": "開啟快捷鍵設定",
+      "shortcut-unbound": "沒有快捷鍵——無法用鍵盤啟動語音輸入",
+      "shortcut-meta-refused": "{key} 無法使用：macOS 不會回報與 ⌘ 一起按住的按鍵何時放開，錄音會停不下來。請選不含 ⌘ 的組合，例如 ⌃⌥M。",
+      "shortcut-meta-warning": "這組快捷鍵含 ⌘：macOS 不會回報放開，按住錄音時放手也不會停止。請改用不含 ⌘ 的組合。",
+      "shortcut-conflict": "也綁定在：{commands}",
       "mode": "錄音方式",
       "mode-hold-tap": "按住說話，點一下鎖定",
       "mode-hold-tap-hint": "按住快捷鍵說話、放開即填入文字；快速點一下則保持免持錄音，直到再按一次（最長 5 分鐘）。",

@@ -8,6 +8,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import SettingsModal from '../SettingsModal.vue'
 import VoiceSettingsSection from '../settings/VoiceSettingsSection.vue'
+import KeyboardShortcutsEditor from '../KeyboardShortcutsEditor.vue'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import { useVoiceSettings } from '../../voice/voiceSettings'
 
@@ -69,6 +70,22 @@ describe('Settings ▸ Voice Input tab', { timeout: 15000 }, () => {
     expect(wrapper!.findAllComponents(VoiceSettingsSection)).toHaveLength(1)
     const general = wrapper!.get('.appearance-body')
     expect(general.findComponent(VoiceSettingsSection).exists()).toBe(false)
+  })
+
+  it('opens Shortcuts filtered to the command the Voice tab links to, and forgets it on leaving', async () => {
+    await mountModal('voice')
+    const section = wrapper!.getComponent(VoiceSettingsSection)
+    section.vm.$emit('open-shortcuts', 'workbench.action.holdToTalk')
+    await flushPromises()
+    expect(wrapper!.get('[data-settings-section="keybindings"]').isVisible()).toBe(true)
+    expect(wrapper!.getComponent(KeyboardShortcutsEditor).props('initialQuery')).toBe('workbench.action.holdToTalk')
+
+    const exposed = wrapper!.vm as unknown as { setTab: (tab: string) => void }
+    exposed.setTab('voice')
+    await flushPromises()
+    exposed.setTab('keybindings')
+    await flushPromises()
+    expect(wrapper!.getComponent(KeyboardShortcutsEditor).props('initialQuery')).toBe('')
   })
 
   it('has a nav label in every locale', () => {

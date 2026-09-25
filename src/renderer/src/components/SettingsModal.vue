@@ -297,6 +297,18 @@ defineExpose({
   },
 })
 
+// Search the Shortcuts tab opens with when another page links to one command
+// (Voice Input → Open Shortcuts); dropped once the tab is left, so a later
+// visit starts unfiltered.
+const shortcutsQuery = ref('')
+function openShortcutsFor(command: string): void {
+  shortcutsQuery.value = command
+  activeTab.value = 'keybindings'
+}
+watch(activeTab, (tab) => {
+  if (tab !== 'keybindings') shortcutsQuery.value = ''
+})
+
 // ── CLI Agents (enable/disable + reorder for the manual spawn dropdown) ────────
 const { order: cliOrder, disabled: cliDisabled } = useCliAgentPrefs()
 
@@ -4249,7 +4261,7 @@ watch(activeTab, (tab) => {
              central rule table does not own) ─────────────────────────────── -->
         <div v-show="activeTab === 'keybindings'" class="s-body keybindings-body" data-settings-section="keybindings">
           <h1 class="s-page-title">{{ $t('settings.nav.keybindings') }}</h1>
-          <KeyboardShortcutsEditor v-if="activeTab === 'keybindings'" />
+          <KeyboardShortcutsEditor v-if="activeTab === 'keybindings'" :initial-query="shortcutsQuery" />
         </div>
 
         <div v-show="activeTab === 'help'" class="s-body help-body" data-settings-section="help">
@@ -4322,7 +4334,7 @@ watch(activeTab, (tab) => {
         <!-- ── VOICE TAB ─────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'voice'" class="s-body voice-body" data-settings-section="voice">
           <h1 class="s-page-title">{{ $t('settings.nav.voice') }}</h1>
-          <VoiceSettingsSection :backend="backend" />
+          <VoiceSettingsSection :backend="backend" @open-shortcuts="openShortcutsFor" />
         </div>
 
         <!-- ── NOTIFICATIONS TAB ─────────────────────────────────────────── -->

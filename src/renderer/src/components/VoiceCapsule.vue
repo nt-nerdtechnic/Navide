@@ -105,7 +105,7 @@ const errorText = computed(() => {
         <span class="vc-dot vc-dot--rec" />
         <span class="vc-meter" aria-hidden="true"><span class="vc-meter-fill" :style="{ transform: `scaleX(${state.level})` }" /></span>
         <span>{{ t(state.handsFree ? 'voice.capsule.recording-hands-free' : 'voice.capsule.recording') }}</span>
-        <span v-if="state.deviceFallback" class="vc-hint vc-cap">{{ t('voice.capsule.device-fallback') }}</span>
+        <span v-if="state.deviceFallback" class="vc-hint vc-cap">{{ state.deviceLabel ? t('voice.capsule.device-fallback-device', { device: state.deviceLabel }) : t('voice.capsule.device-fallback') }}</span>
         <span v-if="capSeconds > 0" class="vc-hint vc-cap">{{ t('voice.capsule.cap-left', { s: capSeconds }) }}</span>
         <span class="vc-hint">{{ t('voice.capsule.esc-cancel') }}</span>
       </template>

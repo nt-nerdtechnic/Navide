@@ -18,6 +18,7 @@ function makeState(over: Partial<VoiceCapsuleState> = {}): VoiceCapsuleState {
     capEndsAt: Date.now() + 60_000,
     level: 0.5,
     deviceFallback: false,
+    deviceLabel: '',
     error: null,
     ...over,
   })
@@ -85,5 +86,24 @@ describe('VoiceCapsule live text', () => {
     wrapper = mount(VoiceCapsule, { props: { state: makeState({ deviceFallback: true }) }, global: { plugins: [i18n] } })
     await nextTick()
     expect(wrapper.text()).toContain('Chosen microphone unavailable — using the system default')
+  })
+
+  it('names the device a fallback records from when it is known', async () => {
+    wrapper = mount(VoiceCapsule, {
+      props: { state: makeState({ deviceFallback: true, deviceLabel: 'MacBook Pro Microphone' }) },
+      global: { plugins: [i18n] },
+    })
+    await nextTick()
+    expect(wrapper.text()).toContain('Chosen microphone unavailable — using “MacBook Pro Microphone”')
+  })
+
+  it('names the microphone in a mic error', async () => {
+    i18n.global.locale.value = 'zh-TW'
+    wrapper = mount(VoiceCapsule, {
+      props: { state: makeState({ phase: 'error', error: { key: 'mic-silent-device', params: { device: 'Neil’s AirPods 4' } } }) },
+      global: { plugins: [i18n] },
+    })
+    await nextTick()
+    expect(wrapper.text()).toContain('麥克風「Neil’s AirPods 4」沒有收到聲音')
   })
 })

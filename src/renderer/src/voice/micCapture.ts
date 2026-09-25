@@ -8,6 +8,9 @@ export interface VoiceCapture {
   close(): void
   /** The chosen device was gone, so the system default is recording. */
   fellBack?: boolean
+  /** Name of the device actually recording (the track label; '' when the
+   *  platform does not tell). */
+  deviceLabel?: string
 }
 
 const FLUSH_TIMEOUT_MS = 500
@@ -84,6 +87,8 @@ export async function openMicCapture(
     for (const t of stream.getTracks()) t.onended = () => { if (!closed) onEnded?.() }
     return {
       fellBack,
+      // Audio only (video: false), so the first track is the microphone.
+      deviceLabel: stream.getTracks()[0]?.label ?? '',
       flush: () =>
         new Promise<void>((resolve) => {
           if (closed) return resolve()

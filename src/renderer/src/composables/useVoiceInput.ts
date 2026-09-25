@@ -64,6 +64,9 @@ export interface VoiceCapsuleState {
   level: number
   /** The chosen microphone was gone and the system default is recording. */
   deviceFallback: boolean
+  /** Name of the microphone recording this take ('' when unknown), so the
+   *  capsule and the mic errors can say which device they mean. */
+  deviceLabel: string
   /** i18n key under `voice.error.`, while phase === 'error'. `text` is a
    *  transcript the pane did not take: kept on screen until dismissed so it
    *  can be copied rather than lost. */
@@ -80,7 +83,9 @@ export const VOICE_ERROR_CODES = [
   'mic-authorized',
   'mic-failed',
   'mic-disconnected',
+  'mic-disconnected-device',
   'mic-silent',
+  'mic-silent-device',
   'backend',
   'no-speech',
   'insert-failed',
@@ -129,6 +134,9 @@ export interface VoiceDeps {
    *  the first-time system dialog. */
   askMicrophone: () => Promise<{ granted: boolean; prompted: boolean }>
   openCapture: (onChunk: (pcm: Int16Array) => void, onEnded: () => void) => Promise<VoiceCapture>
+  /** Label saved with the chosen microphone ('' for the system default): the
+   *  name to use when the capture itself does not report one. */
+  savedDeviceLabel?: () => string
   /** Whether a pane can take dictated text right now. */
   resolveTarget: (paneId: string) => VoiceTarget
   /** Type `text` into the pane's input as a paste: no Enter, no messaging
@@ -175,6 +183,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     capEndsAt: 0,
     level: 0,
     deviceFallback: false,
+    deviceLabel: '',
     error: null,
   })
   const visible = computed(() => state.phase !== 'idle')
@@ -228,6 +237,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     state.capEndsAt = 0
     state.level = 0
     state.deviceFallback = false
+    state.deviceLabel = ''
     state.error = null
   }
 
@@ -250,6 +260,14 @@ export function useVoiceInput(deps: VoiceDeps) {
 
   function cancelSession(sid: string): void {
     void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
+  }
+
+  /** A mic error naming the device when it is known; without a name the
+   *  plain sentence (with its permission hint) stays. */
+  function failMic(code: 'mic-disconnected' | 'mic-silent'): void {
+    const device = state.deviceLabel
+    if (device) fail(`${code}-device`, { device })
+    else fail(code)
   }
 
   function fail(key: string, params?: Record<string, string | number>, text?: string): void {
@@ -353,7 +371,7 @@ export function useVoiceInput(deps: VoiceDeps) {
         // "listening" to nothing until its 5-minute cap.
         () => {
           if (mine === take && (state.phase === 'starting' || state.phase === 'recording')) {
-            fail('mic-disconnected')
+            failMic('mic-disconnected')
           }
         },
       )
@@ -367,6 +385,9 @@ export function useVoiceInput(deps: VoiceDeps) {
     }
     capture = cap
     state.deviceFallback = cap.fellBack === true
+    // The saved label names the chosen device, not the default a fallback
+    // is recording from.
+    state.deviceLabel = cap.deviceLabel || (cap.fellBack ? '' : deps.savedDeviceLabel?.() ?? '')
     mark('capture')
     recordingSince = now()
     state.phase = 'recording'
@@ -463,7 +484,7 @@ export function useVoiceInput(deps: VoiceDeps) {
         take++
         return reset()
       }
-      return fail(peak < SILENT_PEAK ? 'mic-silent' : 'no-speech')
+      return peak < SILENT_PEAK ? failMic('mic-silent') : fail('no-speech')
     }
     // Re-checked: the pane may have closed or been reclaimed since key-down.
     const paneId = state.paneId ?? ''

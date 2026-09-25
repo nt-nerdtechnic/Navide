@@ -14,9 +14,8 @@ import {
 import type { useBackend } from '../composables/useBackend'
 import { useVoiceInput, voiceErrorI18nKey, type VoiceDeps, type VoicePartial, type VoiceTarget } from '../composables/useVoiceInput'
 import { openMicCapture } from './micCapture'
-import { useVoiceSettings } from './voiceSettings'
+import { HOLD_TO_TALK_COMMAND as HOLD_TO_TALK, useVoiceSettings } from './voiceSettings'
 
-const HOLD_TO_TALK = 'workbench.action.holdToTalk'
 /** A press let go sooner than this is a tap: in hold-tap mode it locks the take hands-free. */
 export const TAP_LOCK_MS = 350
 const PREWARM_TIMEOUT_MS = 125_000
@@ -108,6 +107,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       return { granted: res.granted, prompted: res.prompted === true }
     },
     openCapture: (onChunk, onEnded) => openMicCapture(onChunk, settings.voiceInputDeviceId.value, onEnded),
+    savedDeviceLabel: () => (settings.voiceInputDeviceId.value ? settings.voiceInputDeviceLabel.value : ''),
     resolveTarget: (paneId): VoiceTarget => {
       const pane = host.paneInfo(paneId)
       if (!pane || !pane.messagingName) return { ok: false, reason: 'not-cli' }
