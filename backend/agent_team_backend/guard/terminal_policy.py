@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 
 from .classify import (
     _HOME_TOKENS,
-    _WINDOWS,
     DOWNLOADERS,
     MAX_COMMAND_CHARS,
     WRAPPERS_NO_ARG,
@@ -251,6 +250,8 @@ def _segments_into(text: str, out: list[str], depth: int) -> None:
 
 # ── explicit rules ─────────────────────────────────────────────────────────
 
+#: A cmd switch (/s, /q, /?) — a bare "/" is the root, not a switch.
+_WIN_SWITCH = re.compile(r"^/[a-z?]$", re.I)
 _WIN_DRIVE_ROOT = re.compile(r"^[a-z]:[\\/]*\*?$", re.I)
 _SYSTEM_DIRS = ("/etc", "/private/etc", "/system", "/usr", "/bin", "/sbin", "/library", "/boot",
                 "/var/db", "/private/var/db", "c:/windows", "c:/program files", "c:/program files (x86)")
@@ -272,7 +273,12 @@ def _command(words: list[str]) -> tuple[str, list[str]]:
     wrappers classify() also strips, and its arguments."""
     i = 0
     while i < len(words):
-        w = words[i].replace("\\", "") if "/" not in words[i] and ":" not in words[i] else words[i]
+        # Escape characters mean nothing in a command name but hide it: POSIX
+        # "\\" (r\\m), cmd "^" (r^d), PowerShell "`" (Re`move-Item).
+        w = words[i]
+        if "/" not in w and ":" not in w:
+            w = w.replace("\\", "")
+        w = w.replace("^", "").replace("`", "")
         base = w.rsplit("/", 1)[-1].lower().removesuffix(".exe")
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]) or base in WRAPPERS_NO_ARG | {"env", "nice", "!"}:
             i += 1
@@ -307,7 +313,7 @@ def _explicit(segment: str, home: str) -> tuple[str, str] | None:
     if not word:
         return None
     lower = [a.lower() for a in args]
-    flags = {a for a in lower if a.startswith("-") or (a.startswith("/") and len(a) <= 3)}
+    flags = {a for a in lower if a.startswith("-") or _WIN_SWITCH.match(a)}
     # privilege
     if word in {"sudo", "su", "doas", "pkexec", "runas", "gsudo"} or (
         word == "start-process" and "-verb" in lower and "runas" in lower
@@ -340,7 +346,7 @@ def _explicit(segment: str, home: str) -> tuple[str, str] | None:
         a.startswith("-") and not a.startswith("--") and "r" in a[1:] for a in lower if word == "rm"
     )
     if word in {"rm", "remove-item", "ri", "rmdir", "rd", "del", "erase"} and recursive:
-        targets = [a for a in args if not a.startswith("-") and not (a.startswith("/") and len(a) <= 3)]
+        targets = [a for a in args if not a.startswith("-") and not _WIN_SWITCH.match(a)]
         for t in targets:
             if _root_or_home(t, home) or _system_path(t):
                 return "rm-system", f"recursively deletes the root, your home or a system folder: {t}"
@@ -386,28 +392,43 @@ def _category_of(rule: str, level: str) -> str:
     return _RULE_CATEGORY.get(rule) or ("classifier-critical" if level == "critical" else "classifier-high")
 
 
+#: Every way a terminal's shell may read the line. Which shell a terminal pane
+#: runs is not the host's to assume — a Windows machine runs Git Bash, WSL or
+#: msys as readily as PowerShell or cmd, and any of them can be started inside
+#: the pane — so a line is judged as each would read it, and a refusal under
+#: any one refuses it. "bash" unescapes backslashes (r\m is rm); "powershell"
+#: reads them as path separators.
+_LEXERS = ("bash", "powershell")
+
+
 def _classifier_hits(text: str, workspace: str) -> list[tuple[str, str, str]]:
-    """(rule, level, reason) for every classifier hit on ``text``. Opaque
-    verdicts come back with level "opaque"."""
-    # The same lexer choice classify() makes for a Windows shell tool.
-    tool = "powershell" if _WINDOWS else "bash"
-    v = _classify(tool, {"command": text}, cwd=workspace, workspace=workspace)
-    if "unbalanced-quotes" in v.rule_ids and "\\" in text:
-        # A Windows path's backslashes read as escapes to a POSIX lexer; judge
-        # the line with them as the separators they are.
-        v2 = _classify(tool, {"command": text.replace("\\", "/")}, cwd=workspace, workspace=workspace)
-        if "unbalanced-quotes" not in v2.rule_ids:
-            v = v2
+    """(rule, level, reason) for every classifier hit on ``text``, under every
+    shell in _LEXERS. Opaque verdicts come back with level "opaque";
+    unbalanced quotes count only when no shell could parse the line."""
     hits: list[tuple[str, str, str]] = []
-    for rule, reason in zip(v.rule_ids, v.reasons):
-        if rule in _NOTE_RULES:
-            continue
-        opaque = rule in _UNANALYZABLE_RULES
-        level = "opaque" if opaque else v.level
-        hits.append((rule, level, reason))
-    # classify() reports one level for the whole verdict; rules it gave a
-    # lower level to still read as that verdict's level here, which errs on
-    # the side of refusing.
+    unparsed = 0
+    for tool in _LEXERS:
+        v = _classify(tool, {"command": text}, cwd=workspace, workspace=workspace)
+        if "unbalanced-quotes" in v.rule_ids and "\\" in text:
+            # A Windows path's backslashes read as escapes to a POSIX lexer;
+            # judge the line with them as the separators they are.
+            v2 = _classify(tool, {"command": text.replace("\\", "/")}, cwd=workspace, workspace=workspace)
+            if "unbalanced-quotes" not in v2.rule_ids:
+                v = v2
+        for rule, reason in zip(v.rule_ids, v.reasons):
+            if rule in _NOTE_RULES:
+                continue
+            if rule == "unbalanced-quotes":
+                unparsed += 1
+                continue
+            # classify() reports one level for the whole verdict; rules it gave
+            # a lower level to still read as that level here, which errs on
+            # the side of refusing.
+            level = "opaque" if rule in _UNANALYZABLE_RULES else v.level
+            if (rule, level, reason) not in hits:
+                hits.append((rule, level, reason))
+    if unparsed == len(_LEXERS):
+        hits.append(("unbalanced-quotes", "opaque", "command has unbalanced quotes"))
     return hits
 
 

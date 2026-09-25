@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from agent_team_backend.guard import terminal_policy as tp
@@ -13,6 +15,23 @@ WS = "/Users/tester/proj"
 def _home(monkeypatch):
     monkeypatch.setenv("HOME", "/Users/tester")
     monkeypatch.setenv("USERPROFILE", "/Users/tester")
+
+
+#: The classify module itself (the package re-exports a function by that name).
+cls = importlib.import_module("agent_team_backend.guard.classify")
+
+
+@pytest.fixture(params=["posix", "win32"])
+def host(request, monkeypatch):
+    """Run under both hosts: CI's Windows runner reads paths (drives, case)
+    the Windows way, which is where r\\m -rf / once slipped through."""
+    if request.param == "win32":
+        monkeypatch.setattr(cls, "_WINDOWS", True)
+        monkeypatch.setattr(cls, "_FOLD_CASE", True)
+        # Any copy of the host flag the policy module keeps must follow too;
+        # the policy is meant to hold none (it reads every shell regardless).
+        monkeypatch.setattr(tp, "_WINDOWS", True, raising=False)
+    return request.param
 
 
 def rule(cmd: str, settings: tp.Settings | None = None) -> str | None:
@@ -52,7 +71,7 @@ REFUSED = {
 
 
 @pytest.mark.parametrize(("category", "cmd"), [(c, cmd) for c, cmds in REFUSED.items() for cmd in cmds])
-def test_each_category_refuses_its_examples(category, cmd):
+def test_each_category_refuses_its_examples(host, category, cmd):
     # Some lines trip more than one rule; the category reported is the first
     # enabled one, and what matters is that the line is refused at all and by
     # the rule the example stands for when that rule is the only one on.
@@ -67,7 +86,7 @@ def test_each_category_refuses_its_examples(category, cmd):
     "rm --recursive --force ~", 'rm -rf "${HOME}/"', "bash -c 'rm -rf ~'", "sh -c \"sudo ls\"",
     "echo $(rm -rf ~)", "echo `rm -rf ~`", "ls\nrm -rf ~",
 ])
-def test_obfuscated_forms_are_still_refused(cmd):
+def test_obfuscated_forms_are_still_refused(host, cmd):
     assert rule(cmd) is not None, cmd
 
 
@@ -75,7 +94,7 @@ def test_obfuscated_forms_are_still_refused(cmd):
     "ls; rm -rf ~", "git status && sudo rm x", "true || reboot", "ls | xargs sudo rm",
     "echo ok & killall Dock", "npm test\nshutdown -h now",
 ])
-def test_one_refused_segment_refuses_the_whole_line(cmd):
+def test_one_refused_segment_refuses_the_whole_line(host, cmd):
     assert rule(cmd) is not None, cmd
 
 
@@ -85,7 +104,7 @@ def test_one_refused_segment_refuses_the_whole_line(cmd):
     "echo hello > out.txt", "git commit -m 'fix: a; b'", "cat README.md", "export FOO=1",
     "rm build/x.o", "Get-ChildItem C:\\Users\\tester", "git diff HEAD~1", "node scripts/x.js",
 ])
-def test_ordinary_commands_go_through(cmd):
+def test_ordinary_commands_go_through(host, cmd):
     assert rule(cmd) is None, cmd
 
 
@@ -149,3 +168,35 @@ def test_allow_prefix_never_exempts_a_download_piped_into_a_shell():
 ])
 def test_pattern_validation(pattern, ok):
     assert (tp.validate_pattern(pattern) is None) is ok
+
+
+# ── every shell a terminal may run, whatever the host ──────────────────────
+
+@pytest.mark.parametrize("cmd", [
+    "Remove-Item -Recurse -Force C:\\", "Remove-Item -Recurse -Force C:\\*", "ri -Recurse C:\\",
+    "rd /s /q C:\\", "rmdir /S /Q C:\\", "del /s /q C:\\*", "r^d /s /q C:\\", "R^emove-Item -Recurse C:\\",
+    "Re`move-Item -Recurse C:\\", "format C:", "Format-Volume -DriveLetter C",
+])
+def test_powershell_and_cmd_forms_are_refused(host, cmd):
+    assert rule(cmd) is not None, cmd
+
+
+@pytest.mark.parametrize("cmd", ["r\\m -rf /", "r\\m -rf ~", "\\rm -rf /", "s\\udo ls"])
+def test_a_posix_escape_is_refused_by_the_bash_reading_alone(host, monkeypatch, cmd):
+    """A Windows host can run bash (Git Bash, WSL, msys) in a terminal pane,
+    where r\m is rm: the classifier's bash reading must catch it even when the
+    explicit rules do not look."""
+    monkeypatch.setattr(tp, "_explicit", lambda segment, home: None)
+    assert rule(cmd) is not None, cmd
+
+
+def test_a_bare_slash_is_the_root_not_a_cmd_switch(host, monkeypatch):
+    """The explicit rules must see / as a target on their own."""
+    monkeypatch.setattr(tp, "_classifier_hits", lambda text, workspace: [])
+    assert rule("rm -rf /") == "rm-system"
+    assert rule("r\\m -rf /") == "rm-system"
+    assert rule("rd /s /q /") == "rm-system"
+
+
+def test_the_line_is_read_by_every_shell():
+    assert tp._LEXERS == ("bash", "powershell")
