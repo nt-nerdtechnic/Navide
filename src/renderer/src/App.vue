@@ -12541,6 +12541,14 @@ backend.on('agent.activity', (raw) => {
   const questionAction = questionActionFor(ev)
   if (questionAction === 'raise') paneRefs[ev.pane_id]?.markQuestion?.()
   else if (questionAction === 'clear') paneRefs[ev.pane_id]?.clearQuestion?.()
+  // Background tasks the CLI keeps running past its turn end (claude's reader):
+  // they hold the RUNNING badge until the transcript reports them finished.
+  if (ev.detail === 'background:start' || ev.detail === 'background:end') {
+    paneRefs[ev.pane_id]?.noteBackgroundTasks?.(
+      ev.detail === 'background:start' ? 'start' : 'end',
+      (ev.text ?? '').split('\n').filter(Boolean),
+    )
+  }
   // Session-marker gate: sendSessionMarkerBootstrap typed Navide's own marker
   // into this pane as a standalone prompt, so the CLI answers it with an
   // ordinary assistant message that every marker-camp reader reports as a full

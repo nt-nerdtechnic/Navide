@@ -585,3 +585,91 @@ def test_turns_excerpt_is_capped_at_eighty_chars(fake_claude: tuple[ClaudeLogRea
         _assistant_line("m1", "r1", "2026-09-16T00:00:01Z", inp=1, cr=0, cc=0, out=1, stop="end_turn"),
     ])
     assert reader.turns_for_session(session)[0].prompt_excerpt == "x" * 80
+
+
+# ── parse_activity: background tasks ─────────────────────────────────────────
+# A background shell or async subagent outlives the turn that launched it: the
+# main turn still ends with end_turn, so the pane would read as idle while the
+# work runs. Shapes below are copied from real Claude Code transcripts.
+
+def _bg_events(events: list) -> list[tuple[str, str]]:
+    return [(e.detail, e.text) for e in events if e.detail.startswith("background:")]
+
+
+def test_parse_activity_reports_background_task_starts(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "bg-001.jsonl"
+    _write_jsonl(session, [
+        {   # run_in_background, or a foreground call moved there by its timeout
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "tool_result", "content": "Command running in background with ID: bry177hz1."}]},
+            "toolUseResult": {"stdout": "", "stderr": "", "backgroundTaskId": "bry177hz1"},
+        },
+        {   # async subagent
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "tool_result", "content": "launched"}]},
+            "toolUseResult": {"isAsync": True, "status": "async_launched", "agentId": "ae01b1c4f25790113"},
+        },
+        {   # a skill forked into the background
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "tool_result", "content": "forked"}]},
+            "toolUseResult": {"status": "forked", "background": True, "agentId": "a7cee2f1e1012cd3d"},
+        },
+        {   # a foreground subagent that finished inside the turn
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "tool_result", "content": "done"}]},
+            "toolUseResult": {"status": "completed", "agentId": "a111"},
+        },
+    ])
+    events = reader.parse_activity(session, set())
+    assert _bg_events(events) == [
+        ("background:start", "bry177hz1"),
+        ("background:start", "ae01b1c4f25790113"),
+        ("background:start", "a7cee2f1e1012cd3d"),
+    ]
+    # Rides alongside the plain user event, under its own dedup key.
+    starts = [e for e in events if e.detail == "background:start"]
+    assert all(e.event_type == "agent_active" for e in starts)
+    assert len({e.dedup_key for e in events}) == len(events)
+
+
+def test_parse_activity_reports_background_task_ends(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "bg-002.jsonl"
+    _write_jsonl(session, [
+        {
+            "type": "queue-operation", "operation": "enqueue",
+            "content": "<task-notification>\n<task-id>blntq0tve</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>",
+        },
+        {   # the matching dequeue must not end it twice
+            "type": "queue-operation", "operation": "remove",
+            "content": "<task-notification>\n<task-id>blntq0tve</task-id>\n<status>completed</status>\n</task-notification>",
+        },
+        {   # a Monitor event has no status: its task keeps running
+            "type": "queue-operation", "operation": "enqueue",
+            "content": "<task-notification>\n<task-id>b6j9g94mm</task-id>\n<summary>Monitor event</summary>\n<event>FAIL x</event>\n</task-notification>",
+        },
+        {   # tasks orphaned by the previous process, ended in one record
+            "type": "queue-operation", "operation": "enqueue",
+            "content": "<task-notification>\n<task-id>bowyhridg</task-id>\n<task-id>bmon1anlz</task-id>\n<status>stopped</status>\n</task-notification>",
+        },
+        {   # the agent stopping a task itself leaves no notification
+            "type": "assistant",
+            "message": {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "toolu_2", "name": "TaskStop", "input": {"task_id": "bcne01h0f"}},
+            ]},
+        },
+    ])
+    events = reader.parse_activity(session, set())
+    assert _bg_events(events) == [
+        ("background:end", "blntq0tve"),
+        ("background:end", "bowyhridg\nbmon1anlz"),
+        ("background:end", "bcne01h0f"),
+    ]
+    assert all(e.event_type == "agent_active" for e in events if e.detail == "background:end")
+    # No turn ended anywhere in here.
+    assert [e for e in events if e.event_type == "turn_complete"] == []

@@ -1428,6 +1428,16 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // signal is trustworthy but a single miss (a reader dropping a record, a
   // turn aborted with ESC) must not park the badge on RUNNING forever.
   const DELIVERED_PENDING_FUSE_MS = 120_000
+  // Background tasks (a backgrounded shell, an async subagent) the CLI started
+  // and has not reported finished, from its transcript. They outlive the turn
+  // that launched them — that turn still ends with a normal turn_complete — so
+  // without this the pane reads as idle while the work runs. Ids, not a count:
+  // a fast command's completion is logged BEFORE the record that launched it,
+  // so ids that already ended are remembered and a late start for one is
+  // ignored. No fuse: a background command legitimately runs for an hour, and
+  // a respawn clears both sets.
+  const backgroundTaskIds = ref<Set<string>>(new Set())
+  const endedBackgroundTaskIds = new Set<string>()
   // Tick so displayStatus re-evaluates after output goes quiet.
   const nowTick = ref<number>(Date.now())
   const isOnScreen = (): boolean => opts?.onScreen?.() ?? true
@@ -1533,6 +1543,10 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       questionAt.value > 0 &&
       lastCleanBurstAt.value < questionAt.value + AWAITING_SETTLE_MS
     ) return 'awaiting'
+    // Background work still running is work, whatever the turn end says. Below
+    // both AWAITING paths for the same reason as the delivered-pending check
+    // that follows: a pane parked on a prompt needs the user, not patience.
+    if (backgroundTaskIds.value.size > 0) return 'running'
     // A message we delivered that the CLI has not consumed yet means it still
     // has work queued, whatever the PTY says. Below both AWAITING paths on
     // purpose: a pane parked on a prompt or a question cannot consume anything
@@ -1718,6 +1732,22 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    *  text, where the next turn end is the only consume signal there is. */
   function clearDeliveredPending(all = false): void {
     deliveredPendingCount.value = all ? 0 : Math.max(0, deliveredPendingCount.value - 1)
+  }
+
+  /** The CLI's transcript shows background tasks starting or finishing.
+   *  Called from App.vue on the reader's `background:start` / `background:end`
+   *  details. */
+  function noteBackgroundTasks(kind: 'start' | 'end', ids: string[]): void {
+    const next = new Set(backgroundTaskIds.value)
+    for (const id of ids) {
+      if (kind === 'end') {
+        endedBackgroundTaskIds.add(id)
+        next.delete(id)
+      } else if (!endedBackgroundTaskIds.has(id)) {
+        next.add(id)
+      }
+    }
+    backgroundTaskIds.value = next
   }
 
   function markBufferPosition(): number {
@@ -4276,6 +4306,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     awaitingInputAt.value = 0
     questionAt.value = 0
     deliveredPendingCount.value = 0
+    // A new process has none of the old one's background tasks.
+    backgroundTaskIds.value = new Set()
+    endedBackgroundTaskIds.clear()
     error.value = ''
     stallReason.value = null  // a retry must not inherit the last attempt's exit
     status.value = 'starting'
@@ -4682,6 +4715,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     clearQuestion,
     markDeliveredPending,
     clearDeliveredPending,
+    noteBackgroundTasks,
     markBufferPosition,
     recleanBuffer,
     flushPendingClean,

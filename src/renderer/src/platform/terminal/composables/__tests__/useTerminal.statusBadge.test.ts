@@ -404,6 +404,57 @@ describe('useTerminal — RUNNING badge vs self-triggered repaints', () => {
     scope.stop()
   })
 
+  // ── BACKGROUND TASKS: work the CLI keeps running past its turn end ──────
+  // A backgrounded shell or an async subagent outlives the turn that started
+  // it, and that turn still ends with a normal turn_complete. App.vue feeds
+  // the transcript's start/end records in through noteBackgroundTasks.
+
+  it('shows RUNNING while a background task outlives the turn end', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.noteBackgroundTasks('start', ['bry177hz1'])
+    result.markTurnComplete()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(result.displayStatus.value).toBe('running')
+    result.noteBackgroundTasks('end', ['bry177hz1'])
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('holds RUNNING until every background task has ended', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    result.noteBackgroundTasks('start', ['b1'])
+    result.noteBackgroundTasks('start', ['a2'])
+    result.noteBackgroundTasks('end', ['b1'])
+    expect(result.displayStatus.value).toBe('running')
+    result.noteBackgroundTasks('end', ['a2'])
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('ignores a start logged after its own end (a fast command)', async () => {
+    // Claude writes a quick background command's completion notification
+    // before the tool_result that launched it.
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    result.noteBackgroundTasks('end', ['blu0v382j'])
+    result.noteBackgroundTasks('start', ['blu0v382j'])
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('still lets AWAITING outrank a running background task', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.noteBackgroundTasks('start', ['b1'])
+    result.markQuestion()
+    expect(result.displayStatus.value).toBe('awaiting')
+    scope.stop()
+  })
+
   it('does not let a stale delivery linger past the fuse once a new one lands', async () => {
     // Left alone, a count that survived the fuse would need TWO consume
     // signals to drain after the next delivery, holding RUNNING for a message
