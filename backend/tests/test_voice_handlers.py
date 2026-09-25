@@ -813,7 +813,8 @@ async def test_a_partial_over_its_budget_is_cancelled_and_streaming_goes_on(
     await _settle(session)
     requests = [r for r in _requests(stream) if r["segments"]]
     stalled = requests[2]
-    assert stalled["cancelled"] and stalled["end"] - stalled["start"] < 2, stalled
+    budget = voice_handlers._PARTIAL_BUDGET_MIN_S
+    assert stalled["cancelled"] and stalled["end"] - stalled["start"] < budget + 1, stalled
     later = requests[3:]
     assert later and not any(r["cancelled"] for r in later)
     assert len(_partials(session)) >= 3

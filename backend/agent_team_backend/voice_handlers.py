@@ -93,7 +93,7 @@ _PARTIAL_MIN_WINDOW_BYTES = _BYTES_PER_SECOND
 # cancelled partial counts as having taken its budget, so when every decode
 # slows down (load) the budget grows instead of cancelling them all.
 _PARTIAL_BUDGET_FACTOR = 3.0
-_PARTIAL_BUDGET_MIN_S = 1.0
+_PARTIAL_BUDGET_MIN_S = 2.0
 # A window this long commits all but its last segment even without agreement.
 WINDOW_CAP_BYTES = _BYTES_PER_SECOND * 16
 # Segment boundaries usable as cut points (see _trusted).
