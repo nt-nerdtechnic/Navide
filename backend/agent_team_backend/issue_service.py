@@ -22,6 +22,7 @@ import json
 import logging
 import re
 from contextvars import ContextVar
+from time import monotonic
 from typing import Any
 
 from agent_team_backend.host_shell import run_allowlisted_text
@@ -39,6 +40,7 @@ _NUM_RE = re.compile(r"^\d+$")
 _public_shell_policy: ContextVar[tuple[str, frozenset[str]] | None] = ContextVar(
     "issue_public_shell_policy", default=None
 )
+_public_deadline: ContextVar[float | None] = ContextVar("issue_public_deadline", default=None)
 
 
 # ─── input validation ─────────────────────────────────────────────────────────
@@ -73,7 +75,11 @@ async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
         )
         if not allowed:
             raise PermissionError("Issue provider command denied by Execution Policy")
-    return await run_allowlisted_text(args, cwd, timeout=_TIMEOUT)
+    deadline = _public_deadline.get()
+    remaining = deadline - monotonic() if deadline is not None else _TIMEOUT
+    if remaining <= 0:
+        return 128, "", "Issue request timed out"
+    return await run_allowlisted_text(args, cwd, timeout=min(_TIMEOUT, remaining))
 
 
 async def public_request(
@@ -110,6 +116,7 @@ async def public_request(
     ):
         raise ValueError("Invalid Host Issue execution policy")
     token = _public_shell_policy.set((mode, frozenset(commands)))
+    deadline_token = _public_deadline.set(monotonic() + _TIMEOUT)
     try:
         if operation == "provider":
             return await detect_provider(workspace_path)
@@ -123,6 +130,7 @@ async def public_request(
             return await comment_issue(workspace_path, arguments.get("number"), arguments.get("body", ""))
         return await set_issue_state(workspace_path, arguments.get("number"), arguments.get("state", ""))
     finally:
+        _public_deadline.reset(deadline_token)
         _public_shell_policy.reset(token)
 
 

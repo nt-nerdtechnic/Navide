@@ -35,7 +35,6 @@ import {
 } from './pluginRegistryRootApproval'
 import {
   loadPluginDir,
-  manifestToActivation,
   manifestToInstalledPackageSummary,
   type PluginActivationCatalogEntry,
 } from './installedPlugins'
@@ -505,21 +504,13 @@ export function registerPluginIpc(
       }
       transaction = commitInstallTransaction(pkg, pluginsRoot)
       const descriptor = transaction.descriptor
-      let verifiedArtifactDigest: string | undefined
       if (pkg.registryEvidence) {
         const decision = verifyCommittedInstall(join(pluginsRoot, pkg.id), pkg.id, commitTrust)
         if (decision.action === 'quarantine') {
           throw new Error(`installed plugin quarantined: ${decision.reason}`)
         }
-        verifiedArtifactDigest = decision.artifactDigest
       }
       const summary = manifestToInstalledPackageSummary(pkg.manifest, pkg.provenance)
-      let activation: PluginActivationCatalogEntry | undefined
-      if (pkg.registryEvidence && isManifestV2(pkg.manifest)) {
-        activation = manifestToActivation(pkg.manifest, join(pluginsRoot, pkg.id))
-        activation.provenance = 'official-registry'
-        activation.artifactDigest = verifiedArtifactDigest
-      }
       // `official` was earned in prepareInstall (Host-authorized Official
       // Registry check); it is what allows a verified `navide.` install to
       // claim its reserved id.
@@ -530,7 +521,6 @@ export function registerPluginIpc(
         publisherTrust.trust(pkg.publisherId, pkg.id)
         publisherConsentPersisted = true
       }
-      if (activation?.backend) options.onActivationChange?.({ pluginId: pkg.id, activation })
       options.onPackageInstalled?.(pkg.id)
       // The v1 package now owns `<pluginsRoot>/<id>`; its atomic write moved any
       // staged/active v2 candidate aside, so the selection record must not keep
@@ -730,18 +720,7 @@ export function registerPluginIpc(
     }
     const candidateDir = lifecycleSelector.packageDir(id, selectedBeforeRestart.candidate)
     const restartTrust = resolveConfiguredMarketplace(trust).trust
-    const verifyCommitted =
-      options.verifyCommittedInstall ??
-      ((pluginDir: string, pluginId: string, trustConfig: InstallerTrustConfig) =>
-        verifyInstalledRegistryPackage(pluginDir, pluginId, {
-          pinnedRootKey: trustConfig.pinnedRegistryRootKey,
-          snapshot: readRegistryTrustSnapshot(pluginsRoot),
-          registryAuthority: trustConfig.registryAuthority,
-          officialRegistryUrl: trustConfig.officialRegistryUrl,
-          expectedTarget: trustConfig.expectedTarget ?? currentPluginHostTarget(),
-          now: trustConfig.now,
-        }))
-    const currentTrust = verifyCommitted(candidateDir, id, restartTrust)
+    const currentTrust = verifyCommittedInstall(candidateDir, id, restartTrust)
     if (currentTrust.action === 'quarantine') {
       throw new Error(`staged candidate quarantined: ${currentTrust.reason}`)
     }
@@ -763,7 +742,9 @@ export function registerPluginIpc(
     // it must still be drained before candidate promotion.
     const previousVersion = previousDescriptor?.packageVersion ?? selectedBeforeRestart.active?.packageVersion
     const previousGrant = previousVersion ? capabilityGrants.get(id, previousVersion) : null
-    if (previousVersion && !previousGrant) {
+    const isFactory = manager.listInstalledPackages().some((item) =>
+      item.id === id && item.provenance === 'factory-bundled')
+    if (previousVersion && !previousGrant && !isFactory) {
       throw new Error(`active package grant is unavailable for ${id}`)
     }
     let promotedGrant: HostCapabilityGrant
@@ -808,7 +789,25 @@ export function registerPluginIpc(
     let drainedBackendOnly = false
     let promoted = false
     try {
-      lifecycleSelector.beginActivation(id, previousGrant ? { previousGrant } : {})
+      if (!selectedBeforeRestart.active && previousVersion && previousGrant &&
+          previousDescriptor?.packageDir === join(pluginsRoot, id)) {
+        const legacyDir = join(pluginsRoot, id)
+        const legacyScanned = loadPluginDir(legacyDir)
+        if (!legacyScanned.activation || legacyScanned.activation.packageVersion !== previousVersion) {
+          throw new Error('legacy active package is unavailable for migration')
+        }
+        const legacyTrust = verifyCommittedInstall(legacyDir, id, resolveConfiguredMarketplace(trust).trust)
+        if (legacyTrust.action === 'quarantine' || !legacyTrust.target) {
+          throw new Error(`legacy active package cannot be verified: ${legacyTrust.action === 'quarantine' ? legacyTrust.reason : 'Registry target is unavailable'}`)
+        }
+        lifecycleSelector.adoptLegacyActive(id, {
+          packageVersion: previousVersion,
+          target: legacyTrust.target,
+          artifactDigest: legacyTrust.artifactDigest,
+          layout: 'legacy-mutable',
+        }, previousGrant)
+      }
+      lifecycleSelector.beginActivation(id, previousGrant && !isFactory ? { previousGrant } : {})
       if (previousVersion) {
         if (previousDescriptor) {
           restartTransaction = await manager.beginPackageRestart(id, previousVersion)
@@ -829,7 +828,7 @@ export function registerPluginIpc(
       ) {
         throw new Error('staged candidate identity changed during restart')
       }
-      const cutoverTrust = verifyCommitted(candidateDir, id, resolveConfiguredMarketplace(trust).trust)
+      const cutoverTrust = verifyCommittedInstall(candidateDir, id, resolveConfiguredMarketplace(trust).trust)
       if (cutoverTrust.action === 'quarantine') {
         throw new Error(`staged candidate quarantined: ${cutoverTrust.reason}`)
       }
@@ -882,7 +881,7 @@ export function registerPluginIpc(
           const previous = promotedSelection?.previous
           if (previous) {
             const previousDir = lifecycleSelector.packageDir(id, previous)
-            const previousTrust = verifyCommitted(
+            const previousTrust = verifyCommittedInstall(
               previousDir,
               id,
               resolveConfiguredMarketplace(trust).trust,
@@ -991,19 +990,8 @@ export function registerPluginIpc(
     }
     const previous = selectedBeforeRollback.previous
     const previousDir = lifecycleSelector.packageDir(id, previous)
-    const verifyCommitted =
-      options.verifyCommittedInstall ??
-      ((pluginDir: string, pluginId: string, trustConfig: InstallerTrustConfig) =>
-        verifyInstalledRegistryPackage(pluginDir, pluginId, {
-          pinnedRootKey: trustConfig.pinnedRegistryRootKey,
-          snapshot: readRegistryTrustSnapshot(pluginsRoot),
-          registryAuthority: trustConfig.registryAuthority,
-          officialRegistryUrl: trustConfig.officialRegistryUrl,
-          expectedTarget: trustConfig.expectedTarget ?? currentPluginHostTarget(),
-          now: trustConfig.now,
-        }))
     const verifyPrevious = () => {
-      const decision = verifyCommitted(previousDir, id, resolveConfiguredMarketplace(trust).trust)
+      const decision = verifyCommittedInstall(previousDir, id, resolveConfiguredMarketplace(trust).trust)
       if (decision.action === 'quarantine') {
         throw new Error(`previous package is unavailable for rollback: ${decision.reason}`)
       }
@@ -1071,9 +1059,18 @@ export function registerPluginIpc(
           skippedDestroyedHostWindows: report.skippedDestroyedHostWindows,
         }
       }
+      if (restartTransaction) {
+        manager.completePackageRestart(restartTransaction)
+        restartTransaction = undefined
+      }
       lifecycleSelector.completeRollback(id)
       return { id, packageVersion: selected.active!.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
     } catch (error) {
+      if (promoted && restartTransaction) {
+        // The durable journal retains the verified promoted selection for cold recovery.
+        manager.cancelPackageRestart(restartTransaction)
+        restartTransaction = undefined
+      }
       try {
         if (!promoted) {
           lifecycleSelector.recoverInterruptedActivation(id)

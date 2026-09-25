@@ -8,7 +8,7 @@ import {
   writeFileSync,
   type Dirent,
 } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import {
   parseInstalledManifest,
   parseManifestJson,
@@ -28,6 +28,8 @@ import {
   requireTrustObject,
 } from './pluginTrustJson'
 import { currentPluginHostTarget } from './pluginTarget'
+import { isValidManifestV2PluginId } from './pluginManifestV2'
+import { PluginActivationSelector } from './pluginActivationSelector'
 import type { InstalledManifest } from './pluginManifest'
 import { PLUGIN_QUARANTINE_MARKER } from './pluginInstallPaths'
 
@@ -65,7 +67,7 @@ export interface InstalledRegistryTrustContext {
 }
 
 export type InstalledTrustDecision =
-  | { action: 'allow'; artifactDigest: string }
+  | { action: 'allow'; artifactDigest: string; target?: string }
   | { action: 'quarantine'; reason: string }
 
 export function assertRegistryTrustSnapshotDoesNotRollback(
@@ -161,7 +163,7 @@ function installedManifest(pluginDir: string): InstalledManifest {
   return manifest
 }
 
-function listExtractedFiles(root: string): string[] {
+function listExtractedFiles(root: string, hostPackageDirs: ReadonlySet<string>): string[] {
   const files: string[] = []
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -170,6 +172,7 @@ function listExtractedFiles(root: string): string[] {
       if (rel === REGISTRY_RECEIPT_NAME || rel === REGISTRY_ARTIFACT_NAME) continue
       const stat = lstatSync(absolute)
       if (stat.isSymbolicLink()) throw new Error(`installed package contains symlink: ${rel}`)
+      if (stat.isDirectory() && hostPackageDirs.has(rel)) continue
       if (stat.isDirectory()) visit(absolute)
       else if (stat.isFile()) files.push(rel)
       else throw new Error(`installed package contains unsafe entry: ${rel}`)
@@ -186,7 +189,17 @@ function assertExtractedContent(pluginDir: string, archiveBytes: Uint8Array): vo
     .filter((entry) => entry.type === 'regular')
     .map((entry) => entry.path)
     .sort()
-  const installedFiles = listExtractedFiles(pluginDir)
+  const hostPackageDirs = new Set<string>()
+  const pluginId = basename(pluginDir)
+  if (isValidManifestV2PluginId(pluginId)) {
+    const selector = new PluginActivationSelector(dirname(pluginDir))
+    const record = selector.read(pluginId)
+    for (const selection of [record?.active, record?.previous, record?.candidate]) {
+      if (!selection || selection.layout === 'legacy-mutable') continue
+      hostPackageDirs.add(relative(pluginDir, selector.packageDir(pluginId, selection)).split(sep).join('/'))
+    }
+  }
+  const installedFiles = listExtractedFiles(pluginDir, hostPackageDirs)
   if (JSON.stringify(installedFiles) !== JSON.stringify(archivedFiles)) {
     throw new Error('installed package file set does not match retained Registry artifact')
   }
@@ -245,7 +258,7 @@ export function verifyInstalledRegistryPackage(
       throw new Error('Registry authority does not match the current Host configuration')
     }
     assertExtractedContent(pluginDir, archiveBytes)
-    return { action: 'allow', artifactDigest: digest }
+    return { action: 'allow', artifactDigest: digest, target: receipt.target }
   } catch (error) {
     return {
       action: 'quarantine',

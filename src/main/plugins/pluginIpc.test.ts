@@ -28,6 +28,7 @@ import { defaultInstallerDeps, type InstallerTrustConfig } from './pluginInstall
 import { backendEntryOnDisk, type PluginActivationCatalogEntry } from './installedPlugins'
 import { projectBackendPluginActivationCatalog } from './pluginBackendActivationCatalog'
 import { makeZip } from './zipFixture'
+import { readZipEntries } from './pluginPackage'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
 import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
@@ -1228,6 +1229,91 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('activates an update over a v0.2.9 mutable v2 install and retains its rollback grant', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-legacy-v2-upgrade-'))
+    const manager = new FrontendPluginManager()
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const firstDetail = signedDetail(first.digest)
+    const legacyDir = join(root, 'acme.demo')
+    try {
+      for (const entry of readZipEntries(first.bytes)) {
+        if (entry.kind !== 'file') continue
+        const output = join(legacyDir, entry.path)
+        mkdirSync(join(output, '..'), { recursive: true })
+        writeFileSync(output, entry.data)
+      }
+      writeFileSync(join(legacyDir, REGISTRY_ARTIFACT_NAME), first.bytes)
+      writeFileSync(join(legacyDir, REGISTRY_RECEIPT_NAME), JSON.stringify(registryReceiptFromEvidence({
+        packageId: 'acme.demo', version: '1.0.0', publisherId: 'acme', target: 'universal',
+        artifactDigest: first.digest,
+        envelope: firstDetail.versions[0]!.registry_envelope,
+        envelopeSignature: firstDetail.versions[0]!.registry_signature!,
+        registryAuthority: 'self-hosted',
+      })))
+      writeFileSync(join(root, REGISTRY_TRUST_SNAPSHOT_NAME), JSON.stringify({
+        schemaVersion: 1,
+        metadata: firstDetail.trust_metadata,
+        metadataSignature: firstDetail.trust_metadata_signature,
+      }))
+      new PluginCapabilityGrantStore(root).set('acme.demo', {
+        packageVersion: '1.0.0', system: [], storage: true,
+      })
+      expect(manager.loadInstalledPlugins(root, {
+        provenance: 'official-registry',
+        trust: {
+          pinnedRootKey: registryRoot.pubPem,
+          snapshot: readRegistryTrustSnapshot(root),
+          registryAuthority: 'self-hosted',
+          now: FIXED_NOW,
+        },
+      }).loaded).toContain('acme.demo')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toBeNull()
+
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.0')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        candidate: { packageVersion: '1.0.1' },
+      })
+      writeFileSync(join(legacyDir, 'frontend', 'left', 'index.html'), '<tampered>')
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow(/legacy active package cannot be verified/)
+      expect(new PluginActivationSelector(root).read('acme.demo')?.active).toBeUndefined()
+      writeFileSync(join(legacyDir, 'frontend', 'left', 'index.html'), '<!doctype html>')
+
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' })).resolves.toMatchObject({
+        packageVersion: '1.0.1',
+      })
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.1' },
+        previous: { packageVersion: '1.0.0', artifactDigest: first.digest },
+        previousGrant: { packageVersion: '1.0.0' },
+      })
+      await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' })).resolves.toMatchObject({
+        packageVersion: '1.0.0',
+      })
+      expect(manager.getDescriptor('acme.demo')?.packageDir).toBe(legacyDir)
+      const reloaded = new FrontendPluginManager()
+      expect(reloaded.loadInstalledPlugins(root, {
+        provenance: 'official-registry',
+        trust: {
+          pinnedRootKey: registryRoot.pubPem,
+          snapshot: readRegistryTrustSnapshot(root),
+          registryAuthority: 'self-hosted',
+          now: FIXED_NOW,
+        },
+      }).loaded).toContain('acme.demo')
+      expect(reloaded.getDescriptor('acme.demo')?.packageDir).toBe(legacyDir)
+      await reloaded.closeBackendPlugins()
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
@@ -1354,6 +1440,71 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.0' })
       expect(revoke).toHaveBeenCalledWith('acme.demo', '1.0.1')
       expect(manager.hasBackendActivation('acme.demo', '1.0.0')).toBe(true)
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('releases the frontend restart barrier when rolling back to a backend-only package', async () => {
+    const first = buildBackendPkg('1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-backend-only-rollback-barrier-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')!
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.1')
+
+      await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.0' })
+      expect(manager.getDescriptor('acme.demo')).toBeUndefined()
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('releases the frontend barrier while retaining a promoted rollback journal after failure', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-rollback-post-promotion-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')!
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      vi.spyOn(manager, 'setPluginStorageSnapshotSelection').mockImplementationOnce(() => {
+        throw new Error('injected post-promotion failure')
+      })
+      await expect(rollback(null, { id: 'acme.demo' })).rejects.toThrow('injected post-promotion failure')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.0' },
+        candidate: { packageVersion: '1.0.1' },
+        activation: { kind: 'rollback', phase: 'promoted' },
+      })
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
     } finally {
       await manager.closeBackendPlugins()
       rmSync(root, { recursive: true, force: true })

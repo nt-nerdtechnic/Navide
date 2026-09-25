@@ -165,14 +165,23 @@ describe('plugin preload Host channels', () => {
 
       now.mockReturnValue(1_000)
       gesture({ isTrusted: true })
-      await call()
-      expect(payload()).toMatchObject({ userGesture: true })
+      const first = call()
+      const second = call()
+      await Promise.all([first, second])
+      expect(state.invoke.mock.calls.slice(-2).map(([, request]) => request.userGesture))
+        .toEqual([true, false])
 
-      // The window is inclusive of its last millisecond and then closes.
-      now.mockReturnValue(1_000 + 5_000)
+      // Unrelated capability calls do not consume the gesture; a new trusted
+      // event grants exactly one new link-open request until its deadline.
+      now.mockReturnValue(2_000)
+      gesture({ isTrusted: true })
+      await (nav.callCapability as (ns: string, method: string) => Promise<unknown>)('ui', 'notify')
+      now.mockReturnValue(2_000 + 5_000)
       await call()
       expect(payload()).toMatchObject({ userGesture: true })
-      now.mockReturnValue(1_000 + 5_001)
+      now.mockReturnValue(3_000)
+      gesture({ isTrusted: true })
+      now.mockReturnValue(3_000 + 5_001)
       await call()
       expect(payload()).toMatchObject({ userGesture: false })
     } finally {

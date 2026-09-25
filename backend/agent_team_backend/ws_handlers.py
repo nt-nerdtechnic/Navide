@@ -7925,9 +7925,13 @@ async def terminal_reattach(session: "Session", msg_id: str, msg_type: str, payl
         if expected_workspace_path is not None and os.path.realpath(stored.cwd) != os.path.realpath(expected_workspace_path):
             dead.append(tid)
             continue
-        if expected_origin is not None and stored.metadata.get("origin") != expected_origin:
-            dead.append(tid)
-            continue
+        if expected_origin is not None:
+            stored_origin = stored.metadata.get("origin")
+            if stored_origin != expected_origin and not (
+                expected_origin == "mini-ide" and stored_origin == "editor"
+            ):
+                dead.append(tid)
+                continue
         if expected_profile_ids is not None and stored.agent_key not in expected_profile_ids:
             dead.append(tid)
             continue

@@ -27,7 +27,7 @@ const packageBackendEnabled = process.argv.includes(`${PACKAGE_BACKEND_PREFIX}1`
 // cannot suppress it from its own capture listener either. The window matches
 // the browser's transient-activation budget: long enough for a click handler to
 // await work before it opens a link, short enough that an unattended view
-// cannot reuse an old gesture.
+// cannot reuse an old gesture. Each trusted event authorizes one link open.
 const USER_GESTURE_WINDOW_MS = 5_000
 let lastUserGestureAt = Number.NEGATIVE_INFINITY
 // Typed locally: this preload is compiled without the DOM lib (it is Node-free
@@ -52,8 +52,10 @@ if (hostWindow && typeof hostWindow.addEventListener === 'function') {
     )
   }
 }
-function hasFreshUserGesture(): boolean {
-  return performance.now() - lastUserGestureAt <= USER_GESTURE_WINDOW_MS
+function consumeFreshUserGesture(): boolean {
+  const fresh = performance.now() - lastUserGestureAt <= USER_GESTURE_WINDOW_MS
+  lastUserGestureAt = Number.NEGATIVE_INFINITY
+  return fresh
 }
 
 interface CapabilityResponse {
@@ -259,9 +261,9 @@ const nav = {
       method,
       args,
       reqId: globalThis.crypto.randomUUID(),
-      // Sent on every call: whether it is required is a catalog decision the
-      // Host owns, not a decision this bridge makes.
-      userGesture: hasFreshUserGesture(),
+      // The Host owns the catalog gate; only its gesture-gated link operation
+      // consumes this one-shot preload observation.
+      userGesture: ns === 'ui' && method === 'openExternal' && consumeFreshUserGesture(),
     })
   },
   /** Fixed Host-owned first-party action bridge used by the bundled Git

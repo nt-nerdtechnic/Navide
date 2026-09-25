@@ -2283,6 +2283,11 @@ function syncPluginViewVisibility(): void {
     if (host) host.hidden = viewReceiverItemKeys.get(itemId) !== pluginSidebarKey.value
   }
 }
+watch(sidebarView, view => {
+  if (!view) return
+  pluginSidebarKey.value = ''
+  syncPluginViewVisibility()
+})
 function mountViewReceiverOffer(offer: ViewReceiverOffer): void {
   if (!viewReceiverActive) return
   pendingViewReceiverOffers.push(offer)
@@ -2610,6 +2615,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         :ref="viewReceiverContainers.left"
         class="ide-receiver-items ide-receiver-items--left"
         :class="{ 'ide-receiver-items--filled': mountedLeftItems.size > 0 }"
+        :hidden="sidebarView !== ''"
       />
     </div>
     <div v-show="!sidebarHidden" class="ide-resize-handle" @mousedown.prevent="onResizeStart" />

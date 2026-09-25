@@ -24,6 +24,8 @@ export interface PluginPackageSelection {
   packageVersion: string
   target: string
   artifactDigest: string
+  /** Packages installed before immutable staging remain at <root>/<id>. */
+  layout?: 'legacy-mutable'
 }
 
 /** Host proof supplied with the exact selection it authorizes. The persisted
@@ -98,7 +100,9 @@ function validatePackage(value: unknown): PluginPackageSelection | undefined {
   if (value === undefined) return undefined
   if (
     !isObject(value) ||
-    Object.keys(value).length !== 3 ||
+    (Object.keys(value).length !== 3 && Object.keys(value).length !== 4) ||
+    (value.layout !== undefined && value.layout !== 'legacy-mutable') ||
+    (Object.keys(value).length === 4 && value.layout !== 'legacy-mutable') ||
     !validVersion(value.packageVersion) ||
     !isPluginTargetCompatible(value.target) ||
     !validDigest(value.artifactDigest)
@@ -107,6 +111,7 @@ function validatePackage(value: unknown): PluginPackageSelection | undefined {
     packageVersion: value.packageVersion,
     target: value.target,
     artifactDigest: value.artifactDigest,
+    ...(value.layout === 'legacy-mutable' ? { layout: value.layout } : {}),
   }
 }
 
@@ -123,7 +128,8 @@ function validateActivation(value: unknown): PluginActivationProgress | undefine
 function sameSelection(left: PluginPackageSelection, right: PluginPackageSelection): boolean {
   return left.packageVersion === right.packageVersion &&
     left.target === right.target &&
-    left.artifactDigest === right.artifactDigest
+    left.artifactDigest === right.artifactDigest &&
+    left.layout === right.layout
 }
 
 function validateGrant(value: unknown, selection: PluginPackageSelection | undefined): HostCapabilityGrant | undefined {
@@ -262,7 +268,34 @@ export class PluginActivationSelector {
   }
 
   packageDir(pluginId: string, selection: PluginPackageSelection): string {
+    if (selection.layout === 'legacy-mutable') {
+      if (!isValidManifestV2PluginId(pluginId)) throw new Error('invalid plugin id')
+      return join(this.root, pluginId)
+    }
     return immutablePluginPackageDir(this.root, pluginId, selection.packageVersion, selection.target)
+  }
+
+  /** Anchor an already verified pre-staging install without relocating its live files. */
+  adoptLegacyActive(
+    pluginId: string,
+    selection: PluginPackageSelection,
+    grant: HostCapabilityGrant,
+  ): PluginActivationSelectorRecord {
+    if (!isValidManifestV2PluginId(pluginId) || selection.layout !== 'legacy-mutable') {
+      throw new Error('invalid legacy package selection')
+    }
+    const current = this.read(pluginId)
+    if (!current?.candidate || current.active || current.activation) {
+      throw new Error('legacy package cannot be adopted during another lifecycle transition')
+    }
+    const active = validatePackage(selection)!
+    const next: PluginActivationSelectorRecord = {
+      ...current,
+      active,
+      activeGrant: validateGrant(grant, active),
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
   }
 
   stageCandidate(
@@ -272,7 +305,7 @@ export class PluginActivationSelector {
   ): PluginActivationSelectorRecord {
     if (!isValidManifestV2PluginId(pluginId)) throw new Error('invalid plugin id')
     const candidateSelection = validatePackage(candidate)
-    if (!candidateSelection) throw new Error('candidate package is required')
+    if (!candidateSelection || candidateSelection.layout) throw new Error('candidate package is required')
     const current = this.read(pluginId)
     if (current?.candidate && JSON.stringify(current.candidate) !== JSON.stringify(candidateSelection)) {
       throw new Error(`plugin ${pluginId} already has a staged candidate`)

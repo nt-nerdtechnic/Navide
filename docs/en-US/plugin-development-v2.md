@@ -653,8 +653,10 @@ The Host asks a guarded receiver before it destroys a window. The receiver
 answers busy, accepts, or cancels; an accepted close is committed only after
 every other receiver and provider in the same transaction accepts, so a refusal
 or an unanswered request keeps the window, its views, and their uncommitted
-state alive. Each block carries `protocolVersion: 1` and is frozen until a
-later profile is published.
+state alive. Close, reload, and quit share a per-window preparation lock; a
+refused, timed-out, or failed request reports a refusal and releases that lock
+without committing a second close. Each block carries `protocolVersion: 1`
+and is frozen until a later profile is published.
 
 Declaring a contract is not registering it. A `receives` declaration without
 the corresponding runtime registration fails closed: the Host refuses requests
@@ -1227,7 +1229,12 @@ Issue operations use `shell.issueProvider`, `shell.listIssues`,
 `shell.setIssueState`. They reuse the existing provider services. The Host
 derives repository containment and the executable policy from the authenticated
 Initiator, then checks the actual `git`, `gh`, or `glab` command before each
-provider subprocess. A plugin cannot supply backend routes or policy fields.
+provider subprocess. Public Issue requests share a 30-second subprocess budget
+across repository detection and the provider command, beneath the Host's
+35-second request timeout; once that budget expires, no further mutation
+command is started. A remote mutation already submitted before a timeout may still
+have an unknown outcome and must not be retried blindly. A plugin cannot supply
+backend routes or policy fields.
 Account operations use the fixed `ui.listGitAccounts`,
 `ui.getGitAccountBinding`, `ui.addGitAccount`, `ui.bindGitAccount`, and
 `ui.unbindGitAccount` methods. Responses contain masked account summaries;
@@ -1288,8 +1295,9 @@ The Host executor also enforces the catalog's `requiresUserGesture` flag for
 `ui.openExternal` before opening a URL: the plugin preload records a Host-observed
 trusted pointer or key event for its own view, and the broker refuses the address
 with `USER_CANCELLED` when the request carries no such gesture from the last five
-seconds. Agent- and backend-originated calls never carry one, so an unattended
-view cannot hand a URL to the OS browser.
+seconds. Each observed gesture permits only one `ui.openExternal` attempt;
+other capability calls do not consume it. Agent- and backend-originated calls
+never carry one, so an unattended view cannot hand a URL to the OS browser.
 Filesystem calls used by the dock's `@`-file picker remain authorized by
 the public `system:fs` catalog; they are not absorbed into the AI CLI
 permission.
@@ -1306,7 +1314,10 @@ The only miniIDE Plugin Storage migration keys remain `ide-sidebar-width`,
 `ide-ai-panel-width`, and `agentTeam.search.opts`.
 
 Persisted-session adoption requires backend-owned profile, canonical workspace
-and origin metadata, checked before ownership transfer or redraw. Public
+and origin metadata, checked before ownership transfer or redraw. The bundled
+Mini-IDE also accepts its own pre-migration `editor` origin when recovering a
+session; other origins remain excluded. Both sides compare canonical workspace
+paths, including when the user opened the workspace through a symlink. Public
 output stays text; the Host streams UTF-8 decoding across backend binary
 batches. Clipboard images reuse the existing `dropped-files` store and media
 types. Embedded terminal native file-drop behavior is not introduced by this
@@ -1431,13 +1442,16 @@ additive contract only after authors can implement and test the complete
 provider Interface.
 
 An update is downloaded and verified in the background but is not a live code
-swap. It is staged at an immutable target-specific package directory, receives
-current trust verification plus restricted frontend and backend preflight, and
-is then offered through **Restart Plugin**. Navide drains only that plugin,
+swap. The update is staged at an immutable target-specific package directory,
+receives current trust verification plus restricted frontend and backend
+preflight, and is then offered through **Restart Plugin**. Navide drains only that plugin,
 atomically selects one complete frontend/backend package version and its
 matching storage selection, then restores native view placements from fresh
 Host-owned descriptor and Grant data. Navide itself and unrelated plugins do
-not restart. Interrupted activation recovery, rollback to a retained previous
+not restart. An older mutable Registry installation is adopted as the previous
+version only after its retained archive, receipt, grant, and current Registry
+trust verify; a failed check cannot turn it into an active selection.
+Interrupted activation recovery, rollback to a retained previous
 package, and retention/garbage collection are separate lifecycle work; a
 restart never claims to undo completed external effects.
 

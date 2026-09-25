@@ -110,6 +110,52 @@ describe('window close coordinator', () => {
     expect(refusedTarget.reload).not.toHaveBeenCalled()
   })
 
+  it('serializes native close, reload, and quit on the same window while preparation is pending', async () => {
+    let release!: (outcome: WindowCloseOutcome) => void
+    const pending = new Promise<WindowCloseOutcome>((resolve) => { release = resolve })
+    const window = fakeWindow(16)
+    const target = fakeTarget()
+    const host = makeHost({
+      windowForWebContents: () => window,
+      prepareWindowClose: vi.fn(() => pending),
+    })
+    const coordinator = createWindowCloseCoordinator(host)
+    coordinator.watch(window)
+    const firstReload = coordinator.prepareAndReload(target)
+    expect(window.emitClose().prevented).toBe(true)
+    expect(await coordinator.prepareAndReload(target)).toBe(true)
+    expect(await coordinator.prepareForQuit([window])).toBe(false)
+    expect(host.prepareWindowClose).toHaveBeenCalledOnce()
+    release({ ok: true, id: 'prep-1' })
+    expect(await firstReload).toBe(true)
+    expect(host.commitWindowClose).toHaveBeenCalledOnce()
+    expect(target.reload).toHaveBeenCalledOnce()
+  })
+
+  it('reports refusal and rejection for native close, reload, and quit without closing', async () => {
+    const window = fakeWindow(17)
+    const target = fakeTarget()
+    const notifyCloseRefused = vi.fn()
+    const host = makeHost({
+      windowForWebContents: () => window,
+      notifyCloseRefused,
+      prepareWindowClose: vi.fn()
+        .mockResolvedValueOnce({ ok: false, reason: 'refused' })
+        .mockResolvedValueOnce({ ok: false, reason: 'timeout' })
+        .mockRejectedValueOnce(new Error('unavailable')),
+    })
+    const coordinator = createWindowCloseCoordinator(host)
+    coordinator.watch(window)
+    window.emitClose()
+    await vi.waitFor(() => expect(notifyCloseRefused).toHaveBeenCalledWith(window, 'native-window-close', 'refused'))
+    expect(await coordinator.prepareAndReload(target)).toBe(true)
+    expect(notifyCloseRefused).toHaveBeenCalledWith(window, 'reload', 'timeout')
+    expect(await coordinator.prepareForQuit([window])).toBe(false)
+    expect(notifyCloseRefused).toHaveBeenCalledWith(window, 'quit', 'unavailable')
+    expect(window.destroy).not.toHaveBeenCalled()
+    expect(target.reload).not.toHaveBeenCalled()
+  })
+
   it('does not touch unguarded windows or targets without a window', async () => {
     const noParticipants = makeHost({ hasWindowCloseParticipants: () => false })
     const coordinator = createWindowCloseCoordinator(noParticipants)

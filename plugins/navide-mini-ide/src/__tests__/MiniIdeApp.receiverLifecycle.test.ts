@@ -155,6 +155,35 @@ describe('MiniIdeApp receiver item lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('hides a mounted plugin sidebar when returning to Explorer', async () => {
+    const contributionKey = 'acme.provider.left'
+    nav.listReceiverLeftContributions.mockImplementationOnce(async () => [
+      { contributionKey, title: 'Git', location: 'left' },
+    ] as never[])
+    const wrapper = shallowMiniIde()
+    await flushPromises()
+
+    const gitButton = wrapper.findAll('.ide-act-btn').find(button => button.attributes('title') === 'Git')
+    expect(gitButton).toBeDefined()
+    await gitButton!.trigger('click')
+    await offer('offer-git', contributionKey)
+    const host = wrapper.get('.ide-receiver-slot-item').element as HTMLElement
+    expect(host.hidden).toBe(false)
+
+    const explorer = wrapper.findAll('.ide-act-btn')[0]!
+    await explorer.trigger('click')
+    expect(explorer.classes()).toContain('active')
+    expect(gitButton!.classes()).not.toContain('active')
+    expect(host.hidden).toBe(true)
+    expect(wrapper.get('.ide-receiver-items--left').attributes('hidden')).toBeDefined()
+
+    await gitButton!.trigger('click')
+    expect(host.hidden).toBe(false)
+    expect(wrapper.get('.ide-receiver-items--left').attributes('hidden')).toBeUndefined()
+    expect(nav.mountReceiver).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
   it('reoffers the same detail resource through the public receiver and accepts the existing item without remounting', async () => {
     const wrapper = shallowMiniIde()
     await flushPromises()

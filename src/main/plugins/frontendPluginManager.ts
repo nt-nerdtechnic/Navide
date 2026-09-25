@@ -777,7 +777,7 @@ const TERMINAL_OWNED_WS_TYPES = new Set([
 /** These first-party packages consume the public aiCli event vocabulary. Other
  * v2 packages may declare aiCli for capability admission without opting into
  * the event translation, so their internal terminal ownership remains intact. */
-const PUBLIC_AI_CLI_EVENT_PLUGIN_IDS = new Set(['navide.git', 'navide.plans'])
+const PUBLIC_AI_CLI_EVENT_PLUGIN_IDS = new Set(['navide.git', 'navide.plans', 'navide.mini-ide'])
 
 function usesPublicAiCliEvents(plugin: RunningPlugin | undefined): plugin is RunningPlugin {
   return Boolean(
@@ -6837,13 +6837,15 @@ export class FrontendPluginManager {
       if (!candidate && ownerState && storageIdentity) {
         const allowedProfiles = plugin.capabilityContext?.aiCliProfiles ?? []
         const recoveredWorkspace = typeof recovered.workspace_path === 'string'
-          ? resolve(recovered.workspace_path)
-          : ''
+          ? resolvePathForContainment(recovered.workspace_path)
+          : null
+        const expectedWorkspace = resolvePathForContainment(workspacePath)
         const recoveredOrigin = typeof recovered.origin === 'string' ? recovered.origin : ''
         if (
           !profileId ||
           !allowedProfiles.includes(profileId) ||
-          recoveredWorkspace !== resolve(workspacePath) ||
+          !expectedWorkspace ||
+          recoveredWorkspace !== expectedWorkspace ||
           (recoveredOrigin !== 'editor' && recoveredOrigin !== this.aiTerminalMetadataOrigin(plugin))
         ) {
           this.clearDeadAiTerminalSession(plugin, storageIdentity)
@@ -8867,20 +8869,16 @@ export class FrontendPluginManager {
   ): void {
     const contents = record.view.webContents
     this.running.set(instanceId, record)
-    const onReceiverNavigation = (details: { frame: WebFrameMain | null; isSameDocument: boolean }): void => {
-      if (details.frame === contents.mainFrame && !details.isSameDocument) {
-        this.revokeReceiverFrames(instanceId)
-        // A new document is in flight: advance the generation now, so every
-        // registration the incoming document makes records the new value. Doing
-        // it after the load (did-finish-load) invalidated every registration made
-        // during that load — a reloaded receiver window could not compose at all.
-        const current = this.running.get(instanceId)
-        if (current?.view.webContents === contents) current.documentGeneration += 1
-      }
+    const onReceiverNavigation = (): void => {
+      // did-navigate fires only after a new main-frame document commits. A
+      // cancelled navigation must leave the still-live receiver authoritative.
+      this.revokeReceiverFrames(instanceId)
+      const current = this.running.get(instanceId)
+      if (current?.view.webContents === contents) current.documentGeneration += 1
     }
-    contents.on('did-start-navigation', onReceiverNavigation)
+    contents.on('did-navigate', onReceiverNavigation)
     record.detachReceiverFrames = () => {
-      if (!contents.isDestroyed()) contents.removeListener('did-start-navigation', onReceiverNavigation)
+      if (!contents.isDestroyed()) contents.removeListener('did-navigate', onReceiverNavigation)
     }
     if (isV2Identity && this.activationFailureHandler && !preflight) {
       // Register the activation immediately so load failure / renderer death
@@ -11103,11 +11101,12 @@ export class FrontendPluginManager {
     root: string,
     trust: InstalledRegistryTrustContext,
     includePluginIds?: ReadonlySet<string>
-  ): Array<{ pluginId: string; action: 'allow' | 'quarantine'; reason?: string }> {
+  ): Array<{ pluginId: string; action: 'allow' | 'quarantine'; reason?: string; artifactDigest?: string }> {
     const decisions: Array<{
       pluginId: string
       action: 'allow' | 'quarantine'
       reason?: string
+      artifactDigest?: string
     }> = []
     for (const scanned of scanInstalledPlugins(root)) {
       const pluginId = scanned.activation?.pluginId ?? scanned.descriptor?.id
@@ -11135,7 +11134,9 @@ export class FrontendPluginManager {
         if (fallback) this.registerDescriptor(fallback, { builtin: true })
         continue
       }
-      decisions.push({ pluginId, ...decision })
+      decisions.push(decision.action === 'allow'
+        ? { pluginId, action: 'allow', artifactDigest: decision.artifactDigest }
+        : { pluginId, action: 'quarantine', reason: decision.reason })
       if (decision.action === 'quarantine') {
         const packageVersion = scanned.activation?.packageVersion ?? scanned.descriptor?.packageVersion
         if (packageVersion) this.revokePackageVersionInBackground(pluginId, packageVersion)

@@ -45,6 +45,11 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Fixed
 
+- Deliver Mini-IDE AI terminal output to its embedded view, and hide a stale Git or Plans sidebar when returning to Explorer.
+- Let verified pre-staging Registry plugins upgrade to immutable v2 packages without losing their rollback grant; keep factory installs with no prior grant restartable, and release frontend restart barriers after backend-only rollback or a failed promotion.
+- Restore older Mini-IDE AI terminals recorded with the `editor` origin, including workspaces opened through symlinks, without relaxing profile, workspace, or unrelated-origin checks.
+- Serialize plugin window close, reload, and quit preparation and report refused or failed closes; keep receiver registrations on cancelled navigation and retire them only after a new document commits.
+- Consume a trusted `ui.openExternal` gesture only once, and keep public Issue provider commands within one request deadline so a late repository probe cannot start a mutation after timeout.
 - Keep the embedded Git left surface usable when no detail receiver is paired: file and conflict requests fall back to the existing Host routes instead of silently doing nothing, and a refused detail request now reports the failure.
 - Keep installing Manifest v1 packages through the legacy mutable path; Manifest v2 installs continue to stage an immutable candidate for the next restart.
 - Make every descendant counted on a parent card reachable in the Auto, Spotlight and Fullscreen pane lists: unfolding a family now also lists descendants that are minimized or live on another tab or project, each with a location hint. Clicking such a row switches project and tab, restores and focuses it like the left agent list; Cmd/Ctrl/Shift-click only selects it without switching or restoring. The bulk collapse/expand button keeps its current-tab scope, and the parent's `↳ n` chip is replaced by a readable summary such as "1 child pane · Running".

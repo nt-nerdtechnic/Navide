@@ -1786,6 +1786,14 @@ describe('registered receiver frame lifecycle', () => {
     )).toBe(true))
   })
 
+  it('keeps receiver registrations when a top-level navigation never commits', async () => {
+    const fixture = await setupReceiver(false, false, '/workspace', true)
+    const contents = fixture.receiver.webContents as unknown as { emit: (event: string, ...args: unknown[]) => void; mainFrame: unknown }
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+    contents.emit('did-start-navigation', { frame: contents.mainFrame, isSameDocument: false })
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+  })
+
   it('keeps a receiver that registered during the initial load current across did-finish-load', async () => {
     const fixture = await setupReceiver(false, false, '/workspace', true)
     const contents = fixture.receiver.webContents as unknown as { emit: (event: string, ...args: unknown[]) => void }
@@ -1807,19 +1815,12 @@ describe('registered receiver frame lifecycle', () => {
     })
     await expect(preparation).resolves.toEqual({ ok: false, reason: 'refused' })
 
-    // A reload retires the old registration when the new document STARTS
-    // loading — the moment the document is actually replaced. Advancing the
-    // generation at load completion instead invalidated every registration the
-    // incoming document made while it was loading (a reloaded window could not
-    // compose at all).
-    contents.emit('did-start-navigation', {
-      frame: (fixture.receiver.webContents as unknown as { mainFrame: unknown }).mainFrame,
-      isSameDocument: false,
-    })
+    // Only a committed navigation retires the old registration. It advances
+    // before the incoming document registers during load, not on did-finish-load.
+    contents.emit('did-navigate')
     expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(false)
 
-    // The incoming document's own registration stays current across its load:
-    // the generation already advanced when this navigation started.
+    // The incoming document's registration stays current across its load.
     const register = ipcHandlers.get('plugin:receiver:register')
     const reloaded = register?.(fixture.receiverEvent, {
       protocolVersion: 1,
@@ -7198,6 +7199,48 @@ describe('opaque view instance ownership', () => {
     })
     expect(eventsOf(leftView, 'workspace.filesChanged')).toHaveLength(1)
     expect(eventsOf(windowView, 'workspace.filesChanged')).toHaveLength(1)
+  })
+
+  it('routes Mini-IDE PTY bytes to the public AI CLI event consumed by its panel', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = new FrontendPluginManager()
+      const packageDesc = v2PackageDescriptor(MINI_IDE_PLUGIN_ID)
+      const context = v2Context({ pluginId: MINI_IDE_PLUGIN_ID, sessionId: 'mini-session' })
+      mgr.registerDescriptor({ ...packageDesc, capabilityContext: context }, { official: true })
+      const host = new FakeBrowserWindow()
+      const handle = await mgr.openView(packageDesc, packageDesc.views![0], {
+        hostWindow: asHost(host),
+        bounds: 'fill',
+        capabilityContext: context,
+      })
+      const view = host.children[0] as FakeViewLike
+      mgr.noteTerminalRoutes(handle.instanceId, 'terminal.create', {
+        terminal_session_id: 'mini-session',
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'mini-session',
+        data: new TextEncoder().encode('PR133_FAKE_CODEX_READY'),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toEqual([{
+        type: 'aiCli.output',
+        data: { sessionId: 'mini-session', data: 'PR133_FAKE_CODEX_READY' },
+      }])
+      expect(eventsOf(view, 'terminal.output')).toHaveLength(0)
+
+      dispatchEvent(mgr, 'terminal.exit', {
+        terminal_session_id: 'mini-session',
+        exit_code: 0,
+      })
+      expect(eventsOf(view, 'aiCli.exited')).toEqual([{
+        type: 'aiCli.exited',
+        data: { sessionId: 'mini-session', exitCode: 0 },
+      }])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('decodes public PTY bytes per session and flushes the UTF-8 tail before exit', async () => {
@@ -12887,6 +12930,51 @@ describe('first-party Git private bridge', () => {
       ])
     } finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('recovers an owned AI terminal through a symlinked workspace without clearing its PTY', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-ai-symlink-recovery-')))
+    const workspace = join(root, 'real-workspace')
+    const alias = join(root, 'linked-workspace')
+    mkdirSync(workspace)
+    symlinkSync(workspace, alias, 'dir')
+    try {
+      const opened = await openGitView(alias, 'git-window')
+      const operations: Array<{ operation: string; ptyId?: string | null }> = []
+      opened.mgr.setTerminalStorageHandler(async (_origin, request) => {
+        operations.push(request)
+        return { fontSize: 12, lastSize: null, ptyId: 'live-pty', snapshot: null }
+      })
+      opened.mgr.setBackendWsUrl('ws://git-ai-symlink-recovery-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const runtime = (
+        opened.mgr as unknown as {
+          running: Map<string, { capabilityContext: HostCapabilityContext }>
+        }
+      ).running.get(opened.instanceId)!.capabilityContext.runtimeBinding!
+      const resume = opened.mgr.executePublicCapability({
+        kind: 'public', address: 'aiCli.resumeSession', scope: 'workspace', runtime,
+        args: { cols: 80, rows: 24, persistView: true },
+      })
+      await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+      const request = JSON.parse(socket.sent[0]!)
+      expect(request.payload.expected_workspace_path).toBe(alias)
+      socket.receive({
+        id: request.id, type: request.type, ok: true,
+        payload: {
+          alive: ['live-pty'], dead: [],
+          sessions: { 'live-pty': {
+            agent_key: 'claude', workspace_path: workspace, origin: 'navide.git',
+          } },
+        },
+        error: null, timestamp: '',
+      })
+      await expect(resume).resolves.toEqual({ sessionId: 'live-pty', profileId: 'claude' })
+      expect(operations).not.toContainEqual(expect.objectContaining({ operation: 'session', ptyId: null }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

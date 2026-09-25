@@ -55,9 +55,14 @@ export function createWindowCloseCoordinator(host: WindowCloseHost): WindowClose
       void (async () => {
         try {
           const preparation = await host.prepareWindowClose(window, 'native-window-close')
-          if (!preparation.ok) return
+          if (!preparation.ok) {
+            host.notifyCloseRefused?.(window, 'native-window-close', preparation.reason)
+            return
+          }
           host.commitWindowClose(preparation.id)
           if (!window.isDestroyed()) window.destroy()
+        } catch {
+          host.notifyCloseRefused?.(window, 'native-window-close', 'unavailable')
         } finally {
           closing.delete(window.id)
         }
@@ -72,34 +77,60 @@ export function createWindowCloseCoordinator(host: WindowCloseHost): WindowClose
     if (target.isDestroyed()) return true
     const window = findWindowFor(host, target)
     if (!window || window.isDestroyed() || !host.hasWindowCloseParticipants(window)) return false
-    const preparation = await host.prepareWindowClose(window, 'reload')
-    if (!preparation.ok) return true
-    host.commitWindowClose(preparation.id)
-    if (!target.isDestroyed()) target.reload()
+    if (closing.has(window.id)) {
+      host.notifyCloseRefused?.(window, 'reload', 'busy')
+      return true
+    }
+    closing.add(window.id)
+    try {
+      const preparation = await host.prepareWindowClose(window, 'reload')
+      if (!preparation.ok) {
+        host.notifyCloseRefused?.(window, 'reload', preparation.reason)
+        return true
+      }
+      host.commitWindowClose(preparation.id)
+      if (!target.isDestroyed()) target.reload()
+    } catch {
+      host.notifyCloseRefused?.(window, 'reload', 'unavailable')
+    } finally {
+      closing.delete(window.id)
+    }
     return true
   }
 
   async function prepareForQuit(windows: readonly BrowserWindow[]): Promise<boolean> {
     const targets = windows.filter((window) => !window.isDestroyed() && host.hasWindowCloseParticipants(window))
     if (targets.length === 0) return true
-    const committed: string[] = []
-    const preparedWindows: BrowserWindow[] = []
-    for (const target of targets) {
-      const preparation = await host.prepareWindowClose(target, 'quit')
-      if (!preparation.ok) {
-        for (const id of committed) host.cancelWindowClose(id)
-        return false
-      }
-      if (preparation.id) {
-        committed.push(preparation.id)
-        preparedWindows.push(target)
-      }
+    const busy = targets.find((target) => closing.has(target.id))
+    if (busy) {
+      host.notifyCloseRefused?.(busy, 'quit', 'busy')
+      return false
     }
-    for (const id of committed) host.commitWindowClose(id)
-    for (const target of preparedWindows) {
-      if (!target.isDestroyed()) target.destroy()
+    for (const target of targets) closing.add(target.id)
+    const prepared: Array<{ id: string; window: BrowserWindow }> = []
+    let committed = false
+    try {
+      for (const target of targets) {
+        const preparation = await host.prepareWindowClose(target, 'quit')
+        if (!preparation.ok) {
+          host.notifyCloseRefused?.(target, 'quit', preparation.reason)
+          return false
+        }
+        prepared.push({ id: preparation.id, window: target })
+      }
+      for (const { id } of prepared) host.commitWindowClose(id)
+      committed = true
+      for (const { window } of prepared) {
+        if (!window.isDestroyed()) window.destroy()
+      }
+      return true
+    } catch {
+      host.notifyCloseRefused?.(targets[0], 'quit', 'unavailable')
+      return false
+    } finally {
+      if (!committed) for (const { id } of prepared) host.cancelWindowClose(id)
+      for (const target of targets) closing.delete(target.id)
     }
-    return true
   }
 
   return { watch, prepareAndReload, prepareForQuit }

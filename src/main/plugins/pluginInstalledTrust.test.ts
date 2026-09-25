@@ -135,6 +135,7 @@ describe('verifyInstalledRegistryPackage', () => {
     expect(verifyInstalledRegistryPackage(pluginDir, 'acme.demo', context())).toEqual({
       action: 'allow',
       artifactDigest: sha256Hex(archive),
+      target: 'universal',
     })
   })
 

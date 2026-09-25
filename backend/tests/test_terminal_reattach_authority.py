@@ -75,6 +75,28 @@ async def test_attested_host_adopts_matching_session_and_reports_metadata() -> N
 
 
 @pytest.mark.asyncio
+async def test_mini_ide_upgrade_reattaches_legacy_editor_session_only() -> None:
+    s = session(entry("old-editor", origin="editor"))
+    response = await call(s, {
+        "terminal_session_ids": ["old-editor"],
+        "expected_workspace_path": "/ws",
+        "expected_origin": "mini-ide",
+        "expected_profile_ids": ["claude"],
+    })
+    assert response["payload"]["alive"] == ["old-editor"]
+    assert response["payload"]["sessions"]["old-editor"]["origin"] == "editor"
+
+    other = session(entry("old-editor", origin="editor"))
+    denied = await call(other, {
+        "terminal_session_ids": ["old-editor"],
+        "expected_workspace_path": "/ws",
+        "expected_origin": "navide.git",
+        "expected_profile_ids": ["claude"],
+    })
+    assert denied["payload"]["dead"] == ["old-editor"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("field, value", [
     ("expected_workspace_path", "/other"),
     ("expected_workspace_path", "/ws-link"),
