@@ -73,7 +73,11 @@ DEFAULT_LANGUAGE = "zh"
 DEFAULT_INITIAL_PROMPT = "以下是繁體中文語音記錄。"
 # Chinese scripts the sidecar can convert transcripts to (its `script` field).
 SCRIPTS = ("hant-tw", "hans", "none")
+# Time between the starts of two partials. The loop polls every
+# _PARTIAL_POLL_S, so the first partial starts as soon as it is due and one
+# that follows a slow partial starts as soon as that one is done.
 PARTIAL_INTERVAL_S = 1.0
+_PARTIAL_POLL_S = 0.05
 # A partial needs this much audio it has not heard yet, and a window at least
 # _PARTIAL_MIN_WINDOW_BYTES long.
 _PARTIAL_MIN_NEW_BYTES = _BYTES_PER_SECOND // 2
@@ -134,6 +138,7 @@ class _Recording:
     context: str = ""
     context_before: str = ""
     partial_seq: int = 0
+    partial_started: float = 0.0
     ticker: asyncio.Task | None = None
     partial: asyncio.Task | None = None
 
@@ -619,15 +624,16 @@ def _partial_due(rec: _Recording) -> bool:
 
 
 async def _partial_loop(rec: _Recording) -> None:
-    """Tick while ``rec`` is the active take; never queues: a tick that finds
-    the previous partial still running is skipped."""
+    """Start partials while ``rec`` is the active take; never queues: none
+    starts while the previous one is still running."""
     while True:
-        await asyncio.sleep(PARTIAL_INTERVAL_S)
+        await asyncio.sleep(_PARTIAL_POLL_S)
         if _active is not rec:
             return
         if rec.partial is not None and not rec.partial.done():
             continue
-        if _partial_due(rec):
+        if time.monotonic() - rec.partial_started >= PARTIAL_INTERVAL_S and _partial_due(rec):
+            rec.partial_started = time.monotonic()
             rec.partial = asyncio.create_task(_run_partial(rec))
 
 

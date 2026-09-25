@@ -674,6 +674,24 @@ async def test_busy_partials_are_skipped_not_queued(stream: Path, monkeypatch: p
     await _send(session, "voice.cancel", {"sessionId": sid})
 
 
+async def test_a_partial_after_a_slow_one_does_not_wait_for_the_next_second(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Each partial takes 1.2 s of a 1 s interval: the next one starts right
+    # after it, not at the following whole-second tick (0.8 s later).
+    monkeypatch.setattr(voice_handlers, "PARTIAL_INTERVAL_S", 1.0)
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "1.2")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(16), pause=0.2)
+    await _settle(session)
+    requests = [r for r in _requests(stream) if r["segments"]]
+    assert len(requests) >= 2, requests
+    # Serial, one at a time, and back to back (timed by the sidecar's clock).
+    assert all(0 <= b["start"] - a["end"] < 0.5 for a, b in zip(requests, requests[1:])), requests
+    await _send(session, "voice.cancel", {"sessionId": sid})
+
+
 async def test_stop_cancels_an_in_flight_partial_then_runs_the_tail(
     stream: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
