@@ -1348,7 +1348,8 @@
       "no": "いいえ",
       "manifestPermissions": "マニフェストの権限",
       "packageVersionGrant": "パッケージバージョンごとの許可",
-      "noMatchingGrant": "一致する許可なし"
+      "noMatchingGrant": "一致する許可なし",
+      "labeledValue": "{label}：{value}"
     },
     "scope": {
       "user": "ユーザー",

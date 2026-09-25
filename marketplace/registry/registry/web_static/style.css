@@ -196,6 +196,8 @@ main.wrap { padding-top: 28px; padding-bottom: 48px; }
   padding: 20px 24px;
 }
 .markdown h1, .markdown h2, .markdown h3 { margin-top: 1.2em; }
+/* The box padding is the top gutter; a leading heading's margin would double it. */
+.markdown > :first-child { margin-top: 0; }
 .markdown pre {
   background: var(--bg);
   border: 1px solid var(--border);

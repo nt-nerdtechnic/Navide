@@ -1346,9 +1346,10 @@
       "storage": "儲存空間",
       "yes": "是",
       "no": "否",
-      "manifestPermissions": "Manifest Permissions",
-      "packageVersionGrant": "Package-version Grant",
-      "noMatchingGrant": "沒有相符的 Grant"
+      "manifestPermissions": "宣告的權限",
+      "packageVersionGrant": "此版本的授權",
+      "noMatchingGrant": "尚無相符的授權",
+      "labeledValue": "{label}：{value}"
     },
     "scope": {
       "user": "使用者",
@@ -1957,7 +1958,7 @@
             "benchmark": "<strong>Model benchmark</strong> — 對所有本機模型跑四項任務：技術棧偵測（輸出 JSON）、工作區一句話摘要、從文件清單挑最相關的一筆、解析 CLI 輸出並抽出問題與選項。結果表逐項打勾並附耗時，<strong>四題至少過三題（≥75%）</strong>才算通過；沒過的模型會從模型下拉選單裡藏起來。"
           },
           "h4": "擴充功能",
-          "p6": "政策那一塊底下才是外掛清單，分<strong>兩段</strong>：<strong>內建</strong>（隨附套件，例如 內建 Git，可停用後再 <em>還原</em>）與 <strong>已安裝</strong>（自行安裝的，列出敏感能力與相依，可 <em>移除</em>）。兩段的每一列底下都會多一行<em>Manifest Permissions</em> 與 <em>Package-version Grant</em>，寫明這個版本實際被授予什麼；對不到授權時寫「沒有相符的 Grant」。<strong>搜尋登錄庫並安裝新套件已經是另一個分頁「市集」</strong>，不在這裡。",
+          "p6": "政策那一塊底下才是外掛清單，分<strong>兩段</strong>：<strong>內建</strong>（隨附套件，例如 內建 Git，可停用後再 <em>還原</em>）與 <strong>已安裝</strong>（自行安裝的，列出敏感能力與相依，可 <em>移除</em>）。兩段的每一列底下都會多一行<em>宣告的權限</em> 與 <em>此版本的授權</em>，寫明這個版本實際被授予什麼；對不到授權時以淡色寫「尚無相符的授權」。<strong>搜尋登錄庫並安裝新套件已經是另一個分頁「市集」</strong>，不在這裡。",
           "p7": "安裝是<strong>兩道確認</strong>，而且在確認之前不會寫入任何檔案：先是「信任發佈者」——畫面明說<em>有效的簽章只證明套件沒被竄改，不代表你願意執行這個發佈者的程式</em>；接著是「確認外掛權限」，列出它要求的敏感能力，並在帶有原生後端執行檔時特別警告。",
           "mirror": "<strong>下載鏡像</strong>：每個版本的檔案同時放在 GitHub Release 與 <code>dl.navide.dev</code>（同樣的位元，附 sha256 可比對）。<strong>更新來源預設就是鏡像</strong>——app 一啟動就把 feed 指到 <code>dl.navide.dev</code>，GitHub 是備援。只有遇到<strong>網路層失敗</strong>（連不上、逾時、5xx／429）才會退回 GitHub，退過之後<strong>這個 session 就一直用 GitHub</strong>，重開 app 才會回到鏡像。<strong>404 與簽章／checksum 錯誤不會退回</strong>——兩邊放的是同一份檔，換過去只會同樣失敗，照原樣回報才有用。",
           "policyIntro": "<strong>執行政策</strong>決定外掛的後端可以執行什麼。它<strong>不是獨立分頁</strong>，而是擴充功能分頁最上面那一塊，帶自己的層級徽章（使用者＋工作區）與政策檔路徑。最上面先顯示<em>目前生效的政策</em>：來源、模式，以及狀態 <em>生效中</em>／<em>已過期</em>／<em>無法使用</em>／<em>損壞</em>。",

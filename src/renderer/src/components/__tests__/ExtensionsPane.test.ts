@@ -211,6 +211,7 @@ describe('ExtensionsPane', () => {
     expect(row.find('.ext-manifest-permissions').text()).toContain('allowlist')
     expect(row.find('.ext-package-grant').text()).toContain('2.4.0')
     expect(row.find('.ext-package-grant').text()).toContain('ui')
+    expect(row.find('.ext-package-grant').classes()).not.toContain('ext-package-grant-none')
   })
 
   it('distinguishes an installed package with no matching grant', async () => {
@@ -230,6 +231,8 @@ describe('ExtensionsPane', () => {
     await flushPromises()
 
     expect(wrapper.get('.ext-package-grant').text()).toContain('No matching grant')
+    expect(wrapper.get('.ext-package-grant').classes()).toContain('ext-package-grant-none')
+    expect(wrapper.get('[data-id="acme.v2"] .ext-requires').text()).toBe('Version 2.4.0')
   })
 
 

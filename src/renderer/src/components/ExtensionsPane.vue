@@ -130,10 +130,14 @@ onMounted(() => {
           </span>
           <div v-if="p.installed?.manifestPermissions || p.installed?.packageVersion" class="ext-permission-details">
             <span v-if="p.installed?.manifestPermissions" class="ext-manifest-permissions">
-              {{ $t('settings.extensionsPolicy.manifestPermissions') }}: {{ formatManifestPermissions(p.installed.manifestPermissions) }}
+              {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.manifestPermissions'), value: formatManifestPermissions(p.installed.manifestPermissions) }) }}
             </span>
-            <span v-if="p.installed?.packageVersion" class="ext-package-grant">
-              {{ $t('settings.extensionsPolicy.packageVersionGrant') }}: {{ formatPackageGrant(p.installed.packageVersionGrant) }}
+            <span
+              v-if="p.installed?.packageVersion"
+              class="ext-package-grant"
+              :class="{ 'ext-package-grant-none': !p.installed.packageVersionGrant }"
+            >
+              {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.packageVersionGrant'), value: formatPackageGrant(p.installed.packageVersionGrant) }) }}
             </span>
           </div>
           <button
@@ -156,7 +160,7 @@ onMounted(() => {
       <ul class="ext-list">
         <li v-for="p in nonFactoryInstalled" :key="p.id" class="ext-installed" :data-id="p.id">
           <span class="ext-id">{{ p.id }}</span>
-          <span v-if="p.packageVersion" class="ext-requires">{{ $t('settings.extensionsPolicy.version') }} {{ p.packageVersion }}</span>
+          <span v-if="p.packageVersion" class="ext-requires">{{ $t('settings.extensions.marketplace.versionLabel', { version: p.packageVersion }) }}</span>
           <span v-if="p.sensitive.length" class="ext-badge ext-sensitive">
             {{ $t('settings.extensions.sensitive') }}: {{ p.sensitive.join(', ') }}
           </span>
@@ -179,10 +183,14 @@ onMounted(() => {
           </button>
           <div v-if="p.manifestPermissions || p.packageVersion" class="ext-permission-details">
             <span v-if="p.manifestPermissions" class="ext-manifest-permissions">
-              {{ $t('settings.extensionsPolicy.manifestPermissions') }}: {{ formatManifestPermissions(p.manifestPermissions) }}
+              {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.manifestPermissions'), value: formatManifestPermissions(p.manifestPermissions) }) }}
             </span>
-            <span v-if="p.packageVersion" class="ext-package-grant">
-              {{ $t('settings.extensionsPolicy.packageVersionGrant') }}: {{ formatPackageGrant(p.packageVersionGrant) }}
+            <span
+              v-if="p.packageVersion"
+              class="ext-package-grant"
+              :class="{ 'ext-package-grant-none': !p.packageVersionGrant }"
+            >
+              {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.packageVersionGrant'), value: formatPackageGrant(p.packageVersionGrant) }) }}
             </span>
           </div>
         </li>
@@ -251,6 +259,12 @@ onMounted(() => {
   color: var(--text-secondary, #888);
   font-size: var(--font-2xs);
   line-height: 1.4;
+}
+/* No grant is the common case for a version nobody has granted anything yet;
+   keep it readable but quieter than an actual grant. */
+.ext-package-grant-none {
+  color: var(--text-muted, #888);
+  font-style: italic;
 }
 .ext-badge.ext-sensitive {
   color: #c77400;
