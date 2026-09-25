@@ -4259,10 +4259,13 @@ async def _send_and_wait_remote(
         await asyncio.sleep(_WAIT_IDLE_POLL_S)
 
     while True:
+        # Look before giving up, as the local path does: the grace window runs
+        # to the deadline whenever timeout_s is under its cap, so the pane can
+        # be first seen working with no budget left — and a pane seen working
+        # is not "never_started". With no time left cli_wait_idle still checks
+        # once.
         left = timeout - (time.monotonic() - started)
-        if left <= 0:
-            break
-        waited = await cli_wait_idle(to, ctx, timeout_s=left, pane_id=pane_id)
+        waited = await cli_wait_idle(to, ctx, timeout_s=max(left, 0.0), pane_id=pane_id)
         if waited.get("ok") is False:
             # Same reading as the local target_lost: the send happened and
             # msg_key is real, so this is "delivered, but I can no longer

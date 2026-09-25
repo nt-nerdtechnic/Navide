@@ -19,6 +19,7 @@ vocabulary. Hence: `source` is never "turn_complete" for a remote pane, an
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -514,6 +515,80 @@ async def test_send_and_wait_will_not_pass_a_pane_that_never_stirred_off_as_done
     assert result["ok"] is True
     assert result["idle"] is False
     assert result["source"] == "timeout"
+    assert result["reason"] == "never_started"
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_does_not_call_a_remote_turn_seen_at_the_deadline_never_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With timeout_s under the grace cap the grace window IS the budget, so a
+    pane the roster first shows working on the poll that crosses the deadline is
+    latched as started with no budget left. That pane has picked the message up;
+    answering "never_started" tells the caller it did not — an invitation to
+    send it twice.
+
+    The tool runs on a virtual clock that only its own sleeps advance, so where
+    the badge flips relative to the deadline is scripted, not raced."""
+    budget = 0.5
+    clock = SimpleNamespace(now=0.0)
+    real_sleep = asyncio.sleep
+
+    async def virtual_sleep(delay: float) -> None:
+        clock.now += delay
+        await real_sleep(0)
+
+    monkeypatch.setattr(
+        plan_mcp, "time", SimpleNamespace(monotonic=lambda: clock.now, time=time.time)
+    )
+
+    class VirtualAsyncio:
+        sleep = staticmethod(virtual_sleep)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(asyncio, name)
+
+    monkeypatch.setattr(plan_mcp, "asyncio", VirtualAsyncio())
+    # The production grace (10s) outlasts this budget, which is what makes the
+    # grace window run all the way to the deadline.
+    monkeypatch.setattr(plan_mcp, "_SEND_AND_WAIT_START_GRACE_S", 10.0)
+    _seed_local()
+    _link(monkeypatch)
+    _seed_remote(status="idle")
+
+    def list_panes() -> list[Any]:
+        # Working from the deadline on: first seen by the grace poll that
+        # crosses it.
+        status = "running" if clock.now >= budget else "idle"
+        return [remote_roster._pane_from_row(_remote_row(status=status))]
+
+    monkeypatch.setattr(remote_roster, "list_panes", list_panes)
+
+    result = await plan_mcp.cli_send_and_wait(REMOTE, "go", _ctx(), timeout_s=budget)
+
+    assert clock.now >= budget
+    assert result["ok"] is True
+    assert result["idle"] is False
+    assert result["source"] == "timeout"
+    assert result["reason"] == "busy"
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_returns_promptly_on_a_zero_remote_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Looking once before giving up must not turn a spent budget into a loop:
+    with timeout_s=0 the tool checks the pane once and answers."""
+    _seed_local()
+    _link(monkeypatch)
+    _seed_remote(status="idle")
+
+    result = await asyncio.wait_for(
+        plan_mcp.cli_send_and_wait(REMOTE, "go", _ctx(), timeout_s=0.0), timeout=5.0
+    )
+
+    assert result["ok"] is True
+    assert result["idle"] is False
     assert result["reason"] == "never_started"
 
 
