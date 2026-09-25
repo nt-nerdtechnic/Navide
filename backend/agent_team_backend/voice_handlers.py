@@ -625,6 +625,12 @@ def _apply_hypothesis(rec: _Recording, segments: list, window_bytes: int) -> str
         n = next((k + 1 for k in range(len(segs) - 2, -1, -1) if _trusted(segs, k, window_bytes)), 0)
         n = n or max(len(segs) - 1, 1)
         cut = segs[n - 1][2] if n < len(segs) else window_bytes
+        if collapsed:
+            # Stretched times run late: also place the cut by how much of the
+            # text lies before it (speech keeps a roughly even pace) and take
+            # the earlier. Early only repeats words, which the overlap strips.
+            chars = [len(_norm(text)) for text, _, _ in segs]
+            cut = min(cut, window_bytes * sum(chars[:n]) // max(sum(chars), 1))
     if n and cut > 0:
         before = rec.committed
         rec.committed = _join(rec.committed, "".join(text for text, _, _ in segs[:n]).strip())

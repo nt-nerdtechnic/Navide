@@ -722,6 +722,29 @@ def test_collapsed_timestamps_never_place_a_boundary() -> None:
     assert rec.win_start == (7330 * ms - voice_handlers._OVERLAP_BYTES)
 
 
+def test_a_forced_cut_on_collapsed_timestamps_is_not_placed_late() -> None:
+    # A real hypothesis (ggml-base) of a window at the cap with collapsed
+    # timestamps: "再決定要從哪裡下手," really ends 7.45 s in, not 13.42 s.
+    # Cutting there would skip "如果縮短…" and place the boundary 6 s late.
+    ms = SECOND // 1000
+    rec = voice_handlers._Recording(id="s", owner=None)
+    rec.committed = "一次還沒確定的那一段聲音,"
+    segments = [
+        {"t0_ms": 0, "t1_ms": 2910, "text": "所以反應有點慢,"},
+        {"t0_ms": 2910, "t1_ms": 7320, "text": "我打算先兩側每一個階段,"},
+        {"t0_ms": 7320, "t1_ms": 9850, "text": "花了多少時間,"},
+        {"t0_ms": 9850, "t1_ms": 13420, "text": "再決定要從哪裡下手,"},
+        {"t0_ms": 13420, "t1_ms": 16620, "text": "如果縮短變式的視窗可以明顯加速,"},
+        {"t0_ms": 16620, "t1_ms": 16620, "text": "而且準確度沒有下降,"},
+        {"t0_ms": 16620, "t1_ms": 16620, "text": "就把它射程預設值,"},
+    ]
+    voice_handlers._apply_hypothesis(rec, segments, voice_handlers.WINDOW_CAP_BYTES + 630 * ms)
+    assert rec.committed.startswith("一次還沒確定的那一段聲音,所以反應有點慢,")
+    # The next window starts before the real boundary, so nothing is skipped.
+    assert 0 < rec.win_start <= 7450 * ms
+    assert rec.committed_until < 9000 * ms
+
+
 async def test_stop_after_an_unverified_advance_transcribes_only_the_short_tail(
     stream: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
