@@ -59,6 +59,24 @@ def _v2(cur: sqlite3.Cursor) -> None:
     )
 
 
+def _v3(cur: sqlite3.Cursor) -> None:
+    # Seen chats belong to the bot that saw them: a new token must not offer the
+    # old bot's chats. Rows from v2 keep bot '' until their platform next starts.
+    cur.execute(
+        "CREATE TABLE channel_chats_v3 ("
+        " platform TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', chat_id TEXT NOT NULL,"
+        " title TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'group',"
+        " supports_topics INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL,"
+        " PRIMARY KEY (platform, bot, chat_id))"
+    )
+    cur.execute(
+        "INSERT INTO channel_chats_v3 (platform, bot, chat_id, title, kind, supports_topics, last_seen)"
+        " SELECT platform, '', chat_id, title, kind, supports_topics, last_seen FROM channel_chats"
+    )
+    cur.execute("DROP TABLE channel_chats")
+    cur.execute("ALTER TABLE channel_chats_v3 RENAME TO channel_chats")
+
+
 @dataclass
 class PairingRequest:
     platform: str
@@ -96,6 +114,7 @@ class ChannelStore:
         self._db = db
         db.migrate(COMPONENT, 1, _v1)
         db.migrate(COMPONENT, 2, _v2)
+        db.migrate(COMPONENT, 3, _v3)
 
     def _rows(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._db.transaction() as cur:
@@ -152,28 +171,34 @@ class ChannelStore:
 
     # --- seen chats -----------------------------------------------------------
 
-    def remember_chat(self, platform: str, chat_id: str, title: str, kind: str,
+    def remember_chat(self, platform: str, bot: str, chat_id: str, title: str, kind: str,
                       supports_topics: bool, now: int) -> bool:
-        """Upsert a seen chat; True when it (or its topic support) is new."""
+        """Upsert a chat ``bot`` has seen; True when it (or its topic support) is new."""
         with self._db.transaction() as cur:
-            prev = cur.execute("SELECT supports_topics FROM channel_chats WHERE platform = ? AND chat_id = ?",
-                               (platform, chat_id)).fetchone()
+            prev = cur.execute("SELECT supports_topics FROM channel_chats"
+                               " WHERE platform = ? AND bot = ? AND chat_id = ?",
+                               (platform, bot, chat_id)).fetchone()
             cur.execute(
-                "INSERT INTO channel_chats (platform, chat_id, title, kind, supports_topics, last_seen)"
-                " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(platform, chat_id) DO UPDATE SET"
+                "INSERT INTO channel_chats (platform, bot, chat_id, title, kind, supports_topics, last_seen)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(platform, bot, chat_id) DO UPDATE SET"
                 " title = CASE WHEN excluded.title != '' THEN excluded.title ELSE channel_chats.title END,"
                 " kind = excluded.kind,"
                 " supports_topics = MAX(channel_chats.supports_topics, excluded.supports_topics),"
                 " last_seen = excluded.last_seen",
-                (platform, chat_id, title, kind, int(bool(supports_topics)), now),
+                (platform, bot, chat_id, title, kind, int(bool(supports_topics)), now),
             )
         return prev is None or (bool(supports_topics) and not prev["supports_topics"])
 
-    def chats(self, platform: str) -> list[dict[str, Any]]:
+    def adopt_chats(self, platform: str, bot: str) -> int:
+        """Hand v2 rows (seen before chats had a bot) to the bot now running."""
+        return self._exec("UPDATE OR IGNORE channel_chats SET bot = ? WHERE platform = ? AND bot = ''",
+                          (bot, platform))
+
+    def chats(self, platform: str, bot: str) -> list[dict[str, Any]]:
         return [{"chat_id": r["chat_id"], "title": r["title"], "kind": r["kind"],
                  "supports_topics": bool(r["supports_topics"])}
-                for r in self._rows("SELECT * FROM channel_chats WHERE platform = ?"
-                                    " ORDER BY last_seen DESC", (platform,))]
+                for r in self._rows("SELECT * FROM channel_chats WHERE platform = ? AND bot = ?"
+                                    " ORDER BY last_seen DESC", (platform, bot))]
 
     # --- pairing --------------------------------------------------------------
 

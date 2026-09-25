@@ -93,13 +93,15 @@ watch(
   }
 )
 
-/** Name of another pane already connected to this chat, or '' when it is free.
- *  A chat serves one pane at a time; unbinding there frees it here. */
+/** Name of another live pane already connected to this chat, or '' when it is free.
+ *  A chat serves one pane at a time; unbinding there frees it here. A holder
+ *  this window does not know (closed without its unbind landing, or a pane in
+ *  another window) is left to the backend, which refuses a live one. */
 function holderOf(platform: string, chatId: string): string {
   const held = store?.bindings.value.find(
     (b) => b.platform === platform && b.chat_id === chatId && !b.thread_id && b.pane_id !== props.paneId
   )
-  return held ? (messaging.nameOf(held.pane_id) ?? held.title ?? held.pane_id) : ''
+  return held ? (messaging.nameOf(held.pane_id) ?? '') : ''
 }
 
 async function loadGroups(): Promise<void> {

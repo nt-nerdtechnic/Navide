@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import itertools
+import sqlite3
 import time
 from typing import Any
 
@@ -453,8 +454,84 @@ async def test_seen_chats_survive_a_restart(env: Env, tmp_path) -> None:
     await env.inbound("hi", chat="-200", thread="")
     assert [c["chat_id"] for c in env.m.locations("telegram")["locations"]] == ["-200"]
     # A fresh manager over the same database (a backend restart) still lists it.
-    again = ChannelManager(ChannelStore(env.db), env.fake.seams(), factory_for=lambda _p: None)
-    assert [c["chat_id"] for c in again.locations("telegram")["locations"]] == ["-200"]
+    again = ChannelManager(ChannelStore(env.db), env.fake.seams(),
+                           factory_for=lambda _p: lambda _c, secret, _s: FakeAdapter("telegram", secret["token"]))
+    await again.start()
+    try:
+        assert [c["chat_id"] for c in again.locations("telegram")["locations"]] == ["-200"]
+    finally:
+        await again.stop()
+
+
+async def test_a_new_bot_token_does_not_offer_the_old_bots_chats(env: Env) -> None:
+    await env.inbound("hi", chat="-200", thread="")
+    assert (await env.m.configure("telegram", {}, {"token": "tok-B"}))["ok"]
+    assert env.m.locations("telegram")["locations"] == []
+    # Switching back offers them again: nothing was thrown away.
+    assert (await env.m.configure("telegram", {}, {"token": "tok-A"}))["ok"]
+    assert [c["chat_id"] for c in env.m.locations("telegram")["locations"]] == ["-200"]
+
+
+async def test_bind_and_unbind_notices_keep_their_order(env: Env) -> None:
+    await env.m.unbind("pane-1")
+    await _until(lambda: any(t.startswith("🔌") for t in env.tg.texts()))
+    env.tg.sent.clear()
+    real = env.tg.send_text
+
+    async def slow_bound(loc, text, **kw):
+        if text.startswith("🔗"):
+            await asyncio.sleep(0.05)  # the platform is slow on the first one
+        return await real(loc, text, **kw)
+    env.tg.send_text = slow_bound
+    assert (await env.m.bind("pane-2", "b", "telegram", "existing", "-100", "50"))["ok"]
+    await env.m.unbind("pane-2")
+    await _until(lambda: len(env.tg.texts()) == 2)
+    assert [t[0] for t in env.tg.texts()] == ["🔗", "🔌"]
+
+
+async def test_a_chat_held_by_a_closed_pane_can_be_taken(env: Env) -> None:
+    # pane-1 closed without its unbind reaching the backend (renderer crash,
+    # backend down): its binding must not lock the chat away for good.
+    env.fake.gone.add("pane-1")
+    res = await env.m.bind("pane-2", "b", "telegram", "existing", "-100", "50")
+    assert res["ok"] is True
+    assert [b.pane_id for b in env.store.bindings()] == ["pane-2"]
+
+
+async def test_a_failed_seen_chat_write_still_delivers_the_message(env: Env, monkeypatch) -> None:
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(env.store, "remember_chat", boom)
+    await env.inbound("do the thing")
+    assert [t for _, t, _ in env.fake.delivered] == ["do the thing"]
+
+
+async def test_a_failed_seen_chat_write_does_not_fail_an_approval(env: Env, monkeypatch) -> None:
+    await env.inbound("hello", sender="99", chat="99", thread="", direct=True)
+    code = env.store.list_pairing("telegram")[0].code
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(env.store, "remember_chat", boom)
+    res = await env.m.pairing_approve("telegram", code)
+    assert res["ok"] is True
+    assert env.store.is_allowed("telegram", "99")
+
+
+async def test_a_failed_bind_notice_keeps_the_binding_and_is_not_retried(env: Env) -> None:
+    await env.m.unbind("pane-1")
+    await _until(lambda: any(t.startswith("🔌") for t in env.tg.texts()))
+    calls = 0
+
+    async def failing(loc, text, **kw):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("429 Too Many Requests")
+    env.tg.send_text = failing
+    assert (await env.m.bind("pane-2", "b", "telegram", "existing", "-100", "50"))["ok"] is True
+    await asyncio.sleep(0.1)
+    assert calls == 1
+    assert [b.pane_id for b in env.store.bindings()] == ["pane-2"]
 
 
 async def test_a_newly_seen_chat_announces_a_change_once(env: Env) -> None:

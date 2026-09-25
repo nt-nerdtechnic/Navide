@@ -42,7 +42,7 @@ def test_migration_is_idempotent(tmp_path) -> None:
     db = Database(tmp_path / "n.db")
     ChannelStore(db)
     ChannelStore(db)
-    assert db.schema_version("channels") == 2
+    assert db.schema_version("channels") == 3
     db.close()
 
 
@@ -120,3 +120,21 @@ def test_accounts_kill_switch_and_remove(store: ChannelStore) -> None:
     assert store.accounts()["telegram"]["enabled"] is False
     store.remove_platform("telegram")
     assert store.accounts() == {} and store.list_allow(None) == [] and store.bindings() == []
+
+
+def test_v2_seen_chats_survive_the_bot_migration_and_go_to_the_next_bot(tmp_path) -> None:
+    from agent_team_backend.channels import store as store_mod
+    db = Database(tmp_path / "n.db")
+    db.migrate("channels", 1, store_mod._v1)
+    db.migrate("channels", 2, store_mod._v2)
+    with db.transaction() as cur:
+        cur.execute("INSERT INTO channel_chats (platform, chat_id, title, kind, supports_topics, last_seen)"
+                    " VALUES ('telegram', '-200', 'team', 'group', 1, 5)")
+    s = ChannelStore(db)
+    assert db.schema_version("channels") == 3
+    assert s.chats("telegram", "bot-a") == []
+    assert s.adopt_chats("telegram", "bot-a") == 1
+    assert s.chats("telegram", "bot-a") == [
+        {"chat_id": "-200", "title": "team", "kind": "group", "supports_topics": True}]
+    assert s.adopt_chats("telegram", "bot-b") == 0  # adopted once, by the bot that ran first
+    db.close()

@@ -446,6 +446,19 @@ describe('useTerminal — RUNNING badge vs self-triggered repaints', () => {
     scope.stop()
   })
 
+  it('stops holding RUNNING once a background task passes the fuse without an end', async () => {
+    // A dev server killed with `kill <pid>` (or left running) writes no end record.
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.noteBackgroundTasks('start', ['bdev'])
+    result.markTurnComplete()
+    await vi.advanceTimersByTimeAsync(29 * 60_000)
+    expect(result.displayStatus.value).toBe('running')
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
   it('still lets AWAITING outrank a running background task', async () => {
     const { result, mock, scope } = await spawnedFake()
     await chunkThenWait(mock, 0, 100)

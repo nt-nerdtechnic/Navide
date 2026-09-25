@@ -102,6 +102,11 @@ class Seams:
 AdapterFactory = Callable[[dict[str, Any], dict[str, Any], ChannelStore], ChannelAdapter]
 
 
+def _bot_key(adapter: ChannelAdapter) -> str:
+    """Which bot saw a chat: a short prefix of the token fingerprint (the lease key)."""
+    return adapter.token_fingerprint()[:16]
+
+
 def default_adapter_factory(platform: str) -> AdapterFactory | None:
     """``channels.<platform>.create_adapter(config, secret, *, store)``, else the
     module's ``<Platform>Adapter(token, account=...)`` for single-token platforms."""
@@ -313,6 +318,10 @@ class ChannelManager:
         self._lease[fp] = platform
         self._errors.pop(platform, None)
         self._adapters[platform] = adapter
+        try:
+            self.store.adopt_chats(platform, _bot_key(adapter))
+        except Exception as exc:  # noqa: BLE001 — only the picker's list depends on it
+            log.warning("channels: adopting seen chats for %s failed: %s", platform, exc)
 
         async def emit(msg: InboundMessage) -> None:
             await self.handle_inbound(msg)
@@ -485,9 +494,15 @@ class ChannelManager:
         req = self.gate.approve(platform, code)
         if req is None:
             return {"ok": False, "error": "配對碼不存在或已過期 (unknown or expired code)"}
-        # The approved sender's DM is a chat the pane picker can offer right away.
-        self.store.remember_chat(platform, req.chat_id, req.sender_name, "direct", False, int(time.time()))
         adapter = self._adapters.get(platform)
+        # The approved sender's DM is a chat the pane picker can offer right away.
+        # The approval above already stands, so a failed write must not undo it.
+        if adapter is not None:
+            try:
+                self.store.remember_chat(platform, _bot_key(adapter), req.chat_id, req.sender_name,
+                                         "direct", False, int(time.time()))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("channels: remembering approved DM on %s failed: %s", platform, exc)
         if adapter is not None:
             try:
                 await adapter.send_text(Location(platform, getattr(adapter, "account", "default"), req.chat_id),
@@ -511,8 +526,10 @@ class ChannelManager:
         return {"ok": removed, **({} if removed else {"error": "not found"})}
 
     def locations(self, platform: str) -> dict[str, Any]:
-        merged: dict[str, dict[str, Any]] = {c["chat_id"]: c for c in self.store.chats(platform)}
         adapter = self._adapters.get(platform)
+        # Only the running bot's chats: another token's bot may not be in them.
+        chats = self.store.chats(platform, _bot_key(adapter)) if adapter is not None else []
+        merged: dict[str, dict[str, Any]] = {c["chat_id"]: c for c in chats}
         known = getattr(adapter, "known_locations", None)
         if callable(known):
             for loc in known():
@@ -543,16 +560,21 @@ class ChannelManager:
         elif mode == "existing":
             loc = Location(platform, account, str(chat_id), str(thread_id or ""), title or pane_name)
             # A chat belongs to one pane at a time: never silently take it from another.
+            # A holder whose pane no longer resolves closed without its unbind
+            # reaching us; it must not lock the chat away for good.
             holder = next((b for b in self.store.bindings()
-                           if b.location().key() == loc.key() and b.pane_id != pane_id), None)
+                           if b.location().key() == loc.key()
+                           and self._seams.resolve_pane(b.pane_id) not in ("", pane_id)), None)
             if holder is not None:
                 return {"ok": False, "error": MSG_CHAT_TAKEN, "holder_pane_id": holder.pane_id}
         else:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
         binding = self.store.bind(pane_id, loc)
         await self._changed()
-        # Tell the chat which pane it now drives; off the request path like unbind.
-        self._spawn(self._notice(adapter, loc, MSG_BOUND.format(name=pane_name or loc.title or pane_id)))
+        # Tell the chat which pane it now drives; off the request path like unbind,
+        # on the chat's worker so a quick unbind's notice cannot overtake it.
+        text = MSG_BOUND.format(name=pane_name or loc.title or pane_id)
+        self._enqueue(loc.key(), lambda: self._notice(adapter, loc, text))
         return {"ok": True, "binding": binding.public()}
 
     async def unbind(self, pane_id: str, *, reason: str = "", pane_name: str = "") -> dict[str, Any]:
@@ -566,7 +588,8 @@ class ChannelManager:
             if adapter is not None:
                 name = pane_name or removed.title or pane_id
                 text = (MSG_UNBOUND_CLOSED if reason == "closed" else MSG_UNBOUND).format(name=name)
-                self._spawn(self._notice(adapter, removed.location(), text))
+                loc = removed.location()
+                self._enqueue(loc.key(), lambda: self._notice(adapter, loc, text))
         return {"ok": True, "removed": removed is not None}
 
     async def rebind(self, from_pane_id: str, to_pane_id: str) -> dict[str, Any]:
@@ -660,10 +683,18 @@ class ChannelManager:
 
     def _remember_chat(self, msg: InboundMessage) -> bool:
         # Persisted: the pane picker must still list the chat after a restart.
-        return self.store.remember_chat(
-            msg.platform, msg.chat_id, msg.sender_name if msg.is_direct else msg.chat_id,
-            "direct" if msg.is_direct else "group", bool(msg.thread_id), int(time.time()),
-        )
+        # Only a picker convenience: a failed write must not drop the message.
+        adapter = self._adapters.get(msg.platform)
+        if adapter is None:
+            return False
+        try:
+            return self.store.remember_chat(
+                msg.platform, _bot_key(adapter), msg.chat_id, msg.sender_name if msg.is_direct else msg.chat_id,
+                "direct" if msg.is_direct else "group", bool(msg.thread_id), int(time.time()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("channels: remembering chat %s failed: %s", msg.chat_id, exc)
+            return False
 
     def _binding_for(self, msg: InboundMessage) -> Binding | None:
         key = msg.location_key()

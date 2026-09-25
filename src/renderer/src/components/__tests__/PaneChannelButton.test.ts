@@ -5,6 +5,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import { useChannels } from '../../composables/useChannels'
 import { useGuard } from '../../composables/useGuard'
+import { useAgentMessaging } from '../../composables/useAgentMessaging'
 import { settingsSet } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import PaneChannelButton from '../PaneChannelButton.vue'
@@ -262,13 +263,32 @@ describe('PaneChannelButton', () => {
       locations: [{ chat_id: '555', title: 'neillu123', kind: 'direct', supports_topics: false }],
       bindings: [{ pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: '555', thread_id: '', title: 'other-pane' }],
     })
+    const messaging = useAgentMessaging()
+    messaging.registerPane('p2', 'claude', 'other-pane')
+    try {
+      const w = await render()
+      await openPopover(w)
+      const row = q('[data-testid="channel-bind-existing"]') as HTMLButtonElement
+      expect(row.disabled).toBe(true)
+      expect(q('[data-testid="channel-taken"]')?.textContent).toContain('other-pane')
+      lastStore!.bindings.value = []
+      await flushPromises()
+      expect((q('[data-testid="channel-bind-existing"]') as HTMLButtonElement).disabled).toBe(false)
+      expect(q('[data-testid="channel-taken"]')).toBeNull()
+    } finally {
+      messaging.unregisterPane('p2')
+    }
+  })
+
+  it('offers a chat whose holder is no pane this window knows, leaving the verdict to the backend', async () => {
+    // The holder closed without its unbind landing: a disabled row would lock the chat for good.
+    seed({
+      configured: true,
+      locations: [{ chat_id: '555', title: 'neillu123', kind: 'direct', supports_topics: false }],
+      bindings: [{ pane_id: 'ghost', platform: 'telegram', account: 'a', chat_id: '555', thread_id: '', title: 'closed-pane' }],
+    })
     const w = await render()
     await openPopover(w)
-    const row = q('[data-testid="channel-bind-existing"]') as HTMLButtonElement
-    expect(row.disabled).toBe(true)
-    expect(q('[data-testid="channel-taken"]')?.textContent).toContain('other-pane')
-    lastStore!.bindings.value = []
-    await flushPromises()
     expect((q('[data-testid="channel-bind-existing"]') as HTMLButtonElement).disabled).toBe(false)
     expect(q('[data-testid="channel-taken"]')).toBeNull()
   })
