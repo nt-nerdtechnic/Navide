@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import posixpath
 import stat
 import zipfile
 from dataclasses import dataclass, field
@@ -164,10 +165,27 @@ class LoadedPackage:
     raw: bytes = b""
 
 
-def read_package(data: bytes) -> LoadedPackage:
+def backend_entry_for_target(entry: str, target: str | None) -> str:
+    """The archive file a manifest's `backend.entry` names for `target`.
+
+    Mirrors the Host's `backendEntryOnDisk` (src/main/plugins/pluginManifest.ts):
+    a package ships one manifest for every platform, so the entry is written
+    without an extension, and for a Windows target a bare entry names the
+    `.exe` beside it. Every other target, and no target, reads it as written.
+    """
+    if target is None or not target.startswith("win32-"):
+        return entry
+    if posixpath.splitext(entry)[1] != "":
+        return entry
+    return f"{entry}.exe"
+
+
+def read_package(data: bytes, *, target: str | None = None) -> LoadedPackage:
     """Parse and validate a `.vsix`-style archive.
 
-    Rejects malformed archives with a clear PackageError.
+    Rejects malformed archives with a clear PackageError. `target` is the
+    Registry target the package is published for; it only decides which file
+    the manifest's backend entry names (see `backend_entry_for_target`).
     """
     if not zipfile.is_zipfile(BytesIO(data)):
         raise PackageError("package is not a valid ZIP archive")
@@ -217,13 +235,18 @@ def read_package(data: bytes) -> LoadedPackage:
 
         file_names = regular_names
         if is_manifest_v2(manifest):
+            backend_entry = (
+                manifest.backend.entry if manifest.backend is not None else None
+            )
             for path in manifest_referenced_files(manifest):
+                if path == backend_entry:
+                    path = backend_entry_for_target(path, target)
                 if path not in file_names:
                     raise PackageError(
                         f"manifest referenced file '{path}' is not present in the archive"
                     )
             if manifest.backend is not None:
-                backend_path = manifest.backend.entry
+                backend_path = backend_entry_for_target(manifest.backend.entry, target)
                 backend_info = next(
                     info
                     for info, path, kind in validated_entries
@@ -232,7 +255,14 @@ def read_package(data: bytes) -> LoadedPackage:
                 backend_data = zf.read(backend_info)
                 if not backend_data:
                     raise PackageError(f"backend entry is empty: {backend_path}")
-                if not _archive_entry_is_executable(backend_info):
+                # A Windows target has no exec bit to set; there, as on the Host,
+                # the `.exe` extension stands in for it.
+                executable = (
+                    posixpath.splitext(backend_path)[1].lower() == ".exe"
+                    if target is not None and target.startswith("win32-")
+                    else _archive_entry_is_executable(backend_info)
+                )
+                if not executable:
                     raise PackageError(
                         f"backend entry is not marked executable: {backend_path}"
                     )
@@ -268,7 +298,7 @@ def read_package(data: bytes) -> LoadedPackage:
     )
 
 
-def build_package(src_dir: Path | str) -> bytes:
+def build_package(src_dir: Path | str, *, target: str | None = None) -> bytes:
     """Build a `.vsix`-style ZIP from a plugin source directory.
 
     Zips `manifest.json` (required, at root) plus every other file under
@@ -288,5 +318,5 @@ def build_package(src_dir: Path | str) -> bytes:
             zf.write(path, arcname)
     data = buffer.getvalue()
     # Validate the built archive (also surfaces a bad manifest early).
-    read_package(data)
+    read_package(data, target=target)
     return data

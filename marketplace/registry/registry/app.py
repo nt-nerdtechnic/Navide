@@ -276,7 +276,7 @@ def _register_routes(app: FastAPI) -> None:
         settings = state.settings
         data = await package.read()
         try:
-            loaded = read_package(data)
+            loaded = read_package(data, target=target)
         except PackageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

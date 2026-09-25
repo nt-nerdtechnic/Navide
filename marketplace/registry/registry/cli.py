@@ -4,7 +4,7 @@ Thin wrapper around the registry's own format builder (`package.build_package`)
 and signing primitives (`signing`). Commands:
 
     navide-plugin keygen  [--out-dir DIR] [--name NAME]
-    navide-plugin pack    <src_dir> [--out FILE]
+    navide-plugin pack    <src_dir> [--out FILE] [--target TARGET]
     navide-plugin sign    <package> --key <privkey> [--out SIG]
     navide-plugin publish <package> --registry URL [--token TOKEN] [--signature SIG]
                           [--target TARGET]
@@ -67,7 +67,7 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 def cmd_pack(args: argparse.Namespace) -> int:
     src = Path(args.src_dir)
     try:
-        data = build_package(src)
+        data = build_package(src, target=args.target)
     except PackageError as exc:
         print(f"pack failed: {exc}", file=sys.stderr)
         return 1
@@ -175,6 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack = sub.add_parser("pack", help="build a .vsix package from a source dir")
     p_pack.add_argument("src_dir")
     p_pack.add_argument("--out")
+    p_pack.add_argument(
+        "--target",
+        default="universal",
+        help="registry target the package is validated for, e.g. win32-x64",
+    )
     p_pack.set_defaults(func=cmd_pack)
 
     p_sign = sub.add_parser("sign", help="detached-sign a package")

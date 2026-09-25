@@ -10,7 +10,7 @@ from registry import cli
 from registry.package import read_package
 from registry.signing import Ed25519SignatureVerifier, read_private_key_file
 from tests.conftest import SignedEnv
-from tests.fixtures import valid_manifest
+from tests.fixtures import contract_manifest, valid_manifest
 
 
 def _make_src(tmp_path: Path) -> Path:
@@ -57,6 +57,19 @@ def test_pack_builds_valid_package(tmp_path: Path) -> None:
     assert cli.main(["pack", str(src), "--out", str(out)]) == 0
     loaded = read_package(out.read_bytes())
     assert loaded.manifest.id == "acme.hello"
+
+
+def test_pack_validates_a_windows_backend_for_its_target(tmp_path: Path) -> None:
+    src = tmp_path / "plugin-src"
+    (src / "backend").mkdir(parents=True)
+    manifest = contract_manifest("backend-only-skills.json")
+    (src / "manifest.json").write_text(json.dumps(manifest))
+    (src / "backend" / "navide-skills.exe").write_bytes(b"MZ\x90\x00")
+    out = tmp_path / "out.vsix"
+    # Without the target the bare entry is required, as before.
+    assert cli.main(["pack", str(src), "--out", str(out)]) == 1
+    assert cli.main(["pack", str(src), "--out", str(out), "--target", "win32-x64"]) == 0
+    assert read_package(out.read_bytes(), target="win32-x64").manifest.id == manifest["id"]
 
 
 def test_pack_sign_publish_roundtrip(

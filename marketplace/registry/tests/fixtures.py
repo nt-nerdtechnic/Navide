@@ -78,8 +78,13 @@ def build_v2_package(
     omit_paths: set[str] | None = None,
     backend_mode: int = stat.S_IFREG | 0o755,
     backend_data: bytes = b"\x7fELF-test-backend",
+    backend_name: str | None = None,
 ) -> bytes:
-    """Build a package containing every file referenced by a v2 manifest."""
+    """Build a package containing every file referenced by a v2 manifest.
+
+    `backend_name` stores the backend under another archive name, e.g. the
+    `<entry>.exe` a Windows target reads.
+    """
     manifest = manifest if manifest is not None else contract_manifest()
     omitted = omit_paths or set()
     paths: set[str] = set()
@@ -106,7 +111,8 @@ def build_v2_package(
         zf.writestr("manifest.json", json.dumps(manifest))
         zf.writestr("README.md", b"# Contract fixture\n")
         for path in sorted(paths - omitted):
-            info = zipfile.ZipInfo(path)
+            name = backend_name if backend_name and path == backend_entry else path
+            info = zipfile.ZipInfo(name)
             info.create_system = 3
             info.external_attr = (
                 backend_mode if path == backend_entry else stat.S_IFREG | 0o644

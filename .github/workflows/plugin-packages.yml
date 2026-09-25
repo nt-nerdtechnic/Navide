@@ -1,0 +1,199 @@
+name: Plugin packages
+
+# Builds and packs navide.plans for every platform target the app ships, so the
+# per-target packages can be published to the Registry from the maintainer's
+# Mac. This workflow only builds and packs: it holds no secrets, and signing
+# and publishing happen locally with scripts/publish-first-party-plugins.sh
+# (--from-run / --package). The publisher private key never reaches GitHub.
+#
+# navide.plans ships a PyInstaller backend, and PyInstaller cannot
+# cross-compile, so each target is built on a runner of that platform and
+# architecture. Packing is a plain zip, so it runs on one Linux runner for all
+# targets: that keeps the Registry CLI's own dependencies (cryptography, which
+# has no win_arm64 wheel in its lock) off the build runners.
+#
+# darwin-x64 is absent on purpose: release.yml ships macOS arm64 only.
+#
+# The manifest's backend entry is `backend/navide-plans` on every target; for
+# win32 targets the Registry and the Host both read it as `navide-plans.exe`,
+# so the Registry must run a release that has that rule before a win32 package
+# is published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit or tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build navide.plans (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-14
+            timeout: 45
+            arch: 'Mach-O 64-bit executable arm64'
+          - target: linux-x64
+            runner: ubuntu-22.04
+            timeout: 45
+            arch: 'ELF 64-bit.*x86-64'
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            timeout: 45
+            arch: 'ELF 64-bit.*aarch64'
+          - target: win32-x64
+            runner: windows-latest
+            timeout: 45
+            arch: x64
+          - target: win32-arm64
+            runner: windows-11-arm
+            # Two backend dependencies have no win_arm64 wheel and compile
+            # from their sdists here, as in release.yml.
+            timeout: 60
+            arch: arm64
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out requested ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: plugin-packages-${{ matrix.target }}
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Check the runner is the target
+        run: |
+          host="$(node -p "process.platform + '-' + process.arch")"
+          echo "runner target: ${host}"
+          test "${host}" = "${{ matrix.target }}"
+
+      - name: Build navide.plans
+        # The same build commands scripts/publish-first-party-plugins.sh runs.
+        run: |
+          pnpm run build:plans:v2
+          pnpm run build:plans:backend
+
+      - name: Verify the backend architecture
+        run: |
+          backend=dist-plugins/navide-plans/backend/navide-plans
+          case "${{ matrix.target }}" in
+            win32-*)
+              test -f "${backend}.exe"
+              node scripts/check-pe-machine.mjs "${{ matrix.arch }}" "${backend}.exe"
+              ;;
+            *)
+              test -x "${backend}"
+              file "${backend}"
+              file "${backend}" | grep -Eq '${{ matrix.arch }}'
+              ;;
+          esac
+
+      - name: Archive the built plugin
+        # tar keeps the backend's executable bit, which upload-artifact drops.
+        run: tar -C dist-plugins -cf plans-${{ matrix.target }}.tar navide-plans
+
+      - name: Upload the built plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: plans-build-${{ matrix.target }}
+          path: plans-${{ matrix.target }}.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  pack:
+    name: Pack navide.plans (${{ matrix.target }})
+    needs: build
+    # Pack whatever built: one target failing must not skip the others.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [darwin-arm64, linux-x64, linux-arm64, win32-x64, win32-arm64]
+
+    steps:
+      - name: Check out requested ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: plugin-packages-pack
+
+      - name: Download the built plugin
+        uses: actions/download-artifact@v7
+        with:
+          name: plans-build-${{ matrix.target }}
+
+      - name: Pack
+        # --target only picks the backend file validated (`.exe` on win32);
+        # the Registry target is still chosen at publish.
+        id: pack
+        run: |
+          mkdir -p plugin out
+          tar -C plugin -xf plans-${{ matrix.target }}.tar
+          src="${PWD}/plugin/navide-plans"
+          id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "${src}/manifest.json")"
+          version="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "${src}/manifest.json")"
+          test "${id}" = navide.plans
+          name="${id}-${version}-${{ matrix.target }}.vsix"
+          uv --project marketplace/registry run --locked --quiet \
+            navide-plugin pack "${src}" --out "out/${name}" --target "${{ matrix.target }}"
+          (cd out && sha256sum "${name}" > "${name}.sha256" && cat "${name}.sha256")
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: |
+            out/${{ steps.pack.outputs.name }}
+            out/${{ steps.pack.outputs.name }}.sha256
+          if-no-files-found: error
+          retention-days: 7

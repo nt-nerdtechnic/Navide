@@ -344,6 +344,41 @@ platform's artifact to the version (see
 [Per-target artifacts](#per-target-artifacts)); re-running on one platform
 returns `409` for the target already published.
 
+### Publishing platform-specific first-party plugins
+
+`navide.plans` carries a PyInstaller backend, so every target needs its own
+build. `.github/workflows/plugin-packages.yml` (manual `workflow_dispatch`,
+input `ref`) builds it on a runner of each target the app ships
+(`darwin-arm64`, `linux-x64`, `linux-arm64`, `win32-x64`, `win32-arm64`),
+checks the backend's architecture, and uploads
+`navide.plans-<version>-<target>.vsix` plus a `.sha256` (kept 7 days). The
+workflow has no secrets: signing and publishing stay on the maintainer's Mac.
+
+```bash
+gh workflow run plugin-packages.yml -f ref=<commit or tag>
+gh run list --workflow plugin-packages.yml --limit 1   # note the run id
+
+NAVIDE_REGISTRY_URL=https://server.navide.dev/registry \
+NAVIDE_PUBLISHER_KEY=~/navide-signing/plugin_publisher.key \
+NAVIDE_PLUGIN_TOKEN=<navide publisher token> \
+scripts/publish-first-party-plugins.sh --from-run <run id> --version <version> \
+  --target "linux-x64 linux-arm64" --yes
+```
+
+Without `--yes` the script downloads the packages (`gh run download`), checks
+each sha256 and the manifest id/version, and prints what it would publish.
+`--target` limits it to the listed targets; leave out any target already
+published for that version, which would `409` and stop the run. A single
+already-packed file goes through `--package <vsix> --target <target> --version
+<version>`. Both modes refuse a target outside the app's shipped list and a
+package whose manifest is not the expected id and version.
+
+A backend entry is written without an extension (`backend/navide-plans`); for
+a `win32-*` target the Registry reads it as `backend/navide-plans.exe` and
+takes the extension in place of the POSIX exec bit, exactly as the Host's
+`backendEntryOnDisk` does. `navide-plugin pack --target <target>` applies the
+same rule, so a Windows build packs and publishes like any other target.
+
 ## Seams left for later Phase 3 todos
 
 - **Discovery frontend** (`p3-discovery`): ✅ built — the server-rendered

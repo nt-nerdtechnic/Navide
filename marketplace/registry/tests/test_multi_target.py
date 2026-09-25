@@ -23,7 +23,11 @@ PE_X64 = (
 def _backend_package(backend_data: bytes, version: str = "1.0.0") -> bytes:
     manifest = contract_manifest("backend-only-skills.json")
     manifest["version"] = version
-    return build_v2_package(manifest, backend_data=backend_data)
+    # A PE image ships as the `.exe` a Windows target reads the entry as.
+    backend_name = (
+        manifest["backend"]["entry"] + ".exe" if backend_data.startswith(b"MZ") else None
+    )
+    return build_v2_package(manifest, backend_data=backend_data, backend_name=backend_name)
 
 
 def _frontend_package(version: str = "1.0.0") -> bytes:
@@ -170,3 +174,13 @@ def test_detail_page_points_installs_at_the_app(client: TestClient) -> None:
     assert "Settings → Marketplace" in html
     assert "<code>navide.skills</code>" in html
     assert "download the package for a platform directly" in html
+
+
+def test_windows_target_publishes_the_exe_backend(client: TestClient) -> None:
+    windows = _backend_package(PE_X64)
+    resp = _publish(client, windows, "win32-x64")
+    assert resp.status_code == 201, resp.text
+    # The same archive has no bare entry, so no other target can take it.
+    rejected = _publish(client, windows, "linux-x64")
+    assert rejected.status_code == 400
+    assert "'backend/navide-skills' is not present" in rejected.json()["detail"]

@@ -178,6 +178,49 @@ def test_manifest_v2_backend_entry_rejects_empty_file() -> None:
         read_package(build_v2_package(manifest, backend_data=b""))
 
 
+def _windows_backend_package(files: dict[str, bytes]) -> bytes:
+    manifest = contract_manifest("backend-only-skills.json")
+    return _zip_with_entries(
+        [("manifest.json", json.dumps(manifest).encode(), None)]
+        + [(name, data, None) for name, data in files.items()]
+    )
+
+
+@pytest.mark.parametrize("target", ["win32-x64", "win32-arm64"])
+def test_windows_target_reads_bare_backend_entry_as_exe(target: str) -> None:
+    # Packed on Windows: no POSIX mode at all, as the Host accepts it there.
+    data = _windows_backend_package({"backend/navide-skills.exe": b"MZ\x90\x00"})
+    loaded = read_package(data, target=target)
+    assert "backend/navide-skills.exe" in {asset.path for asset in loaded.assets}
+
+
+def test_windows_target_rejects_a_missing_exe_backend() -> None:
+    data = _windows_backend_package({"backend/navide-skills": b"MZ\x90\x00"})
+    with pytest.raises(PackageError, match="'backend/navide-skills.exe' is not present"):
+        read_package(data, target="win32-x64")
+    with pytest.raises(PackageError, match="'backend/navide-skills.exe' is not present"):
+        read_package(_windows_backend_package({}), target="win32-x64")
+
+
+def test_windows_target_rejects_an_empty_exe_backend() -> None:
+    data = _windows_backend_package({"backend/navide-skills.exe": b""})
+    with pytest.raises(PackageError, match="backend entry is empty"):
+        read_package(data, target="win32-x64")
+
+
+@pytest.mark.parametrize("target", [None, "universal", "linux-x64", "darwin-arm64"])
+def test_non_windows_target_still_needs_the_bare_executable(target: str | None) -> None:
+    exe_only = _windows_backend_package({"backend/navide-skills.exe": b"MZ\x90\x00"})
+    with pytest.raises(PackageError, match="'backend/navide-skills' is not present"):
+        read_package(exe_only, target=target)
+    manifest = contract_manifest("backend-only-skills.json")
+    with pytest.raises(PackageError, match="not marked executable"):
+        read_package(
+            build_v2_package(manifest, backend_mode=stat.S_IFREG | 0o644), target=target
+        )
+    assert read_package(build_v2_package(manifest), target=target)
+
+
 def test_manifest_v2_referenced_file_is_required() -> None:
     manifest = contract_manifest()
     first_entry = manifest["contributes"]["views"][0]["entry"]
