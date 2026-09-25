@@ -536,6 +536,29 @@ export class PluginActivationSelector {
     return next
   }
 
+  /** Drop a staged candidate that is not mid-activation. The selected package
+   * is untouched; unreferenced candidate bytes are quarantined by the next
+   * stage of the same identity. */
+  discardCandidate(pluginId: string): PluginActivationSelectorRecord | null {
+    const current = this.read(pluginId)
+    if (!current?.candidate) throw new Error(`plugin ${pluginId} has no staged candidate`)
+    if (current.activation) throw new Error(`plugin ${pluginId} activation is in progress`)
+    if (!current.active) {
+      this.clear(pluginId)
+      return null
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      active: current.active,
+      ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
+      ...(current.previous ? { previous: current.previous } : {}),
+      ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
   /** Explicit user removal and a legacy v1 install replace the whole package
    *  tree, so those are the lifecycle paths that clear the selection record. */
   clear(pluginId: string): void {

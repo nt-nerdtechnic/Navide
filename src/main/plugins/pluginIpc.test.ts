@@ -1560,6 +1560,56 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('discards a staged candidate over an unverifiable v0.2.9 install without removing the plugin', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-legacy-discard-'))
+    const manager = new FrontendPluginManager()
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const legacyDir = join(root, 'acme.demo')
+    try {
+      writeV029Install(root, first)
+      expect(manager.loadInstalledPlugins(root, {
+        provenance: 'official-registry',
+        trust: {
+          pinnedRootKey: registryRoot.pubPem,
+          snapshot: readRegistryTrustSnapshot(root),
+          registryAuthority: 'self-hosted',
+          now: FIXED_NOW,
+        },
+      }).loaded).toContain('acme.demo')
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      writeFileSync(join(legacyDir, 'frontend', 'left', 'index.html'), '<tampered>')
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow(/legacy active package cannot be verified/)
+
+      const third = buildPkg('acme.demo', 'acme', {}, '1.0.2')
+      installFetch(signedDetail(third.digest, 'acme.demo', 'acme', '1.0.2'), third.bytes, third.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.2' })
+      await expect(commit(null, { id: 'acme.demo', publisherConfirmed: true })).rejects.toThrow(/already has a staged candidate/)
+
+      const discard = handlers.get('plugins:discardCandidate')
+      expect(discard).toBeTypeOf('function')
+      await expect(discard!(null, { id: 'acme.demo' })).resolves.toEqual({ ok: true })
+      expect(new PluginActivationSelector(root).read('acme.demo')).toBeNull()
+      expect(manager.getDescriptor('acme.demo')).toMatchObject({ packageVersion: '1.0.0', packageDir: legacyDir })
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' })).rejects.toThrow(/no staged candidate/)
+      await expect(discard!(null, { id: 'acme.demo' })).rejects.toThrow(/no staged candidate/)
+
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.2' })
+      await expect(commit(null, { id: 'acme.demo', publisherConfirmed: true })).resolves.toMatchObject({
+        restartRequired: true,
+      })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('restores the factory-bundled package when a promoted update fails', async () => {
     const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-update-'))
     const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-bundle-'))

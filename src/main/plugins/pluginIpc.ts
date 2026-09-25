@@ -1188,6 +1188,18 @@ export function registerPluginIpc(
     }
   })
 
+  // Leaves the selected package running; the only exit from a candidate that
+  // cannot be activated (for example over an unverifiable legacy install).
+  ipcMain.handle('plugins:discardCandidate', async (event, args: { id?: unknown } | null) => {
+    assertAuthorized(event)
+    const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
+    if (activeTransactions.has(id)) {
+      throw new Error(`plugin transaction already in progress for ${id}`)
+    }
+    lifecycleSelector.discardCandidate(id)
+    return { ok: true }
+  })
+
   ipcMain.handle('plugins:rollback', async (event, args: { id?: unknown } | null) => {
     assertAuthorized(event)
     const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
