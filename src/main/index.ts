@@ -3550,6 +3550,12 @@ const TRUST_CONFIRM_ACTIONS = new Set([
   'guard.terminal.set_category',
   'guard.terminal.add_pattern',
   'guard.terminal.remove_pattern',
+  // Loosening Navide Guard's grading (lowering a built-in rule, adding an
+  // allow pattern, removing a deny pattern or a protected branch).
+  'guard.builtin.set_level',
+  'guard.rules.add',
+  'guard.rules.remove',
+  'guard.branches.remove',
 ])
 ipcMain.handle('trust:confirm', async (event, action: unknown, deviceId: unknown, subject: unknown) => {
   // Minting is the one thing this list exists to keep away from anything

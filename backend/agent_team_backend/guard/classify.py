@@ -116,6 +116,7 @@ class _Ctx:
     downloaded: set[str] = field(default_factory=set)
     # Windows: $HOME when it differs from %USERPROFILE% (Git Bash with a custom HOME).
     env_home: str = ""
+    protected: frozenset[str] = frozenset(PROTECTED_BRANCHES)
 
 
 # ---------------------------------------------------------------- paths
@@ -778,7 +779,7 @@ def _classify_git(args: list[str], ctx: _Ctx, acc: _Acc) -> None:
             if r.startswith(":"):
                 delete = True
             dsts.add(dst.removeprefix("refs/heads/"))
-        protected = dsts & PROTECTED_BRANCHES
+        protected = dsts & ctx.protected
         if (force or delete) and protected:
             acc.hit("critical", "git-force-push-protected",
                     f"force-pushes or deletes protected branch {', '.join(sorted(protected))}")
@@ -818,11 +819,12 @@ def _classify_upload(word: str, args: list[str], ctx: _Ctx, acc: _Acc) -> None:
 # ---------------------------------------------------------------- entry points
 
 
-def _ctx(cwd: str, workspace: str) -> _Ctx:
+def _ctx(cwd: str, workspace: str, protected: frozenset[str] | None = None) -> _Ctx:
     home = _home()
     ws = _norm(os.path.expanduser(workspace)) if workspace else ""
     base = _norm(os.path.expanduser(cwd)) if cwd else (ws or home)
-    return _Ctx(cwd=base, workspace=ws, home=home, env_home=_env_home())
+    return _Ctx(cwd=base, workspace=ws, home=home, env_home=_env_home(),
+                protected=frozenset(PROTECTED_BRANCHES if protected is None else protected))
 
 
 def _tool_command(tool_input: dict) -> str | None:
@@ -845,14 +847,18 @@ def _tool_paths(tool_input: dict) -> list[str]:
     return out
 
 
-def classify(tool: str, tool_input: dict, *, cwd: str, workspace: str) -> Verdict:
+def classify(
+    tool: str, tool_input: dict, *, cwd: str, workspace: str, protected_branches: frozenset[str] | None = None,
+) -> Verdict:
+    """``protected_branches``: the user's list (store); None = the defaults."""
     acc = _Acc()
-    ctx = _ctx(cwd, workspace)
+    ctx = _ctx(cwd, workspace, protected_branches)
     name = (tool or "").strip().lower()
     tool_input = tool_input if isinstance(tool_input, dict) else {}
     if name == "prompt":
         # The rendered text of a permission prompt (chat relay).
-        return classify_prompt_text(str(tool_input.get("text") or ""), workspace=workspace)
+        return classify_prompt_text(str(tool_input.get("text") or ""), workspace=workspace,
+                                    protected_branches=protected_branches)
     if name in SHELL_TOOLS:
         command = _tool_command(tool_input)
         if command and name == "powershell":
@@ -879,7 +885,7 @@ _TOOL_CALL_RE = re.compile(r"\b[A-Z][A-Za-z]*\((.+)\)\s*$")
 _BOX_CHARS = "│┃║|╭╮╰╯─━═>❯›•●○◯▸▶*⎿ \t"
 
 
-def classify_prompt_text(text: str, *, workspace: str) -> Verdict:
+def classify_prompt_text(text: str, *, workspace: str, protected_branches: frozenset[str] | None = None) -> Verdict:
     """Screen the rendered text of a CLI permission prompt (relay path).
 
     The prompt layout differs per vendor, so every line is classified as if
@@ -888,7 +894,7 @@ def classify_prompt_text(text: str, *, workspace: str) -> Verdict:
     come out "normal". Parseability only reflects lines that parsed as shell.
     """
     acc = _Acc()
-    ctx = _ctx(workspace, workspace)
+    ctx = _ctx(workspace, workspace, protected_branches)
     for raw_line in (text or "").splitlines():
         line = raw_line.strip().strip(_BOX_CHARS).strip()
         if not line:
@@ -906,11 +912,11 @@ def classify_prompt_text(text: str, *, workspace: str) -> Verdict:
         candidates = [line] + ([m.group(1)] if m else [])
         for cand in candidates:
             sub = _Acc()
-            _classify_script(cand, _Ctx(ctx.cwd, ctx.workspace, ctx.home, env_home=ctx.env_home), sub)
+            _classify_script(cand, _Ctx(ctx.cwd, ctx.workspace, ctx.home, env_home=ctx.env_home, protected=ctx.protected), sub)
             if "unbalanced-quotes" in sub.rules:
                 # Prose with apostrophes ("don't ask again"): retry without quotes.
                 sub = _Acc()
-                _classify_script(re.sub(r"[\"'`]", " ", cand), _Ctx(ctx.cwd, ctx.workspace, ctx.home, env_home=ctx.env_home), sub)
+                _classify_script(re.sub(r"[\"'`]", " ", cand), _Ctx(ctx.cwd, ctx.workspace, ctx.home, env_home=ctx.env_home, protected=ctx.protected), sub)
             for rule, reason in zip(sub.rules, sub.reasons):
                 if rule != "unbalanced-quotes" and rule not in acc.rules:
                     acc.rules.append(rule)

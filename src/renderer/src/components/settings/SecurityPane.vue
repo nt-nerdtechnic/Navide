@@ -7,8 +7,10 @@ import { useAgentMessaging } from '../../composables/useAgentMessaging'
 import {
   useGuard,
   type GuardAction,
+  type GuardBuiltinRule,
   type GuardDecision,
   type GuardLevel,
+  type GuardMatchedRule,
   type GuardSource,
   type GuardVerdict,
 } from '../../composables/useGuard'
@@ -21,8 +23,9 @@ import TerminalProtectionSection from './TerminalProtectionSection.vue'
 /**
  * Settings → Security: Navide Guard. The on/off switch, what Guard does per
  * request source × danger level (read-only), which CLIs it can actually block,
- * the user's own allow/deny patterns, recent decisions, panes marked as
- * influenced by external content, and a box to try a command against the rules.
+ * the level of each built-in rule and the protected branches, the user's own
+ * allow/deny patterns, recent decisions, panes marked as influenced by external
+ * content, and a box to try a command against the rules.
  */
 const props = defineProps<{
   backend: Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>
@@ -72,15 +75,41 @@ const vendors = computed(() =>
   CLI_AGENT_SPECS.map((s) => ({ key: s.agentKey, label: s.label, support: store.hookSupportFor(s.agentKey) }))
 )
 
+// ── Built-in rules + protected branches ──────────────────────────────────────
+const RULE_GROUPS = ['critical', 'high', 'unanalyzable'] as const
+const builtinGroups = computed(() =>
+  RULE_GROUPS.map((group) => ({ group, rules: store.builtinRules.value.filter((r) => r.group === group) }))
+    .filter((g) => g.rules.length)
+)
+
+function ruleTitle(rule: GuardBuiltinRule): string {
+  const key = `guard.builtin.rule.${rule.id}`
+  const text = t(key)
+  return text === key ? rule.description : text
+}
+
+function levelTone(level: GuardLevel): string {
+  return level === 'critical' ? 'bad' : level === 'high' ? 'warn' : 'muted'
+}
+
+const branchInput = ref('')
+
+async function addBranch(): Promise<void> {
+  const name = branchInput.value.trim()
+  if (!name) return
+  if (await run(() => store.addBranch(name))) branchInput.value = ''
+}
+
 // ── Custom rules ─────────────────────────────────────────────────────────────
 const ruleKind = ref<'allow' | 'deny'>('deny')
+const ruleLevel = ref<'critical' | 'high'>('critical')
 const rulePattern = ref('')
 const ruleNote = ref('')
 
 async function addRule(): Promise<void> {
   const pattern = rulePattern.value.trim()
   if (!pattern) return
-  const ok = await run(() => store.addRule(ruleKind.value, pattern, ruleNote.value.trim()))
+  const ok = await run(() => store.addRule(ruleKind.value, pattern, ruleNote.value.trim(), ruleLevel.value))
   if (ok) {
     rulePattern.value = ''
     ruleNote.value = ''
@@ -107,7 +136,13 @@ function formatTime(ts: number | null | undefined): string {
 const testCommand = ref('')
 const testSource = ref<GuardSource>('local')
 const testTainted = ref(false)
-const testResult = ref<{ verdict: GuardVerdict; decision: GuardDecision } | null>(null)
+const testResult = ref<{ verdict: GuardVerdict; decision: GuardDecision; matched?: GuardMatchedRule[] } | null>(null)
+
+function matchedTitle(m: GuardMatchedRule): string {
+  if (m.user) return t(`guard.test.${m.user}`, { pattern: m.reason })
+  const rule = store.builtinRules.value.find((r) => r.id === m.id)
+  return rule ? ruleTitle(rule) : m.reason || m.id
+}
 const testError = ref('')
 
 async function runTest(): Promise<void> {
@@ -182,11 +217,53 @@ async function runTest(): Promise<void> {
       </SettingsCard>
     </SettingsSection>
 
+    <SettingsSection :label="t('guard.builtin.title')" data-testid="guard-builtin">
+      <p class="gd-hint">{{ t('guard.builtin.hint') }}</p>
+      <template v-for="g in builtinGroups" :key="g.group">
+        <h4 class="gd-subhead">{{ t(`guard.builtin.group.${g.group}`) }}</h4>
+        <SettingsCard>
+          <div v-for="rule in g.rules" :key="rule.id" class="gd-item" data-testid="guard-builtin-row" :data-rule="rule.id">
+            <div class="gd-item-text">
+              <span class="gd-item-name">{{ ruleTitle(rule) }}</span>
+              <code class="gd-code">{{ rule.example }}</code>
+              <span class="gd-item-meta">{{ t('guard.builtin.default', { level: t(`guard.level.${rule.default_level}`) }) }}<template v-if="rule.floor"> · {{ t('guard.builtin.floor') }}</template></span>
+            </div>
+            <select
+              class="gd-input"
+              :class="levelTone(rule.level)"
+              data-testid="guard-builtin-level"
+              :value="rule.level"
+              :disabled="busy || !store.available.value"
+              :aria-label="ruleTitle(rule)"
+              @change="run(() => store.setRuleLevel(rule.id, ($event.target as HTMLSelectElement).value as GuardLevel))"
+            >
+              <option value="critical">{{ t('guard.level.critical') }}</option>
+              <option value="high">{{ t('guard.level.high') }}</option>
+              <option value="normal" :disabled="rule.floor">{{ t('guard.builtin.off') }}</option>
+            </select>
+          </div>
+        </SettingsCard>
+      </template>
+      <h4 class="gd-subhead">{{ t('guard.branches.title') }}</h4>
+      <p class="gd-hint">{{ t('guard.branches.hint') }}</p>
+      <SettingsCard>
+        <div v-for="name in store.protectedBranches.value" :key="name" class="gd-item" data-testid="guard-branch-row">
+          <code class="gd-code gd-item-text">{{ name }}</code>
+          <button type="button" class="gd-btn ghost sm" :disabled="busy" data-testid="guard-branch-remove" @click="run(() => store.removeBranch(name))">{{ t('guard.rules.remove') }}</button>
+        </div>
+        <form class="gd-form" @submit.prevent="addBranch">
+          <input v-model="branchInput" class="gd-input grow mono" name="branch" autocomplete="off" spellcheck="false" :placeholder="t('guard.branches.placeholder')" />
+          <button type="submit" class="gd-btn primary sm" :disabled="busy || !store.available.value || !branchInput.trim()" data-testid="guard-branch-add">{{ t('guard.rules.add') }}</button>
+        </form>
+      </SettingsCard>
+    </SettingsSection>
+
     <SettingsSection :label="t('guard.rules.title')">
       <p class="gd-hint">{{ t('guard.rules.hint') }}</p>
       <SettingsCard>
         <div v-for="rule in store.rules.value" :key="rule.id" class="gd-item" data-testid="guard-rule-row">
           <span class="gd-pill" :class="rule.kind === 'deny' ? 'bad' : 'ok'">{{ t(`guard.rules.kind.${rule.kind}`) }}</span>
+          <span v-if="rule.kind === 'deny'" class="gd-pill" :class="levelTone(rule.level ?? 'critical')">{{ t(`guard.level.${rule.level ?? 'critical'}`) }}</span>
           <div class="gd-item-text">
             <code class="gd-code">{{ rule.pattern }}</code>
             <span v-if="rule.note" class="gd-item-meta">{{ rule.note }}</span>
@@ -197,6 +274,10 @@ async function runTest(): Promise<void> {
           <select v-model="ruleKind" class="gd-input" name="kind" :aria-label="t('guard.rules.kind-label')">
             <option value="deny">{{ t('guard.rules.kind.deny') }}</option>
             <option value="allow">{{ t('guard.rules.kind.allow') }}</option>
+          </select>
+          <select v-if="ruleKind === 'deny'" v-model="ruleLevel" class="gd-input" name="level" data-testid="guard-rule-level" :aria-label="t('guard.rules.level-label')">
+            <option value="critical">{{ t('guard.level.critical') }}</option>
+            <option value="high">{{ t('guard.level.high') }}</option>
           </select>
           <input v-model="rulePattern" class="gd-input grow" name="pattern" autocomplete="off" spellcheck="false" :placeholder="t('guard.rules.pattern')" />
           <input v-model="ruleNote" class="gd-input" name="note" autocomplete="off" :placeholder="t('guard.rules.note')" />
@@ -222,6 +303,16 @@ async function runTest(): Promise<void> {
           <span class="gd-pill" :class="testResult.verdict.level === 'critical' ? 'bad' : testResult.verdict.level === 'high' ? 'warn' : 'muted'">{{ t(`guard.level.${testResult.verdict.level}`) }}</span>
           <span class="gd-item-meta">{{ testResult.decision.reason || testResult.verdict.reasons.join('; ') }}</span>
           <span v-if="!testResult.verdict.parseable" class="gd-item-meta">{{ t('guard.test.unparseable') }}</span>
+        </div>
+        <div v-if="testResult?.matched?.length" class="gd-test-matched" data-testid="guard-test-matched">
+          <div v-for="m in testResult.matched" :key="m.id" class="gd-item" data-testid="guard-test-matched-row" :data-rule="m.id">
+            <span class="gd-item-text gd-item-meta">{{ matchedTitle(m) }}</span>
+            <span class="gd-pill" :class="levelTone(m.default_level)">{{ t(`guard.level.${m.default_level}`) }}</span>
+            <template v-if="m.level !== m.default_level">
+              <span class="gd-item-meta">→</span>
+              <span class="gd-pill" :class="levelTone(m.level)">{{ t(`guard.level.${m.level}`) }}</span>
+            </template>
+          </div>
         </div>
         <p v-if="testError" class="gd-error gd-inset" role="alert">{{ testError }}</p>
       </SettingsCard>
@@ -307,6 +398,10 @@ async function runTest(): Promise<void> {
 .gd-input:focus { outline: none; border-color: var(--accent-focus); }
 .gd-check { display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-2xs); color: var(--text-secondary); }
 .gd-test-result { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 var(--space-row-x) 10px; }
+.gd-test-matched .gd-item { padding-top: 4px; padding-bottom: 4px; }
+.gd-subhead { margin: 10px 0 6px; font-size: var(--font-2xs); font-weight: 600; color: var(--text-secondary); }
+.gd-input.bad { color: var(--danger-fg); }
+.gd-input.warn { color: var(--attention-fg); }
 
 /* Buttons: the Channels page's button set. */
 .gd-btn {

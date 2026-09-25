@@ -192,7 +192,7 @@ def test_a_posix_escape_is_refused_by_the_bash_reading_alone(host, monkeypatch, 
 
 def test_a_bare_slash_is_the_root_not_a_cmd_switch(host, monkeypatch):
     """The explicit rules must see / as a target on their own."""
-    monkeypatch.setattr(tp, "_classifier_hits", lambda text, workspace: [])
+    monkeypatch.setattr(tp, "_classifier_hits", lambda text, workspace, protected: [])
     assert rule("rm -rf /") == "rm-system"
     assert rule("r\\m -rf /") == "rm-system"
     assert rule("rd /s /q /") == "rm-system"

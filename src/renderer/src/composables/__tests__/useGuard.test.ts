@@ -88,6 +88,47 @@ describe('useGuard', () => {
     expect(toast.type).toBe('error')
   })
 
+  it('asks the main process to confirm only changes that loosen grading', async () => {
+    const mock = createMockBackend('connected')
+    seed(mock)
+    const builtin = {
+      rules: [{ id: 'git-push', group: 'high', description: 'Pushes', example: 'git push', default_level: 'high', level: 'high', floor: false }],
+      protected_branches: ['main', 'master'],
+    }
+    mock.setResponse('guard.builtin.get', builtin)
+    mock.setResponse('guard.builtin.set_level', builtin)
+    mock.setResponse('guard.branches.add', builtin)
+    mock.setResponse('guard.branches.remove', builtin)
+    const minted: string[] = []
+    ;(window as unknown as { agentTeam: unknown }).agentTeam = {
+      trustConfirm: async (action: string, _device: string, subject: string) => {
+        minted.push(`${action} ${subject}`)
+        return { nonce: 'n', expires: 'e', mac: 'm' }
+      },
+    }
+    try {
+      const store = useGuard(mock.backend)
+      await store.refresh()
+      expect(store.protectedBranches.value).toEqual(['main', 'master'])
+      await store.setRuleLevel('git-push', 'critical')
+      await store.setRuleLevel('git-push', 'normal')
+      await store.addBranch(' release ')
+      await store.removeBranch('main')
+      await store.addRule('deny', 'docker system prune', '', 'high')
+      const sent = (type: string) => mock.sent.filter((s) => s.type === type).map((s) => s.payload)
+      expect(sent('guard.builtin.set_level')).toEqual([
+        { id: 'git-push', level: 'critical' },
+        { id: 'git-push', level: 'normal', confirm: { nonce: 'n', expires: 'e', mac: 'm' } },
+      ])
+      expect(sent('guard.branches.add')).toEqual([{ name: 'release' }])
+      expect(sent('guard.branches.remove')).toEqual([{ name: 'main', confirm: { nonce: 'n', expires: 'e', mac: 'm' } }])
+      expect(sent('guard.rules.add')).toEqual([{ kind: 'deny', pattern: 'docker system prune', note: '', level: 'high' }])
+      expect(minted).toEqual(['guard.builtin.set_level git-push:normal', 'guard.branches.remove main'])
+    } finally {
+      delete (window as unknown as { agentTeam?: unknown }).agentTeam
+    }
+  })
+
   it('sends mutations with the contract payloads', async () => {
     const mock = createMockBackend('connected')
     seed(mock)
@@ -100,8 +141,9 @@ describe('useGuard', () => {
     await store.test('rm -rf ~', 'relay', true)
     const payload = (type: string) => mock.sent.find((s) => s.type === type)?.payload
     expect(payload('guard.set_enabled')).toEqual({ enabled: false })
-    expect(payload('guard.rules.add')).toEqual({ kind: 'allow', pattern: 'rm -rf dist', note: 'build output' })
-    expect(payload('guard.rules.remove')).toEqual({ id: 1 })
+    // Loosening changes carry the main process's confirmation (none in a test window).
+    expect(payload('guard.rules.add')).toEqual({ kind: 'allow', pattern: 'rm -rf dist', note: 'build output', confirm: null })
+    expect(payload('guard.rules.remove')).toEqual({ id: 1, confirm: null })
     expect(payload('guard.taint.clear')).toEqual({ pane_id: 'p1' })
     expect(payload('guard.test')).toEqual({ command: 'rm -rf ~', source: 'relay', tainted: true })
   })

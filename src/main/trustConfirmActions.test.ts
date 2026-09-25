@@ -23,6 +23,15 @@ describe('trust:confirm action list', () => {
     ]))
   })
 
+  it('mints confirmations for loosening Guard grading', () => {
+    expect(actions()).toEqual(expect.arrayContaining([
+      'guard.builtin.set_level',
+      'guard.rules.add',
+      'guard.rules.remove',
+      'guard.branches.remove',
+    ]))
+  })
+
   it('is only reachable from an app window', () => {
     const handler = source.slice(source.indexOf("ipcMain.handle('trust:confirm'"))
     const body = handler.slice(0, handler.indexOf('\n})'))

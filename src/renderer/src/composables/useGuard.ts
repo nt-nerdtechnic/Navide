@@ -3,9 +3,12 @@ import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import type { useBackend } from './useBackend'
 
 /**
- * Renderer side of Navide Guard: status, custom rules, the audit list and the
- * tainted-pane set, as thin wrappers around the renderer-only `guard.*` WS
- * requests. Re-fetches on reconnect, re-reads the taint set on
+ * Renderer side of Navide Guard: status, built-in rule levels, protected
+ * branches, custom rules, the audit list and the tainted-pane set, as thin
+ * wrappers around the renderer-only `guard.*` WS requests. A change that
+ * loosens grading (lowering a built-in rule, adding an allow, removing a deny
+ * or a protected branch) carries a one-time confirmation minted by the main
+ * process, like terminal command protection; tightening needs none. Re-fetches on reconnect, re-reads the taint set on
  * `guard.taint_changed`, and turns each `guard.decision` (sent for non-allow
  * decisions only) into a transient notice.
  */
@@ -29,7 +32,30 @@ export interface GuardRule {
   kind: 'allow' | 'deny'
   pattern: string
   note: string
+  /** What a matching deny raises to; "normal" on allows. */
+  level?: GuardLevel
   created?: number
+}
+
+export interface GuardBuiltinRule {
+  id: string
+  group: 'critical' | 'high' | 'unanalyzable'
+  description: string
+  example: string
+  default_level: GuardLevel
+  level: GuardLevel
+  /** Never below high. */
+  floor: boolean
+}
+
+/** One rule a tested command matched: a built-in id, or `user-deny:<id>` /
+ *  `user-allow:<id>` (then `reason` is the pattern). */
+export interface GuardMatchedRule {
+  id: string
+  reason: string
+  default_level: GuardLevel
+  level: GuardLevel
+  user?: 'user-deny' | 'user-allow'
 }
 
 export interface GuardAuditEntry {
@@ -96,8 +122,20 @@ export interface GuardResult<T = Record<string, unknown>> {
 }
 
 type Backend = Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>
+type Confirm = { nonce: string; expires: string; mac: string } | null
 
 const AUDIT_LIMIT = 50
+const LEVEL_ORDER: Record<GuardLevel, number> = { normal: 0, high: 1, critical: 2 }
+
+/** The main process's confirmation for one loosening change, or null when
+ *  this window cannot get one (the backend then refuses the change). */
+async function confirmFor(action: string, subject: string): Promise<Confirm> {
+  try {
+    return (await window.agentTeam?.trustConfirm(action, '', subject)) ?? null
+  } catch {
+    return null
+  }
+}
 
 function createGuardStore(backend: Backend) {
   /** False until guard.status has answered once: a backend without Guard
@@ -107,6 +145,8 @@ function createGuardStore(backend: Backend) {
   const counts = ref<GuardCounts>({ critical: 0, high: 0, asks: 0, denies_24h: 0 })
   const hookSupport = ref<Record<string, GuardHookSupport>>({})
   const rules = ref<GuardRule[]>([])
+  const builtinRules = ref<GuardBuiltinRule[]>([])
+  const protectedBranches = ref<string[]>([])
   const audit = ref<GuardAuditEntry[]>([])
   const taint = ref<GuardTaint[]>([])
   const error = ref('')
@@ -157,9 +197,59 @@ function createGuardStore(backend: Backend) {
     return res
   }
 
+  type BuiltinState = { rules: GuardBuiltinRule[]; protected_branches: string[] }
+
+  function adoptBuiltin(state: BuiltinState | undefined): void {
+    if (state?.rules) builtinRules.value = state.rules
+    if (state?.protected_branches) protectedBranches.value = state.protected_branches
+  }
+
+  async function refreshBuiltin(): Promise<GuardResult> {
+    const res = await call<BuiltinState>('guard.builtin.get')
+    if (res.ok) adoptBuiltin(res.data)
+    return res
+  }
+
+  async function mutateBuiltin(type: string, payload: Record<string, unknown>): Promise<GuardResult> {
+    const res = await call<BuiltinState>(type, payload)
+    if (res.ok) adoptBuiltin(res.data)
+    return res
+  }
+
+  async function setRuleLevel(id: string, level: GuardLevel): Promise<GuardResult> {
+    const current = builtinRules.value.find((r) => r.id === id)?.level ?? 'critical'
+    const payload: Record<string, unknown> = { id, level }
+    if (LEVEL_ORDER[level] < LEVEL_ORDER[current]) {
+      payload.confirm = await confirmFor('guard.builtin.set_level', `${id}:${level}`)
+    }
+    return mutateBuiltin('guard.builtin.set_level', payload)
+  }
+
+  async function removeBranch(name: string): Promise<GuardResult> {
+    const confirm = await confirmFor('guard.branches.remove', name)
+    return mutateBuiltin('guard.branches.remove', { name, confirm })
+  }
+
+  async function addRule(kind: 'allow' | 'deny', pattern: string, note: string, level: 'critical' | 'high' = 'critical'): Promise<GuardResult> {
+    const value = pattern.trim()
+    const payload: Record<string, unknown> = { kind, pattern: value, note }
+    if (kind === 'deny') payload.level = level
+    else payload.confirm = await confirmFor('guard.rules.add', `allow:${value}`)
+    return mutate('guard.rules.add', payload, refreshRules)
+  }
+
+  async function removeRule(id: GuardRule['id']): Promise<GuardResult> {
+    const payload: Record<string, unknown> = { id }
+    // Only removing a known allow tightens; anything else may loosen.
+    if (rules.value.find((r) => r.id === id)?.kind !== 'allow') {
+      payload.confirm = await confirmFor('guard.rules.remove', String(id))
+    }
+    return mutate('guard.rules.remove', payload, refreshRules)
+  }
+
   /** Everything the Settings page shows. Pane headers only need status + taint. */
   async function refresh(): Promise<void> {
-    const results = await Promise.all([refreshStatus(), refreshTaint(), refreshRules(), refreshAudit()])
+    const results = await Promise.all([refreshStatus(), refreshTaint(), refreshRules(), refreshAudit(), refreshBuiltin()])
     error.value = results.find((r) => !r.ok)?.error ?? ''
   }
 
@@ -208,6 +298,8 @@ function createGuardStore(backend: Backend) {
     counts,
     hookSupport,
     rules,
+    builtinRules,
+    protectedBranches,
     audit,
     taint,
     error,
@@ -217,13 +309,16 @@ function createGuardStore(backend: Backend) {
     /** 'none' only when the backend says so; unknown vendors stay unknown. */
     hookSupportFor: (vendor: string): GuardHookSupport | null => hookSupport.value[vendor] ?? null,
     setEnabled: (on: boolean) => mutate('guard.set_enabled', { enabled: on }, refreshStatus),
-    addRule: (kind: 'allow' | 'deny', pattern: string, note: string) =>
-      mutate('guard.rules.add', { kind, pattern, note }, refreshRules),
-    removeRule: (id: GuardRule['id']) => mutate('guard.rules.remove', { id }, refreshRules),
+    addRule,
+    removeRule,
+    setRuleLevel,
+    addBranch: (name: string) => mutateBuiltin('guard.branches.add', { name: name.trim() }),
+    removeBranch,
     clearTaint: (paneId: string) => mutate('guard.taint.clear', { pane_id: paneId }, refreshTaint),
     taintEvents: (paneId: string) => call<{ events: GuardTaintEvent[] }>('guard.taint.events', { pane_id: paneId }),
     test: (command: string, source: GuardSource, tainted: boolean) =>
-      call<{ verdict: GuardVerdict; decision: GuardDecision }>('guard.test', { command, source, tainted }),
+      call<{ verdict: GuardVerdict; decision: GuardDecision; matched?: GuardMatchedRule[]; graded_level?: GuardLevel }>(
+        'guard.test', { command, source, tainted }),
   }
 }
 

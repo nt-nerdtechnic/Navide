@@ -32,6 +32,7 @@ from .classify import (
     _HOME_TOKENS,
     DOWNLOADERS,
     MAX_COMMAND_CHARS,
+    PROTECTED_BRANCHES,
     WRAPPERS_NO_ARG,
 )
 from .classify import classify as _classify
@@ -118,6 +119,8 @@ class Settings:
     disabled: frozenset[str] = DEFAULT_OFF
     block_patterns: tuple[str, ...] = ()
     allow_prefixes: tuple[str, ...] = ()
+    # Shared with Guard's CLI grading (store guard_protected_branches).
+    protected_branches: frozenset[str] = frozenset(PROTECTED_BRANCHES)
 
 
 @dataclass(frozen=True)
@@ -401,18 +404,19 @@ def _category_of(rule: str, level: str) -> str:
 _LEXERS = ("bash", "powershell")
 
 
-def _classifier_hits(text: str, workspace: str) -> list[tuple[str, str, str]]:
+def _classifier_hits(text: str, workspace: str, protected: frozenset[str]) -> list[tuple[str, str, str]]:
     """(rule, level, reason) for every classifier hit on ``text``, under every
     shell in _LEXERS. Opaque verdicts come back with level "opaque";
     unbalanced quotes count only when no shell could parse the line."""
     hits: list[tuple[str, str, str]] = []
     unparsed = 0
     for tool in _LEXERS:
-        v = _classify(tool, {"command": text}, cwd=workspace, workspace=workspace)
+        v = _classify(tool, {"command": text}, cwd=workspace, workspace=workspace, protected_branches=protected)
         if "unbalanced-quotes" in v.rule_ids and "\\" in text:
             # A Windows path's backslashes read as escapes to a POSIX lexer;
             # judge the line with them as the separators they are.
-            v2 = _classify(tool, {"command": text.replace("\\", "/")}, cwd=workspace, workspace=workspace)
+            v2 = _classify(tool, {"command": text.replace("\\", "/")}, cwd=workspace, workspace=workspace,
+                           protected_branches=protected)
             if "unbalanced-quotes" not in v2.rule_ids:
                 v = v2
         for rule, reason in zip(v.rule_ids, v.reasons):
@@ -450,7 +454,7 @@ def check(text: str, *, workspace: str, settings: Settings | None = None) -> Ref
             if _pattern_matches(p, seg):
                 return Refusal("block-pattern", seg, f"matches your block pattern `{p}`", pattern=p)
     # 2. pipeline-context rules on the whole line (never exempted by allow)
-    for rule, level, reason in _classifier_hits(text, workspace):
+    for rule, level, reason in _classifier_hits(text, workspace, settings.protected_branches):
         if rule in _PIPELINE_RULES:
             cat = _category_of(rule, level if level != "opaque" else "high")
             if rule == "decode-and-exec":
@@ -464,7 +468,7 @@ def check(text: str, *, workspace: str, settings: Settings | None = None) -> Ref
         hit = _explicit(seg, home)
         if hit and hit[0] in enabled:
             return Refusal(hit[0], seg, hit[1])
-        for rule, level, reason in _classifier_hits(seg, workspace):
+        for rule, level, reason in _classifier_hits(seg, workspace, settings.protected_branches):
             if rule in _PIPELINE_RULES:
                 continue
             if level == "opaque":

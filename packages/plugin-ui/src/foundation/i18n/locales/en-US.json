@@ -9021,14 +9021,72 @@
       "none": "Cannot be blocked",
       "unknown": "Unknown"
     },
+    "builtin": {
+      "title": "Built-in rules",
+      "hint": "How Guard grades each pattern it recognises. Raising a level applies at once; lowering one or turning it off needs confirmation. Rules marked as a safety floor go down to High at most. The table above (what asks, what is denied) stays fixed.",
+      "group": {
+        "critical": "Critical by default",
+        "high": "High by default",
+        "unanalyzable": "Cannot be judged statically (Normal by default; a pane with external content still treats them as High)"
+      },
+      "default": "Default: {level}",
+      "floor": "Safety floor: High at most",
+      "off": "Off (Normal)",
+      "rule": {
+        "credential-access": "Reads, writes or deletes a credential store",
+        "credential-exfil": "Uploads a secret file",
+        "dotenv-outside-workspace": "Touches a .env file outside the workspace",
+        "keychain-access": "Reads or changes the Keychain",
+        "sudo": "Runs with elevated privileges or as another user",
+        "pipe-download-to-shell": "Executes content fetched from the network",
+        "download-then-exec": "Executes a file downloaded in the same command",
+        "disk-write": "dd writes directly to a device",
+        "disk-format": "Formats, erases or repartitions a disk",
+        "rm-root-or-home": "Deletes the root, home, or a parent of the workspace",
+        "rm-workspace-root": "Recursively deletes the whole workspace",
+        "rm-outside-workspace": "Recursive delete outside the workspace",
+        "git-force-push-protected": "Force-pushes to or deletes a protected branch",
+        "cloud-destroy": "Destroys cloud infrastructure or cluster resources",
+        "credential-path-list": "Lists a credential location",
+        "git-hooks-write": "Writes a git hook",
+        "ci-workflow-write": "Writes a CI workflow",
+        "agent-config-write": "Writes agent CLI settings (hooks live there)",
+        "dd": "dd copies raw data",
+        "package-publish": "Publishes a package",
+        "git-push": "Pushes to a remote",
+        "git-push-force": "Force push (history rewrite on the remote)",
+        "git-reset-hard": "git reset --hard discards local changes",
+        "git-clean-force": "git clean -f deletes untracked files",
+        "rm-recursive-in-workspace": "Recursive delete inside the workspace",
+        "rm-file-outside-workspace": "Deletes a file outside the workspace",
+        "rm-unresolved-target": "rm target is computed at run time",
+        "decode-and-exec": "Pipes decoded data into an interpreter",
+        "http-upload-file": "Uploads a local file",
+        "too-long": "Command too long to analyse",
+        "dynamic-command": "Command name is computed at run time",
+        "eval": "eval / source of dynamic text",
+        "unbalanced-quotes": "Command has unbalanced quotes",
+        "nesting-too-deep": "Substitutions nested too deep to analyse",
+        "interpreter-inline-code": "Interpreter runs inline code",
+        "stdin-script": "Interpreter reads its script from stdin",
+        "unknown-script": "Runs a script Guard cannot see",
+        "dynamic-path": "File path is not static"
+      }
+    },
+    "branches": {
+      "title": "Protected branches",
+      "hint": "Force-pushing to or deleting these branches is Critical. Terminal command protection's force-push check uses the same list. Removing a branch needs confirmation.",
+      "placeholder": "Branch name, e.g. release"
+    },
     "rules": {
       "title": "Custom rules",
-      "hint": "Allow patterns downgrade a High match (never Critical). Deny patterns always count as Critical.",
+      "hint": "Deny patterns raise a match to the level you pick (Critical or High). Allow patterns downgrade a High match to Normal (never Critical). Adding an allow or removing a deny needs confirmation.",
       "kind": {
         "allow": "Allow",
         "deny": "Deny"
       },
       "kind-label": "Rule type",
+      "level-label": "Level",
       "pattern": "Pattern, e.g. rm -rf build",
       "note": "Note (optional)",
       "add": "Add",
@@ -9039,7 +9097,9 @@
       "placeholder": "Type a shell command, e.g. rm -rf ~",
       "tainted": "Externally influenced pane",
       "run": "Check",
-      "unparseable": "Cannot be judged statically (variable expansion, eval, encoded script)."
+      "unparseable": "Cannot be judged statically (variable expansion, eval, encoded script).",
+      "user-deny": "Your deny pattern `{pattern}`",
+      "user-allow": "Your allow pattern `{pattern}`"
     },
     "terminal": {
       "title": "Terminal command protection",

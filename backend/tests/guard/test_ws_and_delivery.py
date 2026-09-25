@@ -66,7 +66,9 @@ async def test_rules_roundtrip():
     rid = res["rules"][0]["id"]
     assert (await ws("guard.rules.list"))["rules"][0]["kind"] == "deny"
     assert (await ws("guard.rules.add", {"kind": "maybe", "pattern": "x"}))["ok"] is False
-    assert (await ws("guard.rules.remove", {"id": rid}))["rules"] == []
+    # Removing a deny loosens Guard: refused without the main process's
+    # confirmation (the confirmed path is in test_rule_editing_ws.py).
+    assert (await ws("guard.rules.remove", {"id": rid})) is None
 
 
 @pytest.mark.asyncio

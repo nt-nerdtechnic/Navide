@@ -1,12 +1,13 @@
 """navide.db persistence for the guard: audit log, taint marks, user rules.
 
-Component "guard", schema v3. Only guard_* tables and the ``guard.enabled``
+Component "guard", schema v4. Only guard_* tables and the ``guard.enabled``
 kv key are touched.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from typing import Any
@@ -78,14 +79,40 @@ def _v3(cur: sqlite3.Cursor) -> None:
     )
 
 
+def _v4(cur: sqlite3.Cursor) -> None:
+    """Editable grading: a level per custom rule (rows written before this
+    were forced critical, so a deny keeps "critical"; an allow never raises
+    anything and records "normal"), the user's level per built-in rule (no
+    row = its default), and the protected-branch list shared by Guard and
+    terminal command protection, seeded with the old hard-coded pair."""
+    from .classify import PROTECTED_BRANCHES
+
+    cur.execute("ALTER TABLE guard_rules ADD COLUMN level TEXT NOT NULL DEFAULT 'critical'")
+    cur.execute("UPDATE guard_rules SET level = 'normal' WHERE kind = 'allow'")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guard_rule_overrides ("
+        " id TEXT PRIMARY KEY, level TEXT NOT NULL CHECK (level IN ('critical', 'high', 'normal')))"
+    )
+    cur.execute("CREATE TABLE IF NOT EXISTS guard_protected_branches (name TEXT PRIMARY KEY)")
+    cur.executemany(
+        "INSERT OR IGNORE INTO guard_protected_branches (name) VALUES (?)",
+        [(b,) for b in sorted(PROTECTED_BRANCHES)],
+    )
+
+
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+
+
 class GuardStore:
     def __init__(self, db: Database) -> None:
         self._db = db
         db.migrate(COMPONENT, 1, _v1)
         db.migrate(COMPONENT, 2, _v2)
         db.migrate(COMPONENT, 3, _v3)
+        db.migrate(COMPONENT, 4, _v4)
         self._inserts = 0
         self._terminal_cache: Any = None
+        self._grading_cache: tuple[dict[str, str], frozenset[str]] | None = None
 
     # ── enabled ──────────────────────────────────────────────────────
 
@@ -221,23 +248,101 @@ class GuardStore:
             rows = cur.execute("SELECT * FROM guard_rules ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
-    def rules_add(self, kind: str, pattern: str, note: str = "") -> int:
+    def rules_add(self, kind: str, pattern: str, note: str = "", level: str = "critical") -> int:
+        """``level``: what a matching deny raises to (critical or high); an
+        allow always records "normal" — it only ever lowers high."""
         if kind not in ("allow", "deny"):
             raise ValueError("kind must be 'allow' or 'deny'")
+        if kind == "allow":
+            level = "normal"
+        elif level not in ("critical", "high"):
+            raise ValueError("level must be 'critical' or 'high'")
         pattern = (pattern or "").strip()
         if not pattern:
             raise ValueError("pattern is empty")
         with self._db.transaction() as cur:
             cur.execute(
-                "INSERT INTO guard_rules (kind, pattern, note, created) VALUES (?,?,?,?)",
-                (kind, pattern[:500], (note or "")[:500], time.time()),
+                "INSERT INTO guard_rules (kind, pattern, note, created, level) VALUES (?,?,?,?,?)",
+                (kind, pattern[:500], (note or "")[:500], time.time(), level),
             )
             return int(cur.lastrowid)
+
+    def rule_get(self, rule_id: int) -> dict[str, Any] | None:
+        with self._db.transaction() as cur:
+            row = cur.execute("SELECT * FROM guard_rules WHERE id = ?", (int(rule_id),)).fetchone()
+        return dict(row) if row else None
 
     def rules_remove(self, rule_id: int) -> bool:
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM guard_rules WHERE id = ?", (int(rule_id),))
             return cur.rowcount > 0
+
+    # ── built-in rule levels + protected branches ───────────────────
+
+    def grading(self) -> tuple[dict[str, str], frozenset[str]]:
+        """(built-in rule level overrides, protected branches) as saved,
+        cached until a setter runs: read on every graded tool call."""
+        cached = self._grading_cache
+        if cached is not None:
+            return cached
+        with self._db.transaction() as cur:
+            overrides = {r["id"]: r["level"] for r in cur.execute(
+                "SELECT id, level FROM guard_rule_overrides").fetchall()}
+            branches = frozenset(r["name"] for r in cur.execute(
+                "SELECT name FROM guard_protected_branches").fetchall())
+        self._grading_cache = (overrides, branches)
+        return self._grading_cache
+
+    def rule_overrides(self) -> dict[str, str]:
+        return dict(self.grading()[0])
+
+    def protected_branches(self) -> frozenset[str]:
+        return self.grading()[1]
+
+    def set_rule_level(self, rule_id: str, level: str) -> None:
+        """Save the user's level for one built-in rule; its default level
+        removes the override row."""
+        from .builtin_rules import FLOOR_RULES, LEVELS, RULES_BY_ID
+
+        rule = RULES_BY_ID.get(rule_id)
+        if rule is None:
+            raise ValueError(f"unknown rule: {rule_id}")
+        if level not in LEVELS:
+            raise ValueError("level must be 'critical', 'high' or 'normal'")
+        if rule_id in FLOOR_RULES and level == "normal":
+            raise ValueError(f"{rule_id} can be lowered to high at most")
+        with self._db.transaction() as cur:
+            if level == rule.level:
+                cur.execute("DELETE FROM guard_rule_overrides WHERE id = ?", (rule_id,))
+            else:
+                cur.execute(
+                    "INSERT INTO guard_rule_overrides (id, level) VALUES (?, ?)"
+                    " ON CONFLICT(id) DO UPDATE SET level = excluded.level",
+                    (rule_id, level),
+                )
+        self._grading_cache = None
+
+    @staticmethod
+    def validate_branch(name: str) -> str:
+        name = (name or "").strip().removeprefix("refs/heads/")
+        if not _BRANCH_RE.match(name) or ".." in name or name.startswith(("-", "/")) or name.endswith("/"):
+            raise ValueError("not a valid branch name")
+        return name
+
+    def add_protected_branch(self, name: str) -> None:
+        name = self.validate_branch(name)
+        with self._db.transaction() as cur:
+            cur.execute("INSERT OR IGNORE INTO guard_protected_branches (name) VALUES (?)", (name,))
+        self._grading_cache = None
+        self._terminal_cache = None
+
+    def remove_protected_branch(self, name: str) -> bool:
+        with self._db.transaction() as cur:
+            cur.execute("DELETE FROM guard_protected_branches WHERE name = ?", (name,))
+            removed = cur.rowcount > 0
+        self._grading_cache = None
+        self._terminal_cache = None
+        return removed
 
     # ── terminal command protection ──────────────────────────────────
 
@@ -258,6 +363,7 @@ class GuardStore:
             disabled=frozenset(off),
             block_patterns=tuple(r["pattern"] for r in pats if r["kind"] == "block"),
             allow_prefixes=tuple(r["pattern"] for r in pats if r["kind"] == "allow"),
+            protected_branches=self.protected_branches(),
         )
         self._terminal_cache = settings
         return settings

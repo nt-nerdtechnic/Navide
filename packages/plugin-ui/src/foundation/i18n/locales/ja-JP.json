@@ -9021,14 +9021,72 @@
       "none": "ブロック不可",
       "unknown": "不明"
     },
+    "builtin": {
+      "title": "組み込みルール",
+      "hint": "Guard が認識する各パターンの判定レベルです。上げる変更はすぐに反映されます。下げる・オフにするときは確認が必要です。安全の下限が付いたルールは「高」までしか下げられません。上の判定表（確認するもの・拒否するもの）は固定です。",
+      "group": {
+        "critical": "既定で重大",
+        "high": "既定で高",
+        "unanalyzable": "静的に判定できない（既定は通常。外部の影響を受けた pane では高として扱います）"
+      },
+      "default": "既定: {level}",
+      "floor": "安全の下限: 高まで",
+      "off": "オフ（通常）",
+      "rule": {
+        "credential-access": "認証情報ストアの読み取り・書き込み・削除",
+        "credential-exfil": "機密ファイルをアップロード",
+        "dotenv-outside-workspace": "workspace 外の .env ファイルにアクセス",
+        "keychain-access": "キーチェーンの読み取り・変更",
+        "sudo": "昇格した権限または別ユーザーとして実行",
+        "pipe-download-to-shell": "ネットワークから取得した内容を実行",
+        "download-then-exec": "同じコマンド内でダウンロードしたファイルを実行",
+        "disk-write": "dd でデバイスに直接書き込み",
+        "disk-format": "ディスクのフォーマット・消去・再パーティション",
+        "rm-root-or-home": "ルート、ホーム、または workspace の親を削除",
+        "rm-workspace-root": "workspace 全体を再帰的に削除",
+        "rm-outside-workspace": "workspace 外を再帰的に削除",
+        "git-force-push-protected": "保護ブランチへの force-push または削除",
+        "cloud-destroy": "クラウドインフラやクラスタのリソースを破棄",
+        "credential-path-list": "認証情報の場所を一覧表示",
+        "git-hooks-write": "git hook を書き込み",
+        "ci-workflow-write": "CI ワークフローを書き込み",
+        "agent-config-write": "エージェント CLI の設定を書き込み（hook はここにある）",
+        "dd": "dd で生データをコピー",
+        "package-publish": "パッケージを公開",
+        "git-push": "リモートへ push",
+        "git-push-force": "force push（リモート履歴の書き換え）",
+        "git-reset-hard": "git reset --hard でローカルの変更を破棄",
+        "git-clean-force": "git clean -f で未追跡ファイルを削除",
+        "rm-recursive-in-workspace": "workspace 内での再帰削除",
+        "rm-file-outside-workspace": "workspace 外のファイルを削除",
+        "rm-unresolved-target": "rm の対象が実行時に決まる",
+        "decode-and-exec": "デコードしたデータをインタプリタにパイプ",
+        "http-upload-file": "ローカルファイルをアップロード",
+        "too-long": "コマンドが長すぎて解析できない",
+        "dynamic-command": "コマンド名が実行時に決まる",
+        "eval": "動的テキストの eval／source",
+        "unbalanced-quotes": "引用符の対応が取れていない",
+        "nesting-too-deep": "置換のネストが深すぎて解析できない",
+        "interpreter-inline-code": "インタプリタがインラインコードを実行",
+        "stdin-script": "インタプリタが stdin からスクリプトを読む",
+        "unknown-script": "Guard が中身を見られないスクリプトを実行",
+        "dynamic-path": "ファイルパスが静的でない"
+      }
+    },
+    "branches": {
+      "title": "保護ブランチ",
+      "hint": "これらのブランチへの force-push や削除は「重大」です。ターミナルコマンド保護の force-push チェックも同じリストを使います。ブランチを外すときは確認が必要です。",
+      "placeholder": "ブランチ名（例: release）"
+    },
     "rules": {
       "title": "カスタムルール",
-      "hint": "許可パターンは「高」を許可に下げます（「重大」は対象外）。拒否パターンは常に「重大」として扱います。",
+      "hint": "拒否パターンは一致したコマンドを選んだレベル（重大または高）に上げます。許可パターンは「高」を通常に下げます（「重大」は対象外）。許可の追加と拒否の削除には確認が必要です。",
       "kind": {
         "allow": "許可",
         "deny": "拒否"
       },
       "kind-label": "ルールの種類",
+      "level-label": "レベル",
       "pattern": "パターン（例：rm -rf build）",
       "note": "メモ（任意）",
       "add": "追加",
@@ -9039,7 +9097,9 @@
       "placeholder": "シェルコマンドを入力（例：rm -rf ~）",
       "tainted": "外部の影響を受けた pane",
       "run": "判定",
-      "unparseable": "静的に判断できません（変数展開、eval、エンコードされたスクリプト）。"
+      "unparseable": "静的に判断できません（変数展開、eval、エンコードされたスクリプト）。",
+      "user-deny": "拒否パターン `{pattern}`",
+      "user-allow": "許可パターン `{pattern}`"
     },
     "terminal": {
       "title": "ターミナルコマンド保護",

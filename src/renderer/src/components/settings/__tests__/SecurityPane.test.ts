@@ -72,11 +72,12 @@ describe('SecurityPane', () => {
     await w.get('input[name="pattern"]').setValue('rm -rf build')
     await w.get('[data-testid="guard-rule-add"]').trigger('submit')
     await flushPromises()
-    expect(mock.sent.find((s) => s.type === 'guard.rules.add')?.payload).toEqual({ kind: 'deny', pattern: 'rm -rf build', note: '' })
+    expect(mock.sent.find((s) => s.type === 'guard.rules.add')?.payload).toEqual({ kind: 'deny', pattern: 'rm -rf build', note: '', level: 'critical' })
 
     await w.get('[data-testid="guard-rule-remove"]').trigger('click')
     await flushPromises()
-    expect(mock.sent.find((s) => s.type === 'guard.rules.remove')?.payload).toEqual({ id: 7 })
+    // Removing a deny loosens Guard, so it carries a confirmation (none in a test window).
+    expect(mock.sent.find((s) => s.type === 'guard.rules.remove')?.payload).toEqual({ id: 7, confirm: null })
 
     await w.get('[data-testid="guard-taint-clear-row"]').trigger('click')
     expect(mock.sent.find((s) => s.type === 'guard.taint.clear')?.payload).toEqual({ pane_id: 'p9' })
@@ -87,6 +88,63 @@ describe('SecurityPane', () => {
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'guard.test')?.payload).toEqual({ command: 'rm -rf ~', source: 'relay', tainted: false })
     expect(w.get('[data-testid="guard-test-result"]').text()).toContain('needs local confirmation')
+  })
+
+  it('lists built-in rules by group, keeps floor rules above off, and edits levels and branches', async () => {
+    const builtin = {
+      rules: [
+        { id: 'credential-access', group: 'critical', description: 'Credential store', example: 'cat ~/.ssh/id_rsa', default_level: 'critical', level: 'critical', floor: true },
+        { id: 'git-push', group: 'high', description: 'Pushes to a remote', example: 'git push', default_level: 'high', level: 'high', floor: false },
+      ],
+      protected_branches: ['main', 'master'],
+    }
+    mock.setResponse('guard.builtin.get', builtin)
+    mock.setResponse('guard.builtin.set_level', builtin)
+    mock.setResponse('guard.branches.add', { ...builtin, protected_branches: ['main', 'master', 'release'] })
+    const w = await render()
+    const row = (id: string) => w.get(`[data-testid="guard-builtin-row"][data-rule="${id}"]`)
+    expect(row('git-push').text()).toContain('Pushes to a remote')
+    expect(row('credential-access').text()).toContain('Safety floor')
+    expect(row('credential-access').get('option[value="normal"]').attributes('disabled')).toBeDefined()
+    expect(row('git-push').get('option[value="normal"]').attributes('disabled')).toBeUndefined()
+
+    await row('git-push').get('select').setValue('critical')
+    await flushPromises()
+    expect(mock.sent.find((s) => s.type === 'guard.builtin.set_level')?.payload).toEqual({ id: 'git-push', level: 'critical' })
+
+    expect(w.findAll('[data-testid="guard-branch-row"]').map((r) => r.text())).toEqual([
+      expect.stringContaining('main'), expect.stringContaining('master'),
+    ])
+    await w.get('input[name="branch"]').setValue('release')
+    await w.get('[data-testid="guard-branch-add"]').trigger('submit')
+    await flushPromises()
+    expect(mock.sent.find((s) => s.type === 'guard.branches.add')?.payload).toEqual({ name: 'release' })
+    expect(w.findAll('[data-testid="guard-branch-row"]')).toHaveLength(3)
+  })
+
+  it('shows which rules a tested command matched and how each was graded', async () => {
+    mock.setResponse('guard.builtin.get', {
+      rules: [{ id: 'git-push', group: 'high', description: 'Pushes to a remote', example: 'git push', default_level: 'high', level: 'critical', floor: false }],
+      protected_branches: ['main'],
+    })
+    mock.setResponse('guard.test', {
+      verdict: { level: 'high', rule_ids: ['git-push'], reasons: ['pushes to a remote'], parseable: true },
+      decision: { action: 'ask', level: 'critical', rule_ids: ['git-push', 'user-deny:7'], reason: '', tainted: false },
+      graded_level: 'critical',
+      matched: [
+        { id: 'git-push', reason: 'pushes to a remote', default_level: 'high', level: 'critical' },
+        { id: 'user-deny:7', reason: 'origin', default_level: 'critical', level: 'high', user: 'user-deny' },
+      ],
+    })
+    const w = await render()
+    await w.get('input[name="command"]').setValue('git push origin')
+    await w.get('[data-testid="guard-test-run"]').trigger('submit')
+    await flushPromises()
+    const rows = w.findAll('[data-testid="guard-test-matched-row"]')
+    expect(rows[0].text()).toContain('Pushes to a remote')
+    expect(rows[0].text()).toContain('High')
+    expect(rows[0].text()).toContain('Critical')
+    expect(rows[1].text()).toContain('Your deny pattern `origin`')
   })
 
   it('explains itself when the backend has no Guard yet', async () => {

@@ -9021,14 +9021,72 @@
       "none": "無法阻擋",
       "unknown": "未知"
     },
+    "builtin": {
+      "title": "內建規則",
+      "hint": "Guard 對每種已知樣式的分級。調高立即生效；調低或關閉需要確認。標示為安全底線的規則最多只能降到「高」。上方的決策表（哪些會詢問、哪些會拒絕）固定不變。",
+      "group": {
+        "critical": "預設為嚴重",
+        "high": "預設為高",
+        "unanalyzable": "無法靜態判斷（預設為一般；受外部影響的 pane 仍視為高）"
+      },
+      "default": "預設：{level}",
+      "floor": "安全底線：最低只能到高",
+      "off": "關閉（一般）",
+      "rule": {
+        "credential-access": "讀取、寫入或刪除憑證存放處",
+        "credential-exfil": "上傳機密檔案",
+        "dotenv-outside-workspace": "存取 workspace 以外的 .env 檔",
+        "keychain-access": "讀取或變更 Keychain",
+        "sudo": "以提升的權限或其他使用者身分執行",
+        "pipe-download-to-shell": "執行從網路抓下來的內容",
+        "download-then-exec": "執行同一行指令中下載的檔案",
+        "disk-write": "dd 直接寫入裝置",
+        "disk-format": "格式化、清除或重新分割磁碟",
+        "rm-root-or-home": "刪除根目錄、家目錄或 workspace 的上層",
+        "rm-workspace-root": "遞迴刪除整個 workspace",
+        "rm-outside-workspace": "遞迴刪除 workspace 以外的內容",
+        "git-force-push-protected": "Force-push 或刪除受保護分支",
+        "cloud-destroy": "摧毀雲端基礎設施或叢集資源",
+        "credential-path-list": "列出憑證所在位置",
+        "git-hooks-write": "寫入 git hook",
+        "ci-workflow-write": "寫入 CI workflow",
+        "agent-config-write": "寫入 Agent CLI 設定（hook 設定在其中）",
+        "dd": "dd 複製原始資料",
+        "package-publish": "發佈套件",
+        "git-push": "推送到遠端",
+        "git-push-force": "Force push（改寫遠端歷史）",
+        "git-reset-hard": "git reset --hard 捨棄本機變更",
+        "git-clean-force": "git clean -f 刪除未追蹤的檔案",
+        "rm-recursive-in-workspace": "在 workspace 內遞迴刪除",
+        "rm-file-outside-workspace": "刪除 workspace 以外的檔案",
+        "rm-unresolved-target": "rm 的目標要到執行時才決定",
+        "decode-and-exec": "把解碼後的資料 pipe 給直譯器",
+        "http-upload-file": "上傳本機檔案",
+        "too-long": "指令過長，無法分析",
+        "dynamic-command": "指令名稱要到執行時才決定",
+        "eval": "eval／source 動態內容",
+        "unbalanced-quotes": "引號不成對",
+        "nesting-too-deep": "替換巢狀過深，無法分析",
+        "interpreter-inline-code": "直譯器執行內嵌程式碼",
+        "stdin-script": "直譯器從 stdin 讀取腳本",
+        "unknown-script": "執行 Guard 看不到內容的腳本",
+        "dynamic-path": "檔案路徑不是靜態的"
+      }
+    },
+    "branches": {
+      "title": "受保護分支",
+      "hint": "Force-push 或刪除這些分支屬於「嚴重」。終端機指令防護的 force-push 檢查也使用同一份清單。移除分支需要確認。",
+      "placeholder": "分支名稱，例如 release"
+    },
     "rules": {
       "title": "自訂規則",
-      "hint": "允許樣式可讓「高」等級放行（不影響「嚴重」）；拒絕樣式一律視為「嚴重」。",
+      "hint": "拒絕樣式會把符合的指令提升到你選的等級（嚴重或高）。允許樣式可讓「高」降為一般（不影響「嚴重」）。新增允許或移除拒絕需要確認。",
       "kind": {
         "allow": "允許",
         "deny": "拒絕"
       },
       "kind-label": "規則類型",
+      "level-label": "等級",
       "pattern": "樣式，例如 rm -rf build",
       "note": "備註（選填）",
       "add": "新增",
@@ -9039,7 +9097,9 @@
       "placeholder": "輸入一行 shell 指令，例如 rm -rf ~",
       "tainted": "受外部影響的 pane",
       "run": "判斷",
-      "unparseable": "無法靜態判斷（含變數展開、eval 或編碼後執行）。"
+      "unparseable": "無法靜態判斷（含變數展開、eval 或編碼後執行）。",
+      "user-deny": "你的拒絕樣式 `{pattern}`",
+      "user-allow": "你的允許樣式 `{pattern}`"
     },
     "terminal": {
       "title": "終端機指令防護",

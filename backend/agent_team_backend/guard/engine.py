@@ -1,4 +1,4 @@
-"""evaluate(): classify + user rules + taint + policy + audit, in one call."""
+"""evaluate(): classify + rule levels + user rules + taint + policy + audit, in one call."""
 
 from __future__ import annotations
 
@@ -120,10 +120,12 @@ def _emit_failure(pane_id: str, reason: str, *, action: str = "error") -> None:
 def _evaluate(*, pane_id, vendor, tool, tool_input, cwd, workspace, source) -> Decision:
     tool_input = tool_input if isinstance(tool_input, dict) else {}
     store = runtime.store()
-    verdict = classify(tool, tool_input, cwd=cwd, workspace=workspace)
+    overrides, branches = store.grading()
+    verdict = classify(tool, tool_input, cwd=cwd, workspace=workspace, protected_branches=branches)
     excerpt = excerpt_of(tool, tool_input)
+    level = policy.apply_overrides(verdict.level, verdict.rule_ids, overrides)
     level, rule_ids = policy.apply_user_rules(
-        verdict.level, verdict.rule_ids, _subject(tool_input) or excerpt, store.rules_list()
+        level, verdict.rule_ids, _subject(tool_input) or excerpt, store.rules_list()
     )
     tainted = is_tainted(pane_id)
     level = policy.effective_level(level, parseable=verdict.parseable, tainted=tainted)
