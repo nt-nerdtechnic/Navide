@@ -56,7 +56,7 @@ import { agentUsesBracketedPaste } from '@navide/plugin-shell'
 import { useNotify, useTheme } from '@navide/plugin-ui/foundation'
 import { collapseHomePath, migrateTerminalPtyKey, saveAllScrollSnapshots, type DisplayStatus } from '@navide/terminal'
 import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER, rawReason, TERMINAL_AGENT_KEY } from './composables/useAgentMessaging'
-import type { PushOutcome, RouteResult } from './composables/useAgentMessaging'
+import type { MessageReason, PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
 import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isExternalDelivery, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
@@ -2109,7 +2109,7 @@ async function deliverAgentMessage(
   paneId: string,
   text: string,
   shouldAbort?: () => boolean,
-): Promise<boolean | null> {
+): Promise<boolean | null | { failed: MessageReason }> {
   // Hold the badge on RUNNING until the recipient's log shows the message
   // consumed — released in the agent.activity handler, fused inside
   // useTerminal. Marked BEFORE the Enter, not after: an idle CLI writes the
@@ -2121,13 +2121,14 @@ async function deliverAgentMessage(
   if (panes.value.find((p) => p.id === paneId)?.agentKey !== TERMINAL_AGENT_KEY) {
     paneRefs[paneId]?.markDeliveredPending?.()
   }
-  const outcome: { leftInComposer?: boolean; foregroundBusy?: boolean } = {}
+  const outcome: { leftInComposer?: boolean; foregroundBusy?: boolean; commandRefused?: string } = {}
   // A PTY that stops reading holds the message on `pty-blocked` for as long
   // as it takes; the hold is what cli_check_message shows the sender meanwhile.
   const ok = await injectPane(
     paneId, text, 'agent-msg', true, shouldAbort, outcome,
     (held) => messaging.setDeliveringHold(paneId, held ? { key: 'pty-blocked' } : undefined),
   )
+  if (!ok && outcome.commandRefused) return { failed: rawReason(outcome.commandRefused) }
   if (!ok && outcome.foregroundBusy) {
     // A program took the shell's place between the gate's last look and the
     // write; nothing was typed. Back to the head of the queue, held until the
@@ -2943,7 +2944,7 @@ async function kickoffRequestedPane(
         emitKickoffVerdict('failed', multiline)
         return false
       }
-      const seen: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+      const seen: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null; commandRefused?: string } = {}
       const typed = promptReady || !paneStarting
         ? await injectPane(paneId, task, 'agent-spawn', true, undefined, seen)
         : false
@@ -2951,7 +2952,7 @@ async function kickoffRequestedPane(
         typed, echo: seen.echo ?? null, submit: seen.submit ?? null, promptReady,
       })
       pane.kickoffStatus = outcome
-      emitKickoffVerdict(outcome, outcome === 'sent' ? undefined : TERMINAL_KICKOFF_REASON[outcome])
+      emitKickoffVerdict(outcome, outcome === 'sent' ? undefined : seen.commandRefused ?? TERMINAL_KICKOFF_REASON[outcome])
       return outcome !== 'failed'
     }
     const text = renderSpawnKickoff(task, parentName)
@@ -3598,6 +3599,9 @@ async function injectText(
     /** Plain terminal only: the backend refused the write because a program
      *  other than the shell was in front of the tty. Nothing was typed. */
     foregroundBusy?: boolean
+    /** Plain terminal only: the backend's terminal command protection refused
+     *  the line (guard.terminal_policy) — its message, for the sender. */
+    commandRefused?: string
   },
   // Told `true` while the payload is written but the PTY is not reading it
   // (the message is held on `pty-blocked`), `false` once the wait ends either
@@ -3663,6 +3667,16 @@ async function injectText(
   if (shellTarget && paneMultilineRefusal(paneId as string, body)) return false
   const chunks = injectionChunks(body, CHUNK, bracketed)
   const shellGuard = shellTarget ? { require_shell_prompt: true } : {}
+  // Why the backend refused a guarded write: a program in front of the shell
+  // (try again later) or a command it will not type (never).
+  const noteShellRefusal = (payload?: { error?: string; refusal?: { message?: string } } | null): void => {
+    if (!evidence) return
+    if (payload?.error === 'command-refused') {
+      evidence.commandRefused = payload.refusal?.message || 'refused by terminal command protection'
+    } else {
+      evidence.foregroundBusy = true
+    }
+  }
   // Resolves with the last ack's `pending` — bytes the backend is still holding
   // because the PTY would not take them (0 from a backend too old to say) — or
   // null when a send threw or was refused.
@@ -3671,13 +3685,12 @@ async function injectText(
     let pending = 0
     for (let i = 0; i < chunks.length; i++) {
       try {
-        const resp = await backend.send<{ pending?: number }>('terminal.input', {
-          terminal_session_id: sessionId,
-          data: chunks[i],
-          ...shellGuard,
-        })
-        if (!resp.ok) {
-          if (evidence) evidence.foregroundBusy = true
+        const resp = await backend.send<{ ok?: boolean; pending?: number; error?: string; refusal?: { message?: string } }>(
+          'terminal.input', { terminal_session_id: sessionId, data: chunks[i], ...shellGuard },
+        )
+        // A refusal is a normal answer (envelope ok) whose payload says ok: false.
+        if (resp.payload?.ok === false) {
+          noteShellRefusal(resp.payload)
           return null
         }
         wroteBytes = true
@@ -3864,11 +3877,11 @@ async function injectText(
     // its [Y/n] prompt, or an empty sudo password). The Enter going out is the
     // delivery; the cursor leaving the typed line is the evidence, if any.
     try {
-      const resp = await backend.send('terminal.input', {
+      const resp = await backend.send<{ ok?: boolean; error?: string; refusal?: { message?: string } }>('terminal.input', {
         terminal_session_id: sessionId, data: '\r', ...shellGuard,
       })
-      if (!resp.ok) {
-        if (evidence) evidence.foregroundBusy = true
+      if (resp.payload?.ok === false) {
+        noteShellRefusal(resp.payload)
         return giveUp()
       }
     } catch (err) {
@@ -3939,6 +3952,7 @@ async function injectPane(
     submit?: SubmitEvidence | null
     leftInComposer?: boolean
     foregroundBusy?: boolean
+    commandRefused?: string
   },
   onInputBlocked?: (held: boolean) => void
 ): Promise<boolean> {

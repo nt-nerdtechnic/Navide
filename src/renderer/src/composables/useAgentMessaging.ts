@@ -222,7 +222,11 @@ export interface MessagingDeps {
    *  `shouldAbort` turns true when the user withdraws the message while the
    *  pane's PTY is holding it unread (see cancelMessage); an injection that
    *  honours it clears what it wrote and resolves false. */
-  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) => Promise<boolean | null>
+  /** true: typed. false: did not arrive. null: put it back at the head of the
+   *  queue, nothing spent. `{ failed }`: refused for good, with the reason the
+   *  sender is told (a terminal command the backend will not type). */
+  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) =>
+    Promise<boolean | null | { failed: MessageReason }>
   /** True when the pane can accept an injection right now (idle + settled). */
   isPaneIdle: (paneId: string) => boolean
   /** Why isPaneIdle() said no, as an i18n key suffix under `msg.hold-*`. Must
@@ -1361,7 +1365,10 @@ async function pumpPane(paneId: string): Promise<void> {
     const ok = await deliverOnce(paneId, msg, envelope, push, () => cancelRequested.has(id))
     const stuck = ok === 'unclear'
       && (pushUnclearCount.get(id) ?? 0) + 1 >= PUSH_UNCLEAR_LIMIT
-    if (stuck) {
+    if (typeof ok === 'object' && ok !== null) {
+      ackReason = ok.failed
+      failMessage(id, ackReason)
+    } else if (stuck) {
       // The composer would not clear after PUSH_UNCLEAR_LIMIT pushes: the
       // message is never getting through this way, and re-queuing it again
       // would only park the pane's whole queue behind it. Fail it so the
@@ -1434,7 +1441,7 @@ async function deliverOnce(
   envelope: string,
   push: { kind: string } | null,
   shouldAbort: () => boolean,
-): Promise<boolean | null | 'unclear'> {
+): Promise<boolean | null | 'unclear' | { failed: MessageReason }> {
   if (!deps) return false
   if (push && deps.pushDeliver) {
     msg.route = `push:${push.kind}`

@@ -140,9 +140,22 @@ shell 指令執行**。所以寄給 Terminal 的訊息是裸打進去的 —— 
 - 在 Terminal 佇列裡等超過 2 分鐘的訊息會判定失敗，絕不延後才打進去：等了那麼久的
   指令，已不是寄件者當下想執行的那一個。
 - Terminal 無法回覆：它沒有 MCP 工具，它的輸出也從不會被掃描訊息或 spawn 區塊。
-- **Guard 對 Terminal 只能記錄，不能攔下指令。** 訊息一樣會把 Terminal 標記為受外部
-  影響，但 Guard 的指令檢查跑在 CLI 自己的工具 hook 裡，一般 shell 沒有 hook ——
-  文字與 shell 之間沒有任何 Guard 的判斷。
+- **破壞性指令一律拒絕、絕不打進去。** Guard 的工具 hook 看不到一般 shell，所以
+  後端會在每一行抵達 PTY 前先檢查 —— `cli_send`、`cli_send_and_wait`、排程工作、
+  `cli_open_agent` 的第一個指令、另一個視窗送來的裸行訊息，以及視窗自己的注入
+  （在寫入 PTY 時再檢查一次；即使分段送達，也會把整行合起來判斷）。整行會切成
+  片段（`;` `&&` `||` `|` `&`、換行、`$( )`、反引號），任何一段被拒就整行拒絕。
+  不論 Guard 開關為何都會拒絕：Guard 分類器判為 critical 的一切，外加遞迴
+  刪除根目錄、家目錄或 workspace 以外（含 `Remove-Item -Recurse C:\` 與
+  `rmdir /s`）、`sudo`／`su`／`doas`、格式化磁碟與直接寫入裝置、關機與重開機、
+  `killall`／`pkill`、對 `/` 或 `~` 遞迴 `chmod`／`chown`、寫入系統資料夾、停用
+  系統服務、fork bomb、把下載內容 pipe 給 shell、憑證檔、force-push `main`，以及
+  無法靜態判斷的指令。分類器只判為 high 的指令（`git push`、`git reset --hard`、
+  workspace 內的 `rm -rf node_modules`）預設放行，除非你開啟該類別。呼叫端會收到 `error_code: "terminal-command-refused"`，附上
+  規則與片段；拒絕會寫進 Guard 稽核紀錄，Pane 上也會顯示通知。這類指令請自己執行。
+  每個類別都能在「設定 → 安全性 → 終端機指令防護」個別關閉，也能新增封鎖樣式與
+  允許前綴。只有經 Navide 打進去的那一行會被檢查：你自己打的不會；若視窗假裝成你
+  在打字，也無法與你區分。
 
 `cli_open_agent(agent="terminal")` 可以開一個。它的 `task` 可省略 —— 是提示字元
 出現後打進去一次的指令列，後面不附加任何東西 —— 而 `model`、`effort`、

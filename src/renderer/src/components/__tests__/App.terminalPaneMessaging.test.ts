@@ -95,4 +95,19 @@ describe('plain terminal panes over MCP', () => {
     // Paste guards for a shell only when it turned mode 2004 on.
     expect(inject).toContain("? paneRefs[paneId as string]?.isBracketedPasteActive?.() === true")
   })
+
+  it('reads a guarded write refusal from the payload, where the backend puts it', () => {
+    const fn = block('async function injectText(', '\n}\n')
+    // make_response always answers ok at the envelope; the refusal is payload.ok.
+    expect(fn.match(/resp\.payload\?\.ok === false/g)?.length).toBe(2)
+    expect(fn).not.toMatch(/if \(!resp\.ok\) \{\n\s*noteShellRefusal/)
+    expect(fn).toContain("if (payload?.error === 'command-refused') {")
+  })
+
+  it('fails a refused command for good and says why, on the message and the kickoff paths', () => {
+    const deliver = block('async function deliverAgentMessage(', '\n}\n')
+    expect(deliver).toContain('if (!ok && outcome.commandRefused) return { failed: rawReason(outcome.commandRefused) }')
+    const kickoff = block('async function kickoffRequestedPane(', '\n/** Spawn + kick off a pane')
+    expect(kickoff).toContain('seen.commandRefused ?? TERMINAL_KICKOFF_REASON[outcome]')
+  })
 })

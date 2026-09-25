@@ -162,10 +162,30 @@ The rest follows from that:
   now.
 - A terminal cannot reply: it has no MCP tools, and its output is never scanned
   for message or spawn blocks.
-- **Guard only records a terminal, it cannot block its commands.** A message
-  marks the terminal as externally influenced exactly as it does an agent, but
-  Guard's command checks run inside a CLI's own tool hooks, and a plain shell
-  has none — nothing Guard evaluates stands between the text and the shell.
+- **Destructive commands are refused, never typed.** Guard's tool hooks cannot
+  see a plain shell, so the backend checks every line before it reaches the
+  PTY — `cli_send`, `cli_send_and_wait`, scheduled jobs, `cli_open_agent`'s
+  first command, a bare-line message from another window, and the window's
+  own injections (checked again at the PTY write, the whole line at once even
+  when it arrives in pieces). The line is split into segments (`;` `&&` `||`
+  `|` `&`, newlines, `$( )`, backticks) and one refused segment refuses all of
+  it. Refused, whatever the Guard switch says: anything Guard's classifier
+  rates critical, plus recursive deletes of the root, your home or
+  outside the workspace (including `Remove-Item -Recurse C:\` and
+  `rmdir /s`), `sudo`/`su`/`doas`, disk formatting and raw device writes,
+  shutdown and reboot, `killall`/`pkill`, recursive `chmod`/`chown` on `/` or
+  `~`, writes into system folders, disabling services, fork bombs, piping a
+  download into a shell, credential files, force-pushing `main`, and lines
+  that cannot be judged statically. Commands the classifier only rates high
+  (`git push`, `git reset --hard`, `rm -rf node_modules` inside the workspace)
+  go through unless you turn that category on. The caller gets
+  `error_code: "terminal-command-refused"` with the rule and the segment, the
+  refusal is written to the Guard audit log, and the pane shows a notice. Run
+  such a command yourself. Each category can be switched off, and block
+  patterns and allow prefixes added, in Settings → Security → Terminal command
+  protection. A line typed through Navide is the only thing checked: what you
+  type yourself is not, and a window that typed as if it were you could not be
+  told apart from you.
 
 `cli_open_agent(agent="terminal")` opens one. Its `task` is optional — a
 command line typed once after the prompt is up, with nothing appended — and

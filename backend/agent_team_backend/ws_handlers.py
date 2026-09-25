@@ -7507,6 +7507,40 @@ async def terminal_create_cancel(
     )
 
 
+#: Per terminal session: the text guarded injections have typed since their
+#: last Enter (see terminal_input). Paste guards are stripped; they are not part
+#: of the command.
+_GUARDED_LINES: dict[str, str] = {}
+_PASTE_GUARDS = ("\x1b[200~", "\x1b[201~")
+
+
+def _guarded_terminal_write_refusal(session: "Session", session_id: str, data: str) -> Any:
+    """terminal_policy's refusal for a guarded write to a plain terminal, or
+    None (also for a PTY that is not a terminal pane: only a shell runs what it
+    is typed). Records the write into the session's pending line when it
+    passes; an Enter clears it."""
+    term = session.terminals.get(session_id)
+    if term is None or getattr(term, "agent_key", "") != "terminal":
+        return None
+    from .guard import terminal_policy
+
+    text = data
+    for guard in _PASTE_GUARDS:
+        text = text.replace(guard, "")
+    submit = "\r" in text
+    line = _GUARDED_LINES.get(session_id, "") + text.replace("\r", "")
+    workspace = str(term.metadata.get("workspace_path") or term.cwd)
+    refusal = terminal_policy.enforce(line, workspace=workspace, pane_id=term.pane_id, via="terminal.input")
+    if refusal is not None:
+        _GUARDED_LINES.pop(session_id, None)
+        return refusal
+    if submit:
+        _GUARDED_LINES.pop(session_id, None)
+    else:
+        _GUARDED_LINES[session_id] = line
+    return None
+
+
 @handler("terminal.input")
 async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -7517,13 +7551,29 @@ async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload
     # A write into a plain terminal pane on behalf of a message asks that the
     # shell be at its prompt: checked here, next to the write, so a program
     # started between the renderer's last look and this write still refuses it.
+    session_id = payload["terminal_session_id"]
     if payload.get("require_shell_prompt") is True and payload["data"]:
-        if session.terminals.shell_in_foreground(payload["terminal_session_id"]) is False:
+        if session.terminals.shell_in_foreground(session_id) is False:
             await session.send_json(
                 make_response(msg_id, msg_type, {"ok": False, "error": "foreground-busy"})
             )
             return
-    pending = session.terminals.write(payload["terminal_session_id"], payload["data"])
+        # Everything a guarded injection has typed since its last Enter is one
+        # command line, checked as a whole before each write — a line split
+        # across chunks is judged together, and the Enter re-checks it.
+        refusal = _guarded_terminal_write_refusal(session, session_id, payload["data"])
+        if refusal is not None:
+            await session.send_json(
+                make_response(
+                    msg_id, msg_type, {"ok": False, "error": "command-refused", "refusal": refusal.as_dict()}
+                )
+            )
+            return
+    elif payload["data"]:
+        # Anything else written (a person typing, a kill-line after a failed
+        # injection) means the line is no longer only what was injected.
+        _GUARDED_LINES.pop(session_id, None)
+    pending = session.terminals.write(session_id, payload["data"])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pending": pending}))
     # A keyboard frame (the renderer flags only those: not mouse/focus reports,
     # not paste or programmatic injection) is a human dev-time heartbeat for
@@ -9893,6 +9943,26 @@ async def agent_msg_route(session: "Session", msg_id: str, msg_type: str, payloa
         )
         return
 
+    if result.pane.agent_key == "terminal":
+        from .guard import terminal_policy
+
+        refusal = terminal_policy.enforce(
+            content, workspace=result.pane.workspace_path, pane_id=result.pane.pane_id, via="agent_msg.route"
+        )
+        if refusal is not None:
+            await session.send_json(
+                make_response(
+                    msg_id,
+                    msg_type,
+                    {
+                        "ok": False,
+                        "error": refusal.message(),
+                        "code": "terminal-command-refused",
+                        "params": {"rule": refusal.rule, "segment": refusal.segment},
+                    },
+                )
+            )
+            return
     sender = agent_messaging.get(from_pane_id)
     from_display = agent_messaging.sender_display(
         from_pane_id, str(payload.get("from_name") or "")

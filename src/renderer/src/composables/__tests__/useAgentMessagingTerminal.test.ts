@@ -154,3 +154,26 @@ describe('useAgentMessaging — refuseDelivery', () => {
     expect(single.status).toBe('delivered')
   })
 })
+
+describe('useAgentMessaging — a delivery refused for good', () => {
+  it('fails the message with the refusal the deliver dep returned, and tells the sender', async () => {
+    _resetMessagingForTest()
+    const reports: Array<{ ok: boolean; reason: MessageReason | null }> = []
+    const refusal: MessageReason = { key: 'raw', params: { text: 'refused to type into a terminal: `sudo ls`' } }
+    const m = useAgentMessaging()
+    m.configureMessaging({
+      now: () => 1_000_000,
+      deliver: async () => ({ failed: refusal }),
+      isPaneIdle: () => true,
+      reportDelivery: (_k, ok, reason) => { reports.push({ ok, reason }) },
+    })
+    m.registerPane('shell', TERMINAL_AGENT_KEY, 'sh')
+    m.acceptRemoteMessage({
+      msgKey: 'k1', targetPaneId: 'shell', fromDisplay: 'mcp', content: 'sudo ls',
+    } as Parameters<typeof m.acceptRemoteMessage>[0])
+    m.pump()
+    await flush()
+    expect(reports).toEqual([{ ok: false, reason: refusal }])
+    expect(m.messages.value.find((x) => x.content === 'sudo ls')?.status).toBe('failed')
+  })
+})

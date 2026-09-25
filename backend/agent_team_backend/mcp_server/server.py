@@ -975,7 +975,9 @@ async def cli_open_agent(
     bare prompt. `model`, `effort` and `session_id` are refused for it. Its
     kickoff is typed once and never retyped (a retype would run the command
     twice), so an unconfirmed one answers "unverified": read cli_read_log
-    before resending. Talk to it afterwards with cli_send — see there.
+    before resending. A destructive `task` is refused before the pane opens
+    (error_code "terminal-command-refused" — see cli_send). Talk to it
+    afterwards with cli_send — see there.
 
     The pane you open is related to you: you opened it, so its result needs to
     come back to you. When you talk to the user about it, use whatever reads
@@ -1176,6 +1178,14 @@ async def cli_open_agent(
             _resume_lineage, resume_workspace, agent_key, resume_id
         )
 
+    if agent_key == _TERMINAL_AGENT and (task or "").strip():
+        # Checked before the pane exists: a refused first command should not
+        # leave a shell behind that the caller then types into another way.
+        refused = _terminal_refusal(
+            task, workspace=target_workspace or _caller_workspace(caller), pane_id="", via="cli_open_agent"
+        )
+        if refused:
+            return refused
     request_id = f"{me or caller.kind}:spawn:{secrets.token_hex(8)}"
     loop = asyncio.get_running_loop()
     future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -1747,6 +1757,23 @@ async def _send_to_group(
     }
 
 
+def _terminal_refusal(text: str, *, workspace: str, pane_id: str, via: str) -> dict[str, Any] | None:
+    """The tool answer for a command a terminal must not be typed, or None.
+    See guard.terminal_policy: refused whatever the Guard switch says, audited,
+    and shown on the pane; nothing is broadcast, so no window ever sees it."""
+    from agent_team_backend.guard import terminal_policy
+
+    refusal = terminal_policy.enforce(text, workspace=workspace, pane_id=pane_id, via=via)
+    if refusal is None:
+        return None
+    return {
+        "ok": False,
+        "error": refusal.message(),
+        "error_code": "terminal-command-refused",
+        "refused": refusal.as_dict(),
+    }
+
+
 class TerminalExternalRefused(Exception):
     """External content (a chat channel, another device) addressed to a plain
     terminal pane. Refused here, before it is broadcast or taints anything:
@@ -1874,9 +1901,21 @@ async def cli_send(
     time) when the shell has no bracketed paste, and a message still queued
     after 2 minutes fails rather than running late. A terminal cannot reply, is
     left out of `to: "group"` broadcasts, and refuses content from a chat
-    channel or remote device. Guard marks a terminal as externally influenced
-    but cannot block what is typed into it: its command checks run in CLI tool
-    hooks, which a plain shell does not have.
+    channel or remote device.
+
+    Destructive commands are refused for a terminal, never typed — whatever
+    the Guard switch says. The line is split into segments (; && || | &,
+    newlines, $( ), backticks) and one refused segment refuses it all:
+    anything Guard rates critical (high too, if the user turned that
+    category on — it is off by default), recursive deletes of / ~ or outside
+    the workspace (Remove-Item -Recurse C:\\ and rmdir /s too), sudo/su/doas,
+    disk formatting and raw device writes, shutdown/reboot, killall/pkill,
+    recursive chmod/chown on / or ~, writes into system folders, disabling
+    services, fork bombs, piping a download into a shell, credential files,
+    force-pushing main, and lines that cannot be judged statically. The answer
+    is ok: false with error_code "terminal-command-refused" and `refused`
+    {rule, segment, reason}; tell the user to run it themselves. The user
+    tunes the categories and patterns in Settings → Security.
 
     `to: "group"` broadcasts instead: every other pane in YOUR OWN tab group,
     in your own workspace. Deliberately narrower than the bare-line protocol's
@@ -2141,6 +2180,10 @@ async def _send(
         opened = {"realized": True, "reason": open_result["reason"]}
         target = open_result["pane"]
 
+    if target.agent_key == _TERMINAL_AGENT and send_kind != "ack":
+        refused = _terminal_refusal(text, workspace=target.workspace_path, pane_id=target.pane_id, via="cli_send")
+        if refused:
+            return refused
     msg_key = await _dispatch_delivery(
         target,
         text,

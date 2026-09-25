@@ -1,6 +1,6 @@
 """navide.db persistence for the guard: audit log, taint marks, user rules.
 
-Component "guard", schema v2. Only guard_* tables and the ``guard.enabled``
+Component "guard", schema v3. Only guard_* tables and the ``guard.enabled``
 kv key are touched.
 """
 
@@ -55,12 +55,37 @@ def _v2(cur: sqlite3.Cursor) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS guard_taint_events_pane ON guard_taint_events(pane_id, id)")
 
 
+def _v3(cur: sqlite3.Cursor) -> None:
+    """Terminal command protection (see terminal_policy): one row per built-in
+    category, seeded with its default, and the user's block patterns / allow
+    prefixes. A category with no row — one added after this migration ran —
+    takes its default."""
+    from .terminal_policy import CATEGORY_IDS, DEFAULT_OFF
+
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guard_terminal_categories ("
+        " id TEXT PRIMARY KEY, enabled INTEGER NOT NULL)"
+    )
+    cur.executemany(
+        "INSERT OR IGNORE INTO guard_terminal_categories (id, enabled) VALUES (?, ?)",
+        [(c, int(c not in DEFAULT_OFF)) for c in CATEGORY_IDS],
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guard_terminal_patterns ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " kind TEXT NOT NULL CHECK (kind IN ('block', 'allow')),"
+        " pattern TEXT NOT NULL, created REAL NOT NULL)"
+    )
+
+
 class GuardStore:
     def __init__(self, db: Database) -> None:
         self._db = db
         db.migrate(COMPONENT, 1, _v1)
         db.migrate(COMPONENT, 2, _v2)
+        db.migrate(COMPONENT, 3, _v3)
         self._inserts = 0
+        self._terminal_cache: Any = None
 
     # ── enabled ──────────────────────────────────────────────────────
 
@@ -213,3 +238,73 @@ class GuardStore:
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM guard_rules WHERE id = ?", (int(rule_id),))
             return cur.rowcount > 0
+
+    # ── terminal command protection ──────────────────────────────────
+
+    def terminal_settings(self) -> Any:
+        """terminal_policy.Settings as saved, cached until a setter runs."""
+        from .terminal_policy import CATEGORY_IDS, DEFAULT_OFF, Settings
+
+        cached = self._terminal_cache
+        if cached is not None:
+            return cached
+        with self._db.transaction() as cur:
+            rows = {r["id"]: bool(r["enabled"]) for r in cur.execute(
+                "SELECT id, enabled FROM guard_terminal_categories").fetchall()}
+        off = [c for c in CATEGORY_IDS if not rows.get(c, c not in DEFAULT_OFF)]
+        with self._db.transaction() as cur:
+            pats = cur.execute("SELECT kind, pattern FROM guard_terminal_patterns ORDER BY id").fetchall()
+        settings = Settings(
+            disabled=frozenset(off),
+            block_patterns=tuple(r["pattern"] for r in pats if r["kind"] == "block"),
+            allow_prefixes=tuple(r["pattern"] for r in pats if r["kind"] == "allow"),
+        )
+        self._terminal_cache = settings
+        return settings
+
+    def terminal_patterns(self) -> list[dict[str, Any]]:
+        with self._db.transaction() as cur:
+            rows = cur.execute("SELECT * FROM guard_terminal_patterns ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def terminal_set_category(self, category: str, enabled: bool) -> None:
+        from .terminal_policy import CATEGORY_IDS
+
+        if category not in CATEGORY_IDS:
+            raise ValueError(f"unknown category: {category}")
+        with self._db.transaction() as cur:
+            cur.execute(
+                "INSERT INTO guard_terminal_categories (id, enabled) VALUES (?, ?)"
+                " ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled",
+                (category, int(bool(enabled))),
+            )
+        self._terminal_cache = None
+
+    def terminal_add_pattern(self, kind: str, pattern: str) -> int:
+        from .terminal_policy import validate_pattern
+
+        if kind not in ("block", "allow"):
+            raise ValueError("kind must be 'block' or 'allow'")
+        problem = validate_pattern(pattern)
+        if problem:
+            raise ValueError(problem)
+        with self._db.transaction() as cur:
+            cur.execute(
+                "INSERT INTO guard_terminal_patterns (kind, pattern, created) VALUES (?,?,?)",
+                (kind, pattern.strip(), time.time()),
+            )
+            new_id = int(cur.lastrowid)
+        self._terminal_cache = None
+        return new_id
+
+    def terminal_pattern(self, pattern_id: int) -> dict[str, Any] | None:
+        with self._db.transaction() as cur:
+            row = cur.execute("SELECT * FROM guard_terminal_patterns WHERE id = ?", (int(pattern_id),)).fetchone()
+        return dict(row) if row else None
+
+    def terminal_remove_pattern(self, pattern_id: int) -> bool:
+        with self._db.transaction() as cur:
+            cur.execute("DELETE FROM guard_terminal_patterns WHERE id = ?", (int(pattern_id),))
+            removed = cur.rowcount > 0
+        self._terminal_cache = None
+        return removed
