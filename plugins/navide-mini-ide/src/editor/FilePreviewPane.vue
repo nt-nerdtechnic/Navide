@@ -34,10 +34,14 @@ const rawUrl = ref('')
 // The Host supplies an authenticated resource URL, including the existing
 // relative-subresource and Range behavior. No backend credential enters UI.
 const pageUrl = ref('')
+// null = no failure seen; '' = failed without detail; otherwise the detail.
+// Also set when the Host refuses to resolve the resource at all.
+const rawError = ref<string | null>(null)
 let resourceReady: Promise<void> = Promise.resolve()
 async function loadPageUrl(): Promise<void> {
   rawUrl.value = ''
   pageUrl.value = ''
+  rawError.value = null
   const workspacePath = props.workspacePath
   const relPath = props.relPath
   const resp = await props.backend.send<{ url: string }>('fs.preview_resource', {
@@ -46,6 +50,7 @@ async function loadPageUrl(): Promise<void> {
   if (props.workspacePath !== workspacePath || props.relPath !== relPath) return
   rawUrl.value = resp.payload?.url ?? ''
   pageUrl.value = rawUrl.value
+  if (!rawUrl.value) rawError.value = resp.error?.message ?? ''
 }
 watch(() => [props.workspacePath, props.relPath, kind.value], () => { resourceReady = loadPageUrl() }, { immediate: true })
 
@@ -106,6 +111,41 @@ const pdfSupported =
     ? navigator.pdfViewerEnabled
     : true
 const pdfLoaded = ref(false)
+
+// ── Raw load failure ──────────────────────────────────────────────────────────
+// <img>/<video>/<audio> report failures through their error event, but an
+// iframe fires load even for a 403 page, so the PDF branch probes the resource.
+function onRawError(): void {
+  rawError.value ??= ''
+}
+
+async function probePdf(url: string): Promise<void> {
+  let detail: string | null = null
+  try {
+    const resp = await fetch(url, { headers: { Range: 'bytes=0-0' } })
+    // 416: the file exists but is empty, so no byte range can be satisfied.
+    if (!resp.ok && resp.status !== 416) detail = `HTTP ${resp.status}`
+  } catch (err) {
+    detail = err instanceof Error ? err.message : String(err)
+  }
+  // Ignore answers for a file that is no longer shown.
+  if (detail !== null && url === rawUrl.value) rawError.value = detail
+}
+
+function loadRaw(url: string): void {
+  if (!url) return
+  rawError.value = null
+  if (kind.value === 'pdf' && pdfSupported) void probePdf(url)
+}
+
+watch(rawUrl, loadRaw)
+
+// Clearing the error remounts <img>/<video>/<audio>, which loads again; the
+// PDF branch re-probes. A resource the Host never resolved is asked for again.
+function retryRaw(): void {
+  if (rawUrl.value) loadRaw(rawUrl.value)
+  else resourceReady = loadPageUrl()
+}
 
 // ── Hex dump (unknown binary) ─────────────────────────────────────────────────
 const HEX_LIMIT = 65536
@@ -188,28 +228,48 @@ onMounted(() => {
 
     <!-- Image -->
     <div v-if="kind === 'image'" class="fpv-body fpv-image-body">
+      <div v-if="rawError !== null" class="fpv-raw-error">
+        {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
+      </div>
       <img
+        v-else
         :src="rawUrl"
         class="fpv-img"
         :class="fitToWindow ? 'fpv-img--fit' : 'fpv-img--full'"
         :alt="name"
         @load="onImgLoad"
+        @error="onRawError"
       />
     </div>
 
     <!-- Video -->
     <div v-else-if="kind === 'video'" class="fpv-body fpv-media-body">
-      <video class="fpv-video" controls :src="rawUrl" />
+      <div v-if="rawError !== null" class="fpv-raw-error">
+        {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
+      </div>
+      <video v-else class="fpv-video" controls :src="rawUrl" @error="onRawError" />
     </div>
 
     <!-- Audio -->
     <div v-else-if="kind === 'audio'" class="fpv-body fpv-media-body">
-      <audio class="fpv-audio" controls :src="rawUrl" />
+      <div v-if="rawError !== null" class="fpv-raw-error">
+        {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
+      </div>
+      <audio v-else class="fpv-audio" controls :src="rawUrl" @error="onRawError" />
     </div>
 
     <!-- PDF -->
     <template v-else-if="kind === 'pdf'">
-      <div v-if="pdfSupported" class="fpv-body fpv-pdf-body">
+      <div v-if="pdfSupported && rawError !== null" class="fpv-body fpv-media-body">
+        <div class="fpv-raw-error">
+          {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+          <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
+        </div>
+      </div>
+      <div v-else-if="pdfSupported" class="fpv-body fpv-pdf-body">
         <div v-if="!pdfLoaded" class="fpv-pdf-loading">{{ $t('label.loading') }}</div>
         <iframe
           class="fpv-pdf-frame"
@@ -447,6 +507,14 @@ onMounted(() => {
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--font-xs);
+}
+.fpv-raw-error {
+  color: var(--danger-fg, #e5534b);
+  font-size: var(--font-xs);
+  text-align: center;
+}
+.fpv-retry-btn {
+  margin-left: 8px;
 }
 .fpv-hex-status {
   color: var(--text-secondary);
