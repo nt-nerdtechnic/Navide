@@ -88,16 +88,16 @@ describe('the subtree summary text', () => {
 
   it('names the selected status and only its own count', () => {
     // Two running, one awaiting: awaiting wins, and it counts one — not three.
-    expect(paneListSubtreeText('lead')).toBe(`${paneStatusLabelText('awaiting')} 1`)
-    expect(paneListSubtreeText('solo')).toBe(`${paneStatusLabelText('running')} 1`)
+    expect(paneListSubtreeText('lead')).toBe(`sub ${paneStatusLabelText('awaiting')} 1`)
+    expect(paneListSubtreeText('solo')).toBe(`sub ${paneStatusLabelText('running')} 1`)
     views.value = [...views.value, { id: 'kid2', spawnedBy: 'solo', status: 'running' }]
-    expect(paneListSubtreeText('solo')).toBe(`${paneStatusLabelText('running')} 2`)
+    expect(paneListSubtreeText('solo')).toBe(`sub ${paneStatusLabelText('running')} 2`)
     expect(paneListSubtreeText('a')).toBe('')
   })
 
   it('is translated, not hard-coded', () => {
     i18n.global.locale.value = 'zh-TW'
-    expect(paneListSubtreeText('lead')).toBe(`${paneStatusLabelText('awaiting')} 1`)
+    expect(paneListSubtreeText('lead')).toBe(`sub ${paneStatusLabelText('awaiting')} 1`)
   })
 })
 

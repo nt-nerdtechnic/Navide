@@ -18637,7 +18637,7 @@ function paneListSubtreeAttrs(id: string): Record<string, unknown> {
   }
 }
 
-/** The subtree signal as status and count — "Running 1" — under the card's
+/** The subtree signal as status and count — "sub Running 1" — under the card's
  *  badge; the chip's title spells out that the count is of child panes. */
 function paneListSubtreeText(id: string): string {
   const sub = paneListSubtree.value.get(id)
@@ -21610,7 +21610,7 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-loop.waiting {
   opacity: 0.55;
 }
-/* The parent card's subtree summary, "Running 1", under the card's badge
+/* The parent card's subtree summary, "sub Running 1", under the card's badge
    and painted in the loudest status among its spawned descendants (see
    paneListSubtree). Only the states that mean
    something is still moving or stuck get a rule — idle and below never render

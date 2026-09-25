@@ -549,7 +549,7 @@
       "auto-named-tooltip": "Named automatically from this session's first instruction — rename it and it stays yours",
       "loop-tag-tooltip": "Loop is running on this pane",
       "subtree-tooltip": "{count} spawned pane(s) {status} under this one",
-      "subtree-summary": "{status} {count}",
+      "subtree-summary": "sub {status} {count}",
       "location-minimized": "Minimized to sidebar",
       "location-tab": "Tab: {name}",
       "location-workspace": "Project: {name}",
