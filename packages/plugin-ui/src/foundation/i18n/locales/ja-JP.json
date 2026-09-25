@@ -8079,6 +8079,7 @@
     "terminal-opened": "ターミナルで実行しました：{command}。完了したら「再検出」をクリックしてください。",
     "run-finished": "完了しました：{command}",
     "run-failed": "{command} は成功しませんでした：{error}",
+    "start-failed": "{label} のコマンドを開始できませんでした：{error}",
     "terminal-failed": "ターミナルを開けませんでした：{error}",
     "command-unavailable": "{label} には、この操作用の公式コマンドがありません。",
     "footnote": "更新すると実行ファイルが置き換わります。すでに実行中のセッションは、再起動するまで以前の実行ファイルを使用します。",

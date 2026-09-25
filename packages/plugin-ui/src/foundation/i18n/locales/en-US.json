@@ -8079,6 +8079,7 @@
     "terminal-opened": "Opened in Terminal: {command}. Click Re-detect when it finishes.",
     "run-finished": "Finished: {command}",
     "run-failed": "{command} did not succeed: {error}",
+    "start-failed": "Could not start the {label} command: {error}",
     "terminal-failed": "Could not open Terminal: {error}",
     "command-unavailable": "{label} ships no official command for this action.",
     "footnote": "Updates replace the binary; sessions already running keep the old one until they restart.",

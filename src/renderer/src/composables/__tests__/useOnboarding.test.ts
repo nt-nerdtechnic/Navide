@@ -261,6 +261,43 @@ describe('useOnboarding', () => {
     scope.stop()
   })
 
+  it('dispose kills a command whose start was still in flight once its id arrives', async () => {
+    // Closing Settings while onboarding.run is being answered used to leave the
+    // PTY running with no surface to show it or answer its sudo prompt.
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    void result.install(result.cliDeps.value[0])
+    expect(result.run.value?.state).toBe('starting')
+    result.dispose()
+    await flush()
+    expect(mock.sent.filter((s) => s.type === 'terminal.kill').map((s) => s.payload))
+      .toEqual([{ terminal_session_id: 'run-1' }])
+    scope.stop()
+  })
+
+  it('a cancel that could not be sent leaves Cancel usable and the run not cancelled', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    mock.setRejection('terminal.kill', 'ws not open')
+    await result.cancelRun()
+    expect(result.run.value?.cancelled).toBe(false)
+    expect(result.logLines.value.join('\n')).toContain('Could not cancel: ws not open')
+    mock.setResponse('onboarding.status', status({ cli: true }))
+    await exitRun(mock, 0)
+    const r = await pending
+    expect(r?.ok).toBe(true)
+    expect(r?.cancelled).toBeUndefined()
+    scope.stop()
+  })
+
   it('a dropped connection ends the run instead of leaving it running forever', async () => {
     // The backend kills the run with the connection, and that exit event goes
     // to the dead socket — nothing else would ever settle the install.
@@ -436,7 +473,8 @@ describe('useOnboarding', () => {
     mock.setRejection('onboarding.run', 'ws not open')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await expect(result.startOllamaService()).resolves.toBeNull()
+    await expect(result.startOllamaService()).resolves
+      .toEqual({ ok: false, error: 'ws not open', unanswered: true })
     expect(result.logLines.value.join('\n')).toContain('ws not open')
     scope.stop()
   })

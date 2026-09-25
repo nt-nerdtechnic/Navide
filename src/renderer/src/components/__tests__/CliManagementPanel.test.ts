@@ -262,6 +262,21 @@ describe('CliManagementPanel', () => {
     expect(wrapper!.find('[data-testid="install-terminal"]').exists()).toBe(false)
   })
 
+  it('says why when the command could not even be requested', async () => {
+    // Settings has no log view: a timed-out or disconnected start used to
+    // leave the panel showing nothing at all.
+    const mock = await mountPanel()
+    mock.setRejection('onboarding.run', 'request onboarding.run timeout')
+
+    const update = wrapper!.findAll('button').find((button) => button.text().includes('claude update'))
+    await update!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper!.get('.cm-message').text()).toBe(i18n.global.t('cli-manage.start-failed', {
+      label: 'Claude Code', error: 'request onboarding.run timeout',
+    }))
+  })
+
   it('offers to reinstall an installed CLI through the vendor install command', async () => {
     // A CLI the launch guide flagged (and the user dismissed) still needs a
     // repair path in settings: the guided dialog reads an installed CLI as

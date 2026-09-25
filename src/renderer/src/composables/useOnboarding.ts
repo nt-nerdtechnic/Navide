@@ -156,6 +156,8 @@ export interface InstallResult {
   /** How the run ended: its exit code, null when it never reported one. */
   exit_code?: number | null
   cancelled?: boolean
+  /** The request itself failed (timeout, lost connection): `error` says why. */
+  unanswered?: boolean
 }
 
 /** The command running (or just finished) in this surface's install terminal. */
@@ -273,6 +275,9 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   let runBytes = 0
   const runSinks = new Set<(data: Uint8Array) => void>()
   let runSize = { cols: 100, rows: 24 }
+  /** The surface went away; a run whose start was still in flight is killed
+   *  as soon as its id arrives, since nothing is left to show or answer it. */
+  let disposed = false
 
   function log(line: string): void {
     logLines.value = [...logLines.value, line].slice(-200)
@@ -409,6 +414,7 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
     runId = r.run_id
     run.value = { ...run.value!, runId, command: r.command ?? '', state: 'running' }
     log(`▶ ${r.command ?? label}`)
+    if (disposed) void cancelRun()
     for (const [kind, p] of early) {
       if (kind === 'out') onOutput(p)
       else onExit(p)
@@ -427,6 +433,10 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
       await backend.send('terminal.kill', { terminal_session_id: current.runId })
     } catch (e) {
       log(`✗ Could not cancel: ${e instanceof Error ? e.message : String(e)}`)
+      // Still running: re-enable Cancel, and do not report a later exit as cancelled.
+      if (run.value?.runId === current.runId && run.value.state === 'running') {
+        run.value = { ...run.value, cancelled: false }
+      }
     }
   }
 
@@ -470,6 +480,7 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
 
   /** Release timers and kill a command still running — the surface is going away. */
   function dispose(): void {
+    disposed = true
     stopElapsed()
     void cancelRun()
   }
@@ -584,8 +595,11 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
     try {
       outcome = await startRun(key, label, request)
     } catch (e) {
-      log(`✗ ${label}: ${e instanceof Error ? e.message : String(e)}`)
-      return null
+      const reason = e instanceof Error ? e.message : String(e)
+      log(`✗ ${label}: ${reason}`)
+      // A result, not null: null means "not started, nothing to say" to callers
+      // (CLI management has no log view and would show nothing at all).
+      return { ok: false, error: reason, unanswered: true }
     }
     const { result: r, exit } = outcome
     if (!exit) {

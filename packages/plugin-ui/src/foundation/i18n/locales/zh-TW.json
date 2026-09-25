@@ -8079,6 +8079,7 @@
     "terminal-opened": "已在終端機開啟：{command}。完成後請按「重新偵測」。",
     "run-finished": "已完成：{command}",
     "run-failed": "{command} 沒有成功：{error}",
+    "start-failed": "無法啟動 {label} 的指令：{error}",
     "terminal-failed": "無法開啟終端機：{error}",
     "command-unavailable": "{label} 沒有提供這個動作的官方指令。",
     "footnote": "更新會替換 binary；已在執行中的 session 要重新啟動才會套用新版本。",
