@@ -3544,6 +3544,12 @@ const TRUST_CONFIRM_ACTIONS = new Set([
   'p2p.trust.rebuild',
   // Writes an agent-requested skill into the shared library.
   'skills.install_approval.decide',
+  // Loosening terminal command protection (switching a category off, adding
+  // an allow prefix, removing a block pattern) — the backend demands a token
+  // only for those, so tightening needs no prompt.
+  'guard.terminal.set_category',
+  'guard.terminal.add_pattern',
+  'guard.terminal.remove_pattern',
 ])
 ipcMain.handle('trust:confirm', async (event, action: unknown, deviceId: unknown, subject: unknown) => {
   // Minting is the one thing this list exists to keep away from anything

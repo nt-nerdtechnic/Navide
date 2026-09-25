@@ -9026,6 +9026,55 @@
       "run": "判定",
       "unparseable": "静的に判断できません（変数展開、eval、エンコードされたスクリプト）。"
     },
+    "terminal": {
+      "title": "ターミナルコマンド保護",
+      "hint": "Agent、MCP クライアント、スケジュールされたジョブのために Navide がプレーンな Terminal Pane へ決して打ち込まないコマンドです。Guard のスイッチに関係なく拒否されます。行は ; && {'|'}{'|'} {'|'} & と改行で分けて検査され、1 つでも拒否されれば行全体が拒否されます。ご自身の入力は検査されません。",
+      "default-off": "既定でオフ",
+      "loosen-confirm": "カテゴリをオフにするときは確認が必要です。オンにするときは不要です。",
+      "category": {
+        "rm-system": "ルート・ホーム・workspace 外の再帰削除",
+        "privilege": "別ユーザーや管理者としての実行",
+        "disk": "ディスクのフォーマット、消去、直接書き込み",
+        "power": "シャットダウン、再起動、停止",
+        "mass-kill": "名前やパターンによるプロセスの一括終了",
+        "recursive-perms": "ルート・ホーム・システムフォルダへの再帰的な権限・所有者変更",
+        "system-write": "システムフォルダへの書き込み",
+        "service-disable": "システムサービスの停止・無効化",
+        "fork-bomb": "Fork bomb",
+        "pipe-to-shell": "ネットワークから取得したスクリプトの直接実行",
+        "credential": "認証情報ファイル（SSH、クラウドキー、Keychain、.env）",
+        "force-push-main": "main／master への force-push や削除",
+        "classifier-critical": "Guard が critical と判定するその他のもの",
+        "classifier-high": "Guard が high と判定するその他のもの（git push、git reset --hard、workspace 内の rm -rf）",
+        "unanalyzable": "静的に判定できない行"
+      },
+      "block": {
+        "title": "追加のブロックパターン",
+        "hint": "いずれかに一致するセグメントを拒否します。通常の文字列はどこに現れても一致し、* ? [ ] を含むと glob になります。",
+        "placeholder": "例: docker system prune"
+      },
+      "allow": {
+        "title": "許可の例外",
+        "warning": "これらのプレフィックスで始まるセグメントは上の組み込み検査をすべて飛ばします。完全に信頼できるコマンドだけを追加してください。ブロックパターンは引き続き適用され、ダウンロードをシェルにパイプすることは決して許可されません。追加には確認が必要です。",
+        "placeholder": "コマンドの正確なプレフィックス（例: git push origin）"
+      },
+      "problem": {
+        "empty": "パターンを入力してください。",
+        "too-long": "パターンが 500 文字を超えています。",
+        "control": "パターンに制御文字が含まれています。",
+        "bracket": "パターンに閉じていない [ ] があります。",
+        "match-all": "このパターンはすべてのコマンドに一致します。"
+      },
+      "rule": {
+        "block-pattern": "あなたのブロックパターン"
+      },
+      "test": {
+        "title": "コマンドをテスト",
+        "placeholder": "例: ls && sudo rm -rf /opt/app",
+        "refused": "拒否されます",
+        "allowed": "打ち込まれます"
+      }
+    },
     "taint": {
       "title": "外部の影響を受けた pane",
       "hint": "チャットアプリ、リモート端末、他の pane、MCP から内容を受け取った pane は、マークを解除するまで「高」と「重大」の操作をこのコンピューターで確認します。",

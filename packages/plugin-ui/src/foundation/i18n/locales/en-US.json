@@ -9026,6 +9026,55 @@
       "run": "Check",
       "unparseable": "Cannot be judged statically (variable expansion, eval, encoded script)."
     },
+    "terminal": {
+      "title": "Terminal command protection",
+      "hint": "Commands Navide never types into a plain terminal pane for an agent, an MCP client or a scheduled job — refused whatever the Guard switch says. Each part of a line (split at ; && {'|'}{'|'} {'|'} & and newlines) is checked; one refused part refuses the line. What you type yourself is not checked.",
+      "default-off": "Off by default",
+      "loosen-confirm": "Switching a category off asks for confirmation; switching one on does not.",
+      "category": {
+        "rm-system": "Recursive delete of root, home or outside the workspace",
+        "privilege": "Running as another user or administrator",
+        "disk": "Formatting, erasing or raw-writing a disk",
+        "power": "Shutdown, reboot, halt",
+        "mass-kill": "Killing processes by name or pattern",
+        "recursive-perms": "Recursive permission or owner change on root, home or system folders",
+        "system-write": "Writing into system folders",
+        "service-disable": "Stopping or disabling system services",
+        "fork-bomb": "Fork bombs",
+        "pipe-to-shell": "Running a script straight from the network",
+        "credential": "Credential files (SSH, cloud keys, Keychain, .env)",
+        "force-push-main": "Force-pushing to or deleting main / master",
+        "classifier-critical": "Anything else Guard rates critical",
+        "classifier-high": "Anything else Guard rates high (git push, git reset --hard, rm -rf inside the workspace)",
+        "unanalyzable": "Lines that cannot be judged statically"
+      },
+      "block": {
+        "title": "Extra block patterns",
+        "hint": "Refuse any part of a line matching one of these. Plain text matches anywhere; * ? [ ] make it a glob.",
+        "placeholder": "e.g. docker system prune"
+      },
+      "allow": {
+        "title": "Allow exceptions",
+        "warning": "A part of a line that starts with one of these prefixes skips every built-in check above — only add commands you fully trust. Block patterns still apply, and a download piped into a shell is never allowed. Adding one asks for confirmation.",
+        "placeholder": "Exact command prefix, e.g. git push origin"
+      },
+      "problem": {
+        "empty": "Type a pattern.",
+        "too-long": "The pattern is longer than 500 characters.",
+        "control": "The pattern contains a control character.",
+        "bracket": "The pattern has an unclosed [ ].",
+        "match-all": "This pattern would match every command."
+      },
+      "rule": {
+        "block-pattern": "Your block pattern"
+      },
+      "test": {
+        "title": "Test a command",
+        "placeholder": "e.g. ls && sudo rm -rf /opt/app",
+        "refused": "Would be refused",
+        "allowed": "Would be typed"
+      }
+    },
     "taint": {
       "title": "Panes with external influence",
       "hint": "A pane that received content from a chat app, a remote device, another pane or an MCP caller asks here before any High or Critical action, until you clear it.",

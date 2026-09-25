@@ -9026,6 +9026,55 @@
       "run": "判斷",
       "unparseable": "無法靜態判斷（含變數展開、eval 或編碼後執行）。"
     },
+    "terminal": {
+      "title": "終端機指令防護",
+      "hint": "Navide 絕不替 Agent、MCP 用戶端或排程工作打進一般 Terminal Pane 的指令 —— 不論 Guard 開關為何都會拒絕。一行會在 ; && {'|'}{'|'} {'|'} & 與換行處切開逐段檢查，任何一段被拒就整行拒絕。你自己打的內容不受檢查。",
+      "default-off": "預設關閉",
+      "loosen-confirm": "關閉類別需要確認；開啟不需要。",
+      "category": {
+        "rm-system": "遞迴刪除根目錄、家目錄或 workspace 以外",
+        "privilege": "以其他使用者或管理員身分執行",
+        "disk": "格式化、清除或直接寫入磁碟",
+        "power": "關機、重新開機、停機",
+        "mass-kill": "依名稱或樣式大量終止行程",
+        "recursive-perms": "對根目錄、家目錄或系統資料夾遞迴變更權限或擁有者",
+        "system-write": "寫入系統資料夾",
+        "service-disable": "停止或停用系統服務",
+        "fork-bomb": "Fork bomb",
+        "pipe-to-shell": "直接執行網路下載的腳本",
+        "credential": "憑證檔（SSH、雲端金鑰、Keychain、.env）",
+        "force-push-main": "Force-push 或刪除 main／master",
+        "classifier-critical": "其他被 Guard 判為 critical 的指令",
+        "classifier-high": "其他被 Guard 判為 high 的指令（git push、git reset --hard、workspace 內的 rm -rf）",
+        "unanalyzable": "無法靜態判斷的指令"
+      },
+      "block": {
+        "title": "額外封鎖樣式",
+        "hint": "符合任一樣式的片段一律拒絕。一般文字在任何位置出現即符合；含 * ? [ ] 時視為 glob。",
+        "placeholder": "例如 docker system prune"
+      },
+      "allow": {
+        "title": "允許例外",
+        "warning": "以這些前綴開頭的片段會跳過上面所有內建檢查 —— 只加入你完全信任的指令。封鎖樣式仍然適用，把下載內容 pipe 給 shell 永遠不會被允許。新增時需要確認。",
+        "placeholder": "完整的指令前綴，例如 git push origin"
+      },
+      "problem": {
+        "empty": "請輸入樣式。",
+        "too-long": "樣式超過 500 個字元。",
+        "control": "樣式含有控制字元。",
+        "bracket": "樣式有未閉合的 [ ]。",
+        "match-all": "這個樣式會符合所有指令。"
+      },
+      "rule": {
+        "block-pattern": "你的封鎖樣式"
+      },
+      "test": {
+        "title": "測試指令",
+        "placeholder": "例如 ls && sudo rm -rf /opt/app",
+        "refused": "會被拒絕",
+        "allowed": "會被打進去"
+      }
+    },
     "taint": {
       "title": "受外部影響的 pane",
       "hint": "收過聊天室、遠端裝置、其他 pane 或 MCP 送入內容的 pane，在你清除標記前，所有「高」與「嚴重」動作都會先在這台電腦上要求確認。",

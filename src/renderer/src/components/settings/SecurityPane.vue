@@ -16,6 +16,7 @@ import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingRow from './SettingRow.vue'
 import ToggleSwitch from './ToggleSwitch.vue'
+import TerminalProtectionSection from './TerminalProtectionSection.vue'
 
 /**
  * Settings → Security: Navide Guard. The on/off switch, what Guard does per
@@ -203,6 +204,8 @@ async function runTest(): Promise<void> {
         </form>
       </SettingsCard>
     </SettingsSection>
+
+    <TerminalProtectionSection :backend="backend" />
 
     <SettingsSection :label="t('guard.test.title')">
       <SettingsCard>
