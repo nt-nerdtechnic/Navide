@@ -470,6 +470,12 @@ def _path_within(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
+def _comparable_path(path: str) -> str:
+    # Git for Windows reports C:/Work/repo while the watcher reports the
+    # workspace as opened (c:\work\repo); NTFS ignores case and either separator.
+    return os.path.normcase(os.path.normpath(path))
+
+
 class PaneGitSnapshots:
     """`pane_git_snapshot` behind a per-worktree cache.
 
@@ -551,13 +557,18 @@ class PaneGitSnapshots:
         # git reports worktree roots with symlinks resolved (/var → /private/var
         # on macOS), while the watcher reports the workspace as it was opened,
         # so compare both spellings or a change would never reach its entry.
-        changed = {changed_path, os.path.realpath(changed_path)}
+        changed = {
+            _comparable_path(changed_path),
+            _comparable_path(os.path.realpath(changed_path)),
+        }
         for key in list(self._entries):
-            if any(_path_within(key, c) or _path_within(c, key) for c in changed):
+            k = _comparable_path(key)
+            if any(_path_within(k, c) or _path_within(c, k) for c in changed):
                 del self._entries[key]
         # A path that was outside any repository may be inside one now (git init).
         for path, root in list(self._root_of.items()):
-            if not root and any(_path_within(path, c) for c in changed):
+            p = _comparable_path(path)
+            if not root and any(_path_within(p, c) for c in changed):
                 del self._root_of[path]
 
 

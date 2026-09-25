@@ -7,6 +7,7 @@ fake compute and clock so they can count exactly how often git would run.
 from __future__ import annotations
 
 import asyncio
+import ntpath
 import os
 import subprocess
 from pathlib import Path
@@ -299,6 +300,28 @@ class TestPaneGitSnapshotsCache:
         assert len(calls) == 2
         cache.invalidate("/w/repo/src")  # a folder inside it
         await cache.get("/w/repo")
+        assert len(calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_invalidate_matches_windows_spellings(self, monkeypatch) -> None:
+        """Git for Windows reports ``C:/Work/repo``; the watcher reports the
+        workspace as opened, e.g. ``c:\\work``. NTFS paths compare
+        case-insensitively and either separator names the same folder."""
+        monkeypatch.setattr(git_service, "os", SimpleNamespace(path=ntpath, sep="\\"))
+        calls: list[str] = []
+        cache = git_service.PaneGitSnapshots(
+            compute=_fake_compute({"C:\\Work\\repo": "C:/Work/repo"}, calls),
+            clock=_FakeClock(),
+        )
+        await cache.get("C:\\Work\\repo")
+        cache.invalidate("C:\\Work\\other")  # unrelated: kept
+        await cache.get("C:\\Work\\repo")
+        assert len(calls) == 1
+        cache.invalidate("c:\\work")  # a folder holding the repo
+        await cache.get("C:\\Work\\repo")
+        assert len(calls) == 2
+        cache.invalidate("C:\\Work\\Repo\\src")  # a folder inside it
+        await cache.get("C:\\Work\\repo")
         assert len(calls) == 3
 
     @pytest.mark.asyncio
