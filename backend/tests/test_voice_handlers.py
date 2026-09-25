@@ -777,6 +777,46 @@ async def test_a_partial_after_a_slow_one_does_not_wait_for_the_next_second(
     await _send(session, "voice.cancel", {"sessionId": sid})
 
 
+async def test_a_partial_over_its_budget_is_cancelled_and_streaming_goes_on(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One decode stalls (whisper decoding a hallucinated repetition): it is
+    # cancelled once over its budget instead of holding every later partial.
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "10")
+    monkeypatch.setenv("FAKE_STT_DELAY_ONLY", "3")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(40))
+    await _settle(session)
+    requests = [r for r in _requests(stream) if r["segments"]]
+    stalled = requests[2]
+    assert stalled["cancelled"] and stalled["end"] - stalled["start"] < 2, stalled
+    later = requests[3:]
+    assert later and not any(r["cancelled"] for r in later)
+    assert len(_partials(session)) >= 3
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == _text(40)
+
+
+async def test_the_budget_grows_when_every_partial_is_slow(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every decode takes 0.5 s (a loaded machine): the first partial overruns
+    # the 0.3 s floor, and counting it as having taken that long lets the
+    # next ones finish rather than cancelling them all.
+    monkeypatch.setattr(voice_handlers, "_PARTIAL_BUDGET_MIN_S", 0.3)
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "0.5")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(24))
+    await _settle(session)
+    requests = [r for r in _requests(stream) if r["segments"]]
+    assert requests[0]["cancelled"]
+    assert any(not r["cancelled"] for r in requests[1:]), requests
+    assert _partials(session)
+    await _send(session, "voice.cancel", {"sessionId": sid})
+
+
 async def test_stop_cancels_an_in_flight_partial_then_runs_the_tail(
     stream: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

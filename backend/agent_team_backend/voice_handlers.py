@@ -84,6 +84,16 @@ _PARTIAL_POLL_S = 0.05
 # _PARTIAL_MIN_WINDOW_BYTES long.
 _PARTIAL_MIN_NEW_BYTES = _BYTES_PER_SECOND // 2
 _PARTIAL_MIN_WINDOW_BYTES = _BYTES_PER_SECOND
+# A partial is cancelled (the sidecar aborts it) once it runs this many times
+# longer than recent partials took, and never before _PARTIAL_BUDGET_MIN_S.
+# Whisper sometimes hallucinates a repetition at the end of a window cut
+# mid-speech and decodes it to its token limit, then again at each fallback
+# temperature: seconds for a window that normally takes a fraction of one,
+# more under load. Partials are optional; the next one hears more audio. A
+# cancelled partial counts as having taken its budget, so when every decode
+# slows down (load) the budget grows instead of cancelling them all.
+_PARTIAL_BUDGET_FACTOR = 3.0
+_PARTIAL_BUDGET_MIN_S = 1.0
 # A window this long commits all but its last segment even without agreement.
 WINDOW_CAP_BYTES = _BYTES_PER_SECOND * 16
 # Segment boundaries usable as cut points (see _trusted).
@@ -144,6 +154,8 @@ class _Recording:
     context_before: str = ""
     partial_seq: int = 0
     partial_started: float = 0.0
+    # Moving average of how long recent partials took (seconds).
+    partial_took: float = 0.0
     ticker: asyncio.Task | None = None
     partial: asyncio.Task | None = None
 
@@ -665,18 +677,31 @@ async def _partial_loop(rec: _Recording) -> None:
             rec.partial = asyncio.create_task(_run_partial(rec))
 
 
+def _took_average(average: float, took: float) -> float:
+    return took if not average else 0.7 * average + 0.3 * took
+
+
 async def _run_partial(rec: _Recording) -> None:
     end = rec.size
     rec.heard = end
     started = time.monotonic()
+    budget = max(_PARTIAL_BUDGET_MIN_S, _PARTIAL_BUDGET_FACTOR * rec.partial_took)
     try:
-        result = await _transcribe_window(rec, end, pad=False, segments=True)
+        result = await asyncio.wait_for(_transcribe_window(rec, end, pad=False, segments=True), budget)
+    except asyncio.TimeoutError:
+        rec.partial_took = _took_average(rec.partial_took, budget)
+        log.info(
+            "voice.partial over budget window_ms=%d budget_ms=%d",
+            (end - rec.win_start) * 1000 // _BYTES_PER_SECOND, int(budget * 1000),
+        )
+        return
     except stt_service.SidecarError as err:
         log.info("voice.partial: sidecar failed: %s", err)
         return
     if not result.get("ok"):
         log.info("voice.partial: transcription failed: %s", result.get("error"))
         return
+    rec.partial_took = _took_average(rec.partial_took, time.monotonic() - started)
     window = end - rec.win_start
     segments = result.get("segments")
     tentative = _apply_hypothesis(rec, segments if isinstance(segments, list) else [], window)

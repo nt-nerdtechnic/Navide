@@ -13,7 +13,8 @@ FAKE_STT_TAIL_NOISE=1 appends a digit that changes on every request to the
 last segment (an unstable last word), =all to every segment; FAKE_STT_SKEW_MS moves every
 boundary between two segments by that many ms (late if positive, early if
 negative), like whisper's approximate token timestamps; FAKE_STT_DELAY_S sleeps before answering (a
-``{"op":"cancel","target":id}`` cuts that short, like the real sidecar);
+``{"op":"cancel","target":id}`` cuts that short, like the real sidecar),
+only on the FAKE_STT_DELAY_ONLY-th transcribe request if that is set;
 FAKE_STT_LOG names a file that gets one JSON line per transcribe request.
 FAKE_STT_STARTED names a file that gets the request id once the audio has
 been read and the request is running (before FAKE_STT_DELAY_S), so a test
@@ -99,6 +100,7 @@ def main() -> int:
     decoding = os.environ.get("FAKE_STT_DECODE") == "1"
     tail_noise = os.environ.get("FAKE_STT_TAIL_NOISE") or ""
     delay = float(os.environ.get("FAKE_STT_DELAY_S") or 0)
+    delay_only = int(os.environ.get("FAKE_STT_DELAY_ONLY") or 0)
     hold = float(os.environ.get("FAKE_STT_HOLD_S") or 0)
     skew = int(os.environ.get("FAKE_STT_SKEW_MS") or 0)
     variants = os.environ.get("FAKE_STT_VARIANTS") == "1"
@@ -150,7 +152,8 @@ def main() -> int:
             if started_path:
                 with open(started_path, "a", encoding="utf-8") as fh:
                     fh.write(req["id"] + "\n")
-            while time.monotonic() - started < delay and req["id"] not in cancelled:
+            wait = delay if not delay_only or requests == delay_only else 0
+            while time.monotonic() - started < wait and req["id"] not in cancelled:
                 time.sleep(0.005)
             was_cancelled = req["id"] in cancelled
             if log_path:
