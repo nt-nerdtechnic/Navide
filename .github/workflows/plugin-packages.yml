@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit or tag to build
+        description: Full 40-character commit SHA, branch or tag to build (actions/checkout does not resolve short SHAs)
         required: true
         type: string
 
@@ -150,10 +150,11 @@ jobs:
         target: [darwin-arm64, linux-x64, linux-arm64, win32-x64, win32-arm64]
 
     steps:
-      - name: Check out requested ref
+      # The payload comes from the build artifact; this checkout only supplies
+      # the packing tool, so it uses the workflow's own revision. An older
+      # requested ref may predate `navide-plugin pack --target`.
+      - name: Check out packing tools
         uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
