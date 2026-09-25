@@ -836,6 +836,7 @@ class WindowsTerminalBackend:
     """`winpty.PTY` (ConPTY) with the child assigned to a kill-on-close job."""
 
     helper_waits_for_child: bool = True
+    reports_foreground: bool = False
 
     def parse_command(self, command: str) -> list[str]:
         return _split_command_line(command)

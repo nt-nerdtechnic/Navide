@@ -724,6 +724,24 @@ class TerminalService:
         """The session for ``session_id``, or None when unknown."""
         return self._sessions.get(session_id)
 
+    def shell_in_foreground(self, session_id: str) -> bool | None:
+        """Whether the PTY's own child (a plain terminal pane's login shell) is
+        the group in front of the tty — sitting at its prompt — rather than a
+        program it started (a running command, an editor, a sudo or ssh
+        password prompt, a REPL). None when that cannot be told: an unknown or
+        closed session, or Windows, whose handle reports the child's pid as
+        its foreground group whatever is running."""
+        session = self._sessions.get(session_id)
+        if session is None or session.closed or not osplat.terminal_backend.reports_foreground:
+            return None
+        fg = session.handle.foreground_group()
+        if fg <= 0:
+            return None
+        try:
+            return fg == osplat.process_tree.group_of(session.proc.pid)
+        except (ProcessLookupError, PermissionError):
+            return None
+
     def list_session_ids(self) -> list[str]:
         """Ids of all live (not closed) sessions."""
         return [s.id for s in self._sessions.values() if not s.closed]

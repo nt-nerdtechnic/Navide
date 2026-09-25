@@ -69,7 +69,7 @@ describe('injectText — bracketed paste', () => {
   it('wraps every injection the vendor can take it, not just multi-line ones', () => {
     const body = fn('injectText')
     expect(body).toContain('agentUsesBracketedPaste(')
-    expect(body).toMatch(/const bracketed = preserveNewlines\s*\n?\s*\|\| \(agentUsesBracketedPaste/)
+    expect(body).toMatch(/const agentBracketed = preserveNewlines\s*\n?\s*\|\| \(agentUsesBracketedPaste/)
   })
 
   it('asks the pane whether mode 2004 is actually on before wrapping a single line', () => {
@@ -90,7 +90,7 @@ describe('injectText — bracketed paste', () => {
     // behaviour IS bracketed — the guards are what stop embedded newlines from
     // submitting fragments.
     const body = fn('injectText')
-    expect(body).toContain('const bracketed = preserveNewlines')
+    expect(body).toContain('const agentBracketed = preserveNewlines')
     expect(body).toContain('preserveNewlines ? text : flattenForInjection(text)')
   })
 

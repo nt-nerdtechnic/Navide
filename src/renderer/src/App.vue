@@ -55,7 +55,7 @@ import Welcome from './components/Welcome.vue'
 import { agentUsesBracketedPaste } from '@navide/plugin-shell'
 import { useNotify, useTheme } from '@navide/plugin-ui/foundation'
 import { collapseHomePath, migrateTerminalPtyKey, saveAllScrollSnapshots, type DisplayStatus } from '@navide/terminal'
-import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER, TERMINAL_AGENT_KEY } from './composables/useAgentMessaging'
+import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER, rawReason, TERMINAL_AGENT_KEY } from './composables/useAgentMessaging'
 import type { PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
@@ -159,7 +159,7 @@ import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanD
 import { planExecutionPrompt } from './lib/planExecutePrompt'
 import {
   composerHoldsPayload, echoEvidence, echoTimeoutFor, normalizeForMatch,
-  submitBaseline, submitEvidence, type EchoEvidence, type SubmitEvidence,
+  shellSubmitEvidence, submitBaseline, submitEvidence, type EchoEvidence, type SubmitEvidence,
   SUBMIT_CONFIRM_MS, SUBMIT_SCREEN_LINES, TAIL_MATCH_LEN
 } from './lib/injectEcho'
 import { failedInjectReleasesHold } from './lib/deliveryHold'
@@ -167,6 +167,7 @@ import {
   awaitEcho, awaitInputUnblocked, createInputBlockTracker, needsInputWait, PROBE_SESSION_GONE
 } from './lib/ptyInputBlock'
 import { TERMINAL_KICKOFF_REASON, createKickoffReporter, runKickoffAttempts, terminalKickoffOutcome } from './lib/spawnKickoff'
+import { terminalMultilineRefusal } from './lib/terminalInput'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import { injectStandaloneTask, type StandaloneTaskInjectionDeps } from './lib/standalonePaneTask'
@@ -2108,7 +2109,7 @@ async function deliverAgentMessage(
   paneId: string,
   text: string,
   shouldAbort?: () => boolean,
-): Promise<boolean> {
+): Promise<boolean | null> {
   // Hold the badge on RUNNING until the recipient's log shows the message
   // consumed — released in the agent.activity handler, fused inside
   // useTerminal. Marked BEFORE the Enter, not after: an idle CLI writes the
@@ -2120,13 +2121,20 @@ async function deliverAgentMessage(
   if (panes.value.find((p) => p.id === paneId)?.agentKey !== TERMINAL_AGENT_KEY) {
     paneRefs[paneId]?.markDeliveredPending?.()
   }
-  const outcome: { leftInComposer?: boolean } = {}
+  const outcome: { leftInComposer?: boolean; foregroundBusy?: boolean } = {}
   // A PTY that stops reading holds the message on `pty-blocked` for as long
   // as it takes; the hold is what cli_check_message shows the sender meanwhile.
   const ok = await injectPane(
     paneId, text, 'agent-msg', true, shouldAbort, outcome,
     (held) => messaging.setDeliveringHold(paneId, held ? { key: 'pty-blocked' } : undefined),
   )
+  if (!ok && outcome.foregroundBusy) {
+    // A program took the shell's place between the gate's last look and the
+    // write; nothing was typed. Back to the head of the queue, held until the
+    // shell is at its prompt again.
+    terminalAtPrompt.set(paneId, false)
+    return null
+  }
   if (!ok) {
     // Not when the text is visibly still in the composer: the user can submit
     // it by hand, and the user record that follows releases the hold on its
@@ -2156,6 +2164,38 @@ async function deliverAgentMessage(
  *  it, or are pausing between words). Long enough to bridge a normal typing
  *  pause, short enough that a pane someone glanced at is not parked. */
 const TYPING_HOLD_MS = 4000
+/** terminalMultilineRefusal for this pane's shell as it is right now. */
+function paneMultilineRefusal(paneId: string, text: string): string | null {
+  return terminalMultilineRefusal(text, paneRefs[paneId]?.isBracketedPasteActive?.() === true)
+}
+
+/** TYPING_HOLD_MS for a plain terminal — see messagingHoldKey. */
+const TERMINAL_TYPING_HOLD_MS = 60_000
+
+/** Plain terminal pane id → whether its shell is at its prompt (true), has a
+ *  program in front of the tty (false), or cannot be told (absent / null —
+ *  Windows, an old backend). Read by messagingHoldKey. */
+const terminalAtPrompt = new Map<string, boolean | null>()
+
+/** Refresh terminalAtPrompt for every realized plain terminal. One tcgetpgrp
+ *  per session on the backend; a failed poll forgets what it knew rather than
+ *  keeping a stale "at prompt". */
+async function refreshTerminalPrompts(): Promise<void> {
+  const bySession = new Map<string, string>()
+  for (const p of panes.value) {
+    const sid = p.agentKey === TERMINAL_AGENT_KEY ? paneRefs[p.id]?.sessionId : undefined
+    if (sid) bySession.set(sid as string, p.id)
+  }
+  if (bySession.size === 0) { terminalAtPrompt.clear(); return }
+  try {
+    const resp = await backend.send<{ states?: Record<string, boolean | null> }>(
+      'terminal.shell_at_prompt', { terminal_session_ids: [...bySession.keys()] })
+    terminalAtPrompt.clear()
+    for (const [sid, paneId] of bySession) terminalAtPrompt.set(paneId, resp.payload?.states?.[sid] ?? null)
+  } catch {
+    terminalAtPrompt.clear()
+  }
+}
 
 /** idleHoldKey() dep: why a message cannot be injected into this pane right
  *  now, as an i18n key suffix under `msg.hold-*`, or null when it can be.
@@ -2208,12 +2248,22 @@ function messagingHoldKey(
     const typist = paneRefs[paneId]
     const hasDraft = typist?.hasDraft as boolean | undefined
     const lastKey = (typist?.lastUserKeyAt as number | undefined) ?? 0
-    if (hasDraft || (lastKey > 0 && now - lastKey < TYPING_HOLD_MS)) return 'typing'
+    // A shell line can hold text the draft tracker never saw (a recalled
+    // history entry, a tab completion), and whatever is on it runs with the
+    // injected text appended — so a terminal someone touched stays theirs for
+    // longer than an agent's composer does.
+    const holdMs = pane.agentKey === TERMINAL_AGENT_KEY ? TERMINAL_TYPING_HOLD_MS : TYPING_HOLD_MS
+    if (hasDraft || (lastKey > 0 && now - lastKey < holdMs)) return 'typing'
   }
   // A shell reports no turns, so its output is the only sign of work: while
   // the badge reads RUNNING a command is printing, and a line typed now would
   // go to that command's stdin rather than to the shell.
   if (pane.agentKey === TERMINAL_AGENT_KEY && status === 'running') return 'mid-turn'
+  // A quiet program is still a program: an editor, a pager, a REPL, an ssh
+  // session or a sudo password prompt prints nothing and reads idle, and would
+  // take the line (and its Enter) as its own input. The backend knows who is in
+  // front of the tty; polled by refreshTerminalPrompts().
+  if (pane.agentKey === TERMINAL_AGENT_KEY && terminalAtPrompt.get(paneId) === false) return 'mid-turn'
   const lastActive = paneLastActiveAt.get(paneId) ?? 0
   const inFlight = isTurnInFlight(lastActive, paneTurnCompleteAt.get(paneId) ?? 0, now, {
     inferEndFromSilence: VENDORS_WITHOUT_TURN_END.has(pane.agentKey),
@@ -2887,6 +2937,12 @@ async function kickoffRequestedPane(
     if (pane.agentKey === TERMINAL_AGENT_KEY) {
       // A shell runs what it is typed: the task alone, with no report-back
       // footer, typed once — a retype would run the command a second time.
+      const multiline = paneMultilineRefusal(paneId, task)
+      if (multiline) {
+        pane.kickoffStatus = 'failed'
+        emitKickoffVerdict('failed', multiline)
+        return false
+      }
       const seen: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
       const typed = promptReady || !paneStarting
         ? await injectPane(paneId, task, 'agent-spawn', true, undefined, seen)
@@ -3320,6 +3376,11 @@ onMounted(() => {
     deliver: deliverAgentMessage,
     isPaneIdle: (paneId: string) => deliveryHoldKey(paneId) === null,
     idleHoldKey: deliveryHoldKey,
+    refuseDelivery: (paneId, envelope) => {
+      if (panes.value.find((p) => p.id === paneId)?.agentKey !== TERMINAL_AGENT_KEY) return null
+      const refusal = paneMultilineRefusal(paneId, envelope)
+      return refusal ? rawReason(refusal) : null
+    },
     pushTarget: pushTargetForMessaging,
     pushDeliver: pushDeliverAgentMessage,
     routeRemote: routeRemoteMessage,
@@ -3350,6 +3411,7 @@ onMounted(() => {
   // pollAwaitingPanes runs BEFORE syncPaneBusy: it can flip a pane to AWAITING,
   // and the busy report that follows must carry that same tick's status.
   _msgPumpTimer = window.setInterval(() => {
+    void refreshTerminalPrompts()
     messaging.pump()
     pollAwaitingPanes()
     syncPaneBusy()
@@ -3533,6 +3595,9 @@ async function injectText(
      *  input box, as opposed to never having arrived there. The two owe the
      *  caller different things — see lib/deliveryHold.ts. */
     leftInComposer?: boolean
+    /** Plain terminal only: the backend refused the write because a program
+     *  other than the shell was in front of the tty. Nothing was typed. */
+    foregroundBusy?: boolean
   },
   // Told `true` while the payload is written but the PTY is not reading it
   // (the message is held on `pty-blocked`), `false` once the wait ends either
@@ -3579,14 +3644,28 @@ async function injectText(
   // a raw login prompt has mode 2004 off, and a login-fix or nudge written into
   // that would arrive as a literal "[200~". So ask xterm what the program on the
   // other end last declared — the same source pasteFromClipboard trusts.
-  const bracketed = preserveNewlines
+  // A plain terminal runs what it is typed, so every write asks the backend to
+  // refuse it unless the shell itself is in front of the tty — not a command it
+  // started, an editor, or a sudo/ssh password prompt that would take the text
+  // (and the Enter) as its own input.
+  const shellTarget = paneId !== undefined
+    && panes.value.find((p) => p.id === paneId)?.agentKey === TERMINAL_AGENT_KEY
+  // A shell gets the paste guards only when it asked for them: one without
+  // mode 2004 would type "[200~" into the command line. Multi-line text never
+  // reaches here for such a shell (terminalMultilineRefusal).
+  const agentBracketed = preserveNewlines
     || (agentUsesBracketedPaste(panes.value.find((p) => p.id === paneId)?.agentKey)
         && paneId !== undefined
         && paneRefs[paneId]?.isBracketedPasteActive?.() === true)
+  const bracketed = shellTarget
+    ? paneRefs[paneId as string]?.isBracketedPasteActive?.() === true
+    : agentBracketed
+  if (shellTarget && paneMultilineRefusal(paneId as string, body)) return false
   const chunks = injectionChunks(body, CHUNK, bracketed)
+  const shellGuard = shellTarget ? { require_shell_prompt: true } : {}
   // Resolves with the last ack's `pending` — bytes the backend is still holding
   // because the PTY would not take them (0 from a backend too old to say) — or
-  // null when a send threw.
+  // null when a send threw or was refused.
   let wroteBytes = false
   const sendChunks = async (): Promise<number | null> => {
     let pending = 0
@@ -3594,8 +3673,13 @@ async function injectText(
       try {
         const resp = await backend.send<{ pending?: number }>('terminal.input', {
           terminal_session_id: sessionId,
-          data: chunks[i]
+          data: chunks[i],
+          ...shellGuard,
         })
+        if (!resp.ok) {
+          if (evidence) evidence.foregroundBusy = true
+          return null
+        }
         wroteBytes = true
         pending = resp.payload?.pending ?? 0
         // Nothing pending means nothing blocked, whatever the tracker still
@@ -3773,6 +3857,36 @@ async function injectText(
   // One read serves both: the input box is picked out of this same screen by
   // its frame (composerFromScreen), not by a second, narrower read.
   const baseline = submitBaseline({ screen: screenTail(), tail })
+  if (shellTarget) {
+    // One Enter, never a second: an executed command line stays on screen, so
+    // submitEvidence reads a command that ran as "still in the box", and a
+    // resent Enter would land in whatever the command is now doing (answering
+    // its [Y/n] prompt, or an empty sudo password). The Enter going out is the
+    // delivery; the cursor leaving the typed line is the evidence, if any.
+    try {
+      const resp = await backend.send('terminal.input', {
+        terminal_session_id: sessionId, data: '\r', ...shellGuard,
+      })
+      if (!resp.ok) {
+        if (evidence) evidence.foregroundBusy = true
+        return giveUp()
+      }
+    } catch (err) {
+      console.error('[injectText] submit Enter failed:', err)
+      return false
+    }
+    const cursorLine = paneRefs[paneId as string]?.readLineBeforeCursor as (() => string) | undefined
+    const deadline = Date.now() + SUBMIT_CONFIRM_MS
+    while (Date.now() < deadline) {
+      await sleep(200)
+      const how = shellSubmitEvidence(cursorLine?.() ?? null, tail)
+      if (how) {
+        if (evidence) evidence.submit = how
+        break
+      }
+    }
+    return true
+  }
   const MAX_SUBMITS = 3
   for (let attempt = 1; attempt <= MAX_SUBMITS; attempt++) {
     if (shouldAbort?.()) return false
@@ -3824,6 +3938,7 @@ async function injectPane(
     echo?: EchoEvidence | null
     submit?: SubmitEvidence | null
     leftInComposer?: boolean
+    foregroundBusy?: boolean
   },
   onInputBlocked?: (held: boolean) => void
 ): Promise<boolean> {

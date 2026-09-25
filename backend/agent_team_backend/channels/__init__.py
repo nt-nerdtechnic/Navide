@@ -40,11 +40,14 @@ def default_seams() -> Seams:
             if opened.get("ok"):
                 target = opened["pane"]
         # _dispatch_delivery marks the pane for Guard, linked to the msg_key it mints.
-        msg_key = await mcp._dispatch_delivery(
-            target, text, caller=mcp._Caller(kind="host"), me="",
-            cross_workspace=res.cross_workspace, from_display=from_display, origin="channel",
-            taint_detail=f"chat message from {from_display}", taint_source="remote",
-        )
+        try:
+            msg_key = await mcp._dispatch_delivery(
+                target, text, caller=mcp._Caller(kind="host"), me="",
+                cross_workspace=res.cross_workspace, from_display=from_display, origin="channel",
+                taint_detail=f"chat message from {from_display}", taint_source="remote",
+            )
+        except mcp.TerminalExternalRefused as refused:
+            return {"ok": False, "error": str(refused)}
         return {"ok": True, "msg_key": msg_key, "pane_id": target.pane_id}
 
     async def await_verdict(msg_key: str, timeout: float) -> dict[str, Any]:

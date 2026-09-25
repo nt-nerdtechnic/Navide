@@ -3370,6 +3370,13 @@ class ServerLink:
         from . import app
         from .ipc import make_event
 
+        # A plain terminal runs what it is typed; another device's text is
+        # never that. Refused before anything is marked or broadcast — the
+        # window refuses it as well, but not only the window.
+        if pane.agent_key == "terminal":
+            await self._ack(msg_key, "rejected", reason="terminal-external")
+            return
+
         from_display = "/".join(
             part
             for part in (

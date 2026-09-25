@@ -222,13 +222,19 @@ export interface MessagingDeps {
    *  `shouldAbort` turns true when the user withdraws the message while the
    *  pane's PTY is holding it unread (see cancelMessage); an injection that
    *  honours it clears what it wrote and resolves false. */
-  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) => Promise<boolean>
+  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) => Promise<boolean | null>
   /** True when the pane can accept an injection right now (idle + settled). */
   isPaneIdle: (paneId: string) => boolean
   /** Why isPaneIdle() said no, as an i18n key suffix under `msg.hold-*`. Must
    *  be derived from the same gate as isPaneIdle so the log cannot claim a
    *  reason the gate does not actually apply. Absent → a generic 'busy'. */
   idleHoldKey?: (paneId: string) => string | null
+  /** Why the head message must not be typed into this pane at all, checked
+   *  once the gate is open (so it sees the pane as it will be typed into), or
+   *  null. A refusal fails the message instead of holding it — waiting would
+   *  not change the answer. Today: a multi-line command for a plain terminal
+   *  whose shell has no bracketed paste. */
+  refuseDelivery?: (paneId: string, envelope: string) => MessageReason | null
   /** The push channel that could take a message for this pane right now, or
    *  null when there is none — the vendor has no channel, it is not armed, or
    *  the gates that channel still answers to are closed. Non-null is what lets
@@ -329,6 +335,10 @@ export const TERMINAL_AGENT_KEY = 'terminal'
 const TERMINAL_NOTICE_REASON = rawReason('a Navide notice is never typed into a plain terminal pane — the shell would run it')
 /** Content from outside this machine's user (a chat channel, a remote device)
  *  would run as the user's own shell command in a terminal. */
+/** A command held that long is no longer the one the sender meant to run now:
+ *  typing it once the shell frees up, perhaps hours later, would surprise the
+ *  user at the keyboard — so it fails and the sender decides again. */
+const TERMINAL_STALE_REASON = rawReason('not typed: the terminal stayed busy for 2 minutes — a held command is never run late; resend it if it still applies')
 const TERMINAL_EXTERNAL_REASON = rawReason('external content is never typed into a plain terminal pane — the shell would run it')
 
 /** Handle Navide writes its own messages under — delivery-failure notices here,
@@ -1272,8 +1282,25 @@ function pump(): void {
   }
   // After the pause check, not before: while delivery is paused everything is
   // held on purpose, and the notice itself would be stuck in the same queue.
+  expireStaleTerminalMessages(now)
   notifyStaleHolds(now)
   for (const paneId of queues.keys()) void pumpPane(paneId)
+}
+
+/** Fail every message that has sat queued for a plain terminal past
+ *  STALE_HOLD_MS — see TERMINAL_STALE_REASON. Only queued rows: one already
+ *  being typed is past the point of taking back. */
+function expireStaleTerminalMessages(now: number): void {
+  for (const [paneId, q] of queues) {
+    if (agentByPane.get(paneId) !== TERMINAL_AGENT_KEY) continue
+    for (const id of [...q]) {
+      const m = findMessage(id)
+      if (!m || m.status !== 'queued' || now - m.createdAt < STALE_HOLD_MS) continue
+      q.splice(q.indexOf(id), 1)
+      failMessage(id, TERMINAL_STALE_REASON)
+      ackInbound(id, false, TERMINAL_STALE_REASON)
+    }
+  }
 }
 
 /** How many messages are still waiting to reach this pane.
@@ -1315,6 +1342,13 @@ async function pumpPane(paneId: string): Promise<void> {
   if (!msg || !envelope) {
     q.shift()
     ackInbound(id, false, { key: 'dropped' })
+    return
+  }
+  const refusal = push ? null : deps.refuseDelivery?.(paneId, envelope) ?? null
+  if (refusal) {
+    q.shift()
+    failMessage(id, refusal)
+    ackInbound(id, false, refusal)
     return
   }
   delivering.add(paneId)

@@ -7514,6 +7514,15 @@ async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload
     # `pending` = bytes the kernel has not accepted yet; the renderer must not
     # resend those (they are queued, not lost).  Empty data is a pure probe of
     # that count and must leave no other trace.
+    # A write into a plain terminal pane on behalf of a message asks that the
+    # shell be at its prompt: checked here, next to the write, so a program
+    # started between the renderer's last look and this write still refuses it.
+    if payload.get("require_shell_prompt") is True and payload["data"]:
+        if session.terminals.shell_in_foreground(payload["terminal_session_id"]) is False:
+            await session.send_json(
+                make_response(msg_id, msg_type, {"ok": False, "error": "foreground-busy"})
+            )
+            return
     pending = session.terminals.write(payload["terminal_session_id"], payload["data"])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pending": pending}))
     # A keyboard frame (the renderer flags only those: not mouse/focus reports,
@@ -7525,6 +7534,16 @@ async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload
             workspace_path = str(term.metadata.get("workspace_path") or term.cwd)
             if app.dev_time_store.human_input(workspace_path, term.pane_id):
                 await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
+
+
+@handler("terminal.shell_at_prompt")
+async def terminal_shell_at_prompt(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Per plain-terminal session: whether its shell is at its prompt (True),
+    running something in front of it (False), or unknown (None). Polled by the
+    renderer's messaging gate; a tcgetpgrp per session, no subprocess."""
+    ids = [str(x) for x in (payload.get("terminal_session_ids") or [])]
+    states = {sid: session.terminals.shell_in_foreground(sid) for sid in ids}
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "states": states}))
 
 
 @handler("terminal.memory_usage")

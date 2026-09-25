@@ -43,6 +43,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.responses import PlainTextResponse
 from starlette.types import Receive, Scope, Send
 
+from agent_team_backend import osplat as _osplat
 from agent_team_backend.fs_service import FsError
 from agent_team_backend.pending_registry import TIMEOUT, PendingRegistry
 # Workspace normalisation, not a plan dependency: preview_* resolves a
@@ -928,6 +929,17 @@ def _taint_spawned(caller: _Caller, pane_id: str) -> None:
 #: agent key of a plain login-shell pane (see cli_open_agent / cli_send).
 _TERMINAL_AGENT = "terminal"
 
+#: Whether this platform can tell a terminal's shell at its prompt from a
+#: program it started (tcgetpgrp). Windows cannot: its PTY handle reports the
+#: shell as the foreground whatever runs, so the window falls back to holding
+#: only while the terminal prints — and every answer about a terminal says so.
+_TERMINAL_PROMPT_CHECK = _osplat.terminal_backend.reports_foreground
+_TERMINAL_NO_PROMPT_CHECK = (
+    "this platform cannot tell whether the terminal's shell is at its prompt: "
+    "a quiet running program (an editor, a password prompt, a REPL) may receive "
+    "the text as its own input — check cli_read_log before sending"
+)
+
 
 @server.tool()
 async def cli_open_agent(
@@ -1275,6 +1287,9 @@ async def cli_open_agent(
     if run_group_id is not None:
         result["run_group_id"] = run_group_id
     advisories = list(verdict.get("advisories") or [])
+    if agent_key == _TERMINAL_AGENT and not _TERMINAL_PROMPT_CHECK:
+        result["prompt_check"] = "unavailable"
+        advisories.append(_TERMINAL_NO_PROMPT_CHECK)
     # Two answers only. "unverified" is the window's honest word for "bytes
     # written, nothing seen" — to the caller that is a task that did not
     # arrive, and the cure is the same as for an outright failure.
@@ -1732,6 +1747,18 @@ async def _send_to_group(
     }
 
 
+class TerminalExternalRefused(Exception):
+    """External content (a chat channel, another device) addressed to a plain
+    terminal pane. Refused here, before it is broadcast or taints anything:
+    the renderer refuses it too, but a shell would run it, so the backend does
+    not leave that to the window alone."""
+
+
+TERMINAL_EXTERNAL_ERROR = (
+    "external content is never typed into a plain terminal pane — the shell would run it"
+)
+
+
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
     reply_to: str = "", kind: str = "", from_display: str = "",
@@ -1760,6 +1787,8 @@ async def _dispatch_delivery(
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
 
+    if origin in ("channel", "remote") and getattr(entry, "agent_key", "") == _TERMINAL_AGENT:
+        raise TerminalExternalRefused(TERMINAL_EXTERNAL_ERROR)
     sender = agent_messaging.get(me) if me else None
     msg_key = f"{me or caller.kind}:mcp:{secrets.token_hex(8)}"
     if kind != "ack" and (caller.kind in ("pane", "external") or taint_detail):
@@ -1833,12 +1862,21 @@ async def cli_send(
     A plain terminal pane (agent_key "terminal" in cli_get_status) is a
     login shell, not an agent: `text` is typed in bare — no sender line, no
     reply instructions — and Enter runs it as a shell command line with the
-    user's privileges. It is held while the terminal is printing (a running
-    command would read it as its own input) and never gets a turn end, so
-    cli_wait_idle / cli_send_and_wait settle on "quiet_period" for it; read
-    cli_read_log for the result. A terminal cannot reply, is left out of
-    `to: "group"` broadcasts, and refuses content from a chat channel or remote
-    device.
+    user's privileges. It is held while anything but the shell is in front of
+    its tty — a running command, an editor, a sudo/ssh password prompt, a REPL,
+    printing or not — and for 60s after the user's last keystroke in it; it
+    never gets a turn end, so cli_wait_idle / cli_send_and_wait settle on
+    "quiet_period" for it; read cli_read_log for the result. Where the platform
+    cannot see the shell's prompt (Windows) the answer carries
+    `prompt_check: "unavailable"` and a warning, and it is held only while
+    printing. Enter is pressed once: "delivered" means the line went in, not
+    that the command succeeded. A multi-line `text` fails (send one line at a
+    time) when the shell has no bracketed paste, and a message still queued
+    after 2 minutes fails rather than running late. A terminal cannot reply, is
+    left out of `to: "group"` broadcasts, and refuses content from a chat
+    channel or remote device. Guard marks a terminal as externally influenced
+    but cannot block what is typed into it: its command checks run in CLI tool
+    hooks, which a plain shell does not have.
 
     `to: "group"` broadcasts instead: every other pane in YOUR OWN tab group,
     in your own workspace. Deliberately narrower than the bare-line protocol's
@@ -2126,6 +2164,11 @@ async def _send(
         answer["warning"] = (
             "the target is a restore placeholder with no CLI running; the message "
             "waits until someone opens it (ui.pane.open, or open_target=True)"
+        )
+    if target.agent_key == _TERMINAL_AGENT and not _TERMINAL_PROMPT_CHECK:
+        answer["prompt_check"] = "unavailable"
+        answer["warning"] = "; ".join(
+            w for w in (answer.get("warning"), _TERMINAL_NO_PROMPT_CHECK) if w
         )
     return await _with_delivery_wait(answer, wait_s)
 

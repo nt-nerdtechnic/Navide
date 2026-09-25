@@ -4,6 +4,7 @@ import {
   _resetMessagingForTest,
   NOTICE_SENDER,
   TERMINAL_AGENT_KEY,
+  STALE_HOLD_MS,
   type MessageReason,
   type MessagingDeps,
 } from '../useAgentMessaging'
@@ -92,5 +93,64 @@ describe('useAgentMessaging — plain terminal targets', () => {
     expect(delivered).toEqual([])
     expect(reports).toHaveLength(1)
     expect(reports[0].ok).toBe(false)
+  })
+})
+
+describe('useAgentMessaging — a command held for a terminal expires', () => {
+  it('fails a message queued for a busy terminal past STALE_HOLD_MS instead of typing it late', async () => {
+    _resetMessagingForTest()
+    let now = 1_000_000
+    let idle = false
+    const delivered: string[] = []
+    const m = useAgentMessaging()
+    m.configureMessaging({
+      now: () => now,
+      deliver: async (p, text) => { if (p === 'shell') delivered.push(text); return true },
+      isPaneIdle: () => idle,
+    })
+    m.registerPane('agent', 'claude', 'boss')
+    m.registerPane('shell', TERMINAL_AGENT_KEY, 'sh')
+    const msg = m.sendMessage('boss', 'sh', 'make deploy')
+    m.pump()
+    await flush()
+    expect(msg.status).toBe('queued')
+    now += STALE_HOLD_MS + 1
+    idle = true
+    m.pump()
+    await flush()
+    expect(delivered).toEqual([])
+    expect(msg.status).toBe('failed')
+  })
+})
+
+describe('useAgentMessaging — refuseDelivery', () => {
+  it('fails a message the pane refuses, with the refusal as the reason, and types nothing', async () => {
+    _resetMessagingForTest()
+    const delivered: string[] = []
+    const reports: Array<{ ok: boolean; reason: MessageReason | null }> = []
+    const m = useAgentMessaging()
+    m.configureMessaging({
+      now: () => 1_000_000,
+      deliver: async (p, text) => { if (p === 'shell') delivered.push(text); return true },
+      isPaneIdle: () => true,
+      refuseDelivery: (paneId, envelope) =>
+        paneId === 'shell' && envelope.includes('\n') ? { key: 'raw', params: { text: 'one line at a time' } } : null,
+      reportDelivery: (_k, ok, reason) => { reports.push({ ok, reason }) },
+    })
+    m.registerPane('agent', 'claude', 'boss')
+    m.registerPane('shell', TERMINAL_AGENT_KEY, 'sh')
+    const accepted = m.acceptRemoteMessage({
+      msgKey: 'k1', targetPaneId: 'shell', fromDisplay: 'mcp', content: 'a\nb',
+    } as Parameters<typeof m.acceptRemoteMessage>[0])
+    expect(accepted).toBe(true)
+    m.pump()
+    await flush()
+    expect(delivered).toEqual([])
+    expect(reports).toEqual([{ ok: false, reason: { key: 'raw', params: { text: 'one line at a time' } } }])
+    const single = m.sendMessage('boss', 'sh', 'ls')
+    m.pump()
+    await flush()
+    expect(delivered).toEqual(['ls'])
+    expect(single.status).toBe('delivered')
   })
 })

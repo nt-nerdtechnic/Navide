@@ -135,18 +135,44 @@ The rest follows from that:
   report addressed to a terminal is failed instead.
 - Content from outside this machine's user (a chat channel, a remote device)
   is refused for a terminal rather than fenced.
-- A terminal has no turn end. It is held while it is printing (a running
-  command would read the text as its own input) and is otherwise idle, so
-  `cli_wait_idle` / `cli_send_and_wait` settle on `quiet_period` for it. Read
-  the result with `cli_read_log`.
+- A terminal has no turn end, so it is held while anything but the shell is in
+  front of its tty: a running command, an editor, a pager, a REPL, an `ssh`
+  session or a `sudo` password prompt would read the text as its own input,
+  printing or not. The backend answers that from the tty's foreground process
+  group, and checks it again next to the write, so a program started in
+  between still refuses it (the message goes back to the queue, nothing
+  typed). Otherwise the terminal is idle, so `cli_wait_idle` /
+  `cli_send_and_wait` settle on `quiet_period` for it. Read the result with
+  `cli_read_log`.
+- **Windows cannot tell.** Its PTY reports the shell as the foreground
+  whatever runs, so there a terminal is held only while it is printing, and
+  every `cli_send` / `cli_open_agent` answer about a terminal carries
+  `prompt_check: "unavailable"` with a warning saying so.
+- Someone typing in a terminal holds it for 60 seconds after their last key
+  (4 seconds for an agent pane): a recalled history line or a tab completion
+  is invisible to the draft tracker, and whatever is on the line would run with
+  the message appended.
+- The command is typed with one Enter, never a second one. `delivered` means
+  the line and its Enter went in, not that the command succeeded.
+- A multi-line command needs bracketed paste (zsh, bash 5.1+). A shell without
+  it (macOS `/bin/bash` 3.2, `sh`) would run every line as it arrives, so the
+  message is failed with a reason — send one line at a time.
+- A message still queued for a terminal after 2 minutes is failed, never typed
+  late: a command held that long is no longer the one the sender meant to run
+  now.
 - A terminal cannot reply: it has no MCP tools, and its output is never scanned
   for message or spawn blocks.
+- **Guard only records a terminal, it cannot block its commands.** A message
+  marks the terminal as externally influenced exactly as it does an agent, but
+  Guard's command checks run inside a CLI's own tool hooks, and a plain shell
+  has none — nothing Guard evaluates stands between the text and the shell.
 
 `cli_open_agent(agent="terminal")` opens one. Its `task` is optional — a
 command line typed once after the prompt is up, with nothing appended — and
 `model`, `effort` and `session_id` are refused. The command is never retyped
-(a second copy would run it twice), so a kickoff that could not be confirmed
-answers `unverified`: read `cli_read_log` before resending.
+(a second copy would run it twice). A kickoff reported `failed` was never
+typed; one that could not be confirmed says so in its hint and `advisories` —
+read `cli_read_log` before resending.
 
 ### Another workspace
 

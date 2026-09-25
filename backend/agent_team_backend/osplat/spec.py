@@ -537,6 +537,10 @@ class TerminalBackend(Protocol):
     """Spawn a child on a pseudo-terminal."""
 
     helper_waits_for_child: bool = False
+    #: Whether a handle's foreground_group() tells the shell apart from a
+    #: program it started (tcgetpgrp). False on Windows, whose handle reports
+    #: the child's own pid whatever runs in front.
+    reports_foreground: bool = False
 
     def parse_command(self, command: str) -> list[str]:
         """Split a command-line string into argv the way this platform's shell would."""

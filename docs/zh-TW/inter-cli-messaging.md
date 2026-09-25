@@ -121,15 +121,34 @@ shell 指令執行**。所以寄給 Terminal 的訊息是裸打進去的 —— 
   失敗。
 - 來自這台機器使用者以外的內容（聊天軟體、遠端裝置）寄給 Terminal 會被拒絕，而
   不是加上邊界框送進去。
-- Terminal 沒有回合結束訊號。它在輸出中時會被保留（正在跑的指令會把文字當成自己
-  的輸入），其餘時間都算 idle，所以 `cli_wait_idle`／`cli_send_and_wait` 對它
-  會以 `quiet_period` 結束。結果請用 `cli_read_log` 讀。
+- Terminal 沒有回合結束訊號，所以只要站在它 tty 前景的不是 shell 本身，它就會被
+  保留：正在跑的指令、編輯器、pager、REPL、`ssh` 連線或 `sudo` 密碼提示，不論有沒有
+  輸出，都會把文字當成自己的輸入。後端依 tty 的前景 process group 回答這件事，並在
+  寫入前再檢查一次，所以中間才啟動的程式一樣會擋下（訊息回到佇列，什麼都沒打）。
+  其餘時間都算 idle，所以 `cli_wait_idle`／`cli_send_and_wait` 對它會以
+  `quiet_period` 結束。結果請用 `cli_read_log` 讀。
+- **Windows 判斷不了。** 它的 PTY 不論跑什麼都回報 shell 在前景，所以在 Windows 上
+  Terminal 只在輸出中才會被保留；每個關於 Terminal 的 `cli_send`／`cli_open_agent`
+  回應都會帶 `prompt_check: "unavailable"` 與一段說明此事的警告。
+- 有人在 Terminal 打字時，最後一次按鍵後保留 60 秒（Agent Pane 是 4 秒）：叫出來的
+  歷史指令或 Tab 補完，草稿追蹤看不到，而那一行上的東西會連同訊息一起執行。
+- 指令只按一次 Enter，絕不補按。`delivered` 代表那一行與它的 Enter 已送進去，不代表
+  指令成功。
+- 多行指令需要 bracketed paste（zsh、bash 5.1 以上）。沒有它的 shell（macOS 的
+  `/bin/bash` 3.2、`sh`）會在每一行抵達時就執行，所以訊息會帶原因判定失敗 —— 請一次
+  送一行。
+- 在 Terminal 佇列裡等超過 2 分鐘的訊息會判定失敗，絕不延後才打進去：等了那麼久的
+  指令，已不是寄件者當下想執行的那一個。
 - Terminal 無法回覆：它沒有 MCP 工具，它的輸出也從不會被掃描訊息或 spawn 區塊。
+- **Guard 對 Terminal 只能記錄，不能攔下指令。** 訊息一樣會把 Terminal 標記為受外部
+  影響，但 Guard 的指令檢查跑在 CLI 自己的工具 hook 裡，一般 shell 沒有 hook ——
+  文字與 shell 之間沒有任何 Guard 的判斷。
 
 `cli_open_agent(agent="terminal")` 可以開一個。它的 `task` 可省略 —— 是提示字元
 出現後打進去一次的指令列，後面不附加任何東西 —— 而 `model`、`effort`、
-`session_id` 會被拒絕。指令絕不重打（第二份會讓它再跑一次），所以無法確認的
-kickoff 會回 `unverified`：重送前先讀 `cli_read_log`。
+`session_id` 會被拒絕。指令絕不重打（第二份會讓它再跑一次）。回報 `failed` 的
+kickoff 從沒打進去；無法確認的會在 hint 與 `advisories` 裡說明 —— 重送前先讀
+`cli_read_log`。
 
 ### 另一個 Workspace
 
