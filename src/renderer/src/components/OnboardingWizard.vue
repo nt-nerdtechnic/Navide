@@ -7,6 +7,7 @@ import { missingProviders, orderInstalls, providerFor } from '../lib/installPlan
 import { usePermissions, PERMISSION_KEYS } from '../composables/usePermissions'
 import OnboardingStepCard from './OnboardingStepCard.vue'
 import OnboardingPreview from './OnboardingPreview.vue'
+import InstallTerminal from './InstallTerminal.vue'
 import { useSettings } from '../composables/useSettings'
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
@@ -26,11 +27,11 @@ onMounted(() => {
   void perms.refresh()
 })
 
-// The wizard can be closed mid-install; its timers must not outlive it.
+// The wizard can be closed mid-install; its timers and a running command must
+// not outlive it.
 onBeforeUnmount(() => ob.dispose())
 
-/** Install button label — carries the elapsed seconds, the only progress an
- *  inline brew install reports before its output arrives all at once. */
+/** Install button label — carries the elapsed seconds of the running install. */
 function installLabel(dep: OnboardDep): string {
   if (ob.installing.value !== dep.id) return t('onboard.install')
   const secs = ob.installElapsedSec.value
@@ -39,7 +40,9 @@ function installLabel(dep: OnboardDep): string {
 
 // Re-detect during an install would race the refresh the install itself runs,
 // and the loser's response overwrites the winner's status.
-const detectBusy = computed(() => ob.loading.value || !!ob.installing.value)
+const detectBusy = computed(() => ob.loading.value || !!ob.installing.value || ob.runBusy.value)
+/** A command is running in the install terminal: every other action waits. */
+const busy = computed(() => !!ob.installing.value || ob.runBusy.value)
 
 // ── Blockers ──────────────────────────────────────────────────────────────────
 // The backend already reports each dep's prerequisites and their current state.
@@ -63,13 +66,18 @@ function manualBlockers(dep: OnboardDep): string[] {
 
 /** What the card must say before the user clicks, or after a click failed. */
 function cardError(dep: OnboardDep): string {
+  // Only while the service is still down: once it is up, the failure is moot.
+  if (ollamaStartFailed.value && ollamaStopped(dep)) return t('onboard.ollama-start-failed')
   const failure = ob.installErrors.value[dep.id]
   if (failure?.ranButUndetected) {
     // "Not detected" would be wrong when something WAS found and it is just too
     // old: `brew install python3` succeeds while /usr/bin/python3 (3.9) still
     // wins the PATH, and the card has to name that, not claim an empty result.
+    // Python gets the two concrete repairs; they would mislead on any other dep.
+    const outdatedKey =
+      dep.id === 'python' ? 'onboard.installed-still-outdated-python' : 'onboard.installed-still-outdated'
     return dep.status === 'outdated'
-      ? t('onboard.installed-still-outdated', { label: dep.label, version: dep.version })
+      ? t(outdatedKey, { label: dep.label, version: dep.version })
       : t('onboard.installed-not-detected', { label: dep.label })
   }
   if (failure) {
@@ -93,6 +101,15 @@ function goToBlocker(dep: OnboardDep): void {
 /** ollama installed but its daemon is down — pulling a model cannot work. */
 function ollamaStopped(dep: OnboardDep): boolean {
   return dep.id === 'ollama' && dep.status === 'ok' && !ob.ollamaServiceUp.value
+}
+
+/** The last "Start Ollama" press failed; the detail is in the log. */
+const ollamaStartFailed = ref(false)
+
+async function startOllama(): Promise<void> {
+  ollamaStartFailed.value = false
+  const result = await ob.startOllamaService()
+  ollamaStartFailed.value = !result?.ok
 }
 
 // An install's output lands in one burst; without this the pane stays pinned
@@ -236,33 +253,46 @@ async function installMissing(deps: OnboardDep[]): Promise<void> {
   // the helper existed already but nothing was calling it.
   for (const d of orderInstalls(deps, ob.deps.value)) {
     if (d.status === 'ok' || !d.can_install) continue
+    // Resolves once the command has exited and a fresh re-detect has run.
     const result = await ob.install(d)
-    // An interactive install only *opens* a terminal — the tool is not there
-    // yet. Continuing would run the next command (which may need it) against a
-    // machine that still lacks it: on a fresh Mac every `brew install …` after
-    // Homebrew failed with exit 127. Stop and let the watcher/Re-detect catch up.
-    if (result?.needs_terminal) break
-    // A missing bootstrap binary blocks everything downstream of it too.
-    if (result?.missing_requirements?.length) break
+    // A failed, cancelled or blocked link blocks everything downstream of it.
+    if (!result?.ok) break
+    // Exit 0 but still undetected: continuing would run the next command
+    // (which may need this one) against a machine that cannot see it — on a
+    // fresh Mac every `brew install …` after Homebrew failed with exit 127.
+    if (ob.deps.value.find((x) => x.id === d.id)?.status !== 'ok') break
   }
 }
 
 // Escape hatch: the wizard must never be a dead end. Skipping persists the
 // complete flag so it doesn't re-block every launch — later gaps are covered
 // in-app (missing-CLI badges in the spawn dropdown, the exit=127 install
-// prompt), and Settings → Appearance re-opens this wizard on demand.
+// prompt), and Settings → General re-opens this wizard on demand.
 function skipForNow(): void {
-  void ob
-    .markComplete()
-    .catch(() => {})
-    .finally(() => emit('close'))
+  void saveComplete().then((saved) => { if (saved) emit('close') })
 }
 
 function finish(): void {
-  void ob
-    .markComplete()
-    .catch(() => {})
-    .finally(() => emit('complete'))
+  void saveComplete().then((saved) => { if (saved) emit('complete') })
+}
+
+/** Why the complete flag could not be saved; '' while it has not failed. */
+const completeError = ref('')
+
+// Closing on a failed save would bring the wizard back next launch with no
+// word why, so it stays open with the error and the same button retries.
+async function saveComplete(): Promise<boolean> {
+  completeError.value = ''
+  let error = ''
+  try {
+    const resp = await props.backend.send<{ ok: boolean; error?: string }>(
+      'onboarding.complete', { complete: true })
+    if (resp.payload?.ok === false) error = resp.payload.error || 'unknown'
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e)
+  }
+  completeError.value = error ? t('onboard.complete-failed', { error }) : ''
+  return !error
 }
 </script>
 
@@ -306,7 +336,7 @@ function finish(): void {
               <button
                 v-if="d.can_install"
                 class="ob-btn primary"
-                :disabled="!!ob.installing.value"
+                :disabled="busy"
                 @click="ob.install(d)"
               >
                 {{ installLabel(d) }}
@@ -326,17 +356,12 @@ function finish(): void {
               <button class="ob-btn ghost" :disabled="detectBusy" @click="ob.refresh()">
                 {{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}
               </button>
-              <!-- An inline install shows nothing until it exits: brew streams
-                   no output back here, so the card has to say it is running. -->
-              <p v-if="ob.installing.value === d.id && !d.needs_terminal" class="ob-running">
-                {{ $t('onboard.running-inline', { cmd: d.install_cmd }) }}
-              </p>
             </template>
           </OnboardingStepCard>
 
           <button
             class="ob-linkbtn"
-            :disabled="!!ob.installing.value"
+            :disabled="busy"
             @click="installMissing(ob.foundationDeps.value)"
           >
             {{ $t('action.install-missing') }}
@@ -362,14 +387,15 @@ function finish(): void {
               <button
                 v-if="ollamaStopped(d)"
                 class="ob-btn primary"
-                @click="ob.startOllamaService()"
+                :disabled="busy"
+                @click="startOllama"
               >
                 {{ $t('action.start-ollama') }}
               </button>
               <button
                 v-else-if="d.can_install"
                 class="ob-btn primary"
-                :disabled="!!ob.installing.value"
+                :disabled="busy"
                 @click="ob.install(d)"
               >
                 {{ installLabel(d) }}
@@ -387,9 +413,6 @@ function finish(): void {
               <button class="ob-btn ghost" :disabled="detectBusy" @click="ob.refresh()">
                 {{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}
               </button>
-              <p v-if="ob.installing.value === d.id && !d.needs_terminal" class="ob-running">
-                {{ $t('onboard.running-inline', { cmd: d.install_cmd }) }}
-              </p>
             </template>
           </OnboardingStepCard>
 
@@ -446,7 +469,7 @@ function finish(): void {
 
               <button
                 class="ob-btn primary"
-                :disabled="!pullTarget || !!ob.pulling.value"
+                :disabled="!pullTarget || !!ob.pulling.value || busy"
                 @click="ob.pullModel(pullTarget)"
               >
                 {{
@@ -530,6 +553,12 @@ function finish(): void {
         </template>
 
         <!-- Install log -->
+        <!-- The running (or last) command: live output, prompts, exit code. -->
+        <InstallTerminal
+          v-if="ob.run.value || ob.runFallback.value"
+          class="ob-install-terminal"
+          :onboarding="ob"
+        />
         <div v-if="ob.logLines.value.length" ref="logEl" class="ob-log">
           <div v-for="(l, i) in ob.logLines.value" :key="i" class="ob-log-line">{{ l }}</div>
         </div>
@@ -549,13 +578,14 @@ function finish(): void {
     </div>
 
     <footer class="ob-footer">
-      <button class="ob-btn ghost" @click="skipForNow">{{ $t('action.skip-for-now') }}</button>
-      <button v-if="stepIndex > 0" class="ob-btn ghost" @click="stepIndex--">{{ $t('action.back') }}</button>
+      <button class="ob-btn ghost" :disabled="busy" @click="skipForNow">{{ $t('action.skip-for-now') }}</button>
+      <button v-if="stepIndex > 0" class="ob-btn ghost" :disabled="busy" @click="stepIndex--">{{ $t('action.back') }}</button>
       <span class="ob-spacer" />
+      <span v-if="completeError" class="ob-complete-error" role="alert">{{ completeError }}</span>
       <button
         v-if="!isLast"
         class="ob-btn primary"
-        :disabled="!!ob.installing.value"
+        :disabled="busy"
         @click="stepIndex++"
       >
         {{ $t('action.next') }}
@@ -747,16 +777,6 @@ function finish(): void {
   line-height: 1.55;
   color: var(--text-muted);
 }
-/* An inline install returns nothing until it exits; this line and the button's
-   elapsed counter are the only signs it is running. `flex-basis: 100%` puts it
-   on its own row under the buttons in the flex-wrapped action bar. */
-.ob-running {
-  flex-basis: 100%;
-  margin: 4px 0 0;
-  font: var(--font-2xs) / 1.55 var(--font-mono);
-  color: var(--text-secondary);
-  word-break: break-all;
-}
 .ob-linkbtn {
   background: none;
   border: 0;
@@ -937,6 +957,9 @@ function finish(): void {
   font-weight: 700;
 }
 
+.ob-install-terminal {
+  margin-top: 20px;
+}
 .ob-log {
   margin-top: 20px;
   max-height: 140px;
@@ -963,5 +986,9 @@ function finish(): void {
 }
 .ob-spacer {
   flex: 1;
+}
+.ob-complete-error {
+  color: var(--danger-fg);
+  font-size: 12px;
 }
 </style>

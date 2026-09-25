@@ -6190,7 +6190,6 @@ async def onboarding_status(session: "Session", msg_id: str, msg_type: str, payl
         _ONBOARDING_EXECUTOR, lambda: app.onboarding_deps.get_status(fresh=fresh)
     )
     status["complete"] = app.onboarding_deps.is_complete()
-    status["skip"] = app.onboarding_deps.should_skip()
     await session.send_json(make_response(msg_id, msg_type, status))
 
 
@@ -6205,43 +6204,60 @@ async def onboarding_status_quick(session: "Session", msg_id: str, msg_type: str
 
     status = app.onboarding_deps.quick_status()
     status["complete"] = app.onboarding_deps.is_complete()
-    status["skip"] = app.onboarding_deps.should_skip()
     await session.send_json(make_response(msg_id, msg_type, status))
 
 
-@handler("onboarding.install")
-async def onboarding_install(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+#: The agent_key of a PTY started by onboarding.run. Reserved: terminal.create
+#: refuses it, so no renderer can open a pane that passes as an install run.
+ONBOARDING_RUN_AGENT_KEY = "onboarding-run"
+
+
+@handler("onboarding.run")
+async def onboarding_run(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Start a whitelisted install / maintenance / ollama command in a PTY.
+
+    The window names a kind and ids; the command comes from the registry via
+    onboarding_deps.resolve_run, with the same prerequisite checks as before.
+    Output, input, resize, kill and the exit code then travel over the
+    ordinary terminal.* messages, keyed by the returned run_id.
+    """
     from . import app
 
-    dep_id = payload.get("dep_id", "") or ""
-    result = await asyncio.to_thread(app.onboarding_deps.install_dep, dep_id)
-    await session.send_json(make_response(msg_id, msg_type, result))
-
-
-@handler("onboarding.pull_model")
-async def onboarding_pull_model(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import app
-
-    model = payload.get("model", "") or app.onboarding_deps._SUGGESTED_MODEL
-    # Offloaded: the reachability check shells out to `ollama list`.
-    result = await asyncio.to_thread(app.onboarding_deps.pull_model, model)
-    await session.send_json(make_response(msg_id, msg_type, result))
-
-
-@handler("onboarding.start_ollama")
-async def onboarding_start_ollama(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import app
-
-    result = await asyncio.to_thread(app.onboarding_deps.start_ollama_service)
-    await session.send_json(make_response(msg_id, msg_type, result))
+    # Offloaded: pull_model's reachability check shells out to `ollama list`.
+    resolved = await asyncio.to_thread(app.onboarding_deps.resolve_run, payload)
+    if not resolved.get("ok"):
+        await session.send_json(make_response(msg_id, msg_type, resolved))
+        return
+    command = str(resolved["command"])
+    try:
+        term = session.terminals.create(
+            pane_id=f"{ONBOARDING_RUN_AGENT_KEY}-{__import__('uuid').uuid4().hex}",
+            agent_key=ONBOARDING_RUN_AGENT_KEY,
+            command=app.onboarding_deps.run_argv(command),
+            cwd=str(Path.home()),
+            cols=int(payload.get("cols") or 100),
+            rows=int(payload.get("rows") or 24),
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        # The command is still returned: the window offers it in an external
+        # terminal, so a PTY failure never makes the install impossible.
+        log.warning("onboarding.run could not start %r: %s", command, exc)
+        await session.send_json(make_response(msg_id, msg_type, {
+            **resolved, "ok": False, "spawn_failed": True, "error": str(exc),
+        }))
+        return
+    app._PTY_OWNERS[term.id] = session
+    session._onboarding_runs.add(term.id)
+    log.info("onboarding.run %s started: %s", term.id, command)
+    await session.send_json(make_response(msg_id, msg_type, {**resolved, "run_id": term.id}))
 
 
 @handler("onboarding.complete")
 async def onboarding_complete(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    app.onboarding_deps.set_complete(bool(payload.get("complete", True)))
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    result = app.onboarding_deps.set_complete(bool(payload.get("complete", True)))
+    await session.send_json(make_response(msg_id, msg_type, result))
 
 
 @handler("onboarding.install_prompt")
@@ -6301,18 +6317,7 @@ async def app_broadcast_hook_trust(blocked: bool) -> None:
 async def onboarding_cli_health_dismiss(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    app.onboarding_deps.dismiss_cli_health(str(payload.get("fingerprint") or ""))
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
-
-
-@handler("onboarding.cli_maintenance")
-async def onboarding_cli_maintenance(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import app
-
-    result = app.onboarding_deps.maintenance_command(
-        str(payload.get("agent_key") or ""),
-        str(payload.get("action") or ""),
-    )
+    result = app.onboarding_deps.dismiss_cli_health(str(payload.get("fingerprint") or ""))
     await session.send_json(make_response(msg_id, msg_type, result))
 
 
@@ -6334,7 +6339,6 @@ async def onboarding_cli_health_select_binary(session: "Session", msg_id: str, m
     result = app.onboarding_deps.select_cli_binary(
         str(payload.get("agent_key") or ""),
         str(payload.get("path") or ""),
-        str(payload.get("fingerprint") or ""),
     )
     await session.send_json(make_response(msg_id, msg_type, result))
 
@@ -6469,6 +6473,12 @@ async def ping(session: "Session", msg_id: str, msg_type: str, payload: dict) ->
 async def terminal_create(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    if payload.get("agent_key") == ONBOARDING_RUN_AGENT_KEY:
+        await session.send_json(make_error(
+            msg_id, msg_type, "RESERVED_AGENT_KEY",
+            f"{ONBOARDING_RUN_AGENT_KEY} terminals are started by onboarding.run only",
+        ))
+        return
     pane_id = str(payload["pane_id"])
     generation = str(payload.get("create_generation") or msg_id)
     key = (pane_id, generation)

@@ -3456,12 +3456,17 @@ ipcMain.handle('shell:openTerminal', async (event, command: string) => {
 
 // macOS TCC permissions (onboarding wizard). Requests are user-initiated only —
 // a request may raise a system prompt, status never does.
-ipcMain.handle('permissions:status', async () => await getPermissionStatuses())
+ipcMain.handle('permissions:status', async (event) => {
+  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+  return await getPermissionStatuses()
+})
 
 ipcMain.handle(
   'permissions:request',
-  async (_event, key: PermissionKey, payload?: { title?: string; body?: string }) =>
-    await requestPermission(key, payload)
+  async (event, key: PermissionKey, payload?: { title?: string; body?: string }) => {
+    if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+    return await requestPermission(key, payload)
+  }
 )
 
 // Voice input: ask macOS for microphone access right before the first capture.
@@ -3479,7 +3484,8 @@ ipcMain.handle('media:ask-microphone', async () => {
   return { granted, status: granted ? 'granted' : status, prompted: status === 'not-determined' }
 })
 
-ipcMain.handle('permissions:open-settings', async (_event, key: PermissionKey) => {
+ipcMain.handle('permissions:open-settings', async (event, key: PermissionKey) => {
+  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
   try {
     await openPermissionSettings(key)
     return { ok: true }

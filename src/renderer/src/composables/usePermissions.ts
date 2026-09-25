@@ -1,4 +1,5 @@
 import { computed, getCurrentInstance, onUnmounted, ref } from 'vue'
+import { isMac } from '../../../shared/osplat'
 
 // TccPermissionKey / TccPermissionStatus are ambient globals declared in env.d.ts,
 // alongside the `agentTeam.permissions` bridge signature they belong to.
@@ -82,7 +83,11 @@ export function usePermissions() {
   if (getCurrentInstance()) onUnmounted(stopPolling)
 
   // ── Derived ────────────────────────────────────────────────────────────────
-  const supported = computed(() => PERMISSION_KEYS.some((k) => statuses.value[k] !== 'not-applicable'))
+  // TCC exists only on macOS. Judging from the statuses alone showed the step
+  // everywhere until the first poll answered, because they all start 'unknown'.
+  const supported = computed(
+    () => isMac() && PERMISSION_KEYS.some((k) => statuses.value[k] !== 'not-applicable'),
+  )
 
   function isSettled(key: TccPermissionKey): boolean {
     const s = statuses.value[key]

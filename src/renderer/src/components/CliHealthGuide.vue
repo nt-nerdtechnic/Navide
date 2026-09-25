@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
+import { hasRepairableFinding, STATUS_TIMEOUT_MS } from '../composables/useOnboarding'
 import type { CliHealthCandidate, CliHealthEntry, CliHealthStatus, OnboardStatus } from '../composables/useOnboarding'
 
 const props = defineProps<{
@@ -11,7 +12,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'resolved'): void
-  (e: 'use-binary', payload: { agentKey: string; path: string; version: string }): void
 }>()
 const { t } = useI18n()
 
@@ -43,25 +43,24 @@ async function openDiagnostics(entry: CliHealthEntry): Promise<void> {
     : t('cli-health.terminal-failed', { error: result?.error || 'unknown' })
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`
-}
-
-const NPM_PACKAGES: Record<string, string> = {
-  claude: '@anthropic-ai/claude-code',
-  codex: '@openai/codex',
-}
-
 // Paths whose removal was already opened in Terminal this session; they no
 // longer count as working backups until the next re-detect refreshes the data.
 const removedPaths = ref<Set<string>>(new Set())
 
+// Windows paths arrive with backslashes; the backend compares them as POSIX
+// (`Path.as_posix()`), so the npm-prefix checks here must do the same.
+function posixPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
 function sameNpmInstall(entry: CliHealthEntry, first: CliHealthCandidate, second: CliHealthCandidate): boolean {
-  const packageName = NPM_PACKAGES[entry.agent_key]
+  const packageName = entry.npm_package
   if (!packageName) return false
   const marker = `/node_modules/${packageName}/`
-  if (!first.resolved_path.includes(marker) || !second.resolved_path.includes(marker)) return false
-  return first.resolved_path.split(marker)[0] === second.resolved_path.split(marker)[0]
+  const firstPath = posixPath(first.resolved_path)
+  const secondPath = posixPath(second.resolved_path)
+  if (!firstPath.includes(marker) || !secondPath.includes(marker)) return false
+  return firstPath.split(marker)[0] === secondPath.split(marker)[0]
 }
 
 function remainingOk(entry: CliHealthEntry, candidate: CliHealthCandidate): CliHealthCandidate | undefined {
@@ -81,8 +80,8 @@ function removalAllowed(entry: CliHealthEntry, candidate: CliHealthCandidate): b
 }
 
 function isNpmOwned(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
-  const packageName = NPM_PACKAGES[entry.agent_key]
-  return Boolean(packageName && candidate.resolved_path.includes(`/node_modules/${packageName}/`))
+  const packageName = entry.npm_package
+  return Boolean(packageName && posixPath(candidate.resolved_path).includes(`/node_modules/${packageName}/`))
 }
 
 function showBlockedNote(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
@@ -94,16 +93,9 @@ function showBlockedNote(entry: CliHealthEntry, candidate: CliHealthCandidate): 
 
 function removalCommand(entry: CliHealthEntry, candidate: CliHealthCandidate): string {
   if (!removalAllowed(entry, candidate)) return ''
-  // A removal-aware backend's verdict is final (empty string = unavailable);
-  // reconstruct locally only when the payload predates removal support.
-  if (candidate.removal_command !== undefined) return candidate.removal_command
-  const packageName = NPM_PACKAGES[entry.agent_key]
-  if (!packageName || !candidate.resolved_path.includes(`/node_modules/${packageName}/`)) return ''
-
-  const npmPath = candidate.path.replace(/\/[^/]+$/, '/npm')
-  const description = `Remove ${entry.label} ${candidate.version || ''} from ${candidate.path}`.replace(/  +/g, ' ')
-  const uninstall = `${shellQuote(npmPath)} uninstall -g ${shellQuote(packageName)}`
-  return `printf '%s\\n' ${shellQuote(description)}; printf 'Continue? [y/N] '; read -r answer; case "$answer" in [Yy]*) ${uninstall} ;; *) echo 'Cancelled.' ;; esac`
+  // The backend's command is final (empty = unavailable): it is built for
+  // the terminal shell of this platform, which the renderer cannot know.
+  return candidate.removal_command ?? ''
 }
 
 const pendingRemoval = ref<{ entry: CliHealthEntry; candidate: CliHealthCandidate } | null>(null)
@@ -134,51 +126,82 @@ async function confirmRemoval(): Promise<void> {
   }
 }
 
+/** Send a state write; the error to show, or '' once it is saved. */
+async function saveError(type: string, payload: Record<string, unknown>): Promise<string> {
+  try {
+    const resp = await props.backend.send<{ ok: boolean; error?: string }>(type, payload)
+    return resp.payload?.ok === false ? resp.payload.error || 'unknown' : ''
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e)
+  }
+}
+
 async function useBinary(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
-  const selected = await props.backend.send<{ ok: boolean }>('onboarding.cli_health.select_binary', {
+  message.value = ''
+  const error = await saveError('onboarding.cli_health.select_binary', {
     agent_key: entry.agent_key,
     path: candidate.path,
-    fingerprint: health.value.fingerprint,
-  }).catch(() => null)
-  // Compatibility with an older backend: keep the existing dismissal path
-  // while the renderer/backend are temporarily on different versions.
-  if (!selected?.ok || selected.payload?.ok === false) {
-    await props.backend.send('onboarding.cli_health.dismiss', {
-      fingerprint: health.value.fingerprint,
-    }).catch(() => {})
-  }
-  emit('use-binary', {
-    agentKey: entry.agent_key,
-    path: candidate.path,
-    version: candidate.version,
   })
+  if (error) {
+    message.value = t('cli-health.save-failed', { error })
+    return
+  }
+  // The override resolves this CLI's findings on the backend; re-read them so
+  // the guide stays open only for other CLIs, and a later skip dismisses what
+  // is left rather than the set the guide opened with.
+  try {
+    const resp = await props.backend.send<OnboardStatus>('onboarding.status', {}, STATUS_TIMEOUT_MS)
+    if (resp.payload?.cli_health) {
+      pendingRemoval.value = null
+      removedPaths.value = new Set()
+      health.value = resp.payload.cli_health
+    }
+  } catch {
+    // The choice is saved; re-detect on the last step can still refresh this.
+  }
+  if (!hasRepairableFinding(health.value)) {
+    emit('resolved')
+    return
+  }
+  message.value = t('cli-health.binary-selected', { label: entry.label })
 }
 
 async function recheck(): Promise<void> {
   checking.value = true
   message.value = ''
   try {
-    const resp = await props.backend.send<OnboardStatus>('onboarding.status', {})
+    // fresh: the user just changed installs in Terminal, which the backend's
+    // cached login-shell PATH cannot have seen.
+    const resp = await props.backend.send<OnboardStatus>(
+      'onboarding.status', { fresh: true }, STATUS_TIMEOUT_MS)
     if (!resp.payload?.cli_health) return
     // Fresh probe data supersedes any in-flight confirmation or session-local
     // removal tracking (object identities change with the new payload).
     pendingRemoval.value = null
     removedPaths.value = new Set()
     health.value = resp.payload.cli_health
-    if (!health.value.findings.length) {
+    if (!hasRepairableFinding(health.value)) {
       emit('resolved')
       return
     }
     message.value = t('cli-health.still-detected')
+  } catch (e) {
+    message.value = t('cli-health.recheck-failed', { error: e instanceof Error ? e.message : String(e) })
   } finally {
     checking.value = false
   }
 }
 
 async function dismiss(): Promise<void> {
-  await props.backend.send('onboarding.cli_health.dismiss', {
+  message.value = ''
+  const error = await saveError('onboarding.cli_health.dismiss', {
     fingerprint: health.value.fingerprint,
-  }).catch(() => {})
+  })
+  // Closing anyway would bring the guide back next launch with no word why.
+  if (error) {
+    message.value = t('cli-health.save-failed', { error })
+    return
+  }
   emit('close')
 }
 </script>

@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { usePermissions } from '../usePermissions'
+import { platformId, setPlatformId } from '../../../../shared/osplat'
+
+const BASELINE = platformId()
 
 const ALL_UNKNOWN: Record<TccPermissionKey, TccPermissionStatus> = {
   automation: 'unknown',
@@ -20,10 +23,28 @@ function mockBridge(overrides: Partial<Record<TccPermissionKey, TccPermissionSta
 describe('usePermissions', () => {
   beforeEach(() => {
     delete (window as unknown as { agentTeam?: unknown }).agentTeam
+    setPlatformId('darwin')
   })
   afterEach(() => {
     vi.useRealTimers()
+    setPlatformId(BASELINE)
   })
+
+  it('knows before any status arrives that macOS has permissions to grant', () => {
+    mockBridge()
+    expect(usePermissions().supported.value).toBe(true)
+  })
+
+  it.each([['win32'], ['linux']] as const)(
+    'knows before any status arrives that %s has none',
+    (platform) => {
+      // Statuses start 'unknown'; judging support from them alone showed the
+      // permission step on every platform until the first poll answered.
+      setPlatformId(platform)
+      mockBridge()
+      expect(usePermissions().supported.value).toBe(false)
+    },
+  )
 
   it('reads statuses from the bridge', async () => {
     mockBridge({ automation: 'granted', fullDisk: 'denied' })

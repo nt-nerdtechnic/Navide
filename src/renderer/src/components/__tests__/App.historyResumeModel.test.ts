@@ -25,7 +25,6 @@ function resumeHarness(record?: Record<string, unknown>, live?: Record<string, u
     savedHistoryFile: async () => '',
     panes: { value: live ? [live] : [] },
     spawnHistory: { value: [] },
-    commandWithSelectedBinary: (_agent: string, command: string) => command,
     resolveReadySpawnGroupId: () => '',
     runGroups: { value: [] }, activeTab: { value: '' }, runGroupsReady: { value: true },
     revivingHistoryPaneId: { value: '' }, historyViewWorkspace: { value: '/foreign' },

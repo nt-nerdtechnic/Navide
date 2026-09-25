@@ -472,6 +472,9 @@ class Session:
         self._terminal_create_gates: dict[str, asyncio.Lock] = {}
         self._terminal_create_tombstones: set[tuple[str, str]] = set()
         self._terminal_create_transactions: dict[tuple[str, str], dict[str, Any]] = {}
+        # PTYs this connection started through onboarding.run. They have no
+        # pane to reattach to, so they are killed with the connection.
+        self._onboarding_runs: set[str] = set()
         # Server-created target for the next add-account login, never persisted.
         self._created_cli_profile_id = ""
         # In-flight find_in_files cancellation handle: a newer search from
@@ -2931,6 +2934,7 @@ async def ws(websocket: WebSocket) -> None:
         # Peer is gone: silence any in-flight sends before cancelling tasks.
         session.dead = True
         _SESSIONS.discard(session)
+        await _kill_onboarding_runs(session)
         # Release PTY ownership so their output is dropped until reattached.
         orphaned = [tid for tid, owner in _PTY_OWNERS.items() if owner is session]
         for tid in orphaned:
@@ -2951,6 +2955,20 @@ async def ws(websocket: WebSocket) -> None:
             t.cancel()
         for t in session._handler_tasks:
             t.cancel()
+
+
+async def _kill_onboarding_runs(session: Session) -> None:
+    """Kill the PTYs this connection started through onboarding.run.
+
+    A run has no pane a reloaded window could reattach: left alive it would
+    sit on a sudo or OAuth prompt nobody can answer.
+    """
+    for tid in list(session._onboarding_runs):
+        try:
+            await session.terminals.kill(tid)
+        except Exception:  # noqa: BLE001 - disconnect cleanup must finish
+            log.exception("could not kill onboarding run %s on disconnect", tid)
+    session._onboarding_runs.clear()
 
 
 def _project_payload(project) -> dict[str, Any]:
@@ -3390,7 +3408,7 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         # The binary ran and identified itself; the exit code is the probe
         # command's own business. `--version`/`--help` are not always declared
         # flags — Go's stdlib `flag` exits 0 on ErrHelp, pflag and cobra do not
-        # — and onboarding_deps._probe_one already counts a parsed version as
+        # — and onboarding_deps.detect_dep already counts a parsed version as
         # installed whatever the code was. Disagreeing here is what would show
         # a CLI as installed in Settings while every pane spawn refused it.
         log.info(

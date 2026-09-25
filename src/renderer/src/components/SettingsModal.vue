@@ -323,22 +323,10 @@ const onboarding = useOnboarding(props.backend)
 const translateChip = (key: string, params?: Record<string, unknown>): string =>
   params ? t(key, params) : t(key)
 
-/** `agentTeam.cliBinary.<key>` is a plain settings read, so it is snapshotted
- *  when the tab is opened rather than watched. */
-const cliBinaryOverrides = ref<Record<string, boolean>>({})
-function refreshCliBinaryOverrides(): void {
-  cliBinaryOverrides.value = Object.fromEntries(
-    CLI_AGENT_SPECS.map((s) => [
-      s.agentKey,
-      !!settingsGet(`agentTeam.cliBinary.${s.agentKey}`, '').trim(),
-    ])
-  )
-}
-
 // ── Per-vendor launch overrides: model, effort, command line, environment ────
 // All four are global-scope keys (`agentTeam.cliModel.*`, `.cliCommand.*`,
-// `.cliEnv.*`), snapshotted when the tab opens for the same reason
-// cliBinaryOverrides is: they are plain settings reads, not reactive stores.
+// `.cliEnv.*`), snapshotted when the tab opens: they are plain settings
+// reads, not reactive stores.
 // The drawer edits one vendor at a time; drafts never cross agent boundaries.
 const expandedLaunchKey = ref('')
 const launchModels = ref<Record<string, CliModelDefault>>({})
@@ -476,7 +464,7 @@ const cliAgentRows = computed(() => {
             // The built-in Default slot is an account too, so a vendor with no
             // extra profile still has one.
             accountCount: props.cliProfilesApi.profilesForAgent(spec.agentKey).length + 1,
-            binaryOverride: !!cliBinaryOverrides.value[spec.agentKey],
+            binaryOverride: !!dep?.binary_override,
             commandOverride: !!(launchCommands.value[spec.agentKey] ?? '').trim(),
             envOverrideCount: (launchEnvs.value[spec.agentKey] ?? []).length,
           },
@@ -1954,7 +1942,6 @@ let stopPluginUpdates: (() => void) | null = null
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
   stopPluginUpdates = pluginUpdates.subscribe()
-  refreshCliBinaryOverrides()
   refreshLaunchOverrides()
   if (activeTab.value === 'cliAgents') void onboarding.refresh()
   void loadSettingsPaths()
@@ -2398,7 +2385,6 @@ watch(activeTab, (tab) => {
   if (tab === 'appearance') void loadAutoRestore()
   if (tab === 'accounts') void accountsApi.refresh()
   if (tab === 'cliAgents') {
-    refreshCliBinaryOverrides()
     refreshLaunchOverrides()
     void onboarding.refresh()
   } else {

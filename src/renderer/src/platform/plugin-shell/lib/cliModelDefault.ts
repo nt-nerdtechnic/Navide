@@ -10,10 +10,10 @@
  * losing its `modelArgs` — the setting stays put, the spawn just declines to
  * use it, and the pick comes back if the vendor regains the flag.
  *
- * Scope is GLOBAL, matching `agentTeam.cliPermission.<key>` and
- * `agentTeam.cliBinary.<key>`. A model preference follows the person, not the
- * project: the same CLI answering on a different model depending on which
- * folder is open is a surprise nobody asked for.
+ * Scope is GLOBAL, matching `agentTeam.cliPermission.<key>`. A model
+ * preference follows the person, not the project: the same CLI answering on a
+ * different model depending on which folder is open is a surprise nobody
+ * asked for.
  *
  * Both fields live under ONE key rather than two. They are picked together and
  * refused together (a vendor that cannot take a model cannot take an effort

@@ -4,8 +4,8 @@
  * The two per-vendor launch overrides a user can set by hand: the whole
  * command line, and extra environment variables.
  *
- * Scope is GLOBAL for both, matching `agentTeam.cliPermission.<key>`,
- * `agentTeam.cliBinary.<key>` and `agentTeam.cliModel.<key>`. How a CLI is
+ * Scope is GLOBAL for both, matching `agentTeam.cliPermission.<key>` and
+ * `agentTeam.cliModel.<key>`. How a CLI is
  * invoked follows the machine it is installed on, not whichever folder happens
  * to be open.
  *
@@ -52,8 +52,9 @@ export type LaunchCommandSource = 'caller' | 'stored' | 'none'
  * stored override: it is this launch's command. A LOGIN pane never takes the
  * stored override — the backend keeps only the first token and appends the
  * vendor's sign-in subcommand, so a wrapper line (`npx …`, `ccr code`,
- * `FOO=1 claude`) would become `npx auth login`. The custom binary
- * (`agentTeam.cliBinary.<key>`) is not this setting and still applies to it.
+ * `FOO=1 claude`) would become `npx auth login`. The custom binary (the
+ * backend's override, swapped in at terminal.create) is not this setting and
+ * still applies to it.
  */
 export function chooseLaunchCommand(input: {
   callerCommand: string

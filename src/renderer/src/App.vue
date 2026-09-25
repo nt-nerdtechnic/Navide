@@ -242,7 +242,7 @@ import {
   type RestoreSessionTrigger,
   type WorkspaceRestoreSession,
 } from './lib/resumeBehavior'
-import { flushSettingsOnExit, initSettingsBackend, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+import { flushSettingsOnExit, initSettingsBackend, settingsGet, settingsRemove, settingsSet } from '@navide/plugin-ui/shared'
 import { cliPermissionKey, parseCliPermissionMode, skipPermissionFlagFor } from '@navide/plugin-shell'
 import { chooseLaunchCommand, cliCommandKey, cliEnvKey, spawnEnvOverride, type LaunchCommandSource } from '@navide/plugin-shell'
 import { useLayoutStore } from './layout/useLayoutStore'
@@ -467,40 +467,59 @@ const whatsNewEntry = ref<WhatsNewEntry | null>(null)
 // default 10s deadline expires, and the fail-open below then hides the wizard
 // from exactly the first-run user who needs it.
 const ONBOARDING_STATUS_TIMEOUT_MS = 45_000
+// True while `onboardingComplete` is only `true` because the last check failed
+// open. The gate must not stay open for good on a guess: the next connect, and
+// one delayed retry, check again so a first-run user can still get the wizard.
+const onboardingCheckFailed = ref(false)
+const ONBOARDING_RETRY_MS = 15_000
+let onboardingRetryScheduled = false
+
+// One retry per session: a timeout does not drop the connection, so without it
+// only a reconnect would ever re-check — and a backend that keeps failing must
+// not be polled forever either.
+function scheduleOnboardingRetry(): void {
+  if (onboardingRetryScheduled) return
+  onboardingRetryScheduled = true
+  window.setTimeout(() => {
+    if (onboardingCheckFailed.value && backend.status.value === 'connected') void checkOnboarding()
+  }, ONBOARDING_RETRY_MS)
+}
 
 async function checkOnboarding(): Promise<void> {
   try {
-    const resp = await backend.send<OnboardStatus>(
+    let resp = await backend.send<OnboardStatus>(
       'onboarding.status',
       {},
       ONBOARDING_STATUS_TIMEOUT_MS
     )
     onboardingComplete.value = resp.payload?.complete ?? true
+    onboardingCheckFailed.value = false
     cliInstallPromptDismissed.value = new Set(resp.payload?.install_prompt_dismissed ?? [])
     cliInstallPromptDismissedLoaded.value = true
-    const health = resp.payload?.cli_health
     // One-time migration for selections made by renderer versions that stored
-    // only UI settings. Persist the same path + fingerprint in the backend so
-    // startup probing and reminder suppression survive every kind of restart.
-    // Only findings the repair guide can act on: a failed vendor update raises
-    // needs_attention too, but it is handled in CLI management and must not be
-    // silently dismissed here.
-    const repairable = health?.findings.some((finding) => finding.type !== 'update_failed') ?? false
-    if (repairable && health?.needs_attention && health.fingerprint) {
-      for (const entry of health.entries) {
-        const selectedPath = settingsGet(`agentTeam.cliBinary.${entry.agent_key}`, '').trim()
-        if (!selectedPath || !entry.candidates.some((candidate) => candidate.path === selectedPath)) continue
-        const persisted = await backend.send<{ ok: boolean }>('onboarding.cli_health.select_binary', {
-          agent_key: entry.agent_key,
-          path: selectedPath,
-          fingerprint: health.fingerprint,
-        }).catch(() => null)
-        if (persisted?.ok && persisted.payload?.ok !== false) {
-          health.dismissed = true
-          health.needs_attention = false
-          break
-        }
+    // them only as the `agentTeam.cliBinary.<key>` UI setting. The backend's
+    // override is the only one spawns apply now, so every such choice moves
+    // there — whether or not a finding is currently shown — and the setting is
+    // dropped once persisted, so a stale value can never overwrite a later
+    // choice made in CLI management.
+    let migrated = false
+    for (const entry of resp.payload?.cli_health?.entries ?? []) {
+      const settingKey = `agentTeam.cliBinary.${entry.agent_key}`
+      const selectedPath = settingsGet(settingKey, '').trim()
+      if (!selectedPath || !entry.candidates.some((candidate) => candidate.path === selectedPath)) continue
+      const persisted = await backend.send<{ ok: boolean }>('onboarding.cli_health.select_binary', {
+        agent_key: entry.agent_key,
+        path: selectedPath,
+      }).catch(() => null)
+      if (persisted?.ok && persisted.payload?.ok !== false) {
+        settingsRemove(settingKey)
+        migrated = true
       }
+    }
+    // An override resolves that CLI's findings, so the status read above is
+    // stale for the guide once anything moved.
+    if (migrated) {
+      resp = await backend.send<OnboardStatus>('onboarding.status', {}, ONBOARDING_STATUS_TIMEOUT_MS)
     }
     cliHealthGuide.value = cliHealthGuideForLaunch(resp.payload)
   } catch {
@@ -512,6 +531,8 @@ async function checkOnboarding(): Promise<void> {
     // asked again for the rest of the session. It is left unloaded instead,
     // and promptCliInstall fetches it before it decides.
     onboardingComplete.value = true
+    onboardingCheckFailed.value = true
+    scheduleOnboardingRetry()
   }
 }
 
@@ -614,7 +635,7 @@ watch(booting, (b) => {
 watch(
   () => backend.status.value,
   (s) => {
-    if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
+    if (s === 'connected' && (onboardingComplete.value === null || onboardingCheckFailed.value)) void checkOnboarding()
     // A reconnect is the cheapest retry point for an opt-out list that failed
     // to load; the loader no-ops once it holds one.
     else if (s === 'connected') void loadCliInstallPromptDismissed()
@@ -1100,24 +1121,6 @@ function makeStickyStr(key: string, fallback: string) {
   return r
 }
 const analyzerModel = makeStickyStr('agentTeam.analyzerModel', '')
-const CLI_BINARY_SETTING_PREFIX = 'agentTeam.cliBinary.'
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`
-}
-
-function commandWithSelectedBinary(agentKey: string, command: string): string {
-  const binary = settingsGet(`${CLI_BINARY_SETTING_PREFIX}${agentKey}`, '').trim()
-  const defaultCommand = agentSpecs.find((spec) => spec.agentKey === agentKey)?.defaultCommand ?? ''
-  if (!binary || !defaultCommand) return command
-  const escapedCommand = defaultCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return command.replace(new RegExp(`^${escapedCommand}(?=\\s|$)`), shellQuote(binary))
-}
-
-function selectCliBinary(payload: { agentKey: string; path: string; version: string }): void {
-  settingsSet(`${CLI_BINARY_SETTING_PREFIX}${payload.agentKey}`, payload.path)
-  cliHealthGuide.value = null
-}
 
 // When models first load (or after a refresh), if no model has been explicitly
 // chosen yet, pin the sticky to the backend's default so the selector is stable
@@ -1198,7 +1201,7 @@ function resolveCommand(
   // Navide adds, and an override means the user is writing the line instead.
   // Settings → CLI Agents says so where the override is typed.
   if (launch.source !== 'none') {
-    return { command: commandWithSelectedBinary(agentKey, launch.command), source: launch.source }
+    return { command: launch.command, source: launch.source }
   }
   const parts = [spec?.defaultCommand ?? agentKey]
   const paneArg = paneArgCtx && spec?.paneArg ? spec.paneArg(paneArgCtx) : ''
@@ -1223,7 +1226,7 @@ function resolveCommand(
       + `effort="${modelRequest.effort}" (${chosen.refusal.kind}); launching on the vendor default`
     )
   }
-  return { command: commandWithSelectedBinary(agentKey, parts.join(' ')), source: 'none' }
+  return { command: parts.join(' '), source: 'none' }
 }
 
 interface RunGroup {
@@ -2542,9 +2545,8 @@ async function handleSpawnRequestsForTurn(
  *  backend tool, before the request was broadcast — this is the other half of
  *  that guarantee, turning the id into `claude --resume <id>` / `codex resume
  *  <id>` / … through the same builder every restore and Rebuild path uses.
- *  commandWithSelectedBinary wraps it for the same reason those do: a custom
- *  binary override has to survive a resume, or the pane reopens on the wrong
- *  executable.
+ *  A custom binary override survives the resume without help here: the
+ *  backend swaps it in on terminal.create for every spawn.
  */
 function mcpSpawnCommandOverride(req: {
   agentKey: string
@@ -2584,7 +2586,7 @@ function mcpSpawnCommandOverride(req: {
     })
     return ''
   }
-  return commandWithSelectedBinary(req.agentKey, resume)
+  return resume
 }
 
 /** A recorded run-group id, if that tab still exists in the workspace; ''
@@ -6920,12 +6922,9 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
     model: historyPane?.model ?? historyState?.model ?? payload.model ?? '',
     effort: historyPane?.effort ?? historyState?.effort ?? payload.effort ?? '',
   }
-  // Custom-binary override applies to resume too — the spec guarantees the
-  // command starts with defaultCommand, which this replaces when overridden.
-  const commandOverride = commandWithSelectedBinary(
-    agentKey,
-    buildResumeCommand(agentKey, sessionId, skipFlag, chatHistoryFile, modelRequest)
-  )
+  // The custom-binary override applies to resume too: terminal.create swaps it
+  // in on the backend.
+  const commandOverride = buildResumeCommand(agentKey, sessionId, skipFlag, chatHistoryFile, modelRequest)
   const spawnGroupId = resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
   // Resuming is putting a conversation back where it was, and where it was
   // includes who opened it. Only Agent History knows which pane the session
@@ -7502,13 +7501,10 @@ async function rebuildPaneViaResume(
     }
     const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
     const skipFlag = skipFlagFor(pane.agentKey, spec)
-    const resumeCmd = commandWithSelectedBinary(
-      pane.agentKey,
-      buildResumeCommand(pane.agentKey, sessionId, skipFlag, '', {
-        model: pane.model ?? '',
-        effort: pane.effort ?? '',
-      })
-    )
+    const resumeCmd = buildResumeCommand(pane.agentKey, sessionId, skipFlag, '', {
+      model: pane.model ?? '',
+      effort: pane.effort ?? '',
+    })
     if (!resumeCmd) {
       if (!opts?.suppressBusyToast) {
         notifyRestore.toast(i18n.global.t('pane.terminal.rebuild-no-session'), { type: 'error' })
@@ -10773,13 +10769,10 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       const chatHistoryFile = await savedHistoryFile(saved.agent, workspacePath, saved.pane_id)
       if (isStale?.() || !isLocalWorkspace(workspacePath)) return
       const resumeCmd = attemptResume
-        ? commandWithSelectedBinary(
-            saved.agent,
-            buildResumeCommand(saved.agent, sessionId, skipFlag, chatHistoryFile, {
-              model: saved.model ?? '',
-              effort: saved.effort ?? '',
-            })
-          )
+        ? buildResumeCommand(saved.agent, sessionId, skipFlag, chatHistoryFile, {
+            model: saved.model ?? '',
+            effort: saved.effort ?? '',
+          })
         : ''
       const isResume = !!resumeCmd
       const effectiveResumeId = sessionId
@@ -11133,13 +11126,10 @@ async function performRealizeRestoredPane(
     const chatHistoryFile = await savedHistoryFile(saved.agent, batch.workspacePath, saved.pane_id)
     if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
     let resumeCmd = attemptResume
-      ? commandWithSelectedBinary(
-          saved.agent,
-          buildResumeCommand(saved.agent, sessionId, skipFlag, chatHistoryFile, {
-            model: saved.model ?? '',
-            effort: saved.effort ?? '',
-          })
-        )
+      ? buildResumeCommand(saved.agent, sessionId, skipFlag, chatHistoryFile, {
+          model: saved.model ?? '',
+          effort: saved.effort ?? '',
+        })
       : ''
     const ghostConfirmed = !forceFresh && shouldWarnMissingResume(
       saved.agent, sessionId, canResume, looksLikeResumeCommand(saved.agent, saved.command || ''),
@@ -11158,13 +11148,10 @@ async function performRealizeRestoredPane(
       })
       if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
       if (repointed) {
-        resumeCmd = commandWithSelectedBinary(
-          saved.agent,
-          buildResumeCommand(saved.agent, reconnectId, skipFlag, '', {
-            model: saved.model ?? '',
-            effort: saved.effort ?? '',
-          })
-        )
+        resumeCmd = buildResumeCommand(saved.agent, reconnectId, skipFlag, '', {
+          model: saved.model ?? '',
+          effort: saved.effort ?? '',
+        })
         reconnectedCount.value++
         pipelineLog(`↩ ${saved.agent}: auto-reconnected ${saved.pane_id} → ${reconnectId}`)
         if (!aggregateReconnect) {
@@ -19130,7 +19117,6 @@ function paneIsCommander(p: ActivePane): boolean {
     :initial-health="cliHealthGuide"
     @close="cliHealthGuide = null"
     @resolved="cliHealthGuide = null"
-    @use-binary="selectCliBinary"
   />
   <!-- Guided install for a CLI that is missing (pane exited 127, or picked
        from the spawn dropdown while not installed). -->

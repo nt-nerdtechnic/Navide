@@ -97,7 +97,6 @@ function harness() {
     workspaceRestoreSession: () => ({}), explicitRestoreDecision: () => 'fresh',
     deferredPaneStillCurrent: () => true, skipFlagFor: () => '',
     canResumeSession: async () => false, savedHistoryFile: async () => '',
-    commandWithSelectedBinary: (_agent: string, command: string) => command,
     stripPinnedSessionId: (command: string) => command,
     stripDeadOpencodeAutoFlag: (_agent: string, command: string) => command,
     minimizedPanes: { value: new Set<string>() },

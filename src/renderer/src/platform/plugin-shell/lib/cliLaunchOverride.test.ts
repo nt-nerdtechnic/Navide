@@ -38,7 +38,7 @@ describe('chooseLaunchCommand', () => {
     // The backend keeps only the first token and appends `auth login`, so a
     // wrapper line would become `npx auth login` / `ccr auth login`. 'none'
     // sends the login down the default-command path, where the custom binary
-    // (agentTeam.cliBinary.<key>) still applies.
+    // (the backend's override, applied at terminal.create) still applies.
     for (const storedCommand of ['npx @anthropic-ai/claude-code', 'ccr code', 'FOO=1 claude']) {
       expect(chooseLaunchCommand({ callerCommand: '', storedCommand, isLogin: true }))
         .toEqual({ command: '', source: 'none' })

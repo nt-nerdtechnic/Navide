@@ -1406,8 +1406,11 @@ async function refreshCliStatus(): Promise<void> {
   if (Date.now() - cliStatusFetchedAt < 10_000) return
   cliStatusFetchedAt = Date.now()
   try {
+    // The PATH-only quick pass: answered inline, where the full status queues
+    // on the backend's single onboarding worker behind App's 45s probe and
+    // timed out at connect. Presence is all the badge needs.
     const resp = await props.backend.send<{ deps?: { id: string; group: string; status: string }[] }>(
-      'onboarding.status',
+      'onboarding.status_quick',
       {}
     )
     const deps = resp.payload?.deps ?? []

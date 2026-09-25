@@ -35,7 +35,7 @@ describe('Settings ▸ Voice Input tab', { timeout: 15000 }, () => {
   async function mountModal(initialTab: ModalProps['initialTab']) {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', {
-      deps: [], models: [], model_catalog: [], complete: true, skip: false,
+      deps: [], models: [], model_catalog: [], complete: true,
       gate: {}, cli_health: { entries: [], findings: [], needs_attention: false },
     })
     wrapper = shallowMount(SettingsModal, {
