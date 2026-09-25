@@ -11,8 +11,9 @@ if (theme) {
   document.documentElement.setAttribute('data-theme', theme)
   seedSettings({ 'agent-team:theme': JSON.stringify(theme) })
 }
-const locale = params.get('locale')
-if (locale && i18n.global.availableLocales.includes(locale)) {
+const requestedLocale = params.get('locale')
+const locale = i18n.global.availableLocales.find((available) => available === requestedLocale)
+if (locale) {
   i18n.global.locale.value = locale
   seedSettings({ 'agent-team:language': locale })
 }
