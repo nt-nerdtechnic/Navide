@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import functools
+import json
 import logging
 import mimetypes
 import os
@@ -27,6 +28,8 @@ from . import __version__
 from . import agent_messaging
 from . import hook_auth
 from . import hook_drain
+from . import guard_hooks
+from .guard import runtime as guard_runtime
 from . import ws_auth
 from . import loop_watchdog
 from . import mem_probe
@@ -114,6 +117,7 @@ from . import fs_service
 from . import pty_registry
 from . import search_service
 from . import server_link
+from . import channels
 from . import editor_service
 from . import onboarding_deps
 from . import plan_history
@@ -468,6 +472,9 @@ class Session:
         self._terminal_create_gates: dict[str, asyncio.Lock] = {}
         self._terminal_create_tombstones: set[tuple[str, str]] = set()
         self._terminal_create_transactions: dict[tuple[str, str], dict[str, Any]] = {}
+        # PTYs this connection started through onboarding.run. They have no
+        # pane to reattach to, so they are killed with the connection.
+        self._onboarding_runs: set[str] = set()
         # Server-created target for the next add-account login, never persisted.
         self._created_cli_profile_id = ""
         # In-flight find_in_files cancellation handle: a newer search from
@@ -660,6 +667,7 @@ async def _broadcast_git_changed(
 
     `paths` is additive — `workspace_path` stays exactly as the existing
     `git.changed` consumers read it."""
+    git_service.pane_git_snapshots.invalidate(ws_path)
     entries = [
         {"rel_path": rel_path, "change": _GIT_EVENT_CHANGES[event_type]}
         for rel_path, event_type in (paths or [])
@@ -889,6 +897,9 @@ async def _active_emit(event: dict[str, Any] | bytes) -> None:
     session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
     if session_id and event.get("type") == "terminal.exit":
         sess = _PTY_OWNERS.pop(session_id, None)
+        if sess is not None:
+            # An ended onboarding run needs no kill on disconnect.
+            sess._onboarding_runs.discard(session_id)
     else:
         sess = _PTY_OWNERS.get(session_id) if session_id else None
     if sess is None:
@@ -975,6 +986,19 @@ async def _ownerless_pty_janitor() -> None:
 from . import codex_session_hooks  # noqa: E402
 
 _codex_pending_starts = codex_session_hooks.PendingStarts()
+
+
+def _pane_for_guard_token(token: str) -> str:
+    """The pane whose spawn environment carries this guard token, or ""."""
+    if not token:
+        return ""
+    for terminal_id, owner in list(_PTY_OWNERS.items()):
+        term = owner.terminals.get(terminal_id)
+        if term and not term.closed and secrets.compare_digest(
+            str(term.metadata.get("guard_pane_token") or ""), token
+        ):
+            return str(getattr(term, "pane_id", "") or "")
+    return ""
 
 
 def _live_codex_hook_terms() -> dict[str, Any]:
@@ -1116,6 +1140,9 @@ def _cap_activity_text(text: str) -> str:
 # text is kept only for turn_complete (agent_active only ever carries a short
 # prompt snippet, not meant for replay outside pane naming).
 _pane_activity: dict[str, dict[str, Any]] = {}
+# Observers of the table above (chat channels): called as (pane_id, entry) on
+# every record and (pane_id, None) when a closed pane is forgotten. Must not raise.
+pane_activity_listeners: list[Callable[[str, dict[str, Any] | None], None]] = []
 
 
 def _current_pane_id(pane_id: str) -> str:
@@ -1167,11 +1194,15 @@ def _record_pane_activity(
         # ``model_usage_exhausted``) — kept only for turn ends, bounded.
         "detail": (detail or "")[:200] if event_type == "turn_complete" else "",
     }
+    for listener in pane_activity_listeners:
+        listener(key, _pane_activity[key])
 
 
 def forget_pane_activity(pane_id: str) -> None:
     """Drop a closed pane's entry so the cache tracks live panes only."""
     _pane_activity.pop(pane_id, None)
+    for listener in pane_activity_listeners:
+        listener(pane_id, None)
     hook_drain.forget_pane(pane_id)
     push_delivery.forget_pane(pane_id)
     portable_credentials.forget_launch(pane_id)
@@ -2114,6 +2145,8 @@ async def _start_log_watcher() -> None:
     # loop thread's stack when the loop stops turning (issue #24), instead of
     # the freeze being reproducible only under sample(1).
     loop_watchdog.start(asyncio.get_running_loop())
+    # Guard events raised in hook worker threads are handed back to this loop.
+    guard_runtime.remember_loop(asyncio.get_running_loop())
 
     global _log_watcher
     _log_watcher = LogWatcher(
@@ -2160,6 +2193,8 @@ async def _start_log_watcher() -> None:
     # address it. Does nothing at all when no server URL / access token is
     # configured, which is every single-machine install.
     await server_link.start()
+    # Chat channels (Telegram, Discord, ...): adapters start in the background.
+    await channels.start()
 
     # Start MCP servers in the background so they're ready for the first pipeline run.
     asyncio.create_task(mcp_manager.startup())
@@ -2235,6 +2270,9 @@ async def _stop_log_watcher() -> None:
     from . import scheduler
 
     await scheduler.shutdown()
+    from . import voice_handlers
+
+    await voice_handlers.shutdown()
     await loop_watchdog.stop()
     # PTY children are detached process groups (start_new_session=True); they
     # must be killed here or they outlive the app as CPU-spinning orphans.
@@ -2262,6 +2300,7 @@ async def _stop_log_watcher() -> None:
         _git_watcher.stop()
     if _credential_watcher is not None:
         _credential_watcher.stop()
+    await channels.stop()
     await server_link.stop()
     await mcp_manager.shutdown()
     try:
@@ -2497,6 +2536,51 @@ async def codex_session_start_hook(request: Request) -> Response:
     await _retry_codex_session_start(token)
     # Hook stdout is empty: identity reporting adds no context or model turn.
     return Response(status_code=200)
+
+
+@app.post("/hooks/{vendor}/pretooluse")
+async def cli_pretooluse_guard_hook(vendor: str, request: Request) -> Response:
+    """Navide Guard's synchronous PreToolUse decision (see guard_hooks).
+
+    The body is printed to the CLI as the hook's own output, so it is either a
+    vendor-native decision or empty — empty is "no decision", which is also
+    what every failure answers (local fail-open).
+    """
+    if vendor not in guard_hooks.VENDORS:
+        return Response(status_code=404)
+    if not hook_auth.presented(request.headers.get(hook_auth.HEADER)):
+        return Response(status_code=403)
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        return Response(status_code=200)
+    cwd = str(payload.get("cwd") or "")
+    pane_id, ws_path = "", ""
+    if vendor == "codex":
+        # Same identity the SessionStart hook uses: the per-launch token in the
+        # pane's environment, which exists before any rollout is attributed.
+        term = _live_codex_hook_terms().get(
+            request.headers.get(codex_session_hooks.LAUNCH_HEADER, "")
+        )
+        pane_id = str(getattr(term, "pane_id", "") or "")
+    if not pane_id:
+        pane_id, ws_path, _ = attribution.pane_for_session(
+            str(payload.get("session_id") or payload.get("sessionId") or "")
+        )
+    if not pane_id:
+        # Not attributed yet: the per-pane token from the pane's environment.
+        # A hook fired outside Navide sends none and stays unattributed.
+        pane_id = _pane_for_guard_token(request.headers.get(guard_hooks.PANE_TOKEN_HEADER, ""))
+        pane = agent_messaging.current(pane_id) if pane_id else None
+        ws_path = pane.workspace_path if pane is not None else ws_path
+    answer = await guard_hooks.respond(
+        vendor, payload, pane_id=pane_id or "", cwd=cwd, workspace=ws_path or cwd
+    )
+    # ASCII-only JSON: the body goes back through the hook's shell, and a
+    # Windows PowerShell re-encodes native output with the console code page.
+    return Response(json.dumps(answer), media_type="application/json") if answer else Response(status_code=200)
 
 
 @app.post("/hooks/{vendor}")
@@ -2853,6 +2937,7 @@ async def ws(websocket: WebSocket) -> None:
         # Peer is gone: silence any in-flight sends before cancelling tasks.
         session.dead = True
         _SESSIONS.discard(session)
+        await _kill_onboarding_runs(session)
         # Release PTY ownership so their output is dropped until reattached.
         orphaned = [tid for tid, owner in _PTY_OWNERS.items() if owner is session]
         for tid in orphaned:
@@ -2862,6 +2947,9 @@ async def ws(websocket: WebSocket) -> None:
         # just reconnecting, and a deleted entry told callers the pane did not
         # exist. See agent_messaging.drop_owner.
         agent_messaging.drop_owner(session)
+        from . import voice_handlers
+
+        voice_handlers.drop_owner(session)
         server_link.roster_changed()
         # PTYs survive this disconnect so the frontend can reattach after a
         # transient network outage. They are killed only when the user explicitly
@@ -2870,6 +2958,20 @@ async def ws(websocket: WebSocket) -> None:
             t.cancel()
         for t in session._handler_tasks:
             t.cancel()
+
+
+async def _kill_onboarding_runs(session: Session) -> None:
+    """Kill the PTYs this connection started through onboarding.run.
+
+    A run has no pane a reloaded window could reattach: left alive it would
+    sit on a sudo or OAuth prompt nobody can answer.
+    """
+    for tid in list(session._onboarding_runs):
+        try:
+            await session.terminals.kill(tid)
+        except Exception:  # noqa: BLE001 - disconnect cleanup must finish
+            log.exception("could not kill onboarding run %s on disconnect", tid)
+    session._onboarding_runs.clear()
 
 
 def _project_payload(project) -> dict[str, Any]:
@@ -3309,7 +3411,7 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         # The binary ran and identified itself; the exit code is the probe
         # command's own business. `--version`/`--help` are not always declared
         # flags — Go's stdlib `flag` exits 0 on ErrHelp, pflag and cobra do not
-        # — and onboarding_deps._probe_one already counts a parsed version as
+        # — and onboarding_deps.detect_dep already counts a parsed version as
         # installed whatever the code was. Disagreeing here is what would show
         # a CLI as installed in Settings while every pane spawn refused it.
         log.info(

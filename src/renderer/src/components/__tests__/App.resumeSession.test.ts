@@ -70,9 +70,9 @@ describe('cli_open_agent(session_id) — the MCP resume path, station by station
     // be correct for exactly one CLI.
     expect(body).toContain('buildResumeCommand(')
     expect(body).toContain('skipFlagFor(req.agentKey, spec)')
-    // A custom binary override has to survive a resume, or the pane reopens on
-    // the wrong executable — the same wrapping every other resume path uses.
-    expect(body).toContain('commandWithSelectedBinary(req.agentKey, resume)')
+    // A custom binary override still survives a resume: terminal.create swaps
+    // it in on the backend for every spawn, so the command goes out as built.
+    expect(body).toMatch(/\n  return resume$/)
     // No session asked for = an ordinary fresh spawn, byte for byte.
     expect(body).toContain("if (!sessionId) return ''")
   })
@@ -171,7 +171,7 @@ describe('cli_open_agent(session_id) — the MCP resume path, station by station
     // answered at once instead.
     const body = fn('kickoffRequestedPane')
     expect(body).toContain('if (!task) {')
-    expect(body).toContain("emitKickoffVerdict('sent', 'no task — the resumed conversation was left as it was')")
+    expect(body).toContain("emitKickoffVerdict('sent', 'no task — the pane was left as it was')")
     expect(body).toContain("pane.kickoffStatus = 'none'")
   })
 

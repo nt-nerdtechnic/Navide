@@ -1,9 +1,28 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  createKickoffReporter, kickoffAttemptOutcome, runKickoffAttempts,
+  createKickoffReporter, kickoffAttemptOutcome, runKickoffAttempts, terminalKickoffOutcome,
   type KickoffAttemptEvidence,
 } from '../spawnKickoff'
+
+describe('terminalKickoffOutcome', () => {
+  it('is sent only on payload-level evidence', () => {
+    expect(terminalKickoffOutcome({ typed: true, echo: 'tail', submit: 'tail-left', promptReady: true }))
+      .toBe('sent')
+  })
+
+  it('is unverified, never failed, once the command was typed — a resend would run it again', () => {
+    expect(terminalKickoffOutcome({ typed: true, echo: 'growth', submit: 'growth', promptReady: false }))
+      .toBe('unverified')
+    expect(terminalKickoffOutcome({ typed: true, echo: null, submit: null, promptReady: true }))
+      .toBe('unverified')
+  })
+
+  it('is failed only when nothing was typed', () => {
+    expect(terminalKickoffOutcome({ typed: false, echo: null, submit: null, promptReady: true }))
+      .toBe('failed')
+  })
+})
 
 describe('kickoffAttemptOutcome', () => {
   const base = {

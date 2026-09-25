@@ -34,15 +34,20 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     vi.restoreAllMocks()
   })
 
-  async function mountModal(initialTab: ModalProps['initialTab'] = 'cliAgents', renderSettings = false) {
+  async function mountModal(
+    initialTab: ModalProps['initialTab'] = 'cliAgents',
+    renderSettings = false,
+    binaryOverrides: Record<string, string> = {},
+  ) {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', {
       deps: CLI_AGENT_SPECS.map((spec) => ({
         id: spec.agentKey, label: spec.label, group: 'agent_cli',
         status: spec.agentKey === 'codex' ? 'missing' : 'ok', version: '1.0.0',
         optional: true, can_install: true,
+        binary_override: binaryOverrides[spec.agentKey] ?? '',
       })),
-      models: [], model_catalog: [], complete: true, skip: false,
+      models: [], model_catalog: [], complete: true,
       gate: {}, cli_health: { entries: [], findings: [], needs_attention: false },
     })
     wrapper = shallowMount(SettingsModal, {
@@ -139,6 +144,21 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
       .toContain(i18n.global.t('settings.cliAgents.chip.push', { kind: CLI_AGENT_SPECS.find((spec) => spec.agentKey === 'claude')!.pushChannel!.kind }))
     expect(wrapper!.get('.cli-agent-card[data-agent-key="codex"] .cli-card-status').text())
       .toContain(i18n.global.t('settings.cliAgents.chip.no-push'))
+  })
+
+  it('shows the custom-binary chip from the backend override, not a legacy setting', async () => {
+    // The renderer no longer stores the override; a leftover value must not
+    // light the chip, and the backend's pick must.
+    const other = CLI_AGENT_SPECS.find((spec) => spec.agentKey !== 'claude')!.agentKey
+    settingsSet(`agentTeam.cliBinary.${other}`, '/legacy/other')
+    await mountModal('cliAgents', false, { claude: '/b/claude' })
+    const chip = i18n.global.t('settings.cliAgents.chip.custom-binary')
+
+    await openAgent('claude')
+    expect(wrapper!.get('.cli-agent-chips').text()).toContain(chip)
+
+    await openAgent(other)
+    expect(wrapper!.get('.cli-agent-chips').text()).not.toContain(chip)
   })
 
   async function openAgent(key: string) {

@@ -479,12 +479,48 @@ describe('prepareInstall', () => {
         {
           ...V2_TRUST_CONFIG,
           registryAuthority: 'self-hosted',
-          officialRegistryUrl: 'https://registry.navide.dev',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
         }
       )
     ).rejects.toThrow(/Official Registry|navide.*namespace/i)
     expect(removed).toEqual([])
     expect(writes.size).toBe(0)
+  })
+
+  it('authorizes a reserved namespace only at the exact Official Registry path', async () => {
+    const { bytes, digest } = v2Pkg([
+      {
+        name: 'manifest.json',
+        data: manifestV2({ id: 'navide.spoof', publisher: 'navide' }),
+      },
+      { name: 'frontend/left/index.html', data: '<!doctype html>' },
+    ])
+    const request = signedV2Request(digest, {
+      packageId: 'navide.spoof',
+      publisherId: 'navide',
+    })
+    const officialTrust = {
+      ...V2_TRUST_CONFIG,
+      registryAuthority: 'official' as const,
+      officialRegistryUrl: 'https://server.navide.dev/registry',
+    }
+    const install = (registryUrl: string) =>
+      prepareInstall(
+        { ...request, registryUrl, namespace: 'navide', name: 'spoof' },
+        fakeDeps(bytes, digest).deps,
+        officialTrust
+      )
+
+    await expect(install('https://server.navide.dev/registry/')).resolves.toMatchObject({
+      id: 'navide.spoof',
+    })
+    for (const url of [
+      'https://server.navide.dev',
+      'https://server.navide.dev/registry-evil',
+      'https://server.navide.dev/registry/evil',
+    ]) {
+      await expect(install(url)).rejects.toThrow(/Official Registry/)
+    }
   })
 
   it('rejects a backend entry without archive executable metadata', async () => {
@@ -526,6 +562,34 @@ describe('prepareInstall', () => {
 
       const prepared = await prepareInstall({ ...REQ_BASE, expectedDigest: digest }, deps)
       expect(prepared.containsBackendExecutable).toBe(true)
+    })
+
+    it('installs a Registry win32-x64 artifact whose backend is the packaged .exe', async () => {
+      // The shape `navide-plugin pack --target win32-x64` produces on Windows:
+      // a bare manifest entry and an .exe with no POSIX mode.
+      const { bytes, digest } = v2Pkg([
+        {
+          name: 'manifest.json',
+          data: manifestV2({
+            contributes: undefined,
+            backend: { entry: 'backend/entry', protocolVersion: 1, activation: 'startup' },
+          }),
+        },
+        { name: 'backend/entry.exe', data: Buffer.from('MZ\0\0') },
+      ])
+      const { deps, writes, modes } = fakeDeps(bytes, digest)
+
+      const prepared = await prepareInstall(signedV2Request(digest, { target: 'win32-x64' }), deps, {
+        ...V2_TRUST_CONFIG,
+        expectedTarget: 'win32-x64',
+      })
+      expect(prepared.provenance).toBe('official-registry')
+      expect(prepared.containsBackendExecutable).toBe(true)
+
+      commitInstall(prepared, '/plugins', deps)
+      const backend = join('/plugins', 'acme.demo', 'backend', 'entry.exe')
+      expect(writes.has(backend)).toBe(true)
+      expect(modes.get(backend)).toBe(0o700)
     })
 
     it('rejects a package that ships only the extensionless POSIX binary', async () => {

@@ -120,6 +120,7 @@ import CrossPlatformHelp from './CrossPlatformHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
 import MarketplacePane from './MarketplacePane.vue'
+import { usePluginUpdates } from '../composables/usePluginUpdates'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
@@ -127,12 +128,15 @@ import PromptSkillsPane from './PromptSkillsPane.vue'
 import SyncSettings from './SyncSettings.vue'
 import MemoryPane from './MemoryPane.vue'
 import StatusBadgeSettingsPane from './StatusBadgeSettingsPane.vue'
+import ChannelsPane from './settings/ChannelsPane.vue'
+import SecurityPane from './settings/SecurityPane.vue'
 import NavideCloudMark from './NavideCloudMark.vue'
 import SettingsNavItem from './settings/SettingsNavItem.vue'
 import SettingsSection from './settings/SettingsSection.vue'
 import SettingsCard from './settings/SettingsCard.vue'
 import SettingRow from './settings/SettingRow.vue'
 import ToggleSwitch from './settings/ToggleSwitch.vue'
+import VoiceSettingsSection from './settings/VoiceSettingsSection.vue'
 import { formatBytes } from '../lib/formatBytes'
 import { UI_SCALE_STEPS, formatUiScale, getUiScale, setUiScale } from '../lib/uiScale'
 import {
@@ -222,7 +226,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'security' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -293,6 +297,18 @@ defineExpose({
   },
 })
 
+// Search the Shortcuts tab opens with when another page links to one command
+// (Voice Input → Open Shortcuts); dropped once the tab is left, so a later
+// visit starts unfiltered.
+const shortcutsQuery = ref('')
+function openShortcutsFor(command: string): void {
+  shortcutsQuery.value = command
+  activeTab.value = 'keybindings'
+}
+watch(activeTab, (tab) => {
+  if (tab !== 'keybindings') shortcutsQuery.value = ''
+})
+
 // ── CLI Agents (enable/disable + reorder for the manual spawn dropdown) ────────
 const { order: cliOrder, disabled: cliDisabled } = useCliAgentPrefs()
 
@@ -307,22 +323,10 @@ const onboarding = useOnboarding(props.backend)
 const translateChip = (key: string, params?: Record<string, unknown>): string =>
   params ? t(key, params) : t(key)
 
-/** `agentTeam.cliBinary.<key>` is a plain settings read, so it is snapshotted
- *  when the tab is opened rather than watched. */
-const cliBinaryOverrides = ref<Record<string, boolean>>({})
-function refreshCliBinaryOverrides(): void {
-  cliBinaryOverrides.value = Object.fromEntries(
-    CLI_AGENT_SPECS.map((s) => [
-      s.agentKey,
-      !!settingsGet(`agentTeam.cliBinary.${s.agentKey}`, '').trim(),
-    ])
-  )
-}
-
 // ── Per-vendor launch overrides: model, effort, command line, environment ────
 // All four are global-scope keys (`agentTeam.cliModel.*`, `.cliCommand.*`,
-// `.cliEnv.*`), snapshotted when the tab opens for the same reason
-// cliBinaryOverrides is: they are plain settings reads, not reactive stores.
+// `.cliEnv.*`), snapshotted when the tab opens: they are plain settings
+// reads, not reactive stores.
 // The drawer edits one vendor at a time; drafts never cross agent boundaries.
 const expandedLaunchKey = ref('')
 const launchModels = ref<Record<string, CliModelDefault>>({})
@@ -460,7 +464,7 @@ const cliAgentRows = computed(() => {
             // The built-in Default slot is an account too, so a vendor with no
             // extra profile still has one.
             accountCount: props.cliProfilesApi.profilesForAgent(spec.agentKey).length + 1,
-            binaryOverride: !!cliBinaryOverrides.value[spec.agentKey],
+            binaryOverride: !!dep?.binary_override,
             commandOverride: !!(launchCommands.value[spec.agentKey] ?? '').trim(),
             envOverrideCount: (launchEnvs.value[spec.agentKey] ?? []).length,
           },
@@ -909,6 +913,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     group: t('settings.nav.appearance'),
     summary: t('settings.search.item.status-badges.summary'),
     keywords: 'status badge badges colour color rename label idle running awaiting starting stopped exited error 狀態 徽章 顏色 名稱 重新命名 閒置 執行中 等待回應 啟動中 已停止 已結束 錯誤',
+  },
+  {
+    id: 'voice-input',
+    tab: 'voice',
+    section: 'voice-input',
+    title: t('settings.search.item.voice-input.title'),
+    group: t('settings.nav.voice'),
+    summary: t('settings.search.item.voice-input.summary'),
+    keywords: 'voice input speech dictation microphone mic hold to talk push to talk whisper transcribe model download 語音 語音輸入 麥克風 按住說話 聽寫 轉文字 模型 下載 音声入力 マイク',
   },
   {
     id: 'general-environment',
@@ -1485,12 +1498,18 @@ const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: k
   layout: { scope: 'user', storage: 'localStorage' },
   // The two notification toggles are localStorage flags like General's.
   notifications: { scope: 'user', storage: 'localStorage' },
+  // Both switches are localStorage flags; the model file is the backend's.
+  voice: { scope: 'user', storage: 'localStorage' },
   accounts: { scope: 'userWorkspaceBindings', storage: 'safeStorage' },
   extensions: { scope: 'user', storage: 'mainProcess' },
   // Browsing the registry reads nothing of the user's, so this page has no
   // scope badge; the entry exists because the map covers every nav page.
   marketplace: { scope: '', storage: 'mainProcess' },
   keybindings: { scope: 'user', storage: 'mainProcess' },
+  // Platform config is in navide.db; tokens are in the credential vault.
+  channels: { scope: 'user', storage: 'safeStorage' },
+  // Guard's switch, rules, audit and taint marks are tables in navide.db.
+  security: { scope: 'user', storage: 'app_data_dir' },
 }
 
 function scopeLabel(scope: SettingsScope): string {
@@ -1916,9 +1935,13 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented) return
   emit('close')
 }
+// Pending Registry plugin updates (pushed by the main process's periodic
+// check) badge the Extensions nav item.
+const pluginUpdates = usePluginUpdates()
+let stopPluginUpdates: (() => void) | null = null
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
-  refreshCliBinaryOverrides()
+  stopPluginUpdates = pluginUpdates.subscribe()
   refreshLaunchOverrides()
   if (activeTab.value === 'cliAgents') void onboarding.refresh()
   void loadSettingsPaths()
@@ -1927,6 +1950,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  stopPluginUpdates?.()
   // The onboarding instance is this component's now, so its timers are too:
   // an install watched from the CLI management panel keeps a poll and an
   // elapsed-seconds ticker running, and closing Settings has to stop them.
@@ -2361,7 +2385,6 @@ watch(activeTab, (tab) => {
   if (tab === 'appearance') void loadAutoRestore()
   if (tab === 'accounts') void accountsApi.refresh()
   if (tab === 'cliAgents') {
-    refreshCliBinaryOverrides()
     refreshLaunchOverrides()
     void onboarding.refresh()
   } else {
@@ -2450,6 +2473,11 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2a3.6 3.6 0 0 0-3.6 3.6v2.4L3 10.4v.8h10v-.8l-1.4-2.2V5.8A3.6 3.6 0 0 0 8 2.2Z"/><path d="M6.6 13a1.4 1.4 0 0 0 2.8 0"/></svg>
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.voice')" :active="activeTab === 'voice'" @select="activeTab = 'voice'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5.8" y="1.8" width="4.4" height="7.6" rx="2.2"/><path d="M3.5 7.6a4.5 4.5 0 0 0 9 0M8 12.1v2.1"/></svg>
+                </template>
+              </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
@@ -2467,6 +2495,16 @@ watch(activeTab, (tab) => {
               <SettingsNavItem :label="$t('settings.nav.analyzer')" :active="activeTab === 'analyzer'" @select="activeTab = 'analyzer'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.2C6.6 2.2 4.2 2.8 4.2 4.8 2.7 5.1 2.7 7.3 4.2 7.8c0 2 1.9 2.6 3.8 2.1"/><path d="M8 3.2c1.4-1 3.8-.4 3.8 1.6 1.5.3 1.5 2.5 0 3 0 2-1.9 2.6-3.8 2.1"/><path d="M8 3.2v9.6"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('channels.nav')" :active="activeTab === 'channels'" @select="activeTab = 'channels'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z"/><path d="M5.4 6.2h5.2M5.4 8.2h3.2"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('guard.nav')" :active="activeTab === 'security'" @select="activeTab = 'security'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.6v4c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6v-4Z"/><path d="M5.8 8l1.6 1.6 2.9-3"/></svg>
                 </template>
               </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
@@ -2500,7 +2538,7 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 2.6h6.1l3.5 3.5v7.3H3.2Z"/><path d="M9.1 2.7v3.5h3.5"/><path d="M5.4 8.4h5.2M5.4 10.7h3.4"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" @select="activeTab = 'extensions'">
+              <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" :badge="pluginUpdates.count.value" @select="activeTab = 'extensions'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
                 </template>
@@ -4209,7 +4247,7 @@ watch(activeTab, (tab) => {
              central rule table does not own) ─────────────────────────────── -->
         <div v-show="activeTab === 'keybindings'" class="s-body keybindings-body" data-settings-section="keybindings">
           <h1 class="s-page-title">{{ $t('settings.nav.keybindings') }}</h1>
-          <KeyboardShortcutsEditor v-if="activeTab === 'keybindings'" />
+          <KeyboardShortcutsEditor v-if="activeTab === 'keybindings'" :initial-query="shortcutsQuery" />
         </div>
 
         <div v-show="activeTab === 'help'" class="s-body help-body" data-settings-section="help">
@@ -4267,6 +4305,22 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'layout'" class="s-body layout-body" data-settings-section="layout">
           <h1 class="s-page-title">{{ $t('settings.nav.layout') }}</h1>
           <LayoutSettingsPane />
+        </div>
+
+        <div v-show="activeTab === 'channels'" class="s-body channels-body" data-settings-section="channels">
+          <h1 class="s-page-title">{{ $t('channels.nav') }}</h1>
+          <ChannelsPane v-if="activeTab === 'channels'" :backend="props.backend" />
+        </div>
+
+        <div v-show="activeTab === 'security'" class="s-body security-body" data-settings-section="security">
+          <h1 class="s-page-title">{{ $t('guard.nav') }}</h1>
+          <SecurityPane v-if="activeTab === 'security'" :backend="props.backend" />
+        </div>
+
+        <!-- ── VOICE TAB ─────────────────────────────────────────────────── -->
+        <div v-show="activeTab === 'voice'" class="s-body voice-body" data-settings-section="voice">
+          <h1 class="s-page-title">{{ $t('settings.nav.voice') }}</h1>
+          <VoiceSettingsSection :backend="backend" @open-shortcuts="openShortcutsFor" />
         </div>
 
         <!-- ── NOTIFICATIONS TAB ─────────────────────────────────────────── -->
@@ -4821,6 +4875,9 @@ watch(activeTab, (tab) => {
    .s-body (overflow:hidden, no padding) does not give. */
 .layout-body { overflow-y: auto; padding: 18px 22px; }
 .notifications-body { overflow-y: auto; padding: 18px 22px; }
+.voice-body { overflow-y: auto; padding: 18px 22px; }
+.channels-body { overflow-y: auto; padding: 18px 22px; }
+.security-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */
 .status-badges-body { overflow-y: auto; padding: 18px 22px; }

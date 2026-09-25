@@ -43,6 +43,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.responses import PlainTextResponse
 from starlette.types import Receive, Scope, Send
 
+from agent_team_backend import osplat as _osplat
 from agent_team_backend.fs_service import FsError
 from agent_team_backend.pending_registry import TIMEOUT, PendingRegistry
 # Workspace normalisation, not a plan dependency: preview_* resolves a
@@ -437,17 +438,69 @@ def _target_view(entry: Any, same_workspace: bool) -> dict[str, Any]:
     return view
 
 
+#: How long a read waits for one pane's git snapshot before leaving `git` off
+#: that pane. The computation carries on and fills the cache for the next read.
+_PANE_GIT_WAIT_S = 3.0
+
+
+def _pane_cwd(pane_id: str) -> str:
+    """Where the pane's CLI runs — its live terminal's cwd — or '' when unknown.
+
+    Not the workspace: a pane opened in a linked worktree runs there, and its
+    branch is the worktree's, not the workspace checkout's.
+    """
+    from agent_team_backend import app as _app
+
+    # Read the service only if it exists: get_terminals() would create one, and
+    # a roster read has no business starting the terminal service.
+    service = getattr(_app, "_TERMINALS", None)
+    sessions = list(getattr(service, "_sessions", {}).values())
+    for session in sessions:
+        if getattr(session, "pane_id", "") == pane_id and not getattr(session, "closed", True):
+            return str(getattr(session, "cwd", "") or "")
+    return ""
+
+
+async def pane_git(pane_id: str, workspace_path: str) -> dict[str, Any] | None:
+    """The pane's git snapshot, or None outside a repository or on a slow read."""
+    from agent_team_backend import git_service
+
+    path = _pane_cwd(pane_id) or workspace_path
+    try:
+        snapshot = await asyncio.wait_for(
+            git_service.pane_git_snapshots.get(path), _PANE_GIT_WAIT_S
+        )
+    except Exception:  # noqa: BLE001 - timeout included: a decoration, never a failure
+        return None
+    return snapshot if snapshot.get("worktreeRoot") else None
+
+
+async def _with_git(views: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add `git` to each local target view that has one, in place."""
+    snapshots = await asyncio.gather(
+        *(pane_git(view["pane_id"], view["workspace_path"]) for view in views)
+    )
+    for view, snapshot in zip(views, snapshots):
+        if snapshot is not None:
+            view["git"] = snapshot
+    return views
+
+
 @server.tool()
 async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     """List the CLI panes you can send instructions to with cli_send.
 
     Returns {you, targets}. Each target: {name, address, pane_id,
-    workspace_path, same_workspace, busy, offline}. Address a pane in YOUR
+    workspace_path, same_workspace, busy, offline, git?}. Address a pane in YOUR
     workspace by its bare name; a pane in another workspace window by the
     `<folder>/<pane>` address given here. A caller with no pane identity (host
     / external credential) has no "own workspace" — every target comes back
     with same_workspace false and "you" set to the credential kind ("host" or
     "external"); always use the qualified address. Read-only.
+
+    Plain terminal panes (login shells) are listed too; cli_get_status reports
+    their `agent_key` as "terminal", and whatever you cli_send one runs as a
+    shell command — see cli_send.
 
     This is who exists, not who is related to you — the list carries no
     lineage. The panes you opened with cli_open_agent are yours to keep track
@@ -468,6 +521,20 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
 
     `offline` marks a pane whose Navide window has lost its connection: it still
     exists and is expected back, but sending to it fails until it returns.
+
+    `git` appears on a local target whose pane works inside a git checkout:
+    {branch, worktreeRoot, isLinkedWorktree, dirty, ahead, behind, fetchedAt}.
+    It describes the checkout the pane's CLI runs in (its terminal's cwd, so a
+    pane in a linked worktree reports that worktree), not the workspace folder.
+    `branch` is the short sha when HEAD is detached; `dirty` is the number of
+    `git status --porcelain` lines; `ahead` / `behind` count commits against
+    `origin/main` (null when there is no origin/main); `fetchedAt` is when
+    FETCH_HEAD was last written (ISO-8601 UTC, null when never fetched) —
+    nothing here fetches, so ahead/behind are only as fresh as that. The
+    snapshot is cached per worktree for up to ~30 s and refreshed early when
+    Navide's git watcher sees a change, so a just-made edit can take that long
+    to count. Absent outside a repository, or when git did not answer in
+    time; remote targets never carry it.
 
     `hold_reason` appears on a target that has a cli_send message still waiting
     to go in, and names what is holding it ("typing", "mid-turn", "starting",
@@ -525,6 +592,7 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     else:
         targets = [_target_view(entry, False) for entry in agent_messaging.list_panes()]
         result = {"you": caller.kind, "targets": targets}
+    await _with_git(targets)
     # Absent, not empty, when there is nothing to say: a machine with no server
     # configured has an empty roster and must see byte-for-byte the answer it
     # saw before cross-device addressing existed.
@@ -833,6 +901,46 @@ def _refuse_unresumable_session(
     }
 
 
+
+def _inherited_taint(caller: _Caller, verb: str) -> str:
+    """The taint detail a caller passes on to panes it has the window start,
+    or "" when it passes none: a tainted pane or an MCP client does."""
+    from agent_team_backend.guard.taint import is_tainted
+
+    try:
+        inherits = caller.kind == "external" or (caller.kind == "pane" and is_tainted(caller.pane_id))
+    except Exception:  # noqa: BLE001 - marking only adds friction, so fail closed
+        inherits = True
+    return f"{verb} by {caller.pane_id or caller.kind}" if inherits else ""
+
+
+def _taint_spawned(caller: _Caller, pane_id: str) -> None:
+    """Navide Guard: a spawned pane's task is typed by the window, not sent
+    through _dispatch_delivery, so it would start unmarked. A tainted pane (or
+    an MCP client) must not launder its instructions through a fresh pane."""
+    if not pane_id:
+        return
+    from agent_team_backend.guard.taint import safe_mark_tainted
+
+    detail = _inherited_taint(caller, "opened")
+    if detail:
+        safe_mark_tainted(pane_id, "agent", detail)
+
+#: agent key of a plain login-shell pane (see cli_open_agent / cli_send).
+_TERMINAL_AGENT = "terminal"
+
+#: Whether this platform can tell a terminal's shell at its prompt from a
+#: program it started (tcgetpgrp). Windows cannot: its PTY handle reports the
+#: shell as the foreground whatever runs, so the window falls back to holding
+#: only while the terminal prints — and every answer about a terminal says so.
+_TERMINAL_PROMPT_CHECK = _osplat.terminal_backend.reports_foreground
+_TERMINAL_NO_PROMPT_CHECK = (
+    "this platform cannot tell whether the terminal's shell is at its prompt: "
+    "a quiet running program (an editor, a password prompt, a REPL) may receive "
+    "the text as its own input — check cli_read_log before sending"
+)
+
+
 @server.tool()
 async def cli_open_agent(
     agent: str,
@@ -859,6 +967,17 @@ async def cli_open_agent(
     `agent` is the CLI to run (e.g. "claude", "codex"), `name` is what the pane
     will be called — that name is also its messaging address, so pick something
     role-shaped like "reviewer" — and `task` is what it should do.
+
+    `agent: "terminal"` opens a plain login-shell pane instead of an agent.
+    Its `task` is optional: a shell command line typed once after the prompt
+    is up, exactly as given — nothing is appended, so the report-back advice
+    below does not apply (a shell cannot report). Empty `task` opens it on a
+    bare prompt. `model`, `effort` and `session_id` are refused for it. Its
+    kickoff is typed once and never retyped (a retype would run the command
+    twice), so an unconfirmed one answers "unverified": read cli_read_log
+    before resending. A destructive `task` is refused before the pane opens
+    (error_code "terminal-command-refused" — see cli_send). Talk to it
+    afterwards with cli_send — see there.
 
     The pane you open is related to you: you opened it, so its result needs to
     come back to you. When you talk to the user about it, use whatever reads
@@ -1009,8 +1128,13 @@ async def cli_open_agent(
     # conversation already has its own context and the caller may only want it
     # back on screen, talking to it later with cli_send. So an empty task is
     # refused only when there is no session to resume.
-    if not (task or "").strip() and not resume_id:
+    if not (task or "").strip() and not resume_id and agent_key != _TERMINAL_AGENT:
         return {"ok": False, "error": "task is empty"}
+    if agent_key == _TERMINAL_AGENT and ((model or "").strip() or (effort or "").strip() or resume_id):
+        return {
+            "ok": False,
+            "error": "a terminal pane is a plain shell — it takes no model, effort or session_id",
+        }
     refusal = _refuse_unsupported_model(agent_key, (model or "").strip(), (effort or "").strip())
     if refusal:
         return {"ok": False, "error": refusal}
@@ -1054,6 +1178,14 @@ async def cli_open_agent(
             _resume_lineage, resume_workspace, agent_key, resume_id
         )
 
+    if agent_key == _TERMINAL_AGENT and (task or "").strip():
+        # Checked before the pane exists: a refused first command should not
+        # leave a shell behind that the caller then types into another way.
+        refused = _terminal_refusal(
+            task, workspace=target_workspace or _caller_workspace(caller), pane_id="", via="cli_open_agent"
+        )
+        if refused:
+            return refused
     request_id = f"{me or caller.kind}:spawn:{secrets.token_hex(8)}"
     loop = asyncio.get_running_loop()
     future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -1115,6 +1247,7 @@ async def cli_open_agent(
     if not verdict.get("ok"):
         _pending_kickoffs.pop(request_id, None)
         return {"ok": False, "error": str(verdict.get("error") or "spawn refused")}
+    _taint_spawned(caller, str(verdict.get("pane_id") or ""))
     # The pane exists; now the task. Waited for here rather than reported by
     # message: the caller acts on this answer, and "ok" alone was taken as
     # "delivered" by every caller that got it.
@@ -1164,6 +1297,9 @@ async def cli_open_agent(
     if run_group_id is not None:
         result["run_group_id"] = run_group_id
     advisories = list(verdict.get("advisories") or [])
+    if agent_key == _TERMINAL_AGENT and not _TERMINAL_PROMPT_CHECK:
+        result["prompt_check"] = "unavailable"
+        advisories.append(_TERMINAL_NO_PROMPT_CHECK)
     # Two answers only. "unverified" is the window's honest word for "bytes
     # written, nothing seen" — to the caller that is a task that did not
     # arrive, and the cure is the same as for an outright failure.
@@ -1621,9 +1757,39 @@ async def _send_to_group(
     }
 
 
+def _terminal_refusal(text: str, *, workspace: str, pane_id: str, via: str) -> dict[str, Any] | None:
+    """The tool answer for a command a terminal must not be typed, or None.
+    See guard.terminal_policy: refused whatever the Guard switch says, audited,
+    and shown on the pane; nothing is broadcast, so no window ever sees it."""
+    from agent_team_backend.guard import terminal_policy
+
+    refusal = terminal_policy.enforce(text, workspace=workspace, pane_id=pane_id, via=via)
+    if refusal is None:
+        return None
+    return {
+        "ok": False,
+        "error": refusal.message(),
+        "error_code": "terminal-command-refused",
+        "refused": refusal.as_dict(),
+    }
+
+
+class TerminalExternalRefused(Exception):
+    """External content (a chat channel, another device) addressed to a plain
+    terminal pane. Refused here, before it is broadcast or taints anything:
+    the renderer refuses it too, but a shell would run it, so the backend does
+    not leave that to the window alone."""
+
+
+TERMINAL_EXTERNAL_ERROR = (
+    "external content is never typed into a plain terminal pane — the shell would run it"
+)
+
+
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
-    reply_to: str = "", kind: str = "",
+    reply_to: str = "", kind: str = "", from_display: str = "",
+    origin: str = "", taint_detail: str = "", taint_source: str = "agent",
 ) -> str:
     """Hand one message to the windows and record it; returns its msg_key.
 
@@ -1648,8 +1814,19 @@ async def _dispatch_delivery(
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
 
+    if origin in ("channel", "remote") and getattr(entry, "agent_key", "") == _TERMINAL_AGENT:
+        raise TerminalExternalRefused(TERMINAL_EXTERNAL_ERROR)
     sender = agent_messaging.get(me) if me else None
     msg_key = f"{me or caller.kind}:mcp:{secrets.token_hex(8)}"
+    if kind != "ack" and (caller.kind in ("pane", "external") or taint_detail):
+        # Navide Guard: text from another agent or an MCP client taints the
+        # target. A host caller passes taint_detail when the text is
+        # agent-authored (an agent's scheduled job); a chat channel passes its
+        # own detail with taint_source="remote".
+        from agent_team_backend.guard.taint import safe_mark_tainted
+
+        sender_name = agent_messaging.readable_sender(me, from_display) if me else caller.kind
+        safe_mark_tainted(entry.pane_id, taint_source, taint_detail or f"message from {sender_name}", msg_key)
     await app.broadcast(
         make_event(
             "agent_msg.deliver",
@@ -1660,7 +1837,8 @@ async def _dispatch_delivery(
                 "target_name": entry.name,
                 "target_agent_key": entry.agent_key,
                 "from_pane_id": me,
-                "from_display": agent_messaging.sender_display(
+                # A chat channel names the chat sender ("telegram:alice") instead.
+                "from_display": from_display or agent_messaging.sender_display(
                     me, "an external client" if caller.kind == "external" else "a host client"
                 ),
                 "from_workspace_path": sender.workspace_path if sender else "",
@@ -1677,6 +1855,9 @@ async def _dispatch_delivery(
                 **({"reply_to": reply_to} if reply_to else {}),
                 # Only present for an ack — see the docstring.
                 **({"kind": kind} if kind else {}),
+                # "channel" for a chat-channel message, so the window can mark
+                # it as external; absent otherwise.
+                **({"origin": origin} if origin else {}),
             },
         )
     )
@@ -1704,6 +1885,37 @@ async def cli_send(
     text is delivered verbatim and submitted for the receiving agent to act on,
     once that pane is idle; it is queued if the pane is mid-turn. An unknown or
     ambiguous target is refused rather than guessed.
+
+    A plain terminal pane (agent_key "terminal" in cli_get_status) is a
+    login shell, not an agent: `text` is typed in bare — no sender line, no
+    reply instructions — and Enter runs it as a shell command line with the
+    user's privileges. It is held while anything but the shell is in front of
+    its tty — a running command, an editor, a sudo/ssh password prompt, a REPL,
+    printing or not — and for 60s after the user's last keystroke in it; it
+    never gets a turn end, so cli_wait_idle / cli_send_and_wait settle on
+    "quiet_period" for it; read cli_read_log for the result. Where the platform
+    cannot see the shell's prompt (Windows) the answer carries
+    `prompt_check: "unavailable"` and a warning, and it is held only while
+    printing. Enter is pressed once: "delivered" means the line went in, not
+    that the command succeeded. A multi-line `text` fails (send one line at a
+    time) when the shell has no bracketed paste, and a message still queued
+    after 2 minutes fails rather than running late. A terminal cannot reply, is
+    left out of `to: "group"` broadcasts, and refuses content from a chat
+    channel or remote device.
+
+    Destructive commands are refused for a terminal, never typed — whatever
+    the Guard switch says. The line is split into segments (; && || | &,
+    newlines, $( ), backticks) and one refused segment refuses it all:
+    anything Guard rates critical (high too, if the user turned that
+    category on — it is off by default), recursive deletes of / ~ or outside
+    the workspace (Remove-Item -Recurse C:\\ and rmdir /s too), sudo/su/doas,
+    disk formatting and raw device writes, shutdown/reboot, killall/pkill,
+    recursive chmod/chown on / or ~, writes into system folders, disabling
+    services, fork bombs, piping a download into a shell, credential files,
+    force-pushing main, and lines that cannot be judged statically. The answer
+    is ok: false with error_code "terminal-command-refused" and `refused`
+    {rule, segment, reason}; tell the user to run it themselves. The user
+    tunes the categories and patterns in Settings → Security.
 
     `to: "group"` broadcasts instead: every other pane in YOUR OWN tab group,
     in your own workspace. Deliberately narrower than the bare-line protocol's
@@ -1859,6 +2071,7 @@ async def _send(
     reply_to: str = "",
     kind: str = "message",
     open_target: bool = False,
+    taint_detail: str = "",
 ) -> dict[str, Any]:
     """cli_send once its caller is resolved.
 
@@ -1967,6 +2180,10 @@ async def _send(
         opened = {"realized": True, "reason": open_result["reason"]}
         target = open_result["pane"]
 
+    if target.agent_key == _TERMINAL_AGENT and send_kind != "ack":
+        refused = _terminal_refusal(text, workspace=target.workspace_path, pane_id=target.pane_id, via="cli_send")
+        if refused:
+            return refused
     msg_key = await _dispatch_delivery(
         target,
         text,
@@ -1975,6 +2192,7 @@ async def _send(
         cross_workspace=result.cross_workspace,
         reply_to=reply_to,
         kind=send_kind,
+        taint_detail=taint_detail,
     )
     answer: dict[str, Any] = {
         "ok": True,
@@ -1989,6 +2207,11 @@ async def _send(
         answer["warning"] = (
             "the target is a restore placeholder with no CLI running; the message "
             "waits until someone opens it (ui.pane.open, or open_target=True)"
+        )
+    if target.agent_key == _TERMINAL_AGENT and not _TERMINAL_PROMPT_CHECK:
+        answer["prompt_check"] = "unavailable"
+        answer["warning"] = "; ".join(
+            w for w in (answer.get("warning"), _TERMINAL_NO_PROMPT_CHECK) if w
         )
     return await _with_delivery_wait(answer, wait_s)
 
@@ -3235,7 +3458,7 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
 
     `target` uses the same addressing as cli_send, and `pane_id` names one
     exact pane instead. Returns {ok, name,
-    agent_key, busy, last_activity?, usage?, ui?}. `last_activity`, when known,
+    agent_key, busy, last_activity?, usage?, git?, ui?}. `last_activity`, when known,
     is {type: "agent_active"|"turn_complete", text? (turn_complete only),
     age_seconds}. `ui`, when the owning Navide window answers in time, is
     {status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?,
@@ -3267,6 +3490,11 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     comes from. For claude it is the ACTIVE account's snapshot, which is the
     login every claude pane actually runs on (see `profileId` above). Absent
     when Navide has no snapshot for that vendor at all.
+
+    `git` is the pane's checkout, in the shape and with the caveats
+    cli_list_targets gives it: branch, worktree, dirty count and drift against
+    origin/main, cached for up to ~30 s. Absent outside a repository, when git
+    did not answer in time, and for a remote target.
 
     `ui.kickoff` is how this pane's spawn-time task injection ended, and it is
     the authoritative answer to "did cli_open_agent's task actually arrive":
@@ -3329,6 +3557,9 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     usage = await _cached_usage_snapshot(pane.agent_key)
     if usage is not None:
         status["usage"] = usage
+    git = await pane_git(pane.pane_id, pane.workspace_path)
+    if git is not None:
+        status["git"] = git
 
     ui_result = await _ui_request(
         pane.workspace_path,
@@ -4028,10 +4259,13 @@ async def _send_and_wait_remote(
         await asyncio.sleep(_WAIT_IDLE_POLL_S)
 
     while True:
+        # Look before giving up, as the local path does: the grace window runs
+        # to the deadline whenever timeout_s is under its cap, so the pane can
+        # be first seen working with no budget left — and a pane seen working
+        # is not "never_started". With no time left cli_wait_idle still checks
+        # once.
         left = timeout - (time.monotonic() - started)
-        if left <= 0:
-            break
-        waited = await cli_wait_idle(to, ctx, timeout_s=left, pane_id=pane_id)
+        waited = await cli_wait_idle(to, ctx, timeout_s=max(left, 0.0), pane_id=pane_id)
         if waited.get("ok") is False:
             # Same reading as the local target_lost: the send happened and
             # msg_key is real, so this is "delivered, but I can no longer
@@ -4165,13 +4399,13 @@ async def cli_send_and_wait(
     target_pane_id = resolved.pane.pane_id
 
     baseline = app.pane_activity(target_pane_id)
-    baseline_ts = baseline["ts_monotonic"] if baseline else None
 
     def has_new_activity() -> bool:
+        # Identity, not timestamps: every recorded event is a new dict, while
+        # two events inside one tick of a coarse monotonic clock (15.6 ms on
+        # Windows) carry the same ts_monotonic and would read as no change.
         current = app.pane_activity(target_pane_id)
-        if current is None:
-            return False
-        return baseline_ts is None or current["ts_monotonic"] > baseline_ts
+        return current is not None and current is not baseline
 
     started = time.monotonic()
     timeout = min(max(float(timeout_s), 0.0), _WAIT_IDLE_MAX_TIMEOUT_S)
@@ -4235,10 +4469,12 @@ async def cli_send_and_wait(
             await asyncio.sleep(_WAIT_IDLE_POLL_S)
 
     while True:
-        left = remaining()
-        if left <= 0:
-            break
-        waited = await cli_wait_idle(to, ctx, timeout_s=left, pane_id=pane_id)
+        # Look before giving up. The budget can be gone by the time the new
+        # turn is first seen — the grace window runs to the deadline whenever
+        # timeout_s is under its cap, and a stalled host spends it early — and
+        # a turn already seen is the answer, not "never_started". With no time
+        # left cli_wait_idle still checks once.
+        waited = await cli_wait_idle(to, ctx, timeout_s=max(remaining(), 0.0), pane_id=pane_id)
         if waited.get("ok") is False:
             return target_lost(waited)
         if not waited.get("idle"):
@@ -4431,6 +4667,24 @@ _UI_INVOKE_SLOW_TIMEOUT_S = 60.0
 #: Deliberately a short explicit list, not "every action with a paneId": focus,
 #: close, getStatus and interrupt are cross-pane by design.
 _PANE_PRIVATE_UI_ACTIONS = frozenset({"ui.messaging.readIncoming", "ui.messaging.settleRead"})
+
+
+def _human_only_refusal(action: str, args: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Refuse what only the user at the computer may do, for any MCP caller.
+
+    ui.pane.sendKeys answers a pane's permission prompt or option menu, and
+    ui.settings.yolo with yolo true makes every CLI skip its prompts; an agent
+    doing either approves its own actions. Reading the switch and turning it
+    off stay open. The chat relay presses keys through _ui_request directly
+    (channels.default_seams), not through these tools, and is not affected.
+    """
+    if action == "ui.pane.sendKeys":
+        error = "ui.pane.sendKeys answers a pane's prompt; only the user can do that, at the computer"
+    elif action == "ui.settings.yolo" and (args or {}).get("yolo") is True:
+        error = "請在 Settings 由使用者切換: turning the permission bypass on is the user's call"
+    else:
+        return None
+    return {"ok": False, "result": None, "error": error, "error_code": "ui_human_only"}
 
 # ui.pipeline.start spawns every slot of the run's first stage before it
 # answers, so it is at least as slow as a single pane create and usually
@@ -4678,8 +4932,15 @@ async def ui_invoke(
     hosting window has switched to another project, rather than silently
     running against the wrong one. Switch that window back, or spawn the pane
     from a window that has the project open.
+
+    ui.pane.sendKeys, and ui.settings.yolo with yolo true, are refused with
+    error_code "ui_human_only": answering a pane's prompt and switching the
+    permission bypass on are the user's to do.
     """
     caller = _resolve_caller(ctx)
+    refusal = _human_only_refusal(action, args)
+    if refusal is not None:
+        return refusal
     if action in _PANE_PRIVATE_UI_ACTIONS:
         # Refused here as well as in the window: the renderer check is the one
         # that holds for every path a request can take, this one gives the
@@ -5477,7 +5738,8 @@ async def skills_list(ctx: Context) -> dict[str, Any]:
     skill would cover what they are asking for. Read-only. Use skills_inspect
     with a listed id for instructions and a delivery revision; authorized
     changes use skills_set_delivery. Install through skills_prepare_install
-    then skills_install after reviewing the preview.
+    then skills_install after reviewing the preview; the user approves the
+    install in Navide, and skills_install_status reports the outcome.
 
     Returns {skills, native, root, agents}. Each shared skill is {name,
     id, description, enabled, targets, managed, valid, native_conflict}: `targets`
@@ -6115,9 +6377,24 @@ async def pipeline_start(
     pipeline_id = str(pipeline_id or "").strip()
     if pipeline_id:
         args["pipelineId"] = pipeline_id
-    return await _ui_request(
-        workspace_path, "invoke", caller=caller, action="ui.pipeline.start", args=args
-    )
+    # Navide Guard: the run's panes are spawned and briefed by the window, so
+    # the caller's taint travels with the run (guard.taint arm/adopt).
+    from agent_team_backend.guard import taint as guard_taint
+
+    detail = _inherited_taint(caller, "pipeline started")
+    if detail:
+        guard_taint.arm_pipeline_run(workspace_path, detail)
+    result: dict[str, Any] = {}
+    try:
+        result = await _ui_request(
+            workspace_path, "invoke", caller=caller, action="ui.pipeline.start", args=args
+        )
+    finally:
+        if detail:
+            # Adopted by the run if it started; a leftover arming must not
+            # taint the next run someone starts at the computer.
+            guard_taint.disarm_pipeline_run(workspace_path)
+    return result
 
 
 @server.tool()
@@ -6839,18 +7116,53 @@ async def _announce_scheduler() -> None:
     await scheduler.broadcast_changed()
 
 
+def _scheduler_actor(caller: _Caller) -> dict[str, Any]:
+    """Who an MCP caller acts as on a job. A caller with no pane identity (host
+    or external) is one shared "external" agent."""
+    from agent_team_backend import agent_messaging
+
+    if caller.kind != "pane":
+        return {"kind": "external"}
+    me = agent_messaging.get(caller.pane_id)
+    return {
+        "kind": "pane",
+        "pane_id": caller.pane_id,
+        "pane_name": me.name if me is not None else "",
+        "workspace": _caller_workspace(caller),
+    }
+
+
+_CROSS_WORKSPACE = "SCHEDULER_CROSS_WORKSPACE"
+
+
 @server.tool()
 async def scheduler_list(ctx: Context) -> dict[str, Any]:
     """List Navide's scheduled jobs. Returns {ok, jobs, now}.
 
+    Every job is listed, including ones you may not change: `editable` says
+    whether you may (you may change only jobs you created), `owner` says who
+    created it ({kind: "user"}, {kind: "pane", pane_id, pane_name, workspace}
+    or {kind: "external"}), and `owner_gone` is true when the creating pane is
+    gone — such a job is the user's to change now. `limits` reports the agent
+    limits (see scheduler_upsert, LIMITS) and how much of them is in use:
+    yours_enabled, agent_enabled, agent_runs_today.
+
     Jobs fire only while Navide is running; nothing wakes the machine or the
     app. See scheduler_upsert for the shape of a job.
     """
+    from agent_team_backend.scheduler import may_change
+
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    return await _scheduler_service().list()
+    actor = _scheduler_actor(caller)
+    result = await _scheduler_service().list()
+    result["jobs"] = [{**job, "editable": may_change(actor, job)} for job in result["jobs"]]
+    result["limits"]["yours_enabled"] = sum(
+        1 for job in result["jobs"] if job["editable"] and job["enabled"]
+    )
+    return result
 
 
 @server.tool()
@@ -6868,7 +7180,8 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
 
     Skips are not errors: "no_window" (no Navide window open), "busy" (this
     job's previous message is still queued at the pane), "budget" (daily cap or
-    quota), "target_gone" (pane_id no longer names a pane). A message to a pane
+    quota), "budget_global" (agent jobs' daily total), "expired" (see LIMITS),
+    "target_gone" (pane_id no longer names a pane). A message to a pane
     that is mid-turn is queued by the normal delivery path and runs as "ok".
 
     Defaults for a pane caller: action.workspace is your own workspace, and an
@@ -6877,6 +7190,25 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
     `text`: {name, schedule: {kind: "once", in_ms: 3600000}, action: {kind:
     "message", text}}. Do not use "every" for a one-off wake-up — it repeats. A
     caller with no pane identity must pass workspace and a target.
+
+    OWNERSHIP. A job you create is yours; you may update, remove, pause/resume
+    or run_now only your own jobs — the user's and other agents' answer {ok:
+    false, code: "SCHEDULER_NOT_OWNER"}; ask the user to change those. If your
+    pane is closed, its jobs keep running but become the user's to change. A
+    pane caller may only target panes in its own workspace (another workspace
+    answers code "SCHEDULER_CROSS_WORKSPACE"); a caller with no pane identity
+    has no own workspace and is not limited this way.
+
+    LIMITS on agents' jobs (the user's own jobs have none): at most 10 enabled
+    jobs of yours and 100 enabled agent jobs in all; every_ms at least 300000
+    (5 minutes) and max_runs_per_day at most 288; 300 runs a day across all
+    agent jobs (your run_now included) — past that a slot is skipped as
+    "budget_global". A periodic job of yours disables itself 7 days after you
+    last saved or enabled it (skip reason "expired"; the user can keep it), so
+    save or re-enable it to keep it going. A finished once job of yours is
+    deleted 30 days after it ran. A limit answers {ok: false, code:
+    "SCHEDULER_LIMIT", limit, max, used, error}; `max` is the bound (the
+    minimum, for "min_every_ms").
 
     A once job runs a single time, then disables itself whatever the outcome
     (ok, error or skipped); it stays listed with its state. Enabling it again
@@ -6890,7 +7222,8 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
     (no `id`) needs name, schedule and action.
 
     A job is {id, name, enabled, created_at, updated_at, schedule, action, policy,
-    state}; times are epoch milliseconds.
+    state, owner, updated_by, owner_gone}; times are epoch milliseconds. owner
+    and updated_by are recorded by Navide; anything sent there is ignored.
 
       schedule — one of:
         {kind: "every",  every_ms, anchor_ms?}   every N ms (60000 .. 7 days),
@@ -6932,22 +7265,35 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
             if me is not None:
                 action["pane_name"] = me.name
         job["action"] = action
+        own = agent_messaging._normalize_workspace(_caller_workspace(caller))
+        target = agent_messaging._normalize_workspace(str(action.get("workspace") or ""))
+        if target != own:
+            return {
+                "ok": False,
+                "code": _CROSS_WORKSPACE,
+                "error": f'a pane may only schedule panes in its own workspace ("{own}"), '
+                f'not "{target}" — ask the user, or a pane in that workspace, to schedule it',
+            }
     try:
-        result = await _scheduler_service().upsert(job)
+        result = await _scheduler_service().upsert(job, _scheduler_actor(caller))
     except JobInvalid as err:
         return {"ok": False, "error": str(err)}
-    await _announce_scheduler()
+    if result.get("ok"):
+        await _announce_scheduler()
     return result
 
 
 @server.tool()
 async def scheduler_remove(id: str, ctx: Context) -> dict[str, Any]:
-    """Delete a scheduled job and its run history. Returns {ok} or {ok: false, error}."""
+    """Delete a scheduled job and its run history. Returns {ok} or {ok: false, error}.
+
+    Only a job you created (see scheduler_upsert, OWNERSHIP).
+    """
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    result = await _scheduler_service().remove(str(id or ""))
+    result = await _scheduler_service().remove(str(id or ""), _scheduler_actor(caller))
     if result.get("ok"):
         await _announce_scheduler()
     return result
@@ -6959,13 +7305,16 @@ async def scheduler_set_enabled(id: str, enabled: bool, ctx: Context) -> dict[st
 
     Resuming never fires a slot that passed while the job was paused; it waits
     for the next one. Resuming a once job whose moment has passed answers
-    {ok: false, error} — set a new time with scheduler_upsert instead.
+    {ok: false, error} — set a new time with scheduler_upsert instead. Only a
+    job you created (see scheduler_upsert, OWNERSHIP).
     """
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    result = await _scheduler_service().set_enabled(str(id or ""), bool(enabled))
+    result = await _scheduler_service().set_enabled(
+        str(id or ""), bool(enabled), _scheduler_actor(caller)
+    )
     if result.get("ok"):
         await _announce_scheduler()
     return result
@@ -6978,13 +7327,14 @@ async def scheduler_run_now(id: str, ctx: Context) -> dict[str, Any]:
     Answers as soon as the run has started, not when it ends — read
     scheduler_runs for the outcome. Refused while that job is already running.
     Clears a failure backoff; the error count resets only if this run succeeds.
-    The run does not move the job's next scheduled slot.
+    The run does not move the job's next scheduled slot. Only a job you created
+    (see scheduler_upsert, OWNERSHIP).
     """
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    return await _scheduler_service().run_now(str(id or ""))
+    return await _scheduler_service().run_now(str(id or ""), _scheduler_actor(caller))
 
 
 @server.tool()
@@ -7023,15 +7373,15 @@ async def cli_permission_settings(
     every path that starts a CLI: new panes, pipeline slots, resumes and
     restores alike.
 
-    Called with no argument it only reads. Passing `yolo` sets it, and the new
-    value applies to CLIs started AFTER the change; processes already running
-    keep the flags they were launched with, so turning it off does not reach
-    back into a pane that is already going.
+    Called with no argument it only reads. Passing `yolo=false` turns it off,
+    and the new value applies to CLIs started AFTER the change; processes
+    already running keep the flags they were launched with, so turning it off
+    does not reach back into a pane that is already going.
 
-    WHAT TURNING IT ON MEANS: the CLIs Navide starts stop asking before they
-    edit files, run shell commands or make network calls in the user's
-    workspace, and act on their own judgement instead. That is the user's
-    call to make. Do not switch it on to get your own work past a prompt.
+    `yolo=true` is REFUSED (ok false, error_code "ui_human_only"): with it on,
+    the CLIs Navide starts stop asking before they edit files, run shell
+    commands or make network calls in the user's workspace. Only the user can
+    switch it on, in Settings. Ask them if your work needs it.
 
     Returns {ok, result, error}; `result` is {yolo, agents}. `yolo` is the
     global switch. `agents` is one entry per CLI vendor — {agent, mode,
@@ -7065,6 +7415,9 @@ async def cli_permission_settings(
     # always carried the key would turn every read into a write of whatever
     # the default happened to serialise to.
     args: dict[str, Any] = {} if yolo is None else {"yolo": bool(yolo)}
+    refusal = _human_only_refusal("ui.settings.yolo", args)
+    if refusal is not None:
+        return refusal
     # Soft resolve: unlike the pipeline tools this must not refuse a caller who
     # has no workspace, because the setting does not belong to one. With
     # nothing to address, is_global sends it to any one open window.

@@ -6,6 +6,8 @@
 defineProps<{
   label: string
   active?: boolean
+  /** Numeric badge after the label (e.g. pending updates); hidden at 0. */
+  badge?: number
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +28,7 @@ const emit = defineEmits<{
       <slot name="icon"></slot>
     </span>
     <span class="settings-nav-item-label">{{ label }}</span>
+    <span v-if="badge" class="settings-nav-item-badge">{{ badge }}</span>
   </button>
 </template>
 
@@ -69,6 +72,19 @@ const emit = defineEmits<{
   height: 60%;
   border-radius: 0 2px 2px 0;
   background: var(--accent-emphasis);
+}
+.settings-nav-item-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
 }
 .settings-nav-item-icon {
   display: inline-flex;

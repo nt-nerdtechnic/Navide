@@ -3002,9 +3002,12 @@ async def _run_skill_operation(
 async def skills_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    result = await _run_skill_operation(
-        session, msg_id, msg_type, app.skills_store.list_skills
-    )
+    from .sync_scopes import annotate_content_sync
+
+    def list_skills() -> dict[str, Any]:
+        return annotate_content_sync(app.skills_store.list_skills(), app.skills_store)
+
+    result = await _run_skill_operation(session, msg_id, msg_type, list_skills)
     if result is not None:
         await session.send_json(make_response(msg_id, msg_type, result))
 
@@ -3180,6 +3183,34 @@ async def skills_delete(session: "Session", msg_id: str, msg_type: str, payload:
     )
     if result is not None:
         await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("skills.install_approvals.list")
+async def skills_install_approvals_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .skills_approvals import public, registry
+
+    approvals = [public(record) for record in registry.pending()]
+    await session.send_json(make_response(msg_id, msg_type, {"approvals": approvals}))
+
+
+@handler("skills.install_approval.decide")
+async def skills_install_approval_decide(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .plugins.builtin.navide_skills.skills_tools import _installer
+    from .skills_approvals import SkillApprovalError, decide
+
+    approval_id = str(payload.get("approval_id") or "")
+    approve = payload.get("approve") is True
+    # MCP and the plugin broker hold this socket too; only a window can mint the
+    # confirmation, so an agent cannot approve its own request.
+    subject = f"{approval_id}:{'approve' if approve else 'reject'}"
+    if not await _confirmed(session, msg_id, msg_type, payload, subject=subject):
+        return
+    try:
+        approval = await decide(approval_id, approve, _installer())
+    except SkillApprovalError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, str(err), {"approval_id": approval_id}))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"approval": approval}))
 
 
 # ── CLI instruction files (memory.*) ────────────────────────────────────────
@@ -4723,7 +4754,32 @@ async def p2p_network_snapshot(
     # A link that is down still answers, carrying `state` and the last picture
     # the server sent: "the network you had a moment ago, and the link is
     # offline" is the truth, while an error would read as "you have no network".
+    await _add_local_pane_git(snapshot)
     await session.send_json(make_response(msg_id, msg_type, snapshot))
+
+
+async def _add_local_pane_git(snapshot: dict) -> None:
+    """Give this machine's own pane rows their `git` snapshot, in place.
+
+    Local panes only: another machine's checkout is not readable from here, and
+    nothing about git is uploaded to the server.
+    """
+    from .mcp_server.server import pane_git
+
+    panes = [
+        pane
+        for device in snapshot.get("devices") or []
+        if isinstance(device, dict) and device.get("isLocal")
+        for pane in device.get("panes") or []
+        if isinstance(pane, dict) and pane.get("paneId")
+    ]
+    workspaces = {entry.pane_id: entry.workspace_path for entry in agent_messaging.list_panes()}
+    snapshots = await asyncio.gather(
+        *(pane_git(pane["paneId"], workspaces.get(pane["paneId"], "")) for pane in panes)
+    )
+    for pane, git in zip(panes, snapshots):
+        if git is not None:
+            pane["git"] = git
 
 
 # ── Settings bundle / metadata (settings.*) ─────────────────────────────────
@@ -6199,7 +6255,6 @@ async def onboarding_status(session: "Session", msg_id: str, msg_type: str, payl
         _ONBOARDING_EXECUTOR, lambda: app.onboarding_deps.get_status(fresh=fresh)
     )
     status["complete"] = app.onboarding_deps.is_complete()
-    status["skip"] = app.onboarding_deps.should_skip()
     await session.send_json(make_response(msg_id, msg_type, status))
 
 
@@ -6214,43 +6269,69 @@ async def onboarding_status_quick(session: "Session", msg_id: str, msg_type: str
 
     status = app.onboarding_deps.quick_status()
     status["complete"] = app.onboarding_deps.is_complete()
-    status["skip"] = app.onboarding_deps.should_skip()
     await session.send_json(make_response(msg_id, msg_type, status))
 
 
-@handler("onboarding.install")
-async def onboarding_install(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+#: The agent_key of a PTY started by onboarding.run. Reserved: terminal.create
+#: refuses it, so no renderer can open a pane that passes as an install run.
+ONBOARDING_RUN_AGENT_KEY = "onboarding-run"
+
+
+@handler("onboarding.run")
+async def onboarding_run(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Start a whitelisted install / maintenance / ollama command in a PTY.
+
+    The window names a kind and ids; the command comes from the registry via
+    onboarding_deps.resolve_run, with the same prerequisite checks as before.
+    Output, input, resize, kill and the exit code then travel over the
+    ordinary terminal.* messages, keyed by the returned run_id.
+    """
     from . import app
 
-    dep_id = payload.get("dep_id", "") or ""
-    result = await asyncio.to_thread(app.onboarding_deps.install_dep, dep_id)
-    await session.send_json(make_response(msg_id, msg_type, result))
-
-
-@handler("onboarding.pull_model")
-async def onboarding_pull_model(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import app
-
-    model = payload.get("model", "") or app.onboarding_deps._SUGGESTED_MODEL
-    # Offloaded: the reachability check shells out to `ollama list`.
-    result = await asyncio.to_thread(app.onboarding_deps.pull_model, model)
-    await session.send_json(make_response(msg_id, msg_type, result))
-
-
-@handler("onboarding.start_ollama")
-async def onboarding_start_ollama(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import app
-
-    result = await asyncio.to_thread(app.onboarding_deps.start_ollama_service)
-    await session.send_json(make_response(msg_id, msg_type, result))
+    try:
+        cols = int(payload.get("cols") or 100)
+        rows = int(payload.get("rows") or 24)
+    except (TypeError, ValueError):
+        # A malformed request, not a PTY failure: no external-terminal fallback.
+        await session.send_json(make_error(
+            msg_id, msg_type, "BAD_REQUEST", "cols and rows must be integers",
+        ))
+        return
+    # Offloaded: pull_model's reachability check shells out to `ollama list`.
+    resolved = await asyncio.to_thread(app.onboarding_deps.resolve_run, payload)
+    if not resolved.get("ok"):
+        await session.send_json(make_response(msg_id, msg_type, resolved))
+        return
+    command = str(resolved["command"])
+    try:
+        term = session.terminals.create(
+            pane_id=f"{ONBOARDING_RUN_AGENT_KEY}-{__import__('uuid').uuid4().hex}",
+            agent_key=ONBOARDING_RUN_AGENT_KEY,
+            command=app.onboarding_deps.run_argv(command),
+            cwd=str(Path.home()),
+            cols=cols,
+            rows=rows,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        # The command is still returned: the window offers it in an external
+        # terminal, so a PTY failure never makes the install impossible.
+        log.warning("onboarding.run could not start %r: %s", command, exc)
+        await session.send_json(make_response(msg_id, msg_type, {
+            **resolved, "ok": False, "spawn_failed": True, "error": str(exc),
+        }))
+        return
+    app._PTY_OWNERS[term.id] = session
+    session._onboarding_runs.add(term.id)
+    log.info("onboarding.run %s started: %s", term.id, command)
+    await session.send_json(make_response(msg_id, msg_type, {**resolved, "run_id": term.id}))
 
 
 @handler("onboarding.complete")
 async def onboarding_complete(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    app.onboarding_deps.set_complete(bool(payload.get("complete", True)))
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    result = app.onboarding_deps.set_complete(bool(payload.get("complete", True)))
+    await session.send_json(make_response(msg_id, msg_type, result))
 
 
 @handler("onboarding.install_prompt")
@@ -6310,18 +6391,7 @@ async def app_broadcast_hook_trust(blocked: bool) -> None:
 async def onboarding_cli_health_dismiss(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    app.onboarding_deps.dismiss_cli_health(str(payload.get("fingerprint") or ""))
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
-
-
-@handler("onboarding.cli_maintenance")
-async def onboarding_cli_maintenance(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import app
-
-    result = app.onboarding_deps.maintenance_command(
-        str(payload.get("agent_key") or ""),
-        str(payload.get("action") or ""),
-    )
+    result = app.onboarding_deps.dismiss_cli_health(str(payload.get("fingerprint") or ""))
     await session.send_json(make_response(msg_id, msg_type, result))
 
 
@@ -6343,7 +6413,6 @@ async def onboarding_cli_health_select_binary(session: "Session", msg_id: str, m
     result = app.onboarding_deps.select_cli_binary(
         str(payload.get("agent_key") or ""),
         str(payload.get("path") or ""),
-        str(payload.get("fingerprint") or ""),
     )
     await session.send_json(make_response(msg_id, msg_type, result))
 
@@ -6478,6 +6547,12 @@ async def ping(session: "Session", msg_id: str, msg_type: str, payload: dict) ->
 async def terminal_create(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    if payload.get("agent_key") == ONBOARDING_RUN_AGENT_KEY:
+        await session.send_json(make_error(
+            msg_id, msg_type, "RESERVED_AGENT_KEY",
+            f"{ONBOARDING_RUN_AGENT_KEY} terminals are started by onboarding.run only",
+        ))
+        return
     pane_id = str(payload["pane_id"])
     generation = str(payload.get("create_generation") or msg_id)
     key = (pane_id, generation)
@@ -6664,7 +6739,7 @@ async def _terminal_create_impl(
     # These are server attestations, never renderer-provided metadata.
     for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch",
                 "credential_store_verified", "credential_store_id", "credential_store_error",
-                "credential_launch_term_id"):
+                "credential_launch_term_id", "guard_pane_token"):
         metadata.pop(key, None)
     agent_key = payload.get("agent_key") or ""
     # The window's per-vendor env settings, first in the chain on purpose: the
@@ -6917,6 +6992,16 @@ async def _terminal_create_impl(
                 Path(env.get("CODEX_HOME") or app.codex_home_manager.real_home),
                 app.backend_port_file(), hook_auth.header_file(),
             )
+    from . import guard_hooks
+
+    if agent_key in guard_hooks.PANE_TOKEN_VENDORS:
+        # Navide Guard: names this pane to its PreToolUse hook when the hook's
+        # session id is not attributed yet. Only this pane's processes see it.
+        import secrets
+
+        guard_token = secrets.token_urlsafe(24)
+        metadata["guard_pane_token"] = guard_token
+        env[guard_hooks.PANE_TOKEN_ENV] = guard_token
     # Lines the pane prints at startup when this machine cannot wire it (see
     # wire_command): the only other trace is a backend log the user never sees.
     wiring_warnings: list[str] = []
@@ -7506,6 +7591,40 @@ async def terminal_create_cancel(
     )
 
 
+#: Per terminal session: the text guarded injections have typed since their
+#: last Enter (see terminal_input). Paste guards are stripped; they are not part
+#: of the command.
+_GUARDED_LINES: dict[str, str] = {}
+_PASTE_GUARDS = ("\x1b[200~", "\x1b[201~")
+
+
+def _guarded_terminal_write_refusal(session: "Session", session_id: str, data: str) -> Any:
+    """terminal_policy's refusal for a guarded write to a plain terminal, or
+    None (also for a PTY that is not a terminal pane: only a shell runs what it
+    is typed). Records the write into the session's pending line when it
+    passes; an Enter clears it."""
+    term = session.terminals.get(session_id)
+    if term is None or getattr(term, "agent_key", "") != "terminal":
+        return None
+    from .guard import terminal_policy
+
+    text = data
+    for guard in _PASTE_GUARDS:
+        text = text.replace(guard, "")
+    submit = "\r" in text
+    line = _GUARDED_LINES.get(session_id, "") + text.replace("\r", "")
+    workspace = str(term.metadata.get("workspace_path") or term.cwd)
+    refusal = terminal_policy.enforce(line, workspace=workspace, pane_id=term.pane_id, via="terminal.input")
+    if refusal is not None:
+        _GUARDED_LINES.pop(session_id, None)
+        return refusal
+    if submit:
+        _GUARDED_LINES.pop(session_id, None)
+    else:
+        _GUARDED_LINES[session_id] = line
+    return None
+
+
 @handler("terminal.input")
 async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -7513,7 +7632,32 @@ async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload
     # `pending` = bytes the kernel has not accepted yet; the renderer must not
     # resend those (they are queued, not lost).  Empty data is a pure probe of
     # that count and must leave no other trace.
-    pending = session.terminals.write(payload["terminal_session_id"], payload["data"])
+    # A write into a plain terminal pane on behalf of a message asks that the
+    # shell be at its prompt: checked here, next to the write, so a program
+    # started between the renderer's last look and this write still refuses it.
+    session_id = payload["terminal_session_id"]
+    if payload.get("require_shell_prompt") is True and payload["data"]:
+        if session.terminals.shell_in_foreground(session_id) is False:
+            await session.send_json(
+                make_response(msg_id, msg_type, {"ok": False, "error": "foreground-busy"})
+            )
+            return
+        # Everything a guarded injection has typed since its last Enter is one
+        # command line, checked as a whole before each write — a line split
+        # across chunks is judged together, and the Enter re-checks it.
+        refusal = _guarded_terminal_write_refusal(session, session_id, payload["data"])
+        if refusal is not None:
+            await session.send_json(
+                make_response(
+                    msg_id, msg_type, {"ok": False, "error": "command-refused", "refusal": refusal.as_dict()}
+                )
+            )
+            return
+    elif payload["data"]:
+        # Anything else written (a person typing, a kill-line after a failed
+        # injection) means the line is no longer only what was injected.
+        _GUARDED_LINES.pop(session_id, None)
+    pending = session.terminals.write(session_id, payload["data"])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pending": pending}))
     # A keyboard frame (the renderer flags only those: not mouse/focus reports,
     # not paste or programmatic injection) is a human dev-time heartbeat for
@@ -7524,6 +7668,16 @@ async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload
             workspace_path = str(term.metadata.get("workspace_path") or term.cwd)
             if app.dev_time_store.human_input(workspace_path, term.pane_id):
                 await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
+
+
+@handler("terminal.shell_at_prompt")
+async def terminal_shell_at_prompt(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Per plain-terminal session: whether its shell is at its prompt (True),
+    running something in front of it (False), or unknown (None). Polled by the
+    renderer's messaging gate; a tcgetpgrp per session, no subprocess."""
+    ids = [str(x) for x in (payload.get("terminal_session_ids") or [])]
+    states = {sid: session.terminals.shell_in_foreground(sid) for sid in ids}
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "states": states}))
 
 
 @handler("terminal.memory_usage")
@@ -8881,6 +9035,9 @@ async def pipeline_start(session: "Session", msg_id: str, msg_type: str, payload
         backend_version=app.__version__,
         pipeline_id=payload.get("pipeline_id", "") or app.stages_store.get_active_pipeline_id(),
     )
+    from .guard.taint import pipeline_run_started
+
+    pipeline_run_started(payload["workspace_path"])
     app._register_workspace_and_backfill(project.workspace_path)
     _mirror_pipeline_state(project)
     # Start a fresh token-stats run for this workspace.
@@ -8911,6 +9068,9 @@ async def pipeline_stage_spawn(session: "Session", msg_id: str, msg_type: str, p
         agent=payload.get("agent", ""),
         role=payload.get("role", ""),
     )
+    from .guard.taint import pipeline_pane_spawned
+
+    pipeline_pane_spawned(payload["workspace_path"], str(payload["pane_id"]))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -8937,6 +9097,9 @@ async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, pa
         run_group_id=payload.get("run_group_id", ""),
     )
     app.pane_account_history.pin(str(payload["pane_id"]), _account_pin_for_history(slot_pin))
+    from .guard.taint import pipeline_pane_spawned
+
+    pipeline_pane_spawned(payload["workspace_path"], str(payload["pane_id"]))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -9930,6 +10093,26 @@ async def agent_msg_route(session: "Session", msg_id: str, msg_type: str, payloa
         )
         return
 
+    if result.pane.agent_key == "terminal":
+        from .guard import terminal_policy
+
+        refusal = terminal_policy.enforce(
+            content, workspace=result.pane.workspace_path, pane_id=result.pane.pane_id, via="agent_msg.route"
+        )
+        if refusal is not None:
+            await session.send_json(
+                make_response(
+                    msg_id,
+                    msg_type,
+                    {
+                        "ok": False,
+                        "error": refusal.message(),
+                        "code": "terminal-command-refused",
+                        "params": {"rule": refusal.rule, "segment": refusal.segment},
+                    },
+                )
+            )
+            return
     sender = agent_messaging.get(from_pane_id)
     from_display = agent_messaging.sender_display(
         from_pane_id, str(payload.get("from_name") or "")
@@ -9951,6 +10134,14 @@ async def agent_msg_route(session: "Session", msg_id: str, msg_type: str, payloa
     # exact payload it saw before.
     if reply_to:
         deliver_payload["reply_to"] = reply_to
+    from .guard.taint import safe_mark_tainted
+
+    safe_mark_tainted(
+        result.pane.pane_id,
+        "agent",
+        f"message from {agent_messaging.readable_sender(from_pane_id, from_display)}",
+        msg_key,
+    )
     asyncio.create_task(app.broadcast(make_event("agent_msg.deliver", deliver_payload)))
     await session.send_json(
         make_response(
@@ -10425,6 +10616,38 @@ async def scheduler_set_enabled(session: "Session", msg_id: str, msg_type: str, 
         await scheduler.broadcast_changed(exclude=session)
 
 
+@handler("scheduler.adopt")
+async def scheduler_adopt(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Make an agent's job the user's ("make it mine"). Deliberately not an MCP
+    tool: it is how the user takes over a job no agent may change any more."""
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.adopt needs an id")
+        return
+    result = await scheduler.get_service().adopt(job_id)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.keep")
+async def scheduler_keep(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Stop an agent's periodic job from expiring. Not an MCP tool, for the same
+    reason as scheduler.adopt: the expiry exists to outlive a forgetful agent."""
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.keep needs an id")
+        return
+    result = await scheduler.get_service().keep(job_id)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
 @handler("scheduler.run_now")
 async def scheduler_run_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Start one run and answer at once; the run's own start and end reach
@@ -10454,3 +10677,31 @@ async def scheduler_runs(session: "Session", msg_id: str, msg_type: str, payload
     await session.send_json(
         make_response(msg_id, msg_type, await scheduler.get_service().runs(job_id, limit))
     )
+
+
+# ── Voice input (voice.*) ───────────────────────────────────────────────────
+# Handlers live in voice_handlers; the sidecar and model in stt_service. Both
+# stay inert until one of these messages arrives.
+from . import voice_handlers  # noqa: E402
+
+handler("voice.status")(voice_handlers.voice_status)
+handler("voice.model.download")(voice_handlers.voice_model_download)
+handler("voice.prewarm")(voice_handlers.voice_prewarm)
+handler("voice.shutdown")(voice_handlers.voice_shutdown)
+handler("voice.start")(voice_handlers.voice_start)
+handler("voice.chunk")(voice_handlers.voice_chunk)
+handler("voice.stop")(voice_handlers.voice_stop)
+handler("voice.cancel")(voice_handlers.voice_cancel)
+
+
+# ── Chat channels (channels.*) ──────────────────────────────────────────────
+# Logic lives in channels/ (manager + adapters); these are thin wrappers.
+from .channels import ws_api as channels_ws_api  # noqa: E402
+
+handler(*channels_ws_api.MESSAGE_TYPES)(channels_ws_api.handle)
+
+# ── Navide Guard (guard.*) ──
+# Renderer-only: ws request types, unreachable through MCP ui_invoke.
+from .guard import ws_api as guard_ws_api  # noqa: E402
+
+handler(*guard_ws_api.MESSAGE_TYPES)(guard_ws_api.handle)

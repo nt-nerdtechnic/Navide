@@ -32,6 +32,7 @@ import sys
 import time
 
 from .base import (
+    PlatformInstall,
     AccountSwitchSpec,
     Dep,
     McpServerConfig,
@@ -886,6 +887,10 @@ SPEC = VendorSpec(
         ["agy", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://antigravity.google/cli/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
-        docs_url="https://antigravity.google/docs/cli-getting-started",
+        docs_url="https://antigravity.google/docs/getting-started?tab=cli",
+        # Windows: the official PowerShell installer, per
+        # https://antigravity.google/docs/getting-started?tab=cli
+        install_cmds={"win32": PlatformInstall(
+            "irm https://antigravity.google/cli/install.ps1 | iex", needs_terminal=True)},
         update_cmd="agy update"),
 )

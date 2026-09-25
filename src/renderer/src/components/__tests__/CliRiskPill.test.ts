@@ -211,4 +211,145 @@ describe('CliRiskPill', () => {
     expect(document.querySelector('.cli-risk-pop')).toBeNull()
     expect(wrapper.find('button').exists()).toBe(false)
   })
+
+  describe('Analyze with CLI', () => {
+    const spawn = vi.fn()
+    beforeEach(() => { spawn.mockReset().mockResolvedValue({ ok: true, result: 'pane-new' }) })
+
+    it('hides the analyze buttons without a spawner or workspace path', async () => {
+      render(riskState([networkSignal()]), { spawn })
+      expect((await open()).querySelector('.cli-risk-analyze, .cli-risk-analyze-all')).toBeNull()
+      wrapper.unmount()
+      render(riskState([networkSignal()]), { workspacePath: '/work/project', agentKey: 'codex' })
+      expect((await open()).querySelector('.cli-risk-analyze, .cli-risk-analyze-all')).toBeNull()
+    })
+
+    it('spawns the same vendor with all findings from the header button', async () => {
+      const signals = [networkSignal(), diskSignal()]
+      render(riskState(signals), { spawn, workspacePath: '/work/project', agentKey: 'claude' })
+      const pop = await open()
+      expect(pop.querySelectorAll('.cli-risk-analyze')).toHaveLength(2)
+      actionButton(pop, 'Analyze all with CLI').click()
+      await flushPromises()
+      expect(spawn).toHaveBeenCalledTimes(1)
+      const request = spawn.mock.calls[0][0]
+      expect(request.agent).toBe('claude')
+      expect(request.name).toMatch(/^risk-[0-9a-f]{6}$/)
+      expect(request.task).toContain('pane id: pane-a')
+      expect(request.task).toContain('workspace path: /work/project')
+      expect(request.task).toContain(`Finding 1 (id: ${signals[0].id})`)
+      expect(request.task).toContain(`Finding 2 (id: ${signals[1].id})`)
+      expect(request.task).toContain('Respond in English (UI locale: en-US).')
+      expect(act).not.toHaveBeenCalled()
+      expect(document.querySelector('.cli-risk-pop')).not.toBeNull()
+    })
+
+    it('analyzes one finding and falls back to the signal vendor', async () => {
+      const signals = [networkSignal(), diskSignal()]
+      render(riskState(signals), { spawn, workspacePath: '/work/project' })
+      const pop = await open()
+      ;(pop.querySelector(`[data-signal-id="${signals[1].id}"] .cli-risk-analyze`) as HTMLButtonElement).click()
+      await flushPromises()
+      const request = spawn.mock.calls[0][0]
+      expect(request.agent).toBe('codex')
+      expect(request.task).toContain(`Finding 1 (id: ${signals[1].id})`)
+      expect(request.task).not.toContain(signals[0].id)
+    })
+
+    it('reopens the dialog to show a failure that lands after it was closed', async () => {
+      let finish!: (value: unknown) => void
+      spawn.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+      render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
+      actionButton(await open(), 'Analyze all with CLI').click()
+      await nextTick()
+      document.querySelector<HTMLElement>('.cli-risk-pop')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await flushPromises()
+      expect(document.querySelector('.cli-risk-pop')).toBeNull()
+      finish({ ok: false, error: 'ui.pane.create failed to inject task into pane "p9"' })
+      await flushPromises()
+      expect(document.querySelector('.cli-risk-pop [role="alert"]')?.textContent)
+        .toBe('The analysis pane opened, but its task could not be typed in. Paste the task into that pane, or close it and try again.')
+    })
+
+    it('disables analysis while the spawn is in flight and surfaces a failure', async () => {
+      let finish!: (value: unknown) => void
+      spawn.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+      render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
+      const pop = await open()
+      actionButton(pop, 'Analyze all with CLI').click()
+      await nextTick()
+      expect(actionButton(pop, 'Analyze all with CLI').disabled).toBe(true)
+      expect(actionButton(pop, 'Analyze with CLI').disabled).toBe(true)
+      expect(actionButton(pop, 'Ignore this IP').disabled).toBe(false)
+      actionButton(pop, 'Analyze with CLI').click()
+      expect(spawn).toHaveBeenCalledTimes(1)
+      finish({ ok: false })
+      await flushPromises()
+      expect(pop.querySelector('[role="alert"]')?.textContent).toBe('Could not start the analysis CLI pane. Try again.')
+      expect(actionButton(pop, 'Analyze all with CLI').disabled).toBe(false)
+    })
+
+    it('reports the spawner error inside a localized sentence', async () => {
+      spawn.mockResolvedValue({ ok: false, error: 'ui.pane.create requires an agent and an open workspace' })
+      render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
+      const pop = await open()
+      actionButton(pop, 'Analyze with CLI').click()
+      await flushPromises()
+      expect(pop.querySelector('[role="alert"]')?.textContent)
+        .toBe('Could not start the analysis CLI pane (ui.pane.create requires an agent and an open workspace). Try again.')
+    })
+  })
+})
+
+describe('CliRiskPill console', () => {
+  const loopback = () => networkSignal({
+    id: 'loop', ip: '127.0.0.1', port: 56654, connections: 1,
+    lastObservedAt: '2026-09-21T01:30:00Z',
+    local: [{ pid: 4312, name: 'claude', command: 'claude --resume' }],
+    listener: { status: 'resolved', pid: 8812, name: 'node', command: 'node /repo/node_modules/.bin/vite', observedAt: '2026-09-21T01:30:00Z' },
+    history: [
+      { at: '2026-09-21T01:20:00Z', connections: 3, local: [{ pid: 4312, name: 'claude' }], listener: { status: 'unknown' } },
+      { at: '2026-09-21T01:30:00Z', connections: 1, local: [{ pid: 4312, name: 'claude' }], listener: { status: 'resolved', pid: 8812, name: 'node' } },
+    ],
+  })
+
+  it('shows who opened a loopback endpoint and who listens on it', async () => {
+    render(riskState([loopback()]))
+    const pop = await open()
+    const details = pop.querySelector('[data-signal-id="loop"]')!.textContent!
+    expect(details).toContain('Opened by')
+    expect(details).toContain('claude(4312) claude --resume')
+    expect(details).toContain('Listening process')
+    expect(details).toContain('node(8812) node /repo/node_modules/.bin/vite')
+  })
+
+  it('says when the listening process was last resolved', async () => {
+    render(riskState([loopback()]))
+    const pop = await open()
+    const at = pop.querySelector('[data-signal-id="loop"] [data-testid="cli-risk-listener-at"]')!
+    expect(at.getAttribute('datetime')).toBe('2026-09-21T01:30:00Z')
+    expect(at.textContent).toBe(` · ${new Date('2026-09-21T01:30:00Z').toLocaleTimeString('en-US', { hour12: false })}`)
+  })
+
+  it('lists one line per observation, newest first, with unknown never shown as none', async () => {
+    render(riskState([loopback(), diskSignal()]))
+    const pop = await open()
+    const console = pop.querySelector('[data-testid="cli-risk-console"]')!
+    expect(console.querySelector('summary')?.textContent).toBe('Observation log')
+    const lines = [...console.querySelectorAll('li')].map((li) => li.textContent!)
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toContain('claude(4312) → 127.0.0.1:56654  ← node (pid 8812, node /repo/node_modules/.bin/vite)  1 conn.')
+    expect(lines[1]).toContain('claude(4312) → 127.0.0.1:56654  ← listener unknown  3 conn.')
+    expect(lines[2]).toContain('/vendor-data/pending/archive.enc')
+    expect(console.querySelector('time')?.getAttribute('datetime')).toBe('2026-09-21T01:30:00Z')
+  })
+
+  it('falls back to the current observation for a signal without history', async () => {
+    render(riskState([networkSignal()]))
+    const pop = await open()
+    const line = pop.querySelector('[data-testid="cli-risk-console"] li')!.textContent!
+    expect(line).toContain('Unknown → 198.51.100.25:443')
+    expect(line).not.toContain('←')
+    expect(line).toContain('2 conn.')
+  })
 })

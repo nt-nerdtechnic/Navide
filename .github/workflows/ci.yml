@@ -280,6 +280,29 @@ jobs:
       - name: Backend tests
         run: uv --project backend run --locked pytest backend/tests
 
+  stt-sidecar:
+    name: Speech-to-text sidecar tests
+    # Unit tests for native/navide-stt; the model-backed integration test
+    # skips itself (no NAVIDE_STT_TEST_MODEL here). macOS exercises the Metal
+    # build the release ships.
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/navide-stt
+
+      - name: Cargo tests
+        run: cargo test --locked --manifest-path native/navide-stt/Cargo.toml
+
   backend-linux:
     name: Backend checks (Linux)
     # The macOS job above is the release platform; this one is what stops the

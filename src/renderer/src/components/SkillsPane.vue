@@ -18,7 +18,27 @@ interface SkillSummary {
   managed: boolean
   /** Original location, when this skill was migrated from a CLI's own directory. */
   migratedFrom: string | null
+  /** Managed skill whose files stay on this device; only its settings sync. */
+  syncTooLarge?: boolean
+  /** Managed skill too large for one sync record whose files travel as blobs instead. */
+  syncViaBlobs?: boolean
+  /** A blob upload or download of this skill's files in flight, when there is one. */
+  syncTransfer?: SyncTransfer | null
   path?: string
+}
+
+interface SyncTransfer {
+  direction: 'upload' | 'download'
+  done: number
+  total: number
+}
+
+function normalizeTransfer(value: unknown): SyncTransfer | null {
+  if (!isRecord(value) || (value.direction !== 'upload' && value.direction !== 'download')) return null
+  const done = Number(value.done)
+  const total = Number(value.total)
+  if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return null
+  return { direction: value.direction, done, total }
 }
 
 /**
@@ -150,6 +170,9 @@ function normalizeSummary(value: unknown): SkillSummary | null {
     targets: normalizeTargets(value.targets),
     managed: booleanValue(value.managed, true),
     migratedFrom: stringValue(value.migrated_from) || null,
+    syncTooLarge: value.sync_too_large === true,
+    syncViaBlobs: value.sync_via_blobs === true,
+    syncTransfer: normalizeTransfer(value.sync_transfer),
     path: stringValue(value.path) || undefined,
   }
 }
@@ -815,12 +838,43 @@ function rowSourceLabel(row: MatrixRow): string {
   return t('settings.skills.source-native', { agent: row.skill.source })
 }
 
+/**
+ * Live blob transfers by skill name, from `skills.sync_progress`. `null` means
+ * "finished since the list was loaded", which outranks a stale transfer the
+ * list still carries.
+ */
+const liveTransfers = ref<Record<string, SyncTransfer | null>>({})
+
+function transferOf(skill: SkillSummary): SyncTransfer | null {
+  const name = skill.name
+  return name in liveTransfers.value ? liveTransfers.value[name] : (skill.syncTransfer ?? null)
+}
+
+/** The badge for a skill whose files sync as blobs: progress while moving, else a plain label. */
+function blobSyncBadge(skill: SkillSummary): string {
+  const transfer = transferOf(skill)
+  if (!transfer) return t('settings.skills.sync-via-blobs')
+  const percent = Math.min(100, Math.floor((transfer.done / transfer.total) * 100))
+  return t(transfer.direction === 'upload' ? 'settings.skills.sync-uploading' : 'settings.skills.sync-downloading', { percent })
+}
+
 let offChanged: (() => void) | undefined
+let offProgress: (() => void) | undefined
 onMounted(() => {
   offChanged = props.backend.on('skills.changed', () => void loadSkills(selectedName.value, true))
+  offProgress = props.backend.on('skills.sync_progress', (raw) => {
+    if (!isRecord(raw) || typeof raw.name !== 'string') return
+    const transfer = normalizeTransfer(raw.transfer)
+    liveTransfers.value = { ...liveTransfers.value, [raw.name]: transfer }
+    // A finished download has just written the skill: show what landed.
+    if (!transfer) void loadSkills(selectedName.value, true)
+  })
   void loadSkills()
 })
-onUnmounted(() => offChanged?.())
+onUnmounted(() => {
+  offChanged?.()
+  offProgress?.()
+})
 watch(
   () => props.backend.status.value,
   (status, previous) => {
@@ -942,6 +996,18 @@ watch(
                 <span class="skill-card-head">
                   <strong>{{ row.skill.name }}</strong>
                   <span class="skill-source-tag" :class="row.kind">{{ rowSourceLabel(row) }}</span>
+                  <span
+                    v-if="row.kind === 'shared' && row.skill.syncTooLarge"
+                    class="skill-badge warning"
+                    data-testid="skill-sync-too-large"
+                    :title="t('settings.skills.sync-too-large-hint')"
+                  >{{ t('settings.skills.sync-too-large') }}</span>
+                  <span
+                    v-else-if="row.kind === 'shared' && row.skill.syncViaBlobs"
+                    class="skill-badge"
+                    data-testid="skill-sync-via-blobs"
+                    :title="t('settings.skills.sync-via-blobs-hint')"
+                  >{{ blobSyncBadge(row.skill) }}</span>
                 </span>
                 <span class="skill-card-desc">
                   {{ row.skill.description || (row.kind === 'native' ? row.skill.error : '') || t('settings.skills.no-description') }}
@@ -1055,6 +1121,18 @@ watch(
               class="skill-badge warning"
               :title="t('settings.skills.native-conflict-hint')"
             >{{ t('settings.skills.native-conflict') }}</span>
+            <span
+              v-if="selectedRow.kind === 'shared' && selectedRow.skill.syncTooLarge"
+              class="skill-badge warning"
+              data-testid="skill-drawer-sync-too-large"
+              :title="t('settings.skills.sync-too-large-hint')"
+            >{{ t('settings.skills.sync-too-large') }}</span>
+            <span
+              v-else-if="selectedRow.kind === 'shared' && selectedRow.skill.syncViaBlobs"
+              class="skill-badge"
+              data-testid="skill-drawer-sync-via-blobs"
+              :title="t('settings.skills.sync-via-blobs-hint')"
+            >{{ blobSyncBadge(selectedRow.skill) }}</span>
           </div>
           <button type="button" class="skill-drawer-close" :aria-label="t('action.close')" @click="closeDrawer">✕</button>
         </header>

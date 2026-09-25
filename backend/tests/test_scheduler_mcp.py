@@ -72,7 +72,8 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 JOB = {
     "name": "report",
-    "schedule": {"kind": "every", "every_ms": 120_000},
+    # An agent's job may not run more often than every 5 minutes.
+    "schedule": {"kind": "every", "every_ms": 600_000},
     "action": {"kind": "message", "workspace": "/ws", "pane_name": "report", "text": "go"},
 }
 

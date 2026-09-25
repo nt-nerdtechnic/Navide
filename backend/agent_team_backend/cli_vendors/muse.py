@@ -132,6 +132,7 @@ from ..log_readers.base import (
     user_prompt_text,
 )
 from .base import (
+    PlatformInstall,
     AccountSwitchSpec,
     Dep,
     SkillsWiring,
@@ -812,5 +813,9 @@ SPEC = VendorSpec(
         ["muse", "--version"],
         install_cmd="curl -fsSL https://dev.meta.ai/install.sh | sh",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
-        docs_url="https://developer.meta.com/ai/products/muse-code/"),
+        docs_url="https://dev.meta.ai/products/muse-code",
+        # Windows: the official PowerShell installer, per
+        # https://dev.meta.ai/docs/muse-code
+        install_cmds={"win32": PlatformInstall(
+            "irm https://dev.meta.ai/install.ps1 | iex", needs_terminal=True)}),
 )

@@ -7,8 +7,8 @@ import {
 
 describe('cliModelKey', () => {
   it('mirrors the existing per-vendor key shape', () => {
-    // Same family as agentTeam.cliPermission.<key> / agentTeam.cliBinary.<key>;
-    // a different shape here would make the three read as unrelated settings.
+    // Same family as agentTeam.cliPermission.<key>; a different shape here
+    // would make the two read as unrelated settings.
     expect(cliModelKey('claude')).toBe('agentTeam.cliModel.claude')
     expect(cliModelKey('codex')).toBe('agentTeam.cliModel.codex')
   })

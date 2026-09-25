@@ -67,6 +67,31 @@ export function kickoffAttemptOutcome(input: KickoffAttemptInput): KickoffAttemp
   return { outcome: 'unverified', next: 'retype', retriedOut: false }
 }
 
+/** The verdict for a plain terminal pane's initial command. Typed at most
+ *  once, never retyped: a shell runs what reaches it, so a second copy is a
+ *  second run of the command, not a duplicate prompt. For the same reason an
+ *  unconfirmed typing is `unverified`, never `failed` — `failed` tells the
+ *  caller to resend, and a resend of a command that did run runs it twice.
+ *  `typed` is false only when nothing went out (injectPane said so, or the
+ *  shell had printed nothing and was not typed into). */
+export function terminalKickoffOutcome(input: {
+  typed: boolean
+  echo: EchoEvidence | null
+  submit: SubmitEvidence | null
+  promptReady: boolean
+}): KickoffVerdict {
+  if (!input.typed) return 'failed'
+  return kickoffVerified(input.echo, input.submit, input.promptReady) ? 'sent' : 'unverified'
+}
+
+/** Why a terminal kickoff settled on something other than `sent`, for the
+ *  cli_open_agent caller. */
+export const TERMINAL_KICKOFF_REASON: Record<Exclude<KickoffVerdict, 'sent'>, string> = {
+  failed: 'the command was not typed — the shell never came up, or the injection failed',
+  unverified: 'the command was typed once but its submit was not observed — '
+    + 'read cli_read_log before resending, a resend runs it again',
+}
+
 /** What one attempt at typing the task observed. Produced by the caller's
  *  `inject`, because only it can write to a PTY — the loop below only reads
  *  it. Each call returns its OWN evidence: reusing the previous attempt's was

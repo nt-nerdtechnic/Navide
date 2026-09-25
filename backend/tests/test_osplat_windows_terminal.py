@@ -407,14 +407,25 @@ class TestIdentity:
         assert _windows.process_tree.identity(404) == "404:"
 
     def test_snapshot_uses_pid_as_group_and_orphans_stale_parents(self, monkeypatch):
-        rows = [
-            SimpleNamespace(pid=10, info={"ppid": 4, "create_time": 5.0}),   # parent gone
-            SimpleNamespace(pid=20, info={"ppid": 10, "create_time": 6.0}),  # real child
-            SimpleNamespace(pid=30, info={"ppid": 99, "create_time": 7.0}),  # parent gone
-            SimpleNamespace(pid=40, info={"ppid": 10, "create_time": 4.0}),  # recycled ppid
-            SimpleNamespace(pid=50, info={"ppid": 20, "create_time": None}),  # access denied
-        ]
-        monkeypatch.setattr(_windows.psutil, "process_iter", lambda attrs: iter(rows))
+        rows = {
+            10: {"ppid": 4, "create_time": 5.0},   # parent gone
+            20: {"ppid": 10, "create_time": 6.0},  # real child
+            30: {"ppid": 99, "create_time": 7.0},  # parent gone
+            40: {"ppid": 10, "create_time": 4.0},  # recycled ppid
+            50: {"ppid": 20, "create_time": None},  # access denied
+        }
+
+        class Proc:
+            def __init__(self, pid):
+                if pid not in rows:
+                    raise psutil.NoSuchProcess(pid)  # exited since pids()
+                self.pid = pid
+
+            def as_dict(self, attrs):
+                return rows[self.pid]
+
+        monkeypatch.setattr(_windows.psutil, "pids", lambda: [*rows, 60])
+        monkeypatch.setattr(_windows.psutil, "Process", Proc)
         snap = _windows.process_tree.snapshot()
         assert snap == {
             10: ProcInfo(0, 10, "5.0"),
@@ -424,6 +435,25 @@ class TestIdentity:
             50: ProcInfo(20, 50, ""),
         }
         assert sorted(_windows.process_tree.descendants(10)) == [20, 50]
+
+    def test_snapshot_ignores_process_iter_cache_of_a_recycled_pid(self):
+        # Windows recycles pids fast. process_iter() caches one Process per pid
+        # module-wide; a cached instance whose pid now belongs to a newer
+        # process detects the reuse mid-read and the live process vanished
+        # from the snapshot — pty_registry then read a live orphan as "gone".
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            real = psutil.Process(proc.pid).create_time()
+            stale = psutil.Process(proc.pid)
+            stale._create_time = real - 100.0  # the pid's previous owner
+            stale._ident = (proc.pid, stale._create_time)
+            psutil._pmap[proc.pid] = stale
+            snap = _windows.process_tree.snapshot()
+            assert snap[proc.pid].start == repr(real)
+        finally:
+            psutil._pmap.pop(proc.pid, None)
+            proc.kill()
+            proc.wait()
 
     # The sweep in `terminals` asks the tree what an orphan's ppid looks like:
     # here it is the 0 that `snapshot` writes for a stale parent, never 1.

@@ -150,15 +150,18 @@ export function modelRefusalMessage(
 
 /** The same agent-key whitelist check evaluateSpawnRequest does, pulled out
  *  so a caller that bypasses the rest of the gate (ui.pane.create) can still
- *  refuse a key with no runtime representation — "terminal" included — before
+ *  refuse a key with no runtime representation before
  *  it reaches spawnPane, instead of relying on a `as AgentKey` cast that does
  *  nothing at runtime. Throws instead of returning a result because the only
  *  caller already throws for its other validation failures. */
-export function assertAgentKeyAllowed(agent: unknown, validAgentKeys: readonly string[]): AgentKey {
+export function assertAgentKeyAllowed(
+  agent: unknown,
+  validAgentKeys: readonly string[],
+): AgentKey | 'terminal' {
   if (typeof agent !== 'string' || !validAgentKeys.includes(agent)) {
     throw new Error(`agent 欄位缺少或不合法：「${String(agent)}」不是可用的 agent key`)
   }
-  return agent as AgentKey
+  return agent as AgentKey | 'terminal'
 }
 
 /** Validate one spawn request against the whitelist, naming rules and
@@ -179,8 +182,11 @@ export function evaluateSpawnRequest(
   }
   // A fresh pane with nothing to do is a mistake. A RESUMED one is not — the
   // conversation already has its context, and the caller may only want it
-  // back on screen, talking to it later with cli_send.
-  if (!req.task && !req.resumesSession) return { ok: false, reason: 'task 欄位不可為空' }
+  // back on screen, talking to it later with cli_send. Nor is a terminal: its
+  // task is an optional first command, and a bare shell prompt is a pane.
+  if (!req.task && !req.resumesSession && req.agent !== 'terminal') {
+    return { ok: false, reason: 'task 欄位不可為空' }
+  }
 
   const model = (req.model ?? '').trim()
   const effort = (req.effort ?? '').trim()

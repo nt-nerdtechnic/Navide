@@ -82,6 +82,11 @@ def _card(extension: Extension, versions: list[ExtensionVersion]) -> dict:
         "rating_count": extension.rating_count,
         "featured": extension.featured,
         "latest_version": latest.version if latest else None,
+        "latest_targets": sorted(
+            v.target
+            for v in versions
+            if latest and v.version == latest.version and not v.yanked
+        ),
         "trust_tier": (
             compute_trust_tier(signed=latest.registry_signature is not None)
             if latest
@@ -103,6 +108,12 @@ def _read_package_zip(request: Request, package_key: str) -> zipfile.ZipFile | N
 
 
 def _extract_readme(request: Request, row: ExtensionVersion) -> str | None:
+    raw = readme_text(request, row)
+    return render_markdown(raw) if raw is not None else None
+
+
+def readme_text(request: Request, row: ExtensionVersion) -> str | None:
+    """Return the package README as raw markdown text (not rendered)."""
     zf = _read_package_zip(request, row.package_key)
     if zf is None:
         return None
@@ -118,12 +129,19 @@ def _extract_readme(request: Request, row: ExtensionVersion) -> str | None:
             raw = zf.read(target).decode("utf-8", errors="replace")
         except KeyError:  # pragma: no cover - name came from the archive
             return None
-    return render_markdown(raw)
+    return raw
+
+
+def _base_path_context(request: Request) -> dict[str, str]:
+    """Expose the public path prefix so every emitted link carries it."""
+    return {"base": request.scope.get("root_path", "").rstrip("/")}
 
 
 def create_web_router() -> APIRouter:
     router = APIRouter(include_in_schema=False)
-    templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    templates = Jinja2Templates(
+        directory=str(_TEMPLATES_DIR), context_processors=[_base_path_context]
+    )
 
     @router.get("/", response_class=HTMLResponse)
     def home(
@@ -173,6 +191,7 @@ def create_web_router() -> APIRouter:
             version_views = [
                 {
                     "version": v.version,
+                    "target": v.target,
                     "trust_tier": compute_trust_tier(
                         signed=v.registry_signature is not None
                     ),
@@ -200,6 +219,11 @@ def create_web_router() -> APIRouter:
                 "screenshots": screenshots,
                 "icon_path": icon_path,
                 "latest_version": latest.version if latest else None,
+                "latest_targets": sorted(
+                    v.target
+                    for v in versions
+                    if latest and v.version == latest.version and not v.yanked
+                ),
                 "download_count": extension.download_count,
                 "rating_average": rating_average(extension),
                 "rating_count": extension.rating_count,

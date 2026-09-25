@@ -1,0 +1,26 @@
+[package]
+name = "navide-stt"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Navide local speech-to-text sidecar (whisper.cpp over JSON Lines)"
+
+[dependencies]
+anyhow = "1"
+# Pure Rust OpenCC with its dictionaries embedded (Apache-2.0).
+ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion", "t2s-conversion"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+whisper-rs-sys = "0.13"
+
+# Metal only on macOS; every other target builds the CPU backend.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.14", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.14"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

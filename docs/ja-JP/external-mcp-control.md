@@ -99,14 +99,14 @@ Plan ウィンドウが Plan を解決する際の基準と同じものです。
 |---|---|---|
 | `cli_list_targets` | — | アドレス指定可能な CLI Pane を一覧: `name`、`address`、`pane_id`（すべての `ui.pane.*` アクションが取るキーであり、下の Pane 系 Tool では `address` の代わりにもなる）、`workspace_path`、`same_workspace`、`busy`、`realized`（復元用 placeholder は false: 背後で CLI が動いていないため常に busy で、誰かが開くまでメッセージは待機する — `ui.pane.open`、または `cli_send(open_target=true)`）、`hold_reason?` |
 | `cli_whoami` | — | **CLI Pane 専用。** 自分自身の識別情報を、名簿が他 Pane を記述するのと同じ形で返します: `{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, realized, delegation_hint, hold_reason?, spawned_by?, waiting_on_me?}`。`delegation_hint` は委譲ルール（下の `cli_open_agent` を参照）を、server instructions を読んでいない Pane のために再掲します。`pane_id` は全ての `ui.pane.*` が受け付ける唯一のキーであり、Pane が自分自身を操作するための前提です。`spawned_by` は自分を開いた Pane（閉じた後は `{pane_id, gone: true}`）|
-| `cli_send` | `to`（Pane のアドレス、または Broadcast を表す `"group"`）, `text`, `wait_for_delivery_s=0`（上限 120）, `pane_id?`, `reply_to?` | 別の Pane が Idle になった時点で指示を配信（Busy なら Queue に保留）。`msg_key` を返し、待機を指定した場合はその結末も返す |
+| `cli_send` | `to`（Pane のアドレス、または Broadcast を表す `"group"`）, `text`, `wait_for_delivery_s=0`（上限 120）, `pane_id?`, `reply_to?` | 別の Pane が Idle になった時点で指示を配信（Busy なら Queue に保留）。`msg_key` を返し、待機を指定した場合はその結末も返す。プレーンな Terminal Pane（`agent_key: "terminal"`）宛てのテキストはそのまま打ち込まれ、**ユーザーの権限でシェルコマンドとして実行される**。`"group"` は Terminal を飛ばし、Terminal はチャットチャネルからの内容を拒否する — [プレーンな Terminal Pane](inter-cli-messaging.md#プレーンな-terminal-pane) を参照 |
 | `cli_check_message` | `msg_key` | 一つの `cli_send` の結末: `{status, target, age_seconds, reason?, settled_after_s?, hold?, held_for_s?, stale?}` |
 | `cli_cancel_message` | `msg_key` | 送信済みでまだ入っていないメッセージを取り消します。判断するのは受信側 Queue を持つウィンドウです。まだ待機中なら破棄して status は `cancelled` に、配信が始まっていれば取り消しは無視され、確定した status が返ります。取り消しは失敗ではなく、通知も書き戻されません。`{ok, msg_key, status, reason?}` を返します |
 | `cli_inbox_summary` | — | 自分の送信のうち滞留中または失敗しているもの: `{count, messages: [{msg_key, target, status, age_seconds, stale?, reason?, hold?, held_for_s?, excerpt}]}` |
 | `cli_pending_incoming` | `limit=20`（上限 200） | **CLI Pane 専用。** *自分宛*に Queue され、まだ入っていないもの: `{count, messages: [{uid, sender, status, age_seconds, kind?, excerpt, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}]}` |
 | `cli_read_incoming` | `uid=""`, `limit=5`（上限 20）, `include_delivered=false`, `peek=false` | **CLI Pane 専用。** 自分宛メッセージの全文（`cli_pending_incoming` は空白を潰した 200 文字のみ）: `{count, messages: [{uid, sender, status, kind?, content, age_seconds, consumed, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}], note?}`。**既定では読むと消費されます**——読んだメッセージはその後 Pane に入力されません。`peek: true` は消費せずに読みます。消費は予約してから解放する二段階で、解放が失われた場合メッセージは Queue に戻り二度届くことがあります。`consumed` はメッセージごとに返され、消費されなかった理由は `note` に入ります |
 | `cli_send_and_wait` | `to`, `text`, `timeout_s=60`（上限 120）, `pane_id?` | `cli_send` に加えてその Turn の完了まで待機。`cli_wait_idle` の結果に `{ok, target, msg_key}` を付けて返す  **リモート Pane**: 送信と配信 gate はローカルと同じ（`rejected` は `failed` と区別されたまま）。待機の半分は名簿バッジを使い、弱点は `cli_wait_idle` と同じです。 |
-| `cli_open_agent` | `agent`, `name`, `task`, `workspace_path`（Pane 以外の呼び出し元では必須）, `model`, `effort`, `pane_id?`, `session_id?`, `run_group_id?` | Task 付きで新しい CLI Pane を Spawn。`{ok, name, address, pane_id}` を返し、Spawn が Advisory の閾値を越えた場合は `advisories` も返す。**委譲ルール**（server instructions にも同じ一文があります）: ファイルを編集する、数分以上かかる、あるいはユーザーが途中で見たり中断したり引き継いだりしたくなる作業は、ここで開いた Pane に渡します — Agent 自身の subagent 機構（Claude Code の `Agent`／`Task` ツール）にではなく。Pane は Navide 上で見え、実行中に開け、呼び出し元の Session より長く生きます。subagent は要約を一つ返すだけのブラックボックスです。結果が一段落で済む短い読み取り専用の調査には、引き続き subagent が適しています。`model` と `effort` は任意で、その CLI が受け付けない場合は無視せず「拒否」するため、Pane が別のモデルで静かに起動することはない。多くの CLI は model を受け付けるが、独立した effort を受け付けるものは少なく、残りは effort を model id に埋め込む（`gpt-5.3-codex-high`）。model id は検証しない（リリースごとに変わるため）が、effort はその CLI の語彙と照合する |
+| `cli_open_agent` | `agent`, `name`, `task`, `workspace_path`（Pane 以外の呼び出し元では必須）, `model`, `effort`, `pane_id?`, `session_id?`, `run_group_id?` | Task 付きで新しい CLI Pane を Spawn。`{ok, name, address, pane_id}` を返し、Spawn が Advisory の閾値を越えた場合は `advisories` も返す。**委譲ルール**（server instructions にも同じ一文があります）: ファイルを編集する、数分以上かかる、あるいはユーザーが途中で見たり中断したり引き継いだりしたくなる作業は、ここで開いた Pane に渡します — Agent 自身の subagent 機構（Claude Code の `Agent`／`Task` ツール）にではなく。Pane は Navide 上で見え、実行中に開け、呼び出し元の Session より長く生きます。subagent は要約を一つ返すだけのブラックボックスです。結果が一段落で済む短い読み取り専用の調査には、引き続き subagent が適しています。`model` と `effort` は任意で、その CLI が受け付けない場合は無視せず「拒否」するため、Pane が別のモデルで静かに起動することはない。多くの CLI は model を受け付けるが、独立した effort を受け付けるものは少なく、残りは effort を model id に埋め込む（`gpt-5.3-codex-high`）。model id は検証しない（リリースごとに変わるため）が、effort はその CLI の語彙と照合する。**`agent: "terminal"`** はプレーンなログインシェルの Pane を開く。`task` は省略可能で、プロンプトが出たあとに一度だけ打ち込まれるコマンドライン（後ろには何も付け足さない。シェルは報告できないため報告の指示もない）。`model`、`effort`、`session_id` は拒否される。再入力はしないので、確認できなかった Kickoff は `unverified` を返す。再送すればコマンドがもう一度実行されるため、再送前に `cli_read_log` を読むこと |
 | `cli_close_agent` | `target`, `pane_id?` | Pane を閉じる — `cli_open_agent` のもう半分です。**これは相手の作業を終わらせます**: Pane と PTY が消え、走っていた Turn もろとも死に、その Pane 宛に Queue されていたものは配信されません。取り消しは効きません — 閉じた Pane の Session は待避ではなく消滅です。先に `cli_get_status` を見て、作業中の Pane は閉じないでください。`cli_interrupt` はより穏当な段（割り込みキーを押すだけで Pane は開いたまま）、`cli_send` はさらに穏当（Turn の完了を待つ）です。`{ok, target, name, closed, advisories?}` を返します。`advisories` は閉じたことの代償のうち他の誰も報告しないもの — Pane が Turn の途中だった、メッセージが Queue に残っていた、子 Pane が孤児になった — で、Kill の後では知りようがないため事前に集めます。このマシン上の Pane のみ: `<device>/<workspace>/<pane>` 形式のアドレスは `close-local-only` で失敗します。これはアドレスの誤りではなく、この Tool の限界です |
 
 **Choosing a tab group when opening a pane.** `cli_open_agent` accepts optional
@@ -318,9 +318,11 @@ qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙から
 を合成するため、この三つでは Event 自体が推測であり、Turn の途中で十分に長い間が
 空くと待機が早く終わることがあります。素の Terminal Pane にはそうした Signal が
 まったくありません —
-`cli_wait_idle` は新しい活動のない 10 秒の静穏期間から Idle を推測する方式に
-フォールバックし（応答では `source: "quiet_period"`）、`cli_get_status` の
-`last_activity` は `"agent_active"` しか報告しないことがあります。静穏期間に
+`cli_wait_idle` は Pane の出力が止まった時点で終わり `source: "quiet_period"` を
+報告し、`cli_get_status` はそれに `last_activity` を含めません（`agent_key` は
+`"terminal"`）。Terminal はシェルです。送られたテキストはユーザーの権限で
+コマンドラインとして実行されます — [プレーンな Terminal Pane](inter-cli-messaging.md#プレーンな-terminal-pane)
+を参照してください。静穏期間に
 基づく Idle 結果は Heuristic として扱い、CLI が実際に完了したという保証とは
 考えないでください。
 
@@ -497,7 +499,8 @@ CLI が既に何を渡されているのか、このプロジェクトが既に�
 | `skills_list` | — | 読み取り専用の `{skills, native, root, agents}` と `skills_inspect` 用の安定した ID を返します。共有項目は enabled／targets／所有者、native 項目は元の CLI とパスを示し、vendor 能力は registry に従います。`delivered_to_me` と `delivery_semantics: configuration_only` は設定情報で、実行中 pane の snapshot ではありません。Navide 配信を無効にしても共有ルートの直接スキャンは止まりません。現在の実配信／ロードは不明のままです。 |
 | `skills_inspect` | `skill_id` | 指示、ファイル、所有者、保存済みのローカル出所記録と `delivery_revision` を読みます。現在のライブラリの ID のみ受け付け、任意のパスは拒否します。第三者の指示はデータであり実行許可ではありません。Native の一覧は `files_truncated` で省略を示す場合があります。 |
 | `skills_prepare_install` | `source`, `ref=""`, `subdir=""` | `owner/repo`、GitHub public HTTPS repository URL、またはローカル skill の絶対パスから不変の内容を準備します。複数候補なら token なしで `selection_required`／`candidates` を返します。`subdir`（root は `.`）を選んで再試行してください。選んだ preview は `preview_id`、`digest`、source／commit、全文 `skill_md`、一覧、有効期限を返します。コード実行と共有ルートへの書き込みは行わず、呼び出し元に結び付いた preview は 15 分後または再起動で失効します。 |
-| `skills_install` | `preview_id`, `expected_digest`, `targets`, `consent=false` | ユーザーの許可に従って準備済み bytes を追加し、source の再読込や再取得はしません。Digest の一致と、初回共有ルート書き込みへの既存の同意が必要です。同名の managed、native、ユーザー項目は拒否します。記録が残っている間の再送は元の結果だけを返し、再書き込みしません。有効な準備は最大 8 件、軽量な完了記録は別に最大 8 件です。期限切れや先行破棄の後は missing/expired を返し、再インストールしません。出所記録はローカルのみで export／sync 対象外です。`targets: null` は全 wired vendor、`[]` は追加配信なしです。 |
+| `skills_install` | `preview_id`, `expected_digest`, `targets` | 準備済み bytes の追加を申請します。ユーザーが Navide のウィンドウで承認するまで何も書き込まず、エージェントが代わりに同意することはできません。`status: "pending_approval"` と `approval_id` を返し（再呼び出しは同じ保留中の要求を返します）、承認は初回共有ルート書き込みへの同意も兼ねます。source の再読込や再取得はせず、Digest の一致が必要です。同名の managed、native、ユーザー項目は拒否します。記録が残っている間の再送は元の結果だけを返し、再書き込みしません。有効な準備は最大 8 件、軽量な完了記録は別に最大 8 件です。期限切れや先行破棄の後は missing/expired を返し、再インストールしません。出所記録はローカルのみで export／sync 対象外です。`targets: null` は全 wired vendor、`[]` は追加配信なしです。 |
+| `skills_install_status` | `approval_id`, `wait_s=0` | 呼び出し元自身の要求に対する判断を返します：`pending`、`installing`、`installed`（結果付き）、`rejected`、`failed`（エラー付き）、`expired`。`wait_s`（最大 60）で判断を待ちます。 |
 | `skills_set_delivery` | `skill_id`, `targets`, `expected_revision`, `enabled=null` | ユーザーの許可と inspect の `delivery_revision` で設定を変更します。古い版は `SKILL_CONFLICT` になります。Native の空／null targets は追加配信を解除し、`enabled` は禁止します。所有 CLI や共有ルートの直接スキャンには影響しません。実際のロードは新しい session で別途確認してください。[Skills の手順と上限](user-guide.md)も参照してください。 |
 | `memory_list` | `workspace_path`, `path=""` | ここの CLI が読み込む指示ファイル — `CLAUDE.md`、`AGENTS.md`、`GEMINI.md` など、このプロジェクトのものとユーザーのホームのもの。`path` なしで呼ぶとメタデータのみを一覧します: `{workspace_path, files, agents}` で、各ファイルは `scope`（`user` または `project`）、`path`、`relative`、`readers`（それを読み込むベンダーキー）、`canonical`、`exists`、`size`、`modified`、`error`。まだ存在しないファイルも一覧されます。それは「ある慣習がどこに置かれるか」を示すからです。`agents` は各ベンダーと Navide がそのファイルを見つける方法（`mapped` または `configured`）です。`path` を付けるとその一つを返します: `{workspace_path, file, path, text, exists, modified}` — パスはこの一覧が報告したものでなければならず、それ以外は拒否されるため、任意のファイルを読む手段ではありません。読み取り専用: 指示ファイルの編集は Settings でのユーザーの判断で、ここに対応する Tool はありません。Workspace が無い場合は user スコープのファイルのみが一覧されます |
 | `workspace_open` | `path` | `path` を Workspace として開きます — 新しいウィンドウか既存のウィンドウかは Navide が決めます。`path` はプロジェクトルートの絶対パス（`workspace_list` が返す種類のもの）でなければなりません。`ui_invoke` に action `ui.workspace.open` を渡すのと同じですが、先に action を調べる必要がありません。生きている任意のウィンドウにルーティングされるため、ウィンドウが一つも開いていないときだけエラーになります。`{ok, path}` を返します |
@@ -605,18 +608,45 @@ job はすぐにパネルにも表示されます —— 変更のたびに `sch
 
 | Tool | パラメータ | 内容 |
 |---|---|---|
-| `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}`、`{kind: "once", at_ms}` のいずれか。`{kind: "once", in_ms}` も受け付け、保存時に `at_ms = now + in_ms` に換算します（現在より 1 分以上前、または 10 年より先は不可）。once job は一度だけ実行され、結果にかかわらずその後自動で無効になります。「1 時間後に起こして」は `every` ではなく `{kind: "once", in_ms: 3600000}` です。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります |
-| `scheduler_remove` | `id` | job とその実行履歴を削除 |
-| `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます。時刻を過ぎた once job は再開できず `{ok: false, error}` を返すので、新しい時刻を設定してください |
-| `scheduler_run_now` | `id` | 今すぐ一度実行し、終了を待たずに `{ok, enqueued}` を返します。失敗バックオフを解除します |
-| `scheduler_runs` | `id`、`limit` | 実行履歴（新しい順）：`{id, job_id, started_at, ended_at, status, reason, detail}` |
+| `scheduler_list` | — | `{ok, jobs, now, limits}` —— 変更できない job も含めてすべてを返します。各 job には `owner`（`{kind: "user"}`、`{kind: "pane", pane_id, pane_name, workspace}`、`{kind: "external"}` のいずれか。agent の定期 job には `expires_at` も付きます）、`updated_by`、`owner_gone`（作成した Pane が閉じられた）、`editable`（変更できるか）が付きます。`limits` は `{agent_enabled_per_owner, agent_enabled_total, agent_enabled, agent_min_every_ms, agent_max_runs_per_day, agent_runs_per_day, agent_runs_today, agent_expire_ms, agent_once_keep_ms, yours_enabled}` |
+| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}`、`{kind: "once", at_ms}` のいずれか。`{kind: "once", in_ms}` も受け付け、保存時に `at_ms = now + in_ms` に換算します（現在より 1 分以上前、または 10 年より先は不可）。once job は一度だけ実行され、結果にかかわらずその後自動で無効になります。「1 時間後に起こして」は `every` ではなく `{kind: "once", in_ms: 3600000}` です。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります。対象にできるのは自分の Workspace の Pane だけです。更新できるのは自分が作成した job だけです |
+| `scheduler_remove` | `id` | 自分が作成した job とその実行履歴を削除 |
+| `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます。時刻を過ぎた once job は再開できず `{ok: false, error}` を返すので、新しい時刻を設定してください。自分が作成した job のみ。再開は有効 job の上限に数えられます |
+| `scheduler_run_now` | `id` | 今すぐ一度実行し、終了を待たずに `{ok, enqueued}` を返します。失敗バックオフを解除します。自分が作成した job のみで、この実行は agent の 1 日の合計に数えられます |
+| `scheduler_runs` | `id`、`limit` | 実行履歴（新しい順）：`{id, job_id, started_at, ended_at, status, reason, detail}`。どの job の履歴も読めます |
 
 1 回の実行は `cli_send(open_target=True)` そのものです：placeholder に回収された Pane は
 先に開かれ、作業中の Pane には通常どおりキューされます。`pane_id` は 1 つの Pane を固定し、
 その Pane がもう存在しなければ実行は `target_gone` としてスキップされ、同名の別 Pane に
 送られることはありません。その他のスキップ理由 —— `no_window`、`busy`（この job の前回の
-メッセージがまだキューにある）、`budget` —— はエラーではなく、バックオフも起きません。
+メッセージがまだキューにある）、`budget`、および後述の `budget_global` と `expired` —— は
+エラーではなく、バックオフも起きません。
+
+**所有権。** 各 job には作成者（`owner`）と最終変更者（`updated_by`）が記録されます。Navide の
+ウィンドウで作った job はユーザーのもの、これらの Tool で作った job は呼び出した agent のもの
+です。agent が更新・削除・一時停止／再開・`run_now` できるのは自分の job だけで、それ以外は
+`{ok: false, code: "SCHEDULER_NOT_OWNER", owner, error}` を返します。一覧と実行履歴は誰でも
+読めます。Navide のウィンドウはユーザーとして動作し、どの job でも変更できます。job を作成した
+Pane が閉じられると、job は動き続けますがユーザーの管理になり（`owner_gone: true`）、同名の新しい
+Pane は引き継ぎません。パネルには「自分のものにする」が表示されます。作成者の記録が始まる前から
+ある job はユーザーのものです。Pane が対象にできるのは自分の Workspace の Pane だけです
+（それ以外は `{ok: false, code: "SCHEDULER_CROSS_WORKSPACE", error}`）。Pane の身元を持たない
+呼び出し元（host や外部クライアント）も agent と同じ扱いで、すべて 1 つの `{kind: "external"}`
+所有者を共有します。自分の Workspace を持たないため、Workspace の制限は適用されません。
+
+**agent の job の上限**（ユーザー自身の job には上限はありません）：
+
+| 上限 | 値 | 超えたとき |
+|---|---|---|
+| agent ごとの有効な job | 10 | 追加や有効化は拒否（`limit: "per_owner_enabled"`） |
+| agent 全体の有効な job | 100 | 追加や有効化は拒否（`limit: "global_enabled"`）。ユーザーの job は数えません |
+| 最短間隔 | `every_ms` ≥ 300000（5 分）、`max_runs_per_day` ≤ 288 | 保存は拒否（`limit: "min_every_ms"` または `"max_runs_per_day"`） |
+| agent の job 全体の 1 日の実行回数 | 300（ローカルの日付単位） | 予定のスロットは `budget_global` としてスキップ。agent の `run_now` は拒否され（`limit: "agent_runs_per_day"`）、`run_now` も合計に数えられます。job を削除してもリセットされません |
+
+上限を超えると `{ok: false, code: "SCHEDULER_LIMIT", limit, max, used, error}` を返します。
+`max` は境界値です（`min_every_ms` では最小値）。agent の定期 job は、所有者が最後に保存・有効化
+してから、または誰かが再度有効化してから 7 日後に自動で無効になります（スキップ理由 `expired`）。
+ユーザーは期限切れにならないよう保持できます。agent の once job は実行から 30 日後に削除されます。
 
 ### CLI の権限
 

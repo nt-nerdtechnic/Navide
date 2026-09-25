@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -49,8 +50,14 @@ def enabled_scopes() -> dict[str, bool]:
     return {scope: bool(stored.get(scope, False)) for scope in sync_engine.SCOPES}
 
 
+#: Internal scopes and the switch each one rides with.
+_RIDES_WITH = {"skill-files": "skills"}
+#: Whether file modes carry the executable bit here. Windows has no such bit.
+_EXEC_BITS = os.name != "nt"
+
+
 def scope_enabled(scope: str) -> bool:
-    return enabled_scopes().get(scope, False)
+    return enabled_scopes().get(_RIDES_WITH.get(scope, scope), False)
 
 
 def set_scope_enabled(scope: str, enabled: bool) -> dict[str, bool]:
@@ -218,6 +225,57 @@ class McpScope:
 SKILLS_INTENT_KEY = "sync-skills-intent"
 
 
+def skill_entry(store: Any, skill: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """One skill's sync item, and whether its files were too large to carry.
+
+    A record over the engine's body limit is skipped whole, which would take
+    the enabled/targets decision down with the files. So the size is checked
+    here, on the sealed body the engine will build, and an entry that would
+    not fit goes without its content instead.
+    """
+    name = skill["name"]
+    entry: dict[str, Any] = {
+        "enabled": bool(skill.get("enabled", True)),
+        "targets": skill.get("targets"),
+    }
+    try:
+        content = store.export_content(name)
+    except Exception as err:  # noqa: BLE001 - an unreadable skill still routes
+        log.warning("the files of %s could not be read: %s", name, err)
+        return entry, False
+    if content is None:
+        # export_content also answers None for a skill that is not ours.
+        return entry, bool(skill.get("managed")) and skill.get("valid", True) is not False
+    body = sync_keyring.sealed_length(sync_engine.canonical({**entry, "content": content}))
+    if body > sync_engine.MAX_BODY_BYTES:
+        log.warning("skill %s is too large to sync whole; sending only its settings", name)
+        return entry, True
+    entry["content"] = content
+    return entry, False
+
+
+def annotate_content_sync(listing: dict[str, Any], store: Any) -> dict[str, Any]:
+    """Mark each managed skill whose files stay on this device (``sync_too_large``).
+
+    When the server can hold blobs, those skills' files do travel — as blobs —
+    so they are marked ``sync_via_blobs`` instead, with any transfer in flight
+    under ``sync_transfer``.
+    """
+    blobs = skill_files_scope()
+    via_blobs = blobs.available()
+    for skill in listing.get("skills", []):
+        name = skill.get("name")
+        if skill.get("managed") and isinstance(name, str) and name:
+            too_large = skill_entry(store, skill)[1]
+            skill["sync_too_large"] = too_large and not via_blobs
+            if too_large and via_blobs:
+                skill["sync_via_blobs"] = True
+                transfer = blobs.transfer(name)
+                if transfer is not None:
+                    skill["sync_transfer"] = transfer
+    return listing
+
+
 class SkillsStateScope:
     """Which skills are on, which CLIs each one goes to, and — for the ones
     Navide created — the files themselves.
@@ -270,18 +328,7 @@ class SkillsStateScope:
             name = skill.get("name")
             if not (isinstance(name, str) and name):
                 continue
-            entry: dict[str, Any] = {
-                "enabled": bool(skill.get("enabled", True)),
-                "targets": skill.get("targets"),
-            }
-            try:
-                content = store.export_content(name)
-            except Exception as err:  # noqa: BLE001 - an unreadable skill still routes
-                log.warning("the files of %s could not be read: %s", name, err)
-                content = None
-            if content is not None:
-                entry["content"] = content
-            out[name] = entry
+            out[name] = skill_entry(store, skill)[0]
         return out
 
     def snapshot(self) -> dict[str, Any]:
@@ -318,6 +365,339 @@ class SkillsStateScope:
             store.set_targets(item_id, decision["targets"])
         except Exception as err:  # noqa: BLE001 - a skill that moved is not fatal
             log.warning("the synced decision for %s could not be applied: %s", item_id, err)
+
+
+#: Manifest format of a ``skill-files`` record.
+_MANIFEST_VERSION = 1
+#: How often a running transfer tells the windows how far it got.
+_PROGRESS_INTERVAL_S = 0.5
+
+
+class SkillFilesScope:
+    """The files of skills too large for one ``skills`` record, as blobs.
+
+    ``skills`` still carries every skill's settings; for the skills whose
+    content it has to leave out (``skill_entry`` says too large), this scope
+    carries a manifest — each file's path, blob id, key id, size — and the
+    files themselves travel as blobs (``skill_blobs``) straight between this
+    machine and object storage.
+
+    A scope of its own, never a field on ``skills``: a build that predates
+    blobs would store such an entry without the field and push it back, and
+    the manifest would be silently erased. Old builds never pull this scope.
+
+    Transfers never run inside a sync round. ``ready`` answers whether every
+    blob of an item is already on the server, and starts an upload when not;
+    ``apply`` lands a manifest only once every file is here, and otherwise
+    starts the download and defers (the engine holds the cursor on it). Either
+    transfer kicks one more round when it finishes. A round therefore stays
+    short however large the files are, and the other scopes do not wait.
+
+    Removal is not propagated: a tombstone drops the record, never files, the
+    same rule ``skills`` follows.
+    """
+
+    scope = "skill-files"
+
+    def __init__(self, notify: Callable[[dict[str, Any]], None] | None = None) -> None:
+        self._notify = notify
+        self._layout: Any = None
+        self._request: Any = None
+        self._kick: Callable[[], None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self._transfers: dict[str, dict[str, Any]] = {}
+        self._last_note: dict[str, float] = {}
+        self._digests: Any = None
+
+    # ── wiring ──────────────────────────────────────────────────────────
+
+    def set_notify(self, notify: Callable[[dict[str, Any]], None] | None) -> None:
+        self._notify = notify
+
+    def available(self) -> bool:
+        """Whether the server this machine last spoke to can hold blobs."""
+        return self._layout is not None
+
+    def transfer(self, name: str) -> dict[str, Any] | None:
+        entry = self._transfers.get(name)
+        return dict(entry) if entry else None
+
+    async def prepare(self, request: Any, kick: Callable[[], None]) -> bool:
+        """Called by the engine at the start of each round, on the loop."""
+        from . import skill_blobs
+
+        self._request, self._kick, self._loop = request, kick, asyncio.get_running_loop()
+        try:
+            self._layout = await skill_blobs.server_layout(request)
+        except skill_blobs.BlobError as err:
+            log.warning("the server's blob storage could not be asked about: %s", err)
+            self._layout = None
+        return self._layout is not None
+
+    def _store(self):
+        from . import app
+
+        return app.skills_store
+
+    def _digest_cache(self):
+        if self._digests is None:
+            from . import app, skill_blobs
+
+            self._digests = skill_blobs.DigestCache(app.database)
+        return self._digests
+
+    def _staging(self):
+        from . import app
+
+        path = app.app_data_dir() / "skill-blobs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # ── what is here ────────────────────────────────────────────────────
+
+    def _large_skills(self) -> dict[str, dict[str, Any]]:
+        """Managed skills whose files ``skills`` leaves out, by name → files."""
+        store = self._store()
+        try:
+            listing = store.list_skills()
+        except Exception as err:  # noqa: BLE001 - an unreadable library syncs nothing
+            log.warning("the skills library could not be read: %s", err)
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for skill in listing.get("skills", []):
+            name = skill.get("name")
+            if not (isinstance(name, str) and name and skill.get("managed")):
+                continue
+            if not skill_entry(store, skill)[1]:
+                continue
+            try:
+                files = store.list_files(name)
+            except Exception as err:  # noqa: BLE001 - one unreadable skill is skipped
+                log.warning("the files of %s could not be listed: %s", name, err)
+                continue
+            if files:
+                out[name] = files
+        return out
+
+    def _manifest(self, files: dict[str, Any]) -> dict[str, Any]:
+        cache = self._digest_cache()
+        entries: dict[str, Any] = {}
+        for relative, path in sorted(files.items()):
+            entry = cache.ref_for(path).to_manifest()
+            if self._is_executable(path):
+                entry["x"] = True
+            entries[relative] = entry
+        return {"v": _MANIFEST_VERSION, "files": entries}
+
+    def _is_executable(self, path: Any) -> bool:
+        if _EXEC_BITS:
+            return bool(path.stat().st_mode & 0o111)
+        # No mode bit to read: keep the flag a synced file landed with, and
+        # take a script written here by its shebang, so neither is dropped
+        # for the devices that can run it.
+        if self._digest_cache().is_executable(path):
+            return True
+        with open(path, "rb") as fh:
+            return fh.read(2) == b"#!"
+
+    def snapshot(self) -> dict[str, Any]:
+        if self._layout is None:
+            return {}
+        out: dict[str, Any] = {}
+        for name, files in self._large_skills().items():
+            try:
+                out[name] = self._manifest(files)
+            except (OSError, sync_keyring.KeyringError) as err:
+                log.warning("skill %s could not be named for sync: %s", name, err)
+        return out
+
+    @staticmethod
+    def _refs_of(payload: Any) -> dict[str, Any]:
+        """``relative path → BlobRef`` of a manifest; raises BlobError when malformed."""
+        from . import skill_blobs
+
+        if not isinstance(payload, dict) or payload.get("v") != _MANIFEST_VERSION:
+            raise skill_blobs.BlobError("not a skill-files manifest this build reads")
+        files = payload.get("files")
+        if not isinstance(files, dict) or not files:
+            raise skill_blobs.BlobError("the manifest lists no files")
+        return {str(rel): skill_blobs.BlobRef.from_manifest(entry) for rel, entry in files.items()}
+
+    def refs(self, payload: Any) -> list[str]:
+        return sorted({ref.blob_id for ref in self._refs_of(payload).values()})
+
+    # ── transfers ───────────────────────────────────────────────────────
+
+    def _progress(self, name: str, direction: str) -> Callable[[int, int], None]:
+        def report(done: int, total: int) -> None:
+            self._transfers[name] = {"direction": direction, "done": done, "total": total}
+            now = time.monotonic()
+            if done < total and now - self._last_note.get(name, 0.0) < _PROGRESS_INTERVAL_S:
+                return
+            self._last_note[name] = now
+            self._announce(name)
+
+        return report
+
+    def _announce(self, name: str) -> None:
+        if self._notify is None or self._loop is None:
+            return
+        payload = {"name": name, "transfer": self.transfer(name)}
+        self._loop.call_soon_threadsafe(self._notify, payload)
+
+    def _finish(self, name: str) -> None:
+        self._transfers.pop(name, None)
+        self._tasks.pop(name, None)
+        self._announce(name)
+
+    def _start(self, name: str, work: Callable[[], Any]) -> None:
+        """Run *work* (a coroutine factory) for *name* unless one already runs. Loop only."""
+        if name in self._tasks and not self._tasks[name].done():
+            return
+
+        async def run() -> None:
+            try:
+                await work()
+            except Exception as err:  # noqa: BLE001 - retried by the next round
+                log.warning("the files of skill %s did not transfer: %s", name, err)
+                self._finish(name)
+                return
+            self._finish(name)
+            if self._kick is not None:
+                self._kick()
+
+        self._tasks[name] = asyncio.get_running_loop().create_task(run())
+
+    async def ready(self, item_id: str, payload: Any) -> bool:
+        """Whether every blob *payload* names is on the server; starts the upload when not."""
+        from . import skill_blobs
+
+        if self._layout is None:
+            return False
+        refs = self._refs_of(payload)
+        try:
+            reply = skill_blobs._payload(
+                await self._request("blobs.stat", {"blobIds": sorted({r.blob_id for r in refs.values()})})
+            )
+        except skill_blobs.BlobError as err:
+            # This item waits; the rest of the round goes ahead.
+            log.warning("could not ask which files of %s are uploaded: %s", item_id, err)
+            return False
+        missing = {b["blobId"] for b in reply.get("blobs") or [] if b.get("state") != "complete"}
+        if not missing:
+            return True
+        files = self._store().list_files(item_id) or {}
+        layout, request = self._layout, self._request
+        todo = [(files[rel], ref) for rel, ref in refs.items() if ref.blob_id in missing and rel in files]
+        total = sum(layout.sealed_size(ref.size) for _, ref in todo)
+
+        async def upload() -> None:
+            done = 0
+            seen: set[str] = set()
+            report = self._progress(item_id, "upload")
+            for path, ref in todo:
+                if ref.blob_id in seen:
+                    continue
+                seen.add(ref.blob_id)
+                base = done
+                await skill_blobs.upload(request, path, ref, layout, progress=lambda d, _t: report(base + d, total))
+                done = base + layout.sealed_size(ref.size)
+
+        self._start(item_id, upload)
+        return False
+
+    def apply(self, item_id: str, payload: Any | None) -> Any:
+        """Land a manifest's files, or defer until they are downloaded. Worker thread."""
+        from . import skill_blobs
+
+        if payload is None:
+            return None  # a removal elsewhere never deletes files here
+        try:
+            refs = self._refs_of(payload)
+        except skill_blobs.BlobError as err:
+            log.warning("skill-files record %s was not applied: %s", item_id, err)
+            return False
+        store = self._store()
+        if not store.can_import(item_id):
+            log.warning("skill %s exists here and is not Navide's; its synced files are not fetched", item_id)
+            return False
+        staging = self._staging()
+        current = {}
+        try:
+            current = store.list_files(item_id) or {}
+        except Exception:  # noqa: BLE001 - not ours, or absent: nothing to reuse
+            current = {}
+        sources: dict[str, Any] = {}
+        wanted: dict[str, Any] = {}
+        for rel, ref in refs.items():
+            here = current.get(rel)
+            if here is not None:
+                try:
+                    if self._digest_cache().ref_for(here).blob_id == ref.blob_id:
+                        sources[rel] = here
+                        continue
+                except (OSError, sync_keyring.KeyringError):
+                    pass
+            cached = staging / ref.blob_id
+            if cached.is_file():
+                sources[rel] = cached
+            else:
+                wanted[ref.blob_id] = ref
+        if wanted:
+            if self._layout is None or self._loop is None:
+                raise sync_engine.DeferItem(item_id)
+            layout, request = self._layout, self._request
+            refs_todo = list(wanted.values())
+            total = sum(layout.sealed_size(ref.size) for ref in refs_todo)
+
+            async def download() -> None:
+                done = 0
+                report = self._progress(item_id, "download")
+                for ref in refs_todo:
+                    base = done
+                    await skill_blobs.download(
+                        request, ref, staging / ref.blob_id, layout,
+                        progress=lambda d, _t: report(base + d, total),
+                    )
+                    done = base + layout.sealed_size(ref.size)
+
+            self._loop.call_soon_threadsafe(self._start, item_id, download)
+            raise sync_engine.DeferItem(item_id)
+
+        executable = {rel for rel, entry in payload["files"].items() if isinstance(entry, dict) and entry.get("x")}
+        landed = store.import_files(item_id, sources, executable=executable)
+        for source in sources.values():
+            if source.parent == staging:
+                source.unlink(missing_ok=True)
+        if not landed:
+            return False
+        if not _EXEC_BITS:
+            for rel, path in (store.list_files(item_id) or {}).items():
+                self._digest_cache().set_executable(path, rel in executable)
+        # The settings arrived through ``skills`` and may have been waiting in
+        # the intent map for these files; without applying them now, the next
+        # ``skills`` snapshot would read the defaults off the fresh copy.
+        decision = SkillsStateScope()._intent().get(item_id)
+        if isinstance(decision, dict):
+            try:
+                store.set_enabled(item_id, bool(decision.get("enabled", True)))
+                store.set_targets(item_id, decision.get("targets"))
+            except Exception as err:  # noqa: BLE001 - a decision that will not apply is not fatal
+                log.warning("the synced decision for %s could not be applied: %s", item_id, err)
+        return True
+
+
+_skill_files: SkillFilesScope | None = None
+
+
+def skill_files_scope() -> SkillFilesScope:
+    """The one ``skill-files`` adapter: the engine registers it and the skills
+    listing reads its transfer state, so both must see the same instance."""
+    global _skill_files
+    if _skill_files is None:
+        _skill_files = SkillFilesScope()
+    return _skill_files
 
 
 class MemoryScope:

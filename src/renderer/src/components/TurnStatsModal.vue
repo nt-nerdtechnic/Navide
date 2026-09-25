@@ -518,7 +518,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 }
 .s-page-title {
   margin: 0;
-  padding: 18px 22px 12px;
+  padding: 20px 24px 6px;
   font-size: var(--font-page-title);
   font-weight: 700;
   color: var(--text-bright);
@@ -570,7 +570,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
   background: var(--accent-emphasis);
 }
 .ts-nav-item.unsupported .ts-nav-main { color: var(--text-disabled); }
-.ts-nav-item.placeholder .ts-nav-label { font-style: italic; }
+/* A not-yet-started pane reads quieter; its sub line already says why. */
+.ts-nav-item.placeholder:not(.active) .ts-nav-label { color: var(--text-secondary); }
 .ts-nav-main {
   flex: 1;
   display: flex;
@@ -629,7 +630,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
   opacity: 0.6;
   border-style: dashed;
 }
-.ts-nav-item.unknown .ts-nav-label { font-style: italic; color: var(--text-muted); }
+.ts-nav-item.unknown .ts-nav-label { color: var(--text-muted); }
 .ts-limit-pill {
   font-size: 9px;
   font-weight: 600;

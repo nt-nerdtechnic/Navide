@@ -7,18 +7,17 @@ Electron app or `backend/agent_team_backend/` — it is purely additive under
 
 See [`FORMAT.md`](./FORMAT.md) for the `.vsix`-style package format.
 
-> **Not deployed.** This service currently runs locally only, for development
-> and for exercising the publish/install path end to end. Navide ships
-> first-party plugins bundled into the app package, so nothing installs from a
-> registry in production, and third-party publishing is not open — see
-> [the plugin development guide](../../docs/en-US/plugin-development.md) for
-> how to get in touch about building one.
->
-> Before this is ever exposed publicly, at minimum: add a schema migration
-> mechanism (`db.py` only calls `SQLModel.metadata.create_all`, which will not
-> add columns to existing tables), set `REGISTRY_ADMIN_TOKEN` (the publisher
-> endpoint is open when unset), serve over https, and replace
-> `LocalStorageBackend` with real object storage.
+> **Deployment status.** The Official Registry is planned at
+> `https://server.navide.dev/registry` (a path prefix on the Navide server
+> host); packaged App builds point there by default. See
+> [Deployment](#deployment-official-registry-at-servernavidedevregistry) for
+> the container, secrets and operational requirements. Known limit before
+> wider use: package blobs live on the local data volume
+> (`LocalStorageBackend`). Schema changes go through
+> [migrations](#schema-migrations); a version may carry one artifact per
+> platform target (see [Per-target artifacts](#per-target-artifacts)).
+> Third-party publishing is not open — see
+> [the plugin development guide](../../docs/en-US/plugin-development.md).
 
 ## Run locally
 
@@ -45,18 +44,64 @@ uv --project marketplace/registry run pytest marketplace/registry/tests
 |---|---|---|
 | GET | `/api/health` | Liveness probe. |
 | POST | `/api/publishers` | Register/update a publisher's Ed25519 public key + bearer token. Admin-gated by `X-Admin-Token` when `REGISTRY_ADMIN_TOKEN` is set (open in dev). |
-| POST | `/api/publish` | Upload a `.vsix` package (multipart field `package`); requires a `Bearer` publisher token and (in strict mode) a valid `signature`. Validates manifest, verifies signature, stores blob + assets, appends a version with a trust tier. 409 on duplicate, 403 on cross-namespace/bad-signature, 401 on bad/missing token. |
+| POST | `/api/publish` | Upload a `.vsix` package (multipart field `package`); requires a `Bearer` publisher token and (in strict mode) a valid `signature`. Validates manifest, verifies signature, stores blob + assets, appends a version artifact for `?target=` (default `universal`) with a trust tier. 409 on a duplicate (version, target), on mixing `universal` with platform targets in one version, or on a yanked version; 403 on cross-namespace/bad-signature, 401 on bad/missing token. |
 | GET | `/api/extensions` | Search (`q`) over name/description/categories, newest first, paginated (`offset`, `limit`). |
 | GET | `/api/extensions/{namespace}/{name}` | Extension detail + full version list, registry envelopes/signatures, and root-signed trust metadata. |
-| GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream the package blob **and increment** the per-version + aggregate download counters. |
-| POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version (excluded from latest resolution, still downloadable by exact version). |
+| GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream one artifact's blob **and increment** its download counter plus the aggregate one. `?target=` picks the artifact exactly (no fallback to `universal`); it may be omitted only when the version has a single artifact, else `400` lists the available targets. |
+| POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version — every target's artifact of it (excluded from latest resolution, still downloadable by exact version). |
 | POST | `/api/extensions/{namespace}/{name}/rating` | Add a `{ "score": 1..5 }` rating; returns the new average + count. Per-user auth/dedup is deferred (see below). |
 | POST | `/api/extensions/{namespace}/{name}/featured` | Set the curation flag `{ "featured": bool }`. Admin-gated by `X-Admin-Token` (same gate as `/api/publishers`). |
 
 `GET /api/extensions` also accepts `category` (exact category filter) and
 `sort` (`updated` default, `downloads`, `rating`). Each summary now carries
-`download_count`, `rating_average`, `rating_count`, `featured`; each version
-carries `download_count`.
+`download_count`, `rating_average`, `rating_count`, `featured`, and
+`latest_targets` (the targets `latest_version` is published for); each entry in
+a detail's `versions` is one artifact, carrying its `target` and
+`download_count`.
+
+## Per-target artifacts
+
+A package version is published as **either** one `universal` artifact **or**
+one artifact per platform target (`<platform>-<arch>` as Node reports it, e.g.
+`darwin-arm64`, `win32-x64`) — never both. Rows are unique on
+(extension, version, target); a duplicate target returns `409`, and so does a
+platform artifact for a version that is universal (or the reverse). Mixing is
+refused because the Client prefers an exact platform match over `universal`,
+so a mixed version would install different bytes depending on what was
+published when, and only a frontend-only package — which has nothing
+platform-specific to split — is ever universal.
+
+- **Storage.** New blobs live at `{namespace}/{name}/{version}/{target}/package.vsix`.
+  Each row stores its own key, so artifacts published before per-target
+  support keep their `{version}/package.vsix` key and still download.
+- **Signing.** The registry-signed envelope already binds `target`; each
+  artifact gets its own envelope, and the Client rejects an envelope whose
+  target is not its own host target (or `universal`).
+- **Yank** applies to the whole version, so "latest" resolves to the same
+  version on every platform. A yanked version accepts no further targets.
+- **Latest.** `latest_version` is the newest non-yanked version across all
+  targets. A Host whose target the latest version lacks gets a clear
+  "no artifact for host target" error rather than an older version.
+- **Client selection** (`src/main/plugins/pluginTarget.ts`
+  `selectPluginArtifact`): among the chosen version's rows, the exact host
+  target, else `universal`, else an error naming the available targets. The
+  download then passes `?target=` for a platform artifact.
+- **Older Clients** pick the first row of a version and download without a
+  target, so a multi-target version gets them a `400` (or an envelope target
+  mismatch) instead of an install; universal versions are unaffected.
+
+## Schema migrations
+
+`registry/migrations.py` holds numbered, idempotent steps recorded in the
+`schema_migrations` table; `create_db_engine` runs pending ones at startup,
+after `create_all` creates any missing tables. Each step checks the live
+schema before changing it (so a fresh database records every step without
+work) and runs with its record in one `BEGIN IMMEDIATE` transaction, so a
+failed step leaves nothing behind and concurrent starters apply it once.
+Steps so far: `1` discovery counter columns, `2` registry-signing columns,
+`3` rebuild `extension_version` unique on (extension, version, target).
+Add a step by appending to `MIGRATIONS` with explicit SQL; never edit an
+applied one.
 
 ## Discovery website (p3-discovery)
 
@@ -132,6 +177,7 @@ Extensions view to warn users. This is metadata/gating only — no runtime sandb
 | `REGISTRY_ADMIN_TOKEN` | _(unset)_ | Gates `POST /api/publishers` when set; required and non-empty for the `official` profile. |
 | `REGISTRY_TRUST_PROFILE` | `self-hosted-dev` | `self-hosted-dev` for persistent locally generated trust material, or `official` for explicitly provisioned production material. |
 | `REGISTRY_TRUST_CONFIG_FILE` | _(unset)_ | Required with `official`; path to the complete signer, root, rotation, validity, and blocklist policy below. Rejected for the default profile. |
+| `REGISTRY_ROOT_PATH` | _(unset)_ | Public path prefix when served behind a reverse proxy, e.g. `/registry`. Requests are accepted with the prefix forwarded unchanged (AWS ALB) or stripped by the proxy, and every link the website emits carries it. `/registry-evil/...` is not served. Do not combine with `uvicorn --root-path`. |
 
 ### Official Registry trust deployment
 
@@ -143,10 +189,10 @@ Set `REGISTRY_TRUST_PROFILE=official` and point
   "schemaVersion": 1,
   "profile": "official",
   "expectedRootFingerprint": "sha256:<App-build-pinned-SPKI-digest>",
-  "rootPrivateKeyFile": "/run/secrets/navide-registry-root.pem",
+  "rootPrivateKeyFile": "/run/navide-keys/navide-registry-root.pem",
   "signer": {
     "keyId": "registry-2026-02",
-    "privateKeyFile": "/run/secrets/navide-registry-signer.pem",
+    "privateKeyFile": "/run/navide-keys/navide-registry-signer.pem",
     "status": "active",
     "notBefore": "2026-08-01T00:00:00Z",
     "notAfter": "2027-08-01T00:00:00Z"
@@ -190,14 +236,153 @@ Console entry point (see `registry/cli.py`):
 
 ```bash
 navide-plugin keygen  --out-dir . --name acme        # Ed25519 keypair -> acme.key/acme.pub
-navide-plugin pack    ./plugin-src --out my.vsix      # build + validate a .vsix
+navide-plugin pack    ./plugin-src --out my.vsix      # frontend-only, universal
+navide-plugin pack    ./backend-src --out mac.vsix --target darwin-arm64
 navide-plugin sign    my.vsix --key acme.key --out my.sig
 navide-plugin publish my.vsix --registry http://localhost:8787 \
-  --token <bearer> --signature my.sig
+  --token <bearer> --signature my.sig [--target darwin-arm64]
 ```
 
-`pack` reuses the format builder in `registry/package.py`; `sign` reuses the
-Ed25519 primitives in `registry/signing.py`.
+`keygen` writes the private key owner-only (`0600`). `publish` reads the token
+from `NAVIDE_PLUGIN_TOKEN` when `--token` is omitted, and `--target` (default
+`universal`) selects the Registry target bound into the signed envelope; a
+package with a native backend must be published for its exact
+`<platform>-<arch>` target.
+
+`pack` requires `plugin-src/artifact-files.json` with a canonical `files` array
+that names the manifest and every file to include. For a native backend, pass
+the same `--target` when packing as when publishing so the executable path and
+architecture are validated. `pack` reuses the format builder in
+`registry/package.py`; `sign` reuses the Ed25519 primitives in
+`registry/signing.py`.
+
+## Deployment (Official Registry at server.navide.dev/registry)
+
+The Registry runs as one container behind the load balancer that already
+serves `wss://server.navide.dev/ws`, routed by the path rule `/registry/*`.
+Deployment files live in `deploy/`:
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | uv-built image, non-root user (uid 10001), data volume `/data`, health check on `/api/health`. Build context: `marketplace/registry`. |
+| `deploy/entrypoint.sh` | Copies the key secrets into an owner-only directory, reads the admin token from a file, starts uvicorn. |
+| `deploy/compose.example.yml` | Example Compose service: env, secrets, tmpfs key directory, data volume. |
+| `deploy/official-trust.example.json` | Official trust config template (paths and the pinned root fingerprint; no secrets). |
+
+**Path prefix.** Set `REGISTRY_ROOT_PATH=/registry`. An AWS ALB forwards the
+path unchanged, which the app accepts; a proxy that strips the prefix works
+too. The load balancer health check is `GET /registry/api/health`.
+
+**Secrets.** The root and signer private keys must reach the process as
+regular, non-symlink, owner-only (`0600`) files; the Registry refuses to start
+otherwise. Docker/Swarm secrets are mounted `0444` (Compose file secrets keep
+the host file's owner and mode), so `deploy/entrypoint.sh` copies
+`/run/secrets/navide-registry-root.pem` and
+`/run/secrets/navide-registry-signer.pem` into `/run/navide-keys/` (a tmpfs
+owned by the container user) as `0600`, and the trust config points at those
+copies. With Compose file secrets, make the host files readable by uid 10001
+(`chown 10001:10001 <file>; chmod 0400 <file>`). Never bake keys into the
+image. The container needs:
+
+- `REGISTRY_TRUST_PROFILE=official`
+- `REGISTRY_TRUST_CONFIG_FILE` pointing at the trust config (non-secret; mount
+  it read-only). Its `expectedRootFingerprint` must equal the root pinned in
+  the App build, `resources/official-registry-root.pem`
+  (`sha256:89dd424a…a35367`); startup fails on a mismatch.
+- `REGISTRY_ADMIN_TOKEN`, or `REGISTRY_ADMIN_TOKEN_FILE` naming a secret file
+  (read by the entrypoint). It gates `POST /api/publishers` and
+  `/featured`; generate it randomly and keep it out of shell history.
+
+**Data volume and backup.** `/data` holds the SQLite index (`registry.db`) and
+every package blob (`packages/`). Use a named volume or host directory, back
+it up (stop-the-world copy or `sqlite3 registry.db ".backup …"` plus the
+`packages/` tree), and run a single worker: SQLite is the only index.
+
+**Availability.** Root-signed trust metadata expires 24 hours after it is
+generated (a fresh copy per request). Each App revalidates installed Registry
+plugins against the copy from its last successful refresh; once that copy is
+older than 24 hours, for example during a Registry outage longer than a day,
+installed Registry plugins are quarantined until the Registry answers again. Put
+uptime monitoring and alerting on `https://server.navide.dev/registry/api/health`.
+
+### Publishing first-party plugins
+
+One-off admin step: register the `navide` publisher with its public key and a
+bearer token (the token is stored hashed; keep the plaintext for publishing):
+
+```bash
+python3 - <<'PY'
+import json, os, pathlib, urllib.request
+body = {
+    "name": "navide",
+    "display_name": "Navide",
+    "public_key": pathlib.Path(os.path.expanduser(
+        "~/navide-signing/plugin_publisher.pub.pem")).read_text(),
+    "token": os.environ["NAVIDE_PLUGIN_TOKEN"],
+}
+req = urllib.request.Request(
+    "https://server.navide.dev/registry/api/publishers",
+    data=json.dumps(body).encode(), method="POST",
+    headers={"Content-Type": "application/json",
+             "X-Admin-Token": os.environ["REGISTRY_ADMIN_TOKEN"]})
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
+Then, from the repository root:
+
+```bash
+NAVIDE_REGISTRY_URL=https://server.navide.dev/registry \
+NAVIDE_PUBLISHER_KEY=~/navide-signing/plugin_publisher.key \
+NAVIDE_PLUGIN_TOKEN=<navide publisher token> \
+scripts/publish-first-party-plugins.sh
+```
+
+The script builds, packs, signs and publishes `navide.git` as `universal` and
+`navide.plans` for the host target (for example `darwin-arm64`), reusing the
+`navide-plugin` CLI. `--skip-build` reuses `dist-plugins/`, `--only git|plans`
+publishes one. Plans carries a PyInstaller backend, so each other target must
+be built on a machine of that platform and architecture.
+
+Running the script with the same version on each platform adds that
+platform's artifact to the version (see
+[Per-target artifacts](#per-target-artifacts)); re-running on one platform
+returns `409` for the target already published.
+
+### Publishing platform-specific first-party plugins
+
+`navide.plans` carries a PyInstaller backend, so every target needs its own
+build. `.github/workflows/plugin-packages.yml` (manual `workflow_dispatch`,
+input `ref`) builds it on a runner of each target the app ships
+(`darwin-arm64`, `linux-x64`, `linux-arm64`, `win32-x64`, `win32-arm64`),
+checks the backend's architecture, and uploads
+`navide.plans-<version>-<target>.vsix` plus a `.sha256` (kept 7 days). The
+workflow has no secrets: signing and publishing stay on the maintainer's Mac.
+
+```bash
+gh workflow run plugin-packages.yml -f ref=<commit or tag>
+gh run list --workflow plugin-packages.yml --limit 1   # note the run id
+
+NAVIDE_REGISTRY_URL=https://server.navide.dev/registry \
+NAVIDE_PUBLISHER_KEY=~/navide-signing/plugin_publisher.key \
+NAVIDE_PLUGIN_TOKEN=<navide publisher token> \
+scripts/publish-first-party-plugins.sh --from-run <run id> --version <version> \
+  --target "linux-x64 linux-arm64" --yes
+```
+
+Without `--yes` the script downloads the packages (`gh run download`), checks
+each sha256 and the manifest id/version, and prints what it would publish.
+`--target` limits it to the listed targets; leave out any target already
+published for that version, which would `409` and stop the run. A single
+already-packed file goes through `--package <vsix> --target <target> --version
+<version>`. Both modes refuse a target outside the app's shipped list and a
+package whose manifest is not the expected id and version.
+
+A backend entry is written without an extension (`backend/navide-plans`); for
+a `win32-*` target the Registry reads it as `backend/navide-plans.exe` and
+takes the extension in place of the POSIX exec bit, exactly as the Host's
+`backendEntryOnDisk` does. `navide-plugin pack --target <target>` applies the
+same rule, so a Windows build packs and publishes like any other target.
 
 ## Seams left for later Phase 3 todos
 

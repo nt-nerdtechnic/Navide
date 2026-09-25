@@ -66,6 +66,16 @@ def build_package(
     return buffer.getvalue()
 
 
+def windows_backend_bytes(architecture: str) -> bytes:
+    machine = {"x64": 0x8664, "arm64": 0xAA64}[architecture]
+    header = bytearray(0x46)
+    header[:2] = b"MZ"
+    header[0x3C:0x40] = (0x40).to_bytes(4, "little")
+    header[0x40:0x44] = b"PE\0\0"
+    header[0x44:0x46] = machine.to_bytes(2, "little")
+    return bytes(header)
+
+
 def contract_manifest(name: str = "frontend-multi-view.json") -> dict:
     """Load one normative Manifest v2 fixture for package/API tests."""
     path = CONTRACT_FIXTURES / "valid" / name
@@ -79,8 +89,13 @@ def build_v2_package(
     backend_mode: int = stat.S_IFREG | 0o755,
     backend_data: bytes = b"\x7fELF-test-backend",
     extra_files: dict[str, bytes] | None = None,
+    backend_name: str | None = None,
 ) -> bytes:
-    """Build a package containing every file referenced by a v2 manifest."""
+    """Build a package containing every file referenced by a v2 manifest.
+
+    `backend_name` stores the backend under another archive name, e.g. the
+    `<entry>.exe` a Windows target reads.
+    """
     manifest = manifest if manifest is not None else contract_manifest()
     omitted = omit_paths or set()
     paths: set[str] = set()
@@ -109,7 +124,8 @@ def build_v2_package(
         zf.writestr("manifest.json", json.dumps(manifest))
         zf.writestr("README.md", b"# Contract fixture\n")
         for path in sorted(paths - omitted):
-            info = zipfile.ZipInfo(path)
+            name = backend_name if backend_name and path == backend_entry else path
+            info = zipfile.ZipInfo(name)
             info.create_system = 3
             info.external_attr = (
                 backend_mode if path == backend_entry else stat.S_IFREG | 0o644

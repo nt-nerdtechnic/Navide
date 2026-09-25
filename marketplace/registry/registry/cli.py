@@ -4,9 +4,13 @@ Thin wrapper around the registry's own format builder (`package.build_package`)
 and signing primitives (`signing`). Commands:
 
     navide-plugin keygen  [--out-dir DIR] [--name NAME]
-    navide-plugin pack    <src_dir> [--out FILE]
+    navide-plugin pack    <src_dir> [--out FILE] [--target TARGET]
     navide-plugin sign    <package> --key <privkey> [--out SIG]
-    navide-plugin publish <package> --registry URL --token TOKEN [--signature SIG]
+    navide-plugin publish <package> --registry URL [--token TOKEN] [--signature SIG]
+                          [--target TARGET]
+
+`publish` reads the bearer token from NAVIDE_PLUGIN_TOKEN when --token is
+omitted, which keeps it out of the process list.
 """
 
 from __future__ import annotations
@@ -14,8 +18,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,9 +31,11 @@ from .package import (
     PackageError,
     _reject_duplicate_json_keys,
     build_package,
-    read_package,
 )
 from .signing import generate_keypair, read_private_key_file, sign_digest
+
+
+TOKEN_ENV = "NAVIDE_PLUGIN_TOKEN"
 
 
 def _digest(data: bytes) -> str:
@@ -42,9 +48,20 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     priv_path = out_dir / f"{args.name}.key"
     pub_path = out_dir / f"{args.name}.pub"
-    fd = os.open(priv_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="ascii") as stream:
-        stream.write(private_pem)
+    # Never replace an existing key; the new file is owner-only from creation.
+    fd = os.open(
+        priv_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            fd = -1
+            stream.write(private_pem)
+    finally:
+        if fd >= 0:
+            os.close(fd)
     pub_path.write_text(public_pem)
     print(f"private key: {priv_path}")
     print(f"public key:  {pub_path}")
@@ -60,8 +77,7 @@ def cmd_pack(args: argparse.Namespace) -> int:
         )
         if not isinstance(files, dict) or set(files) != {"files"} or not isinstance(files["files"], list) or not all(isinstance(path, str) for path in files["files"]):
             raise PackageError("artifact-files.json must contain only a files array")
-        data = build_package(src, files["files"])
-        read_package(data, target=args.target)
+        data = build_package(src, files["files"], target=args.target)
     except PackageError as exc:
         print(f"pack failed: {exc}", file=sys.stderr)
         return 1
@@ -106,7 +122,9 @@ def post_package(
     package_path = Path(package_path)
     data = package_path.read_bytes()
     url = registry_url.rstrip("/") + "/api/publish"
-    params = {"target": target, **({"signature": signature} if signature else {})}
+    params = {"target": target}
+    if signature:
+        params["signature"] = signature
     headers = {"Authorization": f"Bearer {token}"}
 
     if client is not None:
@@ -147,8 +165,12 @@ def cmd_publish(args: argparse.Namespace) -> int:
         signature = (
             sig_path.read_text().strip() if sig_path.is_file() else args.signature
         )
+    token = args.token or os.environ.get(TOKEN_ENV)
+    if not token:
+        print(f"publish needs --token or {TOKEN_ENV}", file=sys.stderr)
+        return 2
     status, text = post_package(
-        args.registry, args.package, args.token, signature, args.target
+        args.registry, args.package, token, signature, target=args.target
     )
     print(f"{status} {text}")
     return 0 if 200 <= status < 300 else 1
@@ -166,7 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack = sub.add_parser("pack", help="build a .vsix package from a source dir")
     p_pack.add_argument("src_dir")
     p_pack.add_argument("--out")
-    p_pack.add_argument("--target", default="universal")
+    p_pack.add_argument(
+        "--target",
+        default="universal",
+        help="registry target the package is validated for, e.g. win32-x64",
+    )
     p_pack.set_defaults(func=cmd_pack)
 
     p_sign = sub.add_parser("sign", help="detached-sign a package")
@@ -178,9 +204,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_pub = sub.add_parser("publish", help="upload a package to a registry")
     p_pub.add_argument("package")
     p_pub.add_argument("--registry", required=True)
-    p_pub.add_argument("--token", required=True)
+    p_pub.add_argument("--token", help=f"bearer token (default: ${TOKEN_ENV})")
+    p_pub.add_argument(
+        "--target",
+        default="universal",
+        help="registry target, e.g. universal or darwin-arm64",
+    )
     p_pub.add_argument("--signature", help="signature string or a file path")
-    p_pub.add_argument("--target", default="universal")
     p_pub.set_defaults(func=cmd_publish)
 
     return parser

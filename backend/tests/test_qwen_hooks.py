@@ -29,7 +29,8 @@ def test_installs_a_notification_hook_pointing_at_the_qwen_endpoint(tmp_path) ->
 
     assert result["installed"] is True
     data = json.loads(settings.read_text())
-    assert list(data["hooks"]) == ["Notification"]
+    # PreToolUse is Navide Guard's hook, covered in tests/guard_hooks.
+    assert list(data["hooks"]) == ["Notification", "PreToolUse"]
     command = _hook_commands(data)[0]
     assert "/hooks/qwen" in command
     assert "X-Agent-Team-Event: notification" in command
@@ -45,7 +46,8 @@ def test_reinstalling_does_not_stack_duplicate_entries(tmp_path) -> None:
     qwen_hooks.install_hooks("/tmp/port-file", settings_file=settings)
     qwen_hooks.install_hooks("/tmp/port-file", settings_file=settings)
 
-    assert len(_hook_commands(json.loads(settings.read_text()))) == 1
+    # One Notification hook plus Navide Guard's PreToolUse hook.
+    assert len(_hook_commands(json.loads(settings.read_text()))) == 2
 
 
 def test_keeps_hooks_the_user_wrote_themselves(tmp_path) -> None:

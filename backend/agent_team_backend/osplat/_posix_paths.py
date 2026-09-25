@@ -260,6 +260,15 @@ _PY_POST = (
     'r=u.urlopen(u.Request("http://127.0.0.1:"+p+q,data=sys.stdin.buffer.read(),headers=H,method="POST"),timeout=float(t))\n'
     "sys.stdout.buffer.write(r.read())"
 )
+# The same request plus one header read from the environment at fire time;
+# argv[6] is "<header>=<variable>". A separate text so every hook that does
+# not need it stays byte-for-byte what is already installed.
+_PY_POST_ENV_HEADER = _PY_POST.replace(
+    "r=u.urlopen",
+    'k,v=sys.argv[6].split("=",1)\n'
+    "if os.environ.get(v):H[k]=os.environ[v]\n"
+    "r=u.urlopen",
+)
 
 
 class PosixScripts:
@@ -276,7 +285,8 @@ class PosixScripts:
         return {"type": "command", "command": command}
 
     def _post(
-        self, *, header_file: str, url_path: str, event: str, timeout_s: int, discard: bool
+        self, *, header_file: str, url_path: str, event: str, timeout_s: int, discard: bool,
+        env_header: tuple[str, str] | None = None,
     ) -> str:
         """The request itself: JSON body from stdin, response to stdout unless
         `discard`. Decided when the hook is *written*: curl when this machine
@@ -284,18 +294,21 @@ class PosixScripts:
         already holds -- and the python3 spelling otherwise."""
         if resolve_program("curl") is not None:
             sink = "-o /dev/null " if discard else ""
+            extra = f'-H "{env_header[0]}: ${env_header[1]}" ' if env_header else ""
             return (
                 f"curl -fsS -m {timeout_s} {sink}-X POST "
                 f"-H 'Content-Type: application/json' "
                 f"-H 'X-Agent-Team-Event: {event}' "
-                f"-H @{shlex.quote(header_file)} "
+                f"-H @{shlex.quote(header_file)} {extra}"
                 f"--data-binary @- "
                 f'"http://127.0.0.1:$PORT{url_path}"'
             )
+        script = _PY_POST_ENV_HEADER if env_header else _PY_POST
         return (
-            f"python3 -c {shlex.quote(_PY_POST)} \"$PORT\" "
+            f"python3 -c {shlex.quote(script)} \"$PORT\" "
             f"{shlex.quote(url_path)} {shlex.quote(event)} "
             f"{shlex.quote(header_file)} {timeout_s}"
+            + (f" {shlex.quote(env_header[0] + '=' + env_header[1])}" if env_header else "")
             + (" >/dev/null" if discard else "")
         )
 
@@ -309,11 +322,16 @@ class PosixScripts:
         timeout_s: int,
         keep_body: bool = False,
         exit_zero: bool = False,
+        env_header: tuple[str, str] | None = None,
     ) -> str:
         tail = ' >/dev/null 2>&1; exit 0' if exit_zero else " || true"
+        if exit_zero and keep_body:
+            # The body is the answer (Copilot's guard hook), so only stderr
+            # is silenced; the exit stays 0 because non-zero means deny there.
+            tail = " 2>/dev/null; exit 0"
         post = self._post(
             header_file=header_file, url_path=url_path, event=event, timeout_s=timeout_s,
-            discard=not keep_body,
+            discard=not keep_body, env_header=env_header,
         )
         return (
             f"PORT=$(cat {shlex.quote(port_file)} 2>/dev/null); "

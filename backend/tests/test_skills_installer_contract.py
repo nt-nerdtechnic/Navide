@@ -38,12 +38,12 @@ def commit(installer, item):
 def test_approved_package_limits_reject_complete_package(library, kind):
     store, installer, source = library
     if kind == "file":
-        (source / "large").write_bytes(b"x" * (256 * 1024 + 1))
+        (source / "large").write_bytes(b"x" * (8 * 1024 * 1024 + 1))
     elif kind == "total":
-        for name in ("a", "b"):
-            (source / name).write_bytes(b"x" * (256 * 1024))
+        for name in ("a", "b", "c", "d"):
+            (source / name).write_bytes(b"x" * (8 * 1024 * 1024))
     else:
-        for index in range(64):
+        for index in range(512):
             (source / f"file-{index}").write_bytes(b"x")
     with pytest.raises(SkillValidationError):
         prepare(installer, source)

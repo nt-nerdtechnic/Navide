@@ -177,20 +177,23 @@ def test_install_unknown_id_rejected() -> None:
     assert r["ok"] is False and "unknown" in r["error"].lower()
 
 
-def test_install_needs_terminal_returns_command_without_running(monkeypatch: pytest.MonkeyPatch) -> None:
-    # homebrew is needs_terminal → must NOT shell out, just hand back the command.
+@pytest.mark.parametrize("dep_id", ["homebrew", "node"])
+def test_install_resolves_the_command_without_running_it(
+    monkeypatch: pytest.MonkeyPatch, dep_id: str
+) -> None:
+    # Interactive (homebrew) or not (node), nothing runs here any more: the
+    # command is handed to onboarding.run, which starts it in a visible PTY.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
     # The bootstrap gate asks the seam for each required binary; answer for
-    # it so the test is about needs_terminal, not about what this host has.
+    # it so the test is about resolving, not about what this host has.
     monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/usr/bin/{name}")
-    called = {"ran": False}
     def boom(*_a, **_k):
-        called["ran"] = True
         raise AssertionError("should not run")
     monkeypatch.setattr(ob.subprocess, "run", boom)
-    r = ob.install_dep("homebrew")
-    assert r["ok"] is True and r["needs_terminal"] is True and r["command"]
-    assert called["ran"] is False
+    monkeypatch.setattr(ob.subprocess, "Popen", boom)
+    r = ob.install_dep(dep_id)
+    assert r["ok"] is True
+    assert r["command"] == ob.DEPS_BY_ID[dep_id].install_for("darwin").command
 
 
 def test_python_install_uses_unversioned_formula() -> None:
@@ -250,64 +253,7 @@ def test_pull_model_rejects_bad_name() -> None:
     assert ob.pull_model("evil; rm -rf /")["ok"] is False
 
 
-# ── install: failure reporting + bootstrap gate + timeout reaping ─────────────
-def _fake_popen(returncode: int, stdout: str = "", stderr: str = "", *, timeout: bool = False):
-    """A Popen stand-in; `timeout=True` makes the FIRST communicate() time out."""
-    class _P:
-        pid = 424242
-
-        def __init__(self, *_a: object, **_k: object) -> None:
-            self.returncode = returncode
-            self._timeout = timeout
-            self.killed = False
-
-        def communicate(self, timeout: float | None = None):  # noqa: ANN202
-            if self._timeout:
-                self._timeout = False
-                raise subprocess.TimeoutExpired(cmd="install", timeout=timeout or 0)
-            return stdout, stderr
-
-        def kill(self) -> None:
-            self.killed = True
-
-    return _P
-
-
-def _brew_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A Homebrew install only exists on the darwin roster.
-    monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/opt/homebrew/bin/{name}")
-
-
-def test_install_failure_surfaces_output_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The frontend renders `error`; returning only `output` on failure is what
-    # made every failed install read as "installation failed: unknown".
-    _brew_present(monkeypatch)
-    monkeypatch.setattr(
-        ob.subprocess, "Popen", _fake_popen(1, "", "Error: node: no bottle available")
-    )
-    r = ob.install_dep("node")
-    assert r["ok"] is False
-    assert "no bottle available" in r["error"]
-    assert "no bottle available" in r["output"]
-
-
-def test_install_failure_without_output_still_names_the_exit_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _brew_present(monkeypatch)
-    monkeypatch.setattr(ob.subprocess, "Popen", _fake_popen(127, "", ""))
-    r = ob.install_dep("node")
-    assert r["ok"] is False and "127" in r["error"]
-
-
-def test_install_success_returns_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    _brew_present(monkeypatch)
-    monkeypatch.setattr(ob.subprocess, "Popen", _fake_popen(0, "==> Pouring node\n"))
-    r = ob.install_dep("node")
-    assert r["ok"] is True and "Pouring" in r["output"]
-
-
+# ── install: bootstrap gate ──────────────────────────────────────────────────
 def test_install_blocked_when_bootstrap_binary_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -346,27 +292,6 @@ def test_every_brew_or_npm_install_declares_its_bootstrap_binary() -> None:
             assert "npm" in dep.requires_binaries, dep.id
 
 
-def test_install_timeout_reaps_the_whole_process_group(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # shell=True puts brew one level below /bin/sh: killing only the direct
-    # child leaves it running and keeps the inherited pipes open.
-    signals: list[int] = []
-    _brew_present(monkeypatch)
-    monkeypatch.setattr(ob.subprocess, "Popen", _fake_popen(0, timeout=True))
-    # The product kills through osplat.process_tree (no getpgid/killpg on
-    # Windows); force=False is the SIGTERM step, force=True the SIGKILL one.
-    monkeypatch.setattr(ob.osplat.process_tree, "group_of", lambda _pid: 424242)
-    monkeypatch.setattr(
-        ob.osplat.process_tree,
-        "kill_group",
-        lambda _pgid, *, force: signals.append(force),
-    )
-    r = ob.install_dep("node")
-    assert r["ok"] is False and "timed out" in r["error"]
-    assert signals[:1] == [False]
-
-
 # ── ollama: installed ≠ serving ───────────────────────────────────────────────
 def _ollama_list(returncode: int, stdout: str = "", stderr: str = ""):
     def run(*a: object, **_k: object):
@@ -395,7 +320,6 @@ def test_ollama_status_lists_models_when_reachable(monkeypatch: pytest.MonkeyPat
     )
     r = ob.detect_ollama_status()
     assert r["reachable"] is True and r["models"] == ["qwen2.5-coder:7b"]
-    assert ob.detect_ollama_models() == ["qwen2.5-coder:7b"]
 
 
 def test_gate_reports_analyzer_blocked_when_service_is_down() -> None:
@@ -816,6 +740,71 @@ def test_cli_health_reports_failed_primary_probe(
     assert health["needs_attention"] is True
 
 
+def _probe_primary(
+    monkeypatch: pytest.MonkeyPatch, binary: Path, run
+) -> dict:
+    """detect_dep on the real claude Dep with `binary` as its resolved primary."""
+    claude = next(dep for dep in ob.DEPS if dep.id == "claude")
+    monkeypatch.setattr(ob, "resolve_executable", lambda _dep, quick=False: str(binary))
+    monkeypatch.setattr(ob.subprocess, "run", run)
+    return ob.detect_dep(claude)
+
+
+def _timeout_run(*args, **_kwargs):
+    raise subprocess.TimeoutExpired(args[0] if args else [], 8)
+
+
+def _exit_one_run(*args, **_kwargs):
+    return subprocess.CompletedProcess(args[0] if args else [], 1, "", "boom")
+
+
+def test_cli_health_timed_out_primary_probe_keeps_a_dismissed_guide_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cold-start `--version` timeout is transient: it must not add a
+    finding, move the fingerprint, or re-open a guide the user dismissed."""
+    first = _make_executable(tmp_path / "nvm" / "claude")
+    second = _make_executable(tmp_path / "homebrew" / "claude")
+    monkeypatch.setenv("PATH", f"{first.parent}{ob.os.pathsep}{second.parent}")
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
+    monkeypatch.setattr(ob, "_is_that_tool", lambda _dep, _path: True)
+    monkeypatch.setattr(ob, "read_update_state", lambda _dep: [])
+    dismissed = {"value": ""}
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: dismissed["value"])
+
+    baseline = ob.build_cli_health([_claude_status(first)])
+    assert [f["type"] for f in baseline["findings"]] == ["duplicate_install"]
+    dismissed["value"] = baseline["fingerprint"]
+
+    timed_out = _probe_primary(monkeypatch, first, _timeout_run)
+    assert timed_out["status"] == "missing" and timed_out["probe_timed_out"] is True
+    health = ob.build_cli_health([timed_out])
+
+    assert [f["type"] for f in health["findings"]] == ["duplicate_install"]
+    assert health["fingerprint"] == baseline["fingerprint"]
+    assert health["dismissed"] is True
+    assert health["needs_attention"] is False
+
+
+def test_cli_health_definitive_primary_probe_failure_is_still_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A binary that runs and exits non-zero with no version is a persistent
+    problem, not a slow start — it still surfaces as probe_failed."""
+    binary = _make_executable(tmp_path / "bin" / "claude")
+    monkeypatch.setenv("PATH", str(binary.parent))
+    monkeypatch.setattr(ob, "read_update_state", lambda _dep: [])
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    status = _probe_primary(monkeypatch, binary, _exit_one_run)
+    assert status["probe_timed_out"] is False
+    health = ob.build_cli_health([status])
+
+    failed = next(f for f in health["findings"] if f["type"] == "probe_failed")
+    assert failed["primary"]["exit_code"] == 1
+    assert health["needs_attention"] is True
+
+
 def test_cli_health_dismissal_is_fingerprint_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -831,9 +820,12 @@ def test_cli_health_dismissal_is_fingerprint_scoped(
     assert ob._dismissed_cli_health_fingerprint() == fingerprint
 
 
-def test_cli_binary_selection_persists_path_and_fingerprint_atomically(
+def test_cli_binary_selection_persists_path_without_dismissing_the_guide(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Choosing a binary for one CLI must not silence findings for others:
+    the override itself resolves that CLI (see build_cli_health), so nothing
+    fingerprint-wide is dismissed on the side."""
     flag, _legacy = _patch_flag_paths(monkeypatch, tmp_path)
     prefix = tmp_path / "node"
     target = _make_executable(
@@ -845,16 +837,126 @@ def test_cli_binary_selection_persists_path_and_fingerprint_atomically(
     monkeypatch.setenv("PATH", str(binary.parent))
     ob.set_complete(True)
 
-    result = ob.select_cli_binary("claude", str(binary), "0123456789abcdef")
+    result = ob.select_cli_binary("claude", str(binary))
 
     assert result == {"ok": True, "agent_key": "claude", "path": str(binary)}
     assert ob.cli_binary_override("claude") == str(binary)
-    assert ob._dismissed_cli_health_fingerprint() == "0123456789abcdef"
+    assert ob._dismissed_cli_health_fingerprint() == ""
     assert ob._read_state() == {
         "complete": True,
         "cli_binary_overrides": {"claude": str(binary)},
-        "dismissed_cli_health": "0123456789abcdef",
     }
+
+
+def _fail_write(_data: dict) -> None:
+    raise OSError("disk full")
+
+
+def test_state_writes_report_failure_instead_of_swallowing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_flag_paths(monkeypatch, tmp_path)
+    assert ob.set_complete(True) == {"ok": True}
+    assert ob.dismiss_cli_health("0123456789abcdef") == {"ok": True}
+
+    monkeypatch.setattr(ob, "_write_state", _fail_write)
+
+    assert ob.set_complete(False) == {"ok": False, "error": "disk full"}
+    assert ob.dismiss_cli_health("fedcba9876543210") == {"ok": False, "error": "disk full"}
+    assert ob.dismiss_cli_health("invalid") == {"ok": False, "error": "invalid fingerprint"}
+    assert ob.is_complete() is True
+    assert ob._dismissed_cli_health_fingerprint() == "0123456789abcdef"
+
+
+async def test_onboarding_write_handlers_answer_ok_false_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from agent_team_backend import ws_handlers
+
+    _patch_flag_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(ob, "_write_state", _fail_write)
+    sent: list[dict] = []
+
+    async def send_json(message: dict) -> None:
+        sent.append(message)
+
+    session = SimpleNamespace(send_json=send_json)
+
+    await ws_handlers.onboarding_complete(session, "1", "onboarding.complete", {"complete": True})
+    await ws_handlers.onboarding_cli_health_dismiss(
+        session, "2", "onboarding.cli_health.dismiss", {"fingerprint": "0123456789abcdef"}
+    )
+
+    assert [message["payload"] for message in sent] == [
+        {"ok": False, "error": "disk full"},
+        {"ok": False, "error": "disk full"},
+    ]
+
+
+def _duplicate_claude_installs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, alternate_ok: bool = True
+) -> tuple[Path, Path]:
+    first = _make_executable(tmp_path / "nvm" / "claude")
+    second = _make_executable(tmp_path / "homebrew" / "claude")
+    monkeypatch.setenv("PATH", f"{first.parent}{ob.os.pathsep}{second.parent}")
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok if alternate_ok else _probe_failed)
+    monkeypatch.setattr(ob, "read_update_state", lambda _dep: [])
+    return first, second
+
+
+def test_cli_health_binary_override_resolves_that_clis_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Picking which install Navide launches is the repair for a duplicate
+    install — and for a broken primary, since the pick replaces it."""
+    _patch_flag_paths(monkeypatch, tmp_path)
+    first, second = _duplicate_claude_installs(tmp_path, monkeypatch)
+    before = ob.build_cli_health([_claude_status(first, ok=False)])
+    assert {f["type"] for f in before["findings"]} == {"probe_failed", "duplicate_install"}
+
+    assert ob.select_cli_binary("claude", str(second))["ok"] is True
+    health = ob.build_cli_health([_claude_status(first, ok=False)])
+
+    assert health["findings"] == []
+    assert health["fingerprint"] == ""
+    assert health["needs_attention"] is False
+    # CLI management still lists both installs.
+    assert len(health["entries"][0]["candidates"]) == 2
+
+
+def test_cli_health_override_to_a_broken_install_resolves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_flag_paths(monkeypatch, tmp_path)
+    first, second = _duplicate_claude_installs(tmp_path, monkeypatch, alternate_ok=False)
+    assert ob.select_cli_binary("claude", str(second))["ok"] is True
+
+    health = ob.build_cli_health([_claude_status(first)])
+
+    assert [f["type"] for f in health["findings"]] == ["duplicate_install"]
+    assert health["needs_attention"] is True
+
+
+def test_dep_status_reports_the_chosen_binary_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backend is the only store of the override, so the Settings row
+    chip can only learn about it from the status it is sent — the quick
+    first paint included."""
+    _patch_flag_paths(monkeypatch, tmp_path)
+    _first, second = _duplicate_claude_installs(tmp_path, monkeypatch)
+    claude = ob.DEPS_BY_ID["claude"]
+    assert ob.detect_dep(claude, quick=True)["binary_override"] == ""
+
+    assert ob.select_cli_binary("claude", str(second))["ok"] is True
+
+    assert ob.detect_dep(claude, quick=True)["binary_override"] == str(second)
+    quick = next(d for d in ob.quick_status()["deps"] if d["id"] == "claude")
+    assert quick["binary_override"] == str(second)
+    # Not an agent CLI: never an override.
+    assert ob.detect_dep(_NODE, quick=True)["binary_override"] == ""
 
 
 # ── update state: read back what the CLI itself recorded ─────────────────────
@@ -1023,6 +1125,24 @@ def test_cli_health_entries_carry_registry_commands(
     # one (dynamic pick: see _dep_without_update_cmd).
     if no_update is not None:
         assert entries[no_update.id]["update_command"] == ""
+
+
+def test_cli_health_entries_carry_the_registry_npm_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The guide's same-install check needs the package the backend judged by."""
+    installed = {"qwen": _make_executable(tmp_path / "bin" / "qwen"),
+                 "grok": _make_executable(tmp_path / "bin" / "grok")}
+    monkeypatch.setattr(ob, "_distinct_executables", lambda command: (
+        [_candidate_entry(installed[command])] if command in installed else []
+    ))
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    entries = {e["agent_key"]: e for e in ob.build_cli_health([])["entries"]}
+
+    assert entries["qwen"]["npm_package"] == ob.DEPS_BY_ID["qwen"].npm_package == "@qwen-code/qwen-code"
+    assert entries["grok"]["npm_package"] == ""
 
 
 # ── platform-aware install (Linux port) ───────────────────────────────────────

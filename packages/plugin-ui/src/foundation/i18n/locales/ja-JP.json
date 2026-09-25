@@ -49,6 +49,11 @@
     "status-unknown": "不明",
     "last-success": "最後に成功したサンプル",
     "unknown-value": "不明",
+    "console": "観測ログ",
+    "console-conn": "{count} 接続",
+    "listener-unknown": "待ち受けプロセス不明",
+    "opened-by": "接続元プロセス",
+    "listener": "待ち受けプロセス",
     "stale": "過去の記録です。観測データは古くなっています。",
     "unavailable": "バックエンドに接続できません。最後に受信した記録を表示しています。",
     "pane-scope": "このペインのプロセスツリーで観測されました。",
@@ -63,6 +68,12 @@
     "reveal": "フォルダー内に表示",
     "action-failed": "この選択を保存できませんでした。もう一度お試しください。",
     "reveal-failed": "このパスをファイルマネージャーで表示できませんでした。",
+    "analyze-all": "すべて CLI で分析",
+    "analyze": "CLI で分析",
+    "analyze-hint": "新しい {vendor} ペインを開き、読み取り専用で調査して保護策を提案します。変更を加える前に必ず確認を求めます。",
+    "analyze-failed": "分析用の CLI ペインを起動できませんでした。もう一度お試しください。",
+    "analyze-inject-failed": "分析用ペインは開きましたが、タスクを入力できませんでした。そのペインにタスクを貼り付けるか、閉じてからもう一度お試しください。",
+    "analyze-failed-detail": "分析用の CLI ペインを起動できませんでした（{detail}）。もう一度お試しください。",
     "shared-cdn-field": "共有 CDN",
     "shared-cdn": "{label}（共有 CDN のためサイトを特定できません）",
     "ranges-title": "共有 CDN のアドレス範囲",
@@ -110,6 +121,48 @@
     "interrupt-failed": "AI CLI セッションを中断できません",
     "send-failed": "AI CLI セッションに入力を送信できません",
     "resize-failed": "AI CLI セッションのサイズを変更できません"
+  },
+  "voice": {
+  "prewarm-failed": "音声入力の準備ができていません：{reason}",
+    "capsule": {
+      "starting": "マイクを準備中…",
+      "recording": "録音中 — 離すと入力",
+      "recording-hands-free": "ハンズフリーで録音中 — もう一度ショートカットで入力",
+      "cap-left": "残り {s} 秒",
+      "enter-send-esc-cancel": "Enter で送信・Esc でキャンセル",
+      "dismiss": "閉じる",
+      "copy": "コピー",
+      "copied": "コピーしました",
+      "transcribing": "文字起こし中…",
+      "device-fallback": "選択したマイクが見つからないため、システムの既定のマイクを使用しています",
+      "device-fallback-device": "選択したマイクが見つからないため、「{device}」を使用しています"
+    },
+    "error": {
+      "generic": "音声入力に失敗しました（{code}）",
+      "pane-asleep": "このペインはスリープ中です。先に開いてください",
+      "not-cli": "音声入力は CLI ペインにのみ送れます",
+      "mic-denied": "マイクへのアクセスが拒否されました。システム設定 → プライバシーとセキュリティ → マイク で Navide を許可してください",
+      "mic-failed": "マイクを開けませんでした：{error}",
+      "mic-disconnected": "マイクが切断されました — 接続し直すか、音声設定で別のマイクを選んでください",
+      "mic-disconnected-device": "マイク「{device}」が切断されました — 接続し直すか、音声設定で別のマイクを選んでください",
+      "backend": "バックエンドが応答しません",
+      "start-sidecar-missing": "このビルドには音声エンジンが含まれていません",
+      "start-model-missing": "音声モデルが未ダウンロードです — 設定 → 一般 → 音声入力",
+      "start-sidecar-failed": "音声エンジンを起動できませんでした",
+      "start-busy": "別の録音が進行中です",
+      "start-disabled": "音声入力がオフになりました",
+      "start-failed": "録音を開始できませんでした",
+      "stop-no-session": "録音セッションが失われました",
+      "stop-sidecar-failed": "音声エンジンがクラッシュまたはタイムアウトしました",
+      "stop-transcribe-failed": "文字起こしに失敗しました",
+      "stop-failed": "文字起こしに失敗しました",
+      "no-speech": "音声が検出されませんでした",
+      "not-sent": "テキストは入力欄に入りましたが、送信されていません——Enter を押してください",
+      "insert-failed": "このペインにテキストを入力できませんでした",
+      "mic-silent": "マイクに音が入っていません — システム設定 → プライバシーとセキュリティ → マイク で Navide を許可するか、音声設定で別のマイクを選んでください（Bluetooth ヘッドセットがスリープしている可能性があります）",
+      "mic-silent-device": "マイク「{device}」に音が入っていません — ヘッドセットの場合は装着してスリープを解除するか、音声設定で別のマイクを選んでください",
+      "mic-authorized": "マイクを許可しました — もう一度ショートカットを押しながら話してください"
+    }
   },
   "msg": {
     "panel-title": "CLI 間メッセージ",
@@ -504,11 +557,13 @@
       "auto-named-tooltip": "このセッションの最初の指示から自動で名前を付けました。名前を変更すると、その名前が保持されます",
       "loop-tag-tooltip": "このペインでループが実行中です",
       "subtree-tooltip": "このペインから起動した {count} 個のペインが {status}",
-      "subtree-summary": "子ペイン {count} 件が{status}",
+      "subtree-summary": "sub {status} {count}",
       "location-minimized": "サイドバーに最小化",
       "location-tab": "タブ：{name}",
       "location-workspace": "プロジェクト：{name}",
       "loop-tooltip": "ループ — 設定済みのループ用プロンプトをこのペインに送信します",
+      "skill-cast-failed": "スキル「{name}」をこのペインに送信できませんでした",
+      "skill-cast-busy": "ループが次のプロンプトを送信中です。少し待ってから「{name}」をもう一度使用してください",
       "loop-badge-tooltip": "ループ用プロンプトをこのペインに送信しました。クリックでループを無効にします",
       "loop-waiting-tooltip": "ループは一時停止中です。セッションの上限に達したため、{time} に自動再開します。クリックですぐに再開します",
       "loop-badge-estimate": "∞ ループ · 約 {time}",
@@ -989,6 +1044,10 @@
           "title": "ステータスバッジ",
           "summary": "ペインの各ステータスの名前と色を、言語ごとに設定します。"
         },
+        "voice-input": {
+          "title": "音声入力",
+          "summary": "CLI ペインへの押して話す音声入力、返答の読み上げ、ローカル音声モデルの管理。"
+        },
         "general-environment": {
           "title": "環境",
           "summary": "環境チェック（初期設定）を再実行します。"
@@ -1228,11 +1287,51 @@
       "restore": "復元",
       "installed": "インストール済み",
       "sensitive": "機密性の高い権限",
-      "remove": "削除",
       "empty": "プラグインはインストールされていません。",
       "searchPlaceholder": "拡張機能を検索",
       "search": "検索",
       "install": "インストール",
+      "marketplace": {
+        "loading": "拡張機能を読み込み中…",
+        "loadFailed": "マーケットプレイスを読み込めませんでした：{error}",
+        "noExtensions": "公開されている拡張機能はまだありません。",
+        "noResults": "「{query}」に一致する拡張機能はありません。",
+        "sortLabel": "並べ替え",
+        "sort": {
+          "downloads": "ダウンロード数順",
+          "updated": "最近の更新順",
+          "rating": "評価の高い順"
+        },
+        "downloads": "{count} 回ダウンロード",
+        "installedBadge": "インストール済み",
+        "installedVersion": "インストール済み {version}",
+        "updateAvailable": "アップデートあり",
+        "update": "アップデート",
+        "updateTo": "{version} にアップデート",
+        "uninstall": "アンインストール",
+        "back": "マーケットプレイスに戻る",
+        "loadingDetail": "詳細を読み込み中…",
+        "detailFailed": "この拡張機能を読み込めませんでした：{error}",
+        "publisher": "発行元",
+        "rating": "★ {average}（{count} 件の評価）",
+        "noRating": "まだ評価はありません",
+        "permissions": "権限",
+        "noPermissions": "このバージョンは権限を宣言していません。",
+        "readme": "詳細",
+        "noReadme": "この拡張機能には README がありません。",
+        "versions": "バージョン",
+        "yanked": "取り下げ済み",
+        "unavailable": "このプラットフォームでは利用できません",
+        "unavailableDetail": "バージョン {version} はこのプラットフォーム（{host}）向けに公開されていません。対応プラットフォーム：{targets}。",
+        "uninstallConfirmTitle": "拡張機能をアンインストールしますか？",
+        "uninstallConfirmBody": "{name} をこのデバイスから削除します。マーケットプレイスから再インストールできます。",
+        "updatesCount": "利用可能なアップデート：{count} 件",
+        "retry": "再試行",
+        "installVersion": "{version} をインストール",
+        "versionLabel": "バージョン {version}",
+        "otherTarget": "このプラットフォーム向けではありません（{target}）",
+        "updateAvailableVersion": "アップデートあり：{version}"
+      },
       "trust": {
         "publisherTitle": "公開元を信頼",
         "permissionsTitle": "プラグインの権限を確認",
@@ -1257,7 +1356,8 @@
       "no": "いいえ",
       "manifestPermissions": "マニフェストの権限",
       "packageVersionGrant": "パッケージバージョンごとの許可",
-      "noMatchingGrant": "一致する許可なし"
+      "noMatchingGrant": "一致する許可なし",
+      "labeledValue": "{label}：{value}"
     },
     "scope": {
       "user": "ユーザー",
@@ -1270,6 +1370,74 @@
       "mainProcess": "Electron メインプロセスの userData",
       "safeStorage": "暗号化されたローカルの safeStorage レジストリ",
       "cliFiles": "各 CLI 固有の指示ファイル"
+    },
+    "voice": {
+      "section": "音声入力",
+      "enabled": "音声入力（押して話す）",
+      "enabled-hint": "Ctrl+Alt+M を押している間（ショートカットで変更可）、フォーカス中の CLI ペインに音声入力できます。テキストは手で打ったのと同じように入力欄に入り、Enter を押すまで送信されません。音声はこのコンピューター上のローカル Whisper モデルで文字起こしされ、外部に送信されません。",
+      "device": "マイク",
+      "device-default": "システムの既定",
+      "device-unavailable": "（未接続）",
+      "device-unnamed": "マイク {n}",
+      "device-hint": "デバイス名は初めて音声入力を使った後に表示されます。",
+      "device-missing-note": "選択したマイクが接続されていないため、システムの既定のマイクを使用します。",
+      "shortcut": "ショートカット",
+      "shortcut-hint": "音声入力するときに押し続ける（または押す）キーです。⌃⌥M のような組み合わせ、F13 のようなファンクションキー、または右 Option のような修飾キー単体を使えます。ここで変更するとショートカット設定にも反映されます。",
+      "shortcut-change": "変更",
+      "shortcut-press": "新しいキーを押してください…",
+      "shortcut-save": "保存",
+      "shortcut-cancel": "キャンセル",
+      "shortcut-reset": "デフォルトに戻す",
+      "shortcut-open": "ショートカット設定を開く",
+      "shortcut-unbound": "ショートカットがありません — キーボードから音声入力を開始できません",
+      "shortcut-meta-refused": "{key} は使用できません：macOS は ⌘ と一緒に押したキーを離したことを通知しないため、録音が止まらなくなります。⌃⌥M など ⌘ を含まない組み合わせを選んでください。",
+      "shortcut-meta-warning": "このショートカットには ⌘ が含まれています：macOS はキーを離したことを通知しないため、押し続ける録音が止まりません。⌘ を含まない組み合わせを選んでください。",
+      "shortcut-meta-alone-refused": "{key} は使用できません：⌘ のショートカット（⌘C、⌘V…）はすべて ⌘ から始まるため、どれを押しても録音が始まってしまいます。右 Option など別の修飾キー単体か、ファンクションキーを選んでください。",
+      "shortcut-typing-refused": "{key} は使用できません：CLI に文字を入力・編集するキーです（Enter／Esc は送信／キャンセルにも使われます）。押し続けると音声入力ではなく入力になってしまいます。F13 などのファンクションキー、右 Option などの修飾キー単体、または ⌃ か ⌥ を含む組み合わせを選んでください。",
+      "fn-key": "fn（🌐）キーを使う",
+      "fn-key-hint": "fn を押し続けると、上のショートカットと同じように音声入力します（短く押したときは録音モードに従います）。fn をほかのキーと一緒に押した場合（fn+矢印キーなど）は録音を始めません。「入力監視」の許可が必要です。",
+      "fn-status-starting": "fn キーの監視を開始しています…",
+      "fn-status-ready": "fn キーを使用できます。",
+      "fn-status-no-permission": "fn キーを検出するには「入力監視」の許可が必要です。「システム設定 → プライバシーとセキュリティ → 入力監視」で Navide を許可してから「再確認」を押してください（それでも検出されない場合は Navide を終了して開き直してください）。",
+      "fn-status-restarting": "fn キーの監視が停止しました。再起動しています…",
+      "fn-status-failed": "fn キーの監視を実行できませんでした。",
+      "fn-open-input-monitoring": "入力監視を開く",
+      "fn-check-again": "再確認",
+      "fn-retry": "もう一度試す",
+      "fn-usage-conflict": "macOS も 🌐 キーに反応します（{action}）。「システム設定 → キーボード →『🌐 キーを押して』」を「何もしない」に設定すると、押したときに音声入力だけが行われます。",
+      "fn-usage-1": "入力ソースの切り替え",
+      "fn-usage-2": "絵文字と記号の表示",
+      "fn-usage-3": "macOS の音声入力の開始",
+      "fn-usage-unknown": "デフォルトの動作",
+      "fn-open-keyboard-settings": "キーボード設定を開く",
+      "shortcut-conflict": "ほかの割り当て：{commands}",
+      "mode": "録音方法",
+      "mode-hold-tap": "押して話す・タップで固定",
+      "mode-hold-tap-hint": "ショートカットを押している間に話し、離すとテキストを入力。素早くタップするともう一度押すまでハンズフリーで録音します（最長 5 分）。",
+      "mode-hold": "押して話す",
+      "mode-hold-hint": "話している間ショートカットを押し続け、離すとテキストを入力。最長 60 秒。",
+      "mode-toggle": "押して開始・もう一度押して終了",
+      "mode-toggle-hint": "ショートカットを一度押すと録音開始、もう一度押すとテキストを入力。Esc でキャンセル。最長 5 分。",
+      "script": "中国語の出力",
+      "script-hint": "Whisper は中国語を簡体字で出力することがあります。各文字を選んだ字体に変換します。語彙は置き換えません。",
+      "script-hant-tw": "繁体字（台湾）",
+      "script-hans": "簡体字",
+      "script-none": "変換しない",
+      "model": "音声モデル",
+      "status-checking": "確認中…",
+      "status-unavailable": "状態を取得できません（バックエンドが応答しません）",
+      "sidecar-missing": "このビルドには音声エンジンがありません",
+      "model-missing": "モデル未ダウンロード（約 148 MB）",
+      "model-ready": "準備完了（{size} MB）",
+      "gpu-on": "GPU",
+      "gpu-off": "CPU",
+      "download": "ダウンロード",
+      "downloading": "ダウンロード中…",
+      "recheck": "再確認",
+      "download-starting": "ダウンロードを開始しています…",
+      "download-progress": "{done} / {total} MB（{pct}%）",
+      "download-done": "ダウンロード完了",
+      "download-failed": "ダウンロードに失敗しました：{error}"
     },
     "general": {
       "auto-resume-reconnect": "バックエンドの再起動後にセッションを再開",
@@ -1415,6 +1583,7 @@
       "marketplace": "マーケットプレイス",
       "executionPolicy": "実行ポリシー",
       "statusBadges": "ステータスバッジ",
+      "voice": "音声入力",
       "keybindings": "ショートカット",
       "updates": "更新",
       "help": "ヘルプ"
@@ -4098,12 +4267,12 @@
             "pipeline_define": "パイプラインの作成・名前変更・削除、有効なパイプラインの設定、組み込み設定のリセットを行います。実行中は delete と set_active が拒否されます",
             "stage_define": "段階の追加、編集、削除、並べ替え、リセットを行います。そのパイプラインが実行中の場合、これらの操作は拒否されます",
             "role_define": "ロールの追加、編集、名前変更、削除、リセットを行います。名前変更は参照するすべてのスロットも更新します。参照中のロールは削除できません",
-            "scheduler_list": "Navide のスケジュールジョブを一覧します。Navide の実行中にだけ発火し、マシンやアプリを起こすことはありません",
-            "scheduler_upsert": "スケジュールジョブを作成、または id を渡して更新します。時刻表（N 分ごと、毎日・毎週の HH:MM、タイムゾーン付き）に従って CLI ペインを起こし、指示を送ります。無人実行は残量を消費するため、ジョブごとに 1 日の上限があり、失敗するとバックオフします。ペインから対象を指定せずに呼ぶと自分自身が対象になります",
-            "scheduler_remove": "スケジュールジョブを実行履歴ごと削除します",
-            "scheduler_set_enabled": "スケジュールジョブを一時停止・再開します。再開しても停止中に過ぎた時刻は実行しません",
-            "scheduler_run_now": "時刻表とは別に今すぐ 1 回実行します。実行が始まった時点で応答し、失敗のバックオフを解除し、次の予定時刻は動かしません",
-            "scheduler_runs": "ジョブの実行履歴を新しい順に返します。ok・error・skipped と理由付きで、スキップ（ウィンドウなし、使用中、1 日の上限や残量、対象の消失）はエラーではありません",
+            "scheduler_list": "Navide のスケジュールジョブを一覧します。変更できないジョブも含まれ、各ジョブに作成者と変更可否が付き、agent の上限と現在の使用量も返します。Navide の実行中にだけ発火し、マシンやアプリを起こすことはありません",
+            "scheduler_upsert": "スケジュールジョブを作成、または id を渡して自分のジョブを更新します。時刻表（N 分ごと、毎日・毎週の HH:MM、タイムゾーン付き、または 1 回だけ）に従って自分の Workspace の CLI ペインを起こし、指示を送ります。agent のジョブには上限があります：agent ごとに有効 10 件、agent 全体で 100 件、間隔は 5 分以上、全体で 1 日 300 回まで、定期ジョブは更新がなければ 7 日で自動停止します（ユーザーは保持可能）。ペインから対象を指定せずに呼ぶと自分自身が対象になります",
+            "scheduler_remove": "自分が作成したスケジュールジョブを実行履歴ごと削除します。Navide のウィンドウで作ったジョブや、作成したペインが閉じられたジョブはユーザーの管理です",
+            "scheduler_set_enabled": "自分が作成したスケジュールジョブを一時停止・再開します。再開しても停止中に過ぎた時刻は実行せず、有効ジョブの上限に数えられます",
+            "scheduler_run_now": "自分が作成したジョブを時刻表とは別に今すぐ 1 回実行します。実行が始まった時点で応答し、失敗のバックオフを解除し、次の予定時刻は動かさず、agent 全体の 1 日 300 回に数えられます",
+            "scheduler_runs": "ジョブの実行履歴を新しい順に返します。ok・error・skipped と理由付きで、スキップ（ウィンドウなし、使用中、1 日の上限や残量、agent の 1 日の合計、agent ジョブの期限切れ、対象の消失）はエラーではありません。どのジョブの履歴も読めます",
             "cli_permission_settings": "CLI の権限確認をスキップするフラグ（yolo）を読み書きします。パイプライン固有ではなく全体設定で、以後に開くペインにのみ適用されます。各 CLI に実際にフラグが付くかは、全体の値だけでなく、返された agents[].skipFlag を確認します",
             "workspace_open": "プロジェクトを Navide のワークスペースとして開きます。新しいウィンドウにするか、すでにそのプロジェクトを開いているウィンドウを使うかは、Navide が判断します",
             "workspace_switch": "自分のウィンドウを、そのウィンドウが保持する別のプロジェクトに切り替えます。元のプロジェクトのペインは実行を続けます。そのウィンドウでパイプラインが動作中の場合は、切り替えで実行が中止されるため拒否します",
@@ -5590,6 +5759,12 @@
       "disable": "{name} を無効化",
       "invalid": "無効なファイル",
       "native-conflict": "CLI 固有のスキルを優先",
+      "sync-too-large": "大きすぎて同期不可",
+      "sync-too-large-hint": "このスキルのファイルは大きすぎるため、デバイス間で同期されません。オン／オフと配信設定は引き続き同期されます。",
+      "sync-via-blobs": "ファイルは別途同期",
+      "sync-via-blobs-hint": "このスキルは 1 件の同期レコードに収まらないため、ファイルは暗号化されたファイルアップロードとしてデバイス間で同期されます。オン／オフと配信設定は通常どおり同期されます。",
+      "sync-uploading": "アップロード中 {percent}%",
+      "sync-downloading": "ダウンロード中 {percent}%",
       "editor-hint": "既知のフィールドは編集できます。その他のフロントマターの値は保持されます。",
       "open-folder": "フォルダーを開く",
       "name": "名前",
@@ -6016,6 +6191,11 @@
         "search-placeholder": "ペイン、ワークスペース、デバイスを検索",
         "no-match": "一致するペインはありません。",
         "started-at": "開始 {at}",
+        "git-dirty": "未コミット {count}",
+        "git-stale": "古い可能性あり",
+        "git-linked": "リンクされた worktree",
+        "git-fetched": "最終 fetch：{at}",
+        "git-never-fetched": "未 fetch — ahead/behind は古い可能性があります",
         "collapse": "折りたたむ",
         "expand": "展開"
       },
@@ -6356,6 +6536,7 @@
         "workbench_action_focusSourceControl": "ソース管理にフォーカス",
         "workbench_action_gotoSymbol": "ファイル内のシンボルへ移動",
         "workbench_action_gotoWorkspaceSymbol": "ワークスペース内のシンボルへ移動",
+        "workbench_action_holdToTalk": "押して話す（音声入力）",
         "workbench_action_moveEditorLeftInGroup": "エディターをグループ内で左へ移動",
         "workbench_action_moveEditorRightInGroup": "エディターをグループ内で右へ移動",
         "workbench_action_navigateBack": "戻る",
@@ -6383,6 +6564,7 @@
         "workbench_action_openPreviousEditor": "前のエディターを開く",
         "workbench_action_openSettings": "設定を開く",
         "workbench_action_openSettingsAccounts": "アカウント設定を開く",
+        "workbench_action_openSettingsChannels": "チャット連携設定を開く",
         "workbench_action_problems_focus": "問題パネルにフォーカス",
         "workbench_action_quickOpen": "ファイルをクイックオープン",
         "workbench_action_rebuildFocusedPane": "フォーカス中のペインを再構築",
@@ -7253,6 +7435,16 @@
     "expand-families": "このタブのすべてのペインファミリーを展開",
     "family-toggle-grid": "ファミリーの折りたたみは、自動・スポットライト・全画面レイアウトで利用できます",
     "family-toggle-empty": "このタブには折りたためるペインファミリーがありません",
+    "rename": "名前を変更",
+    "open-in-window": "独立したウィンドウで開く",
+    "rebuild-panes": "このグループの CLI を再構築 ({count})",
+    "reclaim-panes": "このグループの CLI のメモリを解放 ({count})",
+    "close-group": "グループを閉じる",
+    "close-group-title": "このグループを削除し、ペインは別のグループへ移動します",
+    "close-group-and-panes": "グループとそのペインを閉じる",
+    "close-running-confirm-body": "このグループの {count} 個の CLI が実行中です — 閉じると進行中のターンが停止します。閉じますか？",
+    "close-running-confirm-confirm": "閉じる",
+    "remove-panes": "このグループの CLI を削除 ({count})",
     "move-to-group": "別のグループに移動",
     "close-all-panes": "すべてのペインを閉じる"
   },
@@ -7807,6 +7999,20 @@
     "denied": "{label}：{keys} は Navide が管理しているため、設定した値は CLI に渡されませんでした。",
     "overridden": "{label}：{keys} は受け付けられましたが、その後 Navide の設定で上書きされたため、このペインでは指定した値は有効になっていません。"
   },
+  "install-terminal": {
+    "input-lost": "入力がコマンドに届きませんでした：{error}。それ以降に入力した内容（パスワードなど）は受け取られていません。",
+    "running": "実行中 — パスワードや確認を求められたら、ここに入力してください。",
+    "exited-ok": "完了しました（終了コード 0）。",
+    "exited-fail": "終了コード {code} で失敗しました。理由は上の出力を確認してください。",
+    "signal": "{signal} により停止しました。",
+    "cancelled": "キャンセルしました。",
+    "lost": "バックエンドとの接続が切れたため、コマンドを停止しました。",
+    "cancel": "キャンセル",
+    "close": "出力を閉じる",
+    "fallback-title": "内蔵ターミナルを起動できませんでした",
+    "fallback-desc": "代わりに外部のターミナルウィンドウでコマンドを実行し、完了後に再検出してください。",
+    "open-in-terminal": "ターミナルで開く"
+  },
   "cli-install": {
     "kicker": "インストールガイド",
     "title": "{label} をインストール",
@@ -7825,22 +8031,17 @@
     },
     "requirements-label": "前提条件",
     "chain-label": "インストール順序",
-    "chain-desc": "このマシンでの {label} のインストールには {count} ステップ必要です。開始すると各ステップが自動で続きます。ターミナルウィンドウで入力を求められた場合のみ対応してください。",
+    "chain-desc": "このマシンでの {label} のインストールには {count} ステップ必要です。開始すると各ステップが自動で続きます。下のターミナルで入力を求められた場合のみ対応してください。",
     "install-step": "{label} をインストール（1 / {total}）",
     "requirement-missing": "不足",
     "command-label": "実行するコマンド",
-    "note-terminal": "パスワード入力やサインインなどに対応できるよう、外部のターミナルウィンドウで実行します。CLI が検出されると、このダイアログは自動で更新されます。",
-    "note-inline": "バックグラウンドで実行します。数分かかることがあります。",
+    "note-terminal": "このダイアログ内のターミナルで実行するので、出力を確認しながらパスワード入力やサインインなどに対応できます。",
     "no-install-command": "{label} には自動インストールコマンドがありません。ベンダーの手順に従ってインストールし、再検出してください。",
     "install": "インストール",
     "retry": "再試行",
     "installing": "インストール中… {seconds} 秒",
     "not-now": "今はしない",
     "close": "閉じる",
-    "waiting-title": "インストールの完了を待機中",
-    "waiting-desc": "ターミナルウィンドウでコマンドを実行中です。{label} が検出されると、このダイアログが更新されます。",
-    "waiting-timeout": "{label} はまだ検出されていません。ターミナルウィンドウでインストールを完了してから、再検出してください。",
-    "terminal-failed": "Navide はターミナルウィンドウを開けませんでした。上記のコマンドを手動で実行してから、再検出してください。",
     "requirement-manual": "{name} が見つかりません。ここからはインストールできないため、手動でインストールしてから再試行してください。",
     "failed-title": "インストールコマンドが失敗しました",
     "docs": "公式ドキュメントを開く",
@@ -7855,12 +8056,36 @@
     "signin-hint": "サインインを実行するペインを開きます。多くの CLI はその後ブラウザーを開くので、そこで手続きを完了してから戻ってください。",
     "dont-ask": "{label} について今後確認しない"
   },
+  "skill-approval": {
+    "kicker": "スキルのインストール要求",
+    "title": "スキル「{name}」をインストールしますか？",
+    "desc": "エージェントがこのスキルの追加を要求しました。ここで承認するまで何も書き込まれません。エージェントが代わりに承認することはできません。",
+    "queue": "保留中 {count} 件",
+    "requester": "要求元",
+    "source": "ソース",
+    "digest": "ダイジェスト",
+    "targets": "配信先",
+    "targets-all": "接続済みのすべての CLI",
+    "targets-none": "追加配信なし（共有ルートの読み取りのみ）",
+    "expires": "有効期限",
+    "files": "ファイル（{count}）",
+    "script": "スクリプト",
+    "show-skill-md": "SKILL.md を表示",
+    "hide-skill-md": "SKILL.md を隠す",
+    "write-note": "承認すると、このスキルが共有スキルライブラリに書き込まれ、共有ライブラリへの初回書き込みへの同意とみなされます。同梱スクリプトは実行されません。",
+    "approve": "承認してインストール",
+    "reject": "拒否",
+    "installing": "インストール中…",
+    "failed": "インストールに失敗しました",
+    "dismiss": "閉じる",
+    "expired": "承認される前にこのリクエストの有効期限が切れました。エージェントにもう一度プレビューを作成させてください。"
+  },
   "cli-manage": {
     "title": "インストールとアップデート",
     "hint": "Navide は各 CLI の公式コマンドを実行し、独自の方法では更新しません。コマンドは組み込みのレジストリから取得し、実行前に正確な内容を表示します。",
     "redetect": "再検出",
     "detecting": "検出中…",
-    "opening": "開いています…",
+    "opening": "実行中…",
     "update": "更新（{command}）",
     "update-via-docs": "ベンダーのドキュメントに従って更新",
     "doctor": "診断（{command}）",
@@ -7869,10 +8094,16 @@
     "last-update": "最終更新：",
     "duplicates": "インストール先が {count} か所見つかりました",
     "active": "使用中",
+    "use-failed": "{label} をこのインストールに切り替えられませんでした：{error}",
+    "use-done": "Navide は今後 {path} から {label} を起動します。",
+    "autoupdate-failed": "{label} の自動更新設定を変更できませんでした。設定は変わっていません。",
     "use-this": "これを使用",
     "remove": "削除",
     "autoupdate": "自動更新",
     "terminal-opened": "ターミナルで実行しました：{command}。完了したら「再検出」をクリックしてください。",
+    "run-finished": "完了しました：{command}",
+    "run-failed": "{command} は成功しませんでした：{error}",
+    "start-failed": "{label} のコマンドを開始できませんでした：{error}",
     "terminal-failed": "ターミナルを開けませんでした：{error}",
     "command-unavailable": "{label} には、この操作用の公式コマンドがありません。",
     "footnote": "更新すると実行ファイルが置き換わります。すでに実行中のセッションは、再起動するまで以前の実行ファイルを使用します。",
@@ -7899,6 +8130,8 @@
     }
   },
   "cli-health": {
+    "override-missing": "選択した {label} のインストール（{path}）が見つからないため、既定のものを起動します。設定 → CLI Agents で選び直してください。",
+    "override-refused": "選択した {label} のインストール（{path}）を保持できませんでした：{error}。既定のものを起動します。設定 → CLI Agents で選び直してください。",
     "kicker": "CLI の動作確認",
     "title": "エージェント CLI の設定に問題が見つかりました",
     "step": {
@@ -7935,7 +8168,10 @@
     "removal-opened": "ターミナルに {label} の削除確認を表示しました。完了したらここに戻って再検出してください。",
     "terminal-opened": "ターミナルで診断コマンドを開きました。",
     "terminal-failed": "ターミナルを開けませんでした：{error}",
+    "save-failed": "選択を保存できませんでした：{error}。もう一度お試しください。",
+    "binary-selected": "Navide は今後このバージョンで {label} を起動します。下の問題はまだ対応が必要です。",
     "still-detected": "問題はまだ検出されています。上のパスを確認して再試行してください。",
+    "recheck-failed": "検出に失敗しました: {error}。しばらくしてからもう一度お試しください。",
     "close": "閉じて今後は通知しない"
   },
   "usage": {
@@ -8072,11 +8308,13 @@
     },
     "blocked-by": "先に {names} をインストールしてください。ここでインストールするための前提条件です。",
     "go-install": "先に {name} をインストール",
+    "complete-failed": "セットアップの進捗を保存できませんでした：{error}。もう一度お試しください。",
+    "ollama-start-failed": "Ollama サービスを起動できませんでした。詳細はログを確認するか、ターミナルで `ollama serve` を実行してください。",
     "install-failed": "インストールに失敗しました：{reason}",
     "run-by-hand": "ターミナルで自分で実行することもできます：{cmd}",
     "installed-not-detected": "コマンドは完了しましたが、{label} はまだ検出されていません。新しいシェルセッションが必要か、PATH 外にインストールされた可能性があります。",
-    "installed-still-outdated": "インストールは完了しましたが、PATH 上の {label} は古い {version} のままです。システム側のコピーが優先されている可能性があります。新しいシェルセッションを開いてから、再検出してください。",
-    "running-inline": "バックグラウンドで {cmd} を実行中です。数分かかることがあり、完了するまで何も出力されません。"
+    "installed-still-outdated": "インストールは完了しましたが、PATH 上の {label} は古い {version} のままです。システム側のコピーが優先されている可能性があります。そのディレクトリを PATH の前方に移してから、再検出してください。PATH の順序を直せば、再起動しなくても再検出で反映されます。",
+    "installed-still-outdated-python": "インストールは完了しましたが、PATH 上の {label} は古い {version} のままです。次のどちらかで直してから再検出してください：brew link --overwrite python{'@'}3.x を実行する（インストールしたバージョンに置き換えてください）、または ~/.zprofile に eval \"$(/opt/homebrew/bin/brew shellenv)\" を追加して Homebrew をシステム側より前にする。"
   },
   "executions": {
     "last-scan": "最終スキャン {time}",
@@ -8226,6 +8464,8 @@
       "target_gone": "対象の pane はもう存在しません",
       "missed": "スキップ：時刻を逃した",
       "interrupted": "スキップ：中断",
+      "budget_global": "スキップ：agent の 1 日の合計に到達",
+      "expired": "期限切れ：agent のジョブが 7 日間更新されていません",
       "unknown": "スキップ"
     },
     "editor": {
@@ -8266,6 +8506,23 @@
       "remove-confirm": "このスケジュールジョブを削除しますか？",
       "cancel": "キャンセル",
       "save": "保存"
+    },
+    "owner": {
+      "agent": "agent · {name}",
+      "external": "外部 agent",
+      "agent-title": "agent「{name}」が作成；変更できるのはその agent とあなただけです",
+      "gone": "作成者は終了済み",
+      "gone-title": "このジョブを作成した pane は閉じられました。agent は読み取りのみで、管理はあなたが行います",
+      "adopt": "自分のものにする",
+      "expires-in": "{n} 日後に期限切れ",
+      "expires-title": "agent が作成した定期ジョブは、最後に保存または有効化してから 7 日後に自動で無効になります",
+      "keep": "保持",
+      "updated-by": "最終変更：{name}"
+    },
+    "limit": {
+      "meter": "agent 有効 {n}/{max} · 本日の実行 {runs}/{runsMax}",
+      "enabled-full": "agent の有効なジョブが上限（{n}/{max}）に達したため、agent は追加や有効化ができません。あなたのジョブには影響しません",
+      "runs-full": "agent のジョブは本日の実行上限（{runs}/{max}）に達しました。残りの時間枠は明日までスキップされます"
     }
   },
   "turn-stats": {
@@ -8650,5 +8907,322 @@
     "err-generic": "問題が発生しました。もう一度お試しください。",
     "token-stored": "このデバイスにトークンが保存されています",
     "token-linked": "トークンで接続済み"
+  },
+  "channels": {
+    "nav": "チャット連携",
+    "platform": {
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "slack": "Slack",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "matrix": "Matrix",
+      "mattermost": "Mattermost",
+      "imessage": "iMessage"
+    },
+    "status": {
+      "not-configured": "未設定",
+      "disabled": "無効"
+    },
+    "lifecycle": {
+      "stopped": "停止",
+      "starting": "接続中…",
+      "ready": "接続済み",
+      "recovering": "再接続中…",
+      "blocked": "ブロック中 — 認証情報を確認してください"
+    },
+    "global": {
+      "title": "チャット連携",
+      "desc": "オフにするとすべてのプラットフォームの接続を直ちに切断します。"
+    },
+    "single-receiver-hint": "この bot のメッセージを受け取れるのは 1 つのプログラムだけです。Claude Code --channels や他の bot プログラムと同時に使うと、互いにメッセージを奪い合います。",
+    "section": {
+      "platforms": "プラットフォーム"
+    },
+    "pending-count": "{n} 件のペアリング待ち",
+    "cancel": "キャンセル",
+    "desc": {
+      "telegram": "{'@'}BotFather で作成した bot",
+      "discord": "サーバー内の bot アプリケーション",
+      "slack": "ワークスペースの Socket Mode アプリ",
+      "feishu": "Feishu または Lark のカスタムアプリ",
+      "dingtalk": "Stream モードの社内ロボット",
+      "matrix": "任意の homeserver 上の bot ユーザー",
+      "mattermost": "サーバー上の bot アカウント",
+      "imessage": "この Mac の「メッセージ」"
+    },
+    "error": {
+      "generic": "操作に失敗しました。",
+      "missing": "入力してください：{fields}"
+    },
+    "enable-platform": "{platform} を有効化",
+    "manage": "管理",
+    "connect": "接続",
+    "needs": "必要なもの：{fields}",
+    "imessage-note": "トークン不要。macOS のみ。",
+    "field": {
+      "token": "Bot トークン",
+      "app_token": "App-level トークン",
+      "bot_token": "Bot トークン",
+      "app_id": "App ID",
+      "app_secret": "App Secret",
+      "client_id": "Client ID",
+      "client_secret": "Client Secret",
+      "access_token": "アクセストークン",
+      "server_url": "サーバー URL",
+      "homeserver": "Homeserver URL",
+      "domain": "リージョン",
+      "robot_code": "Robot code"
+    },
+    "secret-stored": "保存済み ••••••••（空欄のままなら変更なし）",
+    "remove": "削除",
+    "save": "保存",
+    "pairing": {
+      "title": "承認待ちのペアリング",
+      "hint": "未知の送信者が bot に DM するとコードが届きます。ここで承認すると pane と会話できます。",
+      "empty": "承認待ちはありません。",
+      "approve": "承認",
+      "reject": "拒否"
+    },
+    "allow": {
+      "title": "許可リスト",
+      "empty": "まだ誰も許可されていません。",
+      "remove": "削除"
+    },
+    "pane": {
+      "connect": "チャットに接続",
+      "unbind": "チャットとの接続を解除",
+      "where": "どこに接続しますか？",
+      "loading": "チャットを読み込み中…",
+      "new-topic": "新しいトピック「{name}」",
+      "use-existing": "このチャットを使う",
+      "kind-group": "グループ",
+      "kind-direct": "DM",
+      "new-topic-short": "新しいトピック",
+      "no-chats-yet": "チャットで bot にメッセージを送ると、ここに表示されます",
+      "manage-chats": "チャット連携の設定を管理",
+      "taken-by": "接続中：{pane}",
+      "taken-hint": "別の pane に接続済みです。そちらで接続を解除すると選べます。"
+    },
+    "option": {
+      "feishu": "Feishu（中国）",
+      "lark": "Lark（国際版）"
+    },
+    "optional": "（任意）",
+    "hint": {
+      "discord": "Discord Developer Portal で bot の Message Content Intent を有効にしてください。",
+      "slack": "App-level トークンは xapp- で始まり（connections:write が必要）、Bot トークンは xoxb- で始まります。両方必須です。",
+      "feishu": "グループでは bot を {'@'}メンションしたメッセージしか届きません（アプリに「グループ内の全メッセージを読む」権限がある場合を除く）。",
+      "dingtalk": "DingTalk にはスレッドがありません。1 グループ＝1 pane です。",
+      "imessage": "フルディスクアクセス（システム設定 → プライバシーとセキュリティ）が必要です。最初の送信時に「メッセージの自動操作」の許可ダイアログが表示されます。"
+    }
+  },
+  "guard": {
+    "nav": "セキュリティ",
+    "unavailable": "このバックエンドにはまだ Navide Guard がありません。更新後に Navide を再起動してください。",
+    "enabled": {
+      "title": "Navide Guard",
+      "desc": "CLI の各操作を危険度と依頼元で判断し、危険なものは止めるか確認を求めます。判断は固定ルールのコードで、AI は使いません。オフにしても、チャットチャンネルからの高リスク操作の承認は引き続き拒否されます。"
+    },
+    "counts": {
+      "critical": "重大 {n}",
+      "high": "高 {n}",
+      "asks": "確認 {n}",
+      "denies": "拒否（24 時間）{n}"
+    },
+    "policy": {
+      "title": "Guard の動作",
+      "hint": "各操作を分類し、依頼元に応じて処理します。",
+      "source": "依頼元",
+      "levels": "重大：workspace やホーム外の削除、ディスク・システム操作、sudo、curl | sh、認証情報の読み書き、main への強制プッシュ、クラウドリソースの削除。高：workspace 内の rm -rf、git push／reset --hard、パッケージ公開、CI や git hooks の変更。",
+      "row": {
+        "local": "このコンピューターのあなた",
+        "relay": "チャットアプリで承認",
+        "remote": "リモート端末・他の pane・agent",
+        "tainted": "外部の影響を受けた pane"
+      }
+    },
+    "level": {
+      "critical": "重大",
+      "high": "高",
+      "normal": "通常"
+    },
+    "action": {
+      "allow": "許可",
+      "allow-audit": "許可して記録",
+      "ask": "このコンピューターで確認",
+      "deny": "拒否"
+    },
+    "source": {
+      "local": "ローカル",
+      "relay": "チャットアプリ",
+      "remote": "リモート",
+      "agent": "他の agent"
+    },
+    "vendors": {
+      "title": "Guard がブロックできる CLI",
+      "hint": "Guard は CLI 自身の hook で操作を止めます。hook のない CLI は、チャットでの承認を拒否することと YOLO モードで動かさないことでしか守れません。",
+      "block": "ブロック可能",
+      "none": "ブロック不可",
+      "unknown": "不明"
+    },
+    "builtin": {
+      "title": "組み込みルール",
+      "hint": "Guard が認識する各パターンの判定レベルです。上げる変更はすぐに反映されます。下げる・オフにするときは確認が必要です。安全の下限が付いたルールは「高」までしか下げられません。上の判定表（確認するもの・拒否するもの）は固定です。",
+      "group": {
+        "critical": "既定で重大",
+        "high": "既定で高",
+        "unanalyzable": "静的に判定できない（既定は通常。外部の影響を受けた pane では高として扱います）"
+      },
+      "default": "既定: {level}",
+      "floor": "安全の下限: 高まで",
+      "off": "オフ（通常）",
+      "rule": {
+        "credential-access": "認証情報ストアの読み取り・書き込み・削除",
+        "credential-exfil": "機密ファイルをアップロード",
+        "dotenv-outside-workspace": "workspace 外の .env ファイルにアクセス",
+        "keychain-access": "キーチェーンの読み取り・変更",
+        "sudo": "昇格した権限または別ユーザーとして実行",
+        "pipe-download-to-shell": "ネットワークから取得した内容を実行",
+        "download-then-exec": "同じコマンド内でダウンロードしたファイルを実行",
+        "disk-write": "dd でデバイスに直接書き込み",
+        "disk-format": "ディスクのフォーマット・消去・再パーティション",
+        "rm-root-or-home": "ルート、ホーム、または workspace の親を削除",
+        "rm-workspace-root": "workspace 全体を再帰的に削除",
+        "rm-outside-workspace": "workspace 外を再帰的に削除",
+        "git-force-push-protected": "保護ブランチへの force-push または削除",
+        "cloud-destroy": "クラウドインフラやクラスタのリソースを破棄",
+        "credential-path-list": "認証情報の場所を一覧表示",
+        "git-hooks-write": "git hook を書き込み",
+        "ci-workflow-write": "CI ワークフローを書き込み",
+        "agent-config-write": "エージェント CLI の設定を書き込み（hook はここにある）",
+        "dd": "dd で生データをコピー",
+        "package-publish": "パッケージを公開",
+        "git-push": "リモートへ push",
+        "git-push-force": "force push（リモート履歴の書き換え）",
+        "git-reset-hard": "git reset --hard でローカルの変更を破棄",
+        "git-clean-force": "git clean -f で未追跡ファイルを削除",
+        "rm-recursive-in-workspace": "workspace 内での再帰削除",
+        "rm-file-outside-workspace": "workspace 外のファイルを削除",
+        "rm-unresolved-target": "rm の対象が実行時に決まる",
+        "decode-and-exec": "デコードしたデータをインタプリタにパイプ",
+        "http-upload-file": "ローカルファイルをアップロード",
+        "too-long": "コマンドが長すぎて解析できない",
+        "dynamic-command": "コマンド名が実行時に決まる",
+        "eval": "動的テキストの eval／source",
+        "unbalanced-quotes": "引用符の対応が取れていない",
+        "nesting-too-deep": "置換のネストが深すぎて解析できない",
+        "interpreter-inline-code": "インタプリタがインラインコードを実行",
+        "stdin-script": "インタプリタが stdin からスクリプトを読む",
+        "unknown-script": "Guard が中身を見られないスクリプトを実行",
+        "dynamic-path": "ファイルパスが静的でない"
+      }
+    },
+    "branches": {
+      "title": "保護ブランチ",
+      "hint": "これらのブランチへの force-push や削除は「重大」です。ターミナルコマンド保護の force-push チェックも同じリストを使います。ブランチを外すときは確認が必要です。",
+      "placeholder": "ブランチ名（例: release）"
+    },
+    "rules": {
+      "title": "カスタムルール",
+      "hint": "拒否パターンは一致したコマンドを選んだレベル（重大または高）に上げます。許可パターンは「高」を通常に下げます（「重大」は対象外）。許可の追加と拒否の削除には確認が必要です。",
+      "kind": {
+        "allow": "許可",
+        "deny": "拒否"
+      },
+      "kind-label": "ルールの種類",
+      "level-label": "レベル",
+      "pattern": "パターン（例：rm -rf build）",
+      "note": "メモ（任意）",
+      "add": "追加",
+      "remove": "削除"
+    },
+    "test": {
+      "title": "試してみる",
+      "placeholder": "シェルコマンドを入力（例：rm -rf ~）",
+      "tainted": "外部の影響を受けた pane",
+      "run": "判定",
+      "unparseable": "静的に判断できません（変数展開、eval、エンコードされたスクリプト）。",
+      "user-deny": "拒否パターン `{pattern}`",
+      "user-allow": "許可パターン `{pattern}`"
+    },
+    "terminal": {
+      "title": "ターミナルコマンド保護",
+      "hint": "Agent、MCP クライアント、スケジュールされたジョブのために Navide がプレーンな Terminal Pane へ決して打ち込まないコマンドです。Guard のスイッチに関係なく拒否されます。行は ; && {'|'}{'|'} {'|'} & と改行で分けて検査され、1 つでも拒否されれば行全体が拒否されます。ご自身の入力は検査されません。",
+      "default-off": "既定でオフ",
+      "loosen-confirm": "カテゴリをオフにするときは確認が必要です。オンにするときは不要です。",
+      "category": {
+        "rm-system": "ルート・ホーム・workspace 外の再帰削除",
+        "privilege": "別ユーザーや管理者としての実行",
+        "disk": "ディスクのフォーマット、消去、直接書き込み",
+        "power": "シャットダウン、再起動、停止",
+        "mass-kill": "名前やパターンによるプロセスの一括終了",
+        "recursive-perms": "ルート・ホーム・システムフォルダへの再帰的な権限・所有者変更",
+        "system-write": "システムフォルダへの書き込み",
+        "service-disable": "システムサービスの停止・無効化",
+        "fork-bomb": "Fork bomb",
+        "pipe-to-shell": "ネットワークから取得したスクリプトの直接実行",
+        "credential": "認証情報ファイル（SSH、クラウドキー、Keychain、.env）",
+        "force-push-main": "main／master への force-push や削除",
+        "classifier-critical": "Guard が critical と判定するその他のもの",
+        "classifier-high": "Guard が high と判定するその他のもの（git push、git reset --hard、workspace 内の rm -rf）",
+        "unanalyzable": "静的に判定できない行"
+      },
+      "block": {
+        "title": "追加のブロックパターン",
+        "hint": "いずれかに一致するセグメントを拒否します。通常の文字列はどこに現れても一致し、* ? [ ] を含むと glob になります。",
+        "placeholder": "例: docker system prune"
+      },
+      "allow": {
+        "title": "許可の例外",
+        "warning": "これらのプレフィックスで始まるセグメントは上の組み込み検査をすべて飛ばします。完全に信頼できるコマンドだけを追加してください。ブロックパターンは引き続き適用され、ダウンロードをシェルにパイプすることは決して許可されません。追加には確認が必要です。",
+        "placeholder": "コマンドの正確なプレフィックス（例: git push origin）"
+      },
+      "problem": {
+        "empty": "パターンを入力してください。",
+        "too-long": "パターンが 500 文字を超えています。",
+        "control": "パターンに制御文字が含まれています。",
+        "bracket": "パターンに閉じていない [ ] があります。",
+        "match-all": "このパターンはすべてのコマンドに一致します。"
+      },
+      "rule": {
+        "block-pattern": "あなたのブロックパターン"
+      },
+      "test": {
+        "title": "コマンドをテスト",
+        "placeholder": "例: ls && sudo rm -rf /opt/app",
+        "refused": "拒否されます",
+        "allowed": "打ち込まれます"
+      }
+    },
+    "taint": {
+      "title": "外部の影響を受けた pane",
+      "hint": "チャットアプリ、リモート端末、他の pane、MCP から内容を受け取った pane は、マークを解除するまで「高」と「重大」の操作をこのコンピューターで確認します。",
+      "empty": "マークされた pane はありません。"
+    },
+    "audit": {
+      "title": "最近の判定",
+      "empty": "まだ記録はありません。"
+    },
+    "pane": {
+      "badge": "外部の影響",
+      "tooltip": "{since} から {sources} の内容を受信",
+      "console": "受信ログ",
+      "expand": "全文を表示",
+      "text-missing": "本文はメッセージログに残っていません",
+      "text-none": "本文の記録なし",
+      "explain": "「高」と「重大」の操作には、このコンピューターでの確認が必要です。受け取った内容を確認してからマークを解除してください。",
+      "clear": "解除",
+      "no-hook-warning": "この CLI は Guard でブロックできず、権限確認なしで動いています。チャットから指示するときは注意してください。"
+    },
+    "notice": {
+      "denied": "Navide Guard が操作を拒否しました：{reason}",
+      "asked": "Navide Guard が確認を求めています：{reason}",
+      "failedOpen": "Navide Guard が操作を確認できなかったため、そのまま実行されました：{reason}"
+    },
+    "error": {
+      "generic": "エラーが発生しました。もう一度お試しください。"
+    },
+    "cancel": "キャンセル"
   }
 }

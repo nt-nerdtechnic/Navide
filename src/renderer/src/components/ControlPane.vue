@@ -34,6 +34,8 @@ import type { TabRunState } from '../lib/tabStatus'
 import RebuildIcon from './RebuildIcon.vue'
 import AddPaneIcon from './AddPaneIcon.vue'
 import HistoryIcon from './HistoryIcon.vue'
+import PaneChannelIcon from './PaneChannelIcon.vue'
+import PaneGuardIcon from './PaneGuardIcon.vue'
 import FolderIcon from './FolderIcon.vue'
 import ExplorerPane from './ExplorerPane.vue'
 import GitPluginHostSlot from './GitPluginHostSlot.vue'
@@ -1094,6 +1096,9 @@ const emit = defineEmits<{
   /** A pane dropped on a run group's header row: make it a root of the
    *  lineage inside that group. */
   (e: 'root-pane', draggedId: string, workspacePath: string, runGroupId: string): void
+  /** Right-click on a group heading. App.vue opens the same run-group menu the
+   *  stage tabs use; runGroupId '' is the ungrouped section (the manual tab). */
+  (e: 'group-context-menu', workspacePath: string, runGroupId: string, ev: MouseEvent): void
   /** Replace the App-owned multi-selection with exactly these panes. Fired
    *  when a drag starts on a folded row: the hidden subtree travels with it,
    *  and App resolves every drop from the selection, so the selection must
@@ -1401,8 +1406,11 @@ async function refreshCliStatus(): Promise<void> {
   if (Date.now() - cliStatusFetchedAt < 10_000) return
   cliStatusFetchedAt = Date.now()
   try {
+    // The PATH-only quick pass: answered inline, where the full status queues
+    // on the backend's single onboarding worker behind App's 45s probe and
+    // timed out at connect. Presence is all the badge needs.
     const resp = await props.backend.send<{ deps?: { id: string; group: string; status: string }[] }>(
-      'onboarding.status',
+      'onboarding.status_quick',
       {}
     )
     const deps = resp.payload?.deps ?? []
@@ -3666,6 +3674,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           @dragenter="onGroupDragOver($event, ws?.path ?? '', g.id)"
           @dragleave="onGroupDragLeave(ws?.path ?? '', g.id)"
           @drop.prevent="onGroupDrop($event, ws?.path ?? '', g.id)"
+          @contextmenu.prevent="ws && emit('group-context-menu', ws.path, g.id, $event)"
         >
           <button
             class="ws-grp-caret"
@@ -3716,9 +3725,9 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           </button>
           <!-- The sidebar's own entry point: ＋ here opens an agent in THIS
                group, which the stage tab bar cannot express — it can only open
-               into whichever group it is currently showing. Management (rename,
-               delete, detach) stays on the tab bar so there is one place to
-               change a group, not two that can disagree. -->
+               into whichever group it is currently showing. Management is the
+               right-click menu, which is the tab bar's own menu (App.vue opens
+               one RunGroupContextMenu for both), so the two cannot disagree. -->
           <button
             v-if="ws && !g.bare && canSpawn"
             class="ws-grp-add"
@@ -3785,6 +3794,8 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
             <span v-if="p.isMuted" class="muted-tag" :title="$t('pane.terminal.muted-tooltip')"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"></path><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg></span>
+            <PaneChannelIcon :pane-id="p.id" />
+            <PaneGuardIcon :pane-id="p.id" />
             <span v-if="p.isMinimized" class="minimized-tag" :title="$t('label.docked-in-sidebar')">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
               Docked

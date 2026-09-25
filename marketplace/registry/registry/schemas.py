@@ -33,6 +33,8 @@ class ExtensionSummary(BaseModel):
     description: str | None
     categories: list[str]
     latest_version: str | None
+    latest_targets: list[str]
+    """Targets `latest_version` is published for (`universal`, or platforms)."""
     updated_at: datetime
     download_count: int
     """Aggregate downloads across all versions."""
@@ -49,6 +51,13 @@ class ExtensionDetail(ExtensionSummary):
     versions: list[VersionInfo]
 
 
+class ReadmeResponse(BaseModel):
+    version: str | None
+    """Latest non-yanked version the README was read from."""
+    markdown: str | None
+    """Raw README markdown; clients render it themselves (None when absent)."""
+
+
 class ExtensionListResponse(BaseModel):
     items: list[ExtensionSummary]
     total: int
@@ -60,6 +69,7 @@ class PublishResponse(BaseModel):
     namespace: str
     name: str
     version: str
+    target: str
     package_digest: str
     yanked: bool
 
@@ -69,6 +79,8 @@ class YankResponse(BaseModel):
     name: str
     version: str
     yanked: bool
+    targets: list[str]
+    """Every target's artifact the yank covered."""
 
 
 class PublisherRegisterRequest(BaseModel):

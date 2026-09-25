@@ -812,6 +812,14 @@ def sender_display(from_pane_id: str, fallback: str) -> str:
     return sender.qualified_name if sender else fallback
 
 
+def readable_sender(pane_id: str, fallback: str = "") -> str:
+    """A name a person can read for a sending pane: its qualified name while it
+    is registered (under this id or a former one), else ``fallback``, and the
+    raw id only when nothing better is known."""
+    sender = current(pane_id)
+    return sender.qualified_name if sender else (fallback or pane_id)
+
+
 def _reset_for_test() -> None:
     _PANES.clear()
     _OWNERS.clear()

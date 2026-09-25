@@ -505,4 +505,74 @@ describe('TaskerPanel — Navide jobs', () => {
     expect(wrapper.find('[data-entry-id]').exists()).toBe(false)
     expect(wrapper.get('[data-section="timeline"]').find('[data-job-id="a"]').exists()).toBe(true)
   })
+
+  const AGENT = { kind: 'pane' as const, pane_id: PANE_B, pane_name: '排程功能', workspace: WS }
+  const LIMITS = { agent_enabled_total: 100, agent_enabled: 1, agent_runs_per_day: 300, agent_runs_today: 12 }
+
+  it('labels agent jobs with their creator, expiry and last editor; the user\'s carry none', async () => {
+    const expires = Date.now() + 3 * 86_400_000 - 1000
+    wire.jobs = [
+      job('mine', { owner: { kind: 'user' } }),
+      job('theirs', { owner: { ...AGENT, expires_at: expires }, updated_by: AGENT }),
+      job('ext', { owner: { kind: 'external', expires_at: null }, updated_by: { kind: 'user' } }),
+    ]
+    wire.overrides.set('scheduler.list', { ok: true, jobs: wire.jobs, now: Date.now(), limits: LIMITS })
+    wrapper = await mountSection()
+    expect(row(wrapper, 'mine').find('[data-test="owner"]').exists()).toBe(false)
+    expect(row(wrapper, 'mine').find('[data-test="expiry"]').exists()).toBe(false)
+    const theirs = row(wrapper, 'theirs')
+    expect(theirs.get('[data-test="owner"]').text()).toBe(t('scheduler.owner.agent', { name: '排程功能' }))
+    expect(theirs.get('[data-test="expiry"]').text()).toContain(t('scheduler.owner.expires-in', { n: 3 }))
+    expect(theirs.get('[data-test="updated-by"]').text()).toBe(
+      t('scheduler.owner.updated-by', { name: '排程功能' })
+    )
+    const ext = row(wrapper, 'ext')
+    expect(ext.get('[data-test="owner"]').text()).toBe(t('scheduler.owner.external'))
+    // Kept by the user: no expiry; changed by the user: no "last changed by".
+    expect(ext.find('[data-test="expiry"]').exists()).toBe(false)
+    expect(ext.find('[data-test="updated-by"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="agent-meter"]').text()).toBe(
+      t('scheduler.limit.meter', { n: 2, max: 100, runs: 12, runsMax: 300 })
+    )
+    expect(wrapper.find('[data-test^="agent-limit-"]').exists()).toBe(false)
+  })
+
+  it('offers "make it mine" when the creator is gone, and "keep" on an expiring job', async () => {
+    wire.jobs = [
+      job('orphan', { owner: AGENT, owner_gone: true }),
+      job('expiring', { owner: { ...AGENT, expires_at: Date.now() + 86_400_000 } }),
+    ]
+    wrapper = await mountSection()
+    const orphan = row(wrapper, 'orphan')
+    expect(orphan.get('[data-test="owner-gone"]').text()).toContain(t('scheduler.owner.gone'))
+    const before = callsOf('scheduler.list').length
+    await orphan.get('[data-test="adopt"]').trigger('click')
+    await flushPromises()
+    expect(callsOf('scheduler.adopt').map((c) => c.payload)).toEqual([{ id: 'orphan' }])
+    expect(callsOf('scheduler.list').length).toBe(before + 1)
+    await row(wrapper, 'expiring').get('[data-test="keep"]').trigger('click')
+    await flushPromises()
+    expect(callsOf('scheduler.keep').map((c) => c.payload)).toEqual([{ id: 'expiring' }])
+  })
+
+  it('shows the agent limit notices once agents reach them', async () => {
+    wire.jobs = Array.from({ length: 100 }, (_, i) => job(`a${i}`, { owner: AGENT }))
+    wire.overrides.set('scheduler.list', {
+      ok: true,
+      jobs: wire.jobs,
+      now: Date.now(),
+      limits: { ...LIMITS, agent_enabled: 100, agent_runs_today: 300 },
+    })
+    wrapper = await mountSection()
+    expect(wrapper.get('[data-test="agent-limit-enabled"]').text()).toBe(
+      t('scheduler.limit.enabled-full', { n: 100, max: 100 })
+    )
+    expect(wrapper.get('[data-test="agent-limit-runs"]').text()).toBe(
+      t('scheduler.limit.runs-full', { runs: 300, max: 300 })
+    )
+    // Disabling one (the broadcast carries the new list) clears the first notice.
+    emit('scheduler.changed', { jobs: [job('a0', { owner: AGENT, enabled: false }), ...wire.jobs.slice(1)] })
+    await nextTick()
+    expect(wrapper.find('[data-test="agent-limit-enabled"]').exists()).toBe(false)
+  })
 })

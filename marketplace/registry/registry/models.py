@@ -56,9 +56,14 @@ class Extension(SQLModel, table=True):
 
 
 class ExtensionVersion(SQLModel, table=True):
+    """One row per published artifact: a version carries either one `universal`
+    artifact or one artifact per platform target (enforced at publish)."""
+
     __tablename__ = "extension_version"
     __table_args__ = (
-        UniqueConstraint("extension_id", "version", name="uq_version_identity"),
+        UniqueConstraint(
+            "extension_id", "version", "target", name="uq_version_target_identity"
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)

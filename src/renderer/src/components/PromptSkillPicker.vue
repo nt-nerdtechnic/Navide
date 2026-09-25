@@ -42,7 +42,9 @@ const anchorRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
 const open = ref(false)
 const hoverId = ref<string | null>(null)
-const anchor = ref({ x: 0, y: 0 })
+/** The ring's origin is the button's center; the list hangs from its bottom
+ *  edge, `halfHeight` below that. */
+const anchor = ref({ x: 0, y: 0, halfHeight: 0 })
 const flipPreview = ref(false)
 /** Measured at open time from the owning pane, not passed in as a prop: the
  *  pane resizes constantly and only the value at open time matters. */
@@ -85,8 +87,9 @@ const footStyle = computed(() => ({ top: `${geometry.value.radius + RING_SLOT_D 
  *  box spans that gap and belongs to the menu, so entering it keeps the ring
  *  open. It is clipped to a wedge so it only covers the path to the slots. */
 const bridgeStyle = computed(() => ({
+  top: `${anchor.value.halfHeight}px`,
   width: `${geometry.value.radius * 2 + RING_SLOT_D}px`,
-  height: `${geometry.value.radius + RING_SLOT_D / 2}px`,
+  height: `${geometry.value.radius + RING_SLOT_D / 2 - anchor.value.halfHeight}px`,
 }))
 
 const previewSkill = computed(() => castable.value.find((s) => s.id === hoverId.value) ?? null)
@@ -95,7 +98,7 @@ function measure(): void {
   const el = anchorRef.value
   if (!el) return
   const r = el.getBoundingClientRect()
-  anchor.value = { x: r.left + r.width / 2, y: r.bottom }
+  anchor.value = { x: r.left + r.width / 2, y: r.top + r.height / 2, halfHeight: r.height / 2 }
   paneWidth.value = el.closest<HTMLElement>('.pane')?.clientWidth ?? window.innerWidth
   // Preview sits to the right of the ring unless that would run off-screen.
   flipPreview.value = anchor.value.x + RING_R_MAX + RING_SLOT_D + 300 > window.innerWidth
@@ -222,7 +225,7 @@ defineExpose({ closeNow })
       :class="{ list: asList }"
       role="menu"
       :aria-label="$t('pane.terminal.skill-picker.label')"
-      :style="{ left: `${anchor.x}px`, top: `${anchor.y}px` }"
+      :style="{ left: `${anchor.x}px`, top: `${asList ? anchor.y + anchor.halfHeight : anchor.y}px` }"
       @mouseenter="clearTimers()"
       @mouseleave="scheduleClose"
       @keydown="onMenuKeydown"

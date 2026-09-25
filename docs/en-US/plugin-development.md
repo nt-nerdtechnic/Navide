@@ -468,10 +468,15 @@ The archive is a ZIP with `manifest.json` at its root. Any other file is
 recorded as an asset. If `manifest.icon` is set, the referenced path must exist
 inside the archive.
 
-**The registry is currently self-hosted.** The default endpoint is
-`http://localhost:8787`, and plaintext HTTP is rejected outside loopback in
-production builds. Publishing requires a publisher account on the registry
-instance you are targeting. There is no public Navide registry yet, so
+**Registry endpoints.** Packaged Navide builds use the Official Registry at
+`https://server.navide.dev/registry`. Its root key is pinned in the App build
+(`resources/official-registry-root.pem`), and only that exact URL (scheme,
+host, and the `/registry` path; a trailing slash is ignored) carries Official
+Registry authority. Development builds default to a local self-hosted Registry
+at `http://localhost:8787`. `AGENT_TEAM_MARKETPLACE_URL` overrides either
+default, and plaintext HTTP is rejected outside loopback in production builds.
+Publishing requires a publisher account on the registry instance you are
+targeting. Third-party publishing to the Official Registry is not open, so
 third-party distribution today means running your own instance or installing
 from a local package.
 

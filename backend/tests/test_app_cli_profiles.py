@@ -21,7 +21,7 @@ import time
 import pytest
 
 from agent_team_backend import app
-from agent_team_backend import ws_handlers
+from agent_team_backend import guard_hooks, ws_handlers
 from agent_team_backend.credential_vault import CredentialVault
 from agent_team_backend.profiles_store import CliProfilesStore
 
@@ -170,6 +170,13 @@ class FakeVault:
     def write_slot(self, agent_key: str, slot_id: str, creds: Any) -> None:
         self.slot_secrets[(agent_key, slot_id)] = creds.secret
         self.slot_writes.append((agent_key, slot_id, creds.secret))
+
+
+def _env_without_guard_token(env: dict[str, str] | None) -> dict[str, str] | None:
+    """The spawn env minus Navide Guard's per-pane token, which every claude,
+    copilot and qwen pane gets (guard_hooks.PANE_TOKEN_ENV)."""
+    rest = {k: v for k, v in (env or {}).items() if k != guard_hooks.PANE_TOKEN_ENV}
+    return rest or None
 
 
 def _session() -> app.Session:
@@ -1321,7 +1328,7 @@ async def test_terminal_create_active_account_gets_no_profile_env(
     if agent_key == "kimi":
         assert created["env"] == {"PI_TUI_ESC_TIMEOUT": "100"}
     else:
-        assert created["env"] is None
+        assert _env_without_guard_token(created["env"]) is None
     assert created["env_remove"] is None
     assert not real_vault.profile_home_path(agent_key, profile["id"]).exists()
 
@@ -1346,7 +1353,7 @@ async def test_terminal_create_without_profile_is_unchanged(
     })
 
     created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["env"] is None
+    assert _env_without_guard_token(created["env"]) is None
     assert created["env_remove"] is None
     assert "profile_id" not in created["metadata"]
 
@@ -1414,7 +1421,7 @@ async def test_terminal_create_pinned_profile_gets_no_profile_env(
     })
 
     created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["env"] is None
+    assert _env_without_guard_token(created["env"]) is None
     assert created["env_remove"] is None
     assert not real_vault.profile_home_path("claude", profile_a["id"]).exists()
 
@@ -1441,7 +1448,7 @@ async def test_terminal_create_pinned_default_stays_on_real_home(
     })
 
     created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["env"] is None
+    assert _env_without_guard_token(created["env"]) is None
     assert created["env_remove"] is None
 
 

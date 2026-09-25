@@ -49,6 +49,11 @@
     "status-unknown": "Unknown",
     "last-success": "Last successful sample",
     "unknown-value": "Unknown",
+    "console": "Observation log",
+    "console-conn": "{count} conn.",
+    "listener-unknown": "listener unknown",
+    "opened-by": "Opened by",
+    "listener": "Listening process",
     "stale": "Historical finding — observation is stale.",
     "unavailable": "Backend unavailable — showing last received evidence.",
     "pane-scope": "Observed in this pane's process tree.",
@@ -63,6 +68,12 @@
     "reveal": "Reveal in folder",
     "action-failed": "Could not save this decision. Try again.",
     "reveal-failed": "Could not reveal this path in the file manager.",
+    "analyze-all": "Analyze all with CLI",
+    "analyze": "Analyze with CLI",
+    "analyze-hint": "Opens a new {vendor} pane that investigates read-only and proposes protective measures; it asks before changing anything.",
+    "analyze-failed": "Could not start the analysis CLI pane. Try again.",
+    "analyze-inject-failed": "The analysis pane opened, but its task could not be typed in. Paste the task into that pane, or close it and try again.",
+    "analyze-failed-detail": "Could not start the analysis CLI pane ({detail}). Try again.",
     "shared-cdn-field": "Shared CDN",
     "shared-cdn": "{label} (shared CDN; the site cannot be identified)",
     "ranges-title": "Shared CDN address ranges",
@@ -110,6 +121,48 @@
     "interrupt-failed": "Unable to interrupt the AI CLI session",
     "send-failed": "Unable to send input to the AI CLI session",
     "resize-failed": "Unable to resize the AI CLI session"
+  },
+  "voice": {
+  "prewarm-failed": "Voice input is not ready: {reason}",
+    "capsule": {
+      "starting": "Preparing microphone…",
+      "recording": "Listening — release to insert",
+      "recording-hands-free": "Listening hands-free — press the shortcut again to insert",
+      "cap-left": "{s}s left",
+      "enter-send-esc-cancel": "Enter to send · Esc to cancel",
+      "dismiss": "Dismiss",
+      "copy": "Copy",
+      "copied": "Copied",
+      "transcribing": "Transcribing…",
+      "device-fallback": "Chosen microphone unavailable — using the system default",
+      "device-fallback-device": "Chosen microphone unavailable — using “{device}”"
+    },
+    "error": {
+      "generic": "Voice input failed ({code})",
+      "pane-asleep": "This pane is asleep — open it first",
+      "not-cli": "Voice input only goes to CLI panes",
+      "mic-denied": "Microphone access denied — allow Navide in System Settings → Privacy & Security → Microphone",
+      "mic-failed": "Could not open the microphone: {error}",
+      "mic-disconnected": "The microphone was disconnected — reconnect it or choose another one in the voice settings",
+      "mic-disconnected-device": "The microphone “{device}” was disconnected — reconnect it or choose another one in the voice settings",
+      "backend": "The backend is not responding",
+      "start-sidecar-missing": "The speech engine is not installed in this build",
+      "start-model-missing": "Speech model not downloaded — Settings → General → Voice input",
+      "start-sidecar-failed": "The speech engine failed to start",
+      "start-busy": "Another recording is already in progress",
+      "start-disabled": "Voice input was switched off",
+      "start-failed": "Could not start recording",
+      "stop-no-session": "The recording session was lost",
+      "stop-sidecar-failed": "The speech engine crashed or timed out",
+      "stop-transcribe-failed": "Transcription failed",
+      "stop-failed": "Transcription failed",
+      "no-speech": "No speech detected",
+      "not-sent": "The text is in the input box but was not sent — press Enter",
+      "insert-failed": "Could not type the text into this pane",
+      "mic-silent": "The microphone is not picking up any sound — allow Navide in System Settings → Privacy & Security → Microphone, or choose another microphone in the voice settings (a Bluetooth headset may be asleep)",
+      "mic-silent-device": "The microphone “{device}” is not picking up any sound — if it is a headset, put it on to wake it, or choose another microphone in the voice settings",
+      "mic-authorized": "Microphone allowed — hold the shortcut again to speak"
+    }
   },
   "msg": {
     "panel-title": "Inter-CLI Messages",
@@ -504,11 +557,13 @@
       "auto-named-tooltip": "Named automatically from this session's first instruction — rename it and it stays yours",
       "loop-tag-tooltip": "Loop is running on this pane",
       "subtree-tooltip": "{count} spawned pane(s) {status} under this one",
-      "subtree-summary": "{count} child pane · {status} | {count} child panes · {status}",
+      "subtree-summary": "sub {status} {count}",
       "location-minimized": "Minimized to sidebar",
       "location-tab": "Tab: {name}",
       "location-workspace": "Project: {name}",
       "loop-tooltip": "Loop — send the configured loop prompt to this pane",
+      "skill-cast-failed": "Could not send the skill \"{name}\" to this pane",
+      "skill-cast-busy": "The loop is sending its next prompt — cast \"{name}\" again in a moment",
       "loop-badge-tooltip": "Loop prompt was sent to this pane — click to turn the loop off",
       "loop-waiting-tooltip": "Loop paused — session limit hit; auto-resume at {time}. Click to resume now",
       "loop-badge-estimate": "∞ Loop · ~{time}",
@@ -989,6 +1044,10 @@
           "title": "Status Badges",
           "summary": "Rename each pane status and pick its colour, per language."
         },
+        "voice-input": {
+          "title": "Voice Input",
+          "summary": "Hold-to-talk dictation into a CLI pane, reading replies aloud, and the local speech model."
+        },
         "general-environment": {
           "title": "Environment",
           "summary": "Rerun the environment check (onboarding)."
@@ -1228,11 +1287,51 @@
       "restore": "Restore",
       "installed": "Installed",
       "sensitive": "sensitive",
-      "remove": "Remove",
       "empty": "No plugins installed.",
       "searchPlaceholder": "Search extensions",
       "search": "Search",
       "install": "Install",
+      "marketplace": {
+        "loading": "Loading extensions…",
+        "loadFailed": "Could not load the marketplace: {error}",
+        "noExtensions": "No extensions are published yet.",
+        "noResults": "No extensions match \"{query}\".",
+        "sortLabel": "Sort by",
+        "sort": {
+          "downloads": "Most downloaded",
+          "updated": "Recently updated",
+          "rating": "Highest rated"
+        },
+        "downloads": "{count} downloads",
+        "installedBadge": "Installed",
+        "installedVersion": "Installed {version}",
+        "updateAvailable": "Update available",
+        "update": "Update",
+        "updateTo": "Update to {version}",
+        "uninstall": "Uninstall",
+        "back": "Back to marketplace",
+        "loadingDetail": "Loading details…",
+        "detailFailed": "Could not load this extension: {error}",
+        "publisher": "Publisher",
+        "rating": "★ {average} ({count} ratings)",
+        "noRating": "No ratings yet",
+        "permissions": "Permissions",
+        "noPermissions": "This version declares no permissions.",
+        "readme": "Details",
+        "noReadme": "This extension has no README.",
+        "versions": "Versions",
+        "yanked": "Yanked",
+        "unavailable": "Not available for this platform",
+        "unavailableDetail": "Version {version} is not published for this platform ({host}); available for: {targets}.",
+        "uninstallConfirmTitle": "Uninstall extension?",
+        "uninstallConfirmBody": "{name} will be removed from this device. You can install it again from the Marketplace.",
+        "updatesCount": "Updates available: {count}",
+        "retry": "Retry",
+        "installVersion": "Install {version}",
+        "versionLabel": "Version {version}",
+        "otherTarget": "Not for this platform ({target})",
+        "updateAvailableVersion": "Update available: {version}"
+      },
       "trust": {
         "publisherTitle": "Trust publisher",
         "permissionsTitle": "Confirm plugin permissions",
@@ -1257,7 +1356,8 @@
       "no": "no",
       "manifestPermissions": "Manifest Permissions",
       "packageVersionGrant": "Package-version Grant",
-      "noMatchingGrant": "No matching grant"
+      "noMatchingGrant": "No matching grant",
+      "labeledValue": "{label}: {value}"
     },
     "scope": {
       "user": "User",
@@ -1270,6 +1370,74 @@
       "mainProcess": "Electron main process userData",
       "safeStorage": "Encrypted local safeStorage registry",
       "cliFiles": "Each CLI's own instruction files"
+    },
+    "voice": {
+      "section": "Voice input",
+      "enabled": "Voice input (hold to talk)",
+      "enabled-hint": "Hold Ctrl+Alt+M (rebindable under Shortcuts) to dictate into the focused CLI pane. The text goes into its input box as if you typed it — nothing is sent until you press Enter yourself. Speech is transcribed on this computer by a local Whisper model; audio never leaves the machine.",
+      "device": "Microphone",
+      "device-default": "System default",
+      "device-unavailable": "(not connected)",
+      "device-unnamed": "Microphone {n}",
+      "device-hint": "Device names appear after the first voice use.",
+      "device-missing-note": "The chosen microphone is not connected; the system default will be used.",
+      "shortcut": "Shortcut",
+      "shortcut-hint": "The key to hold (or press) to dictate — a combination such as ⌃⌥M, a function key such as F13, or one modifier by itself such as Right Option. Changing it here also changes it under Shortcuts.",
+      "shortcut-change": "Change",
+      "shortcut-press": "Press the new keys…",
+      "shortcut-save": "Save",
+      "shortcut-cancel": "Cancel",
+      "shortcut-reset": "Reset to default",
+      "shortcut-open": "Open Shortcuts",
+      "shortcut-unbound": "No shortcut — voice input cannot be started from the keyboard",
+      "shortcut-meta-refused": "{key} cannot be used: macOS does not report letting go of a key held with ⌘, so the recording would never stop. Pick a chord without ⌘, such as ⌃⌥M.",
+      "shortcut-meta-warning": "This shortcut uses ⌘: macOS does not report letting go of it, so a held recording will not stop. Pick a chord without ⌘.",
+      "shortcut-meta-alone-refused": "{key} cannot be used: every ⌘ shortcut (⌘C, ⌘V…) starts with ⌘, so each one would start a recording. Pick another modifier on its own, such as Right Option, or a function key.",
+      "shortcut-typing-refused": "{key} cannot be used: it types or edits in the CLI (and Enter / Esc already send / cancel), so holding it would type instead of dictate. Pick a function key such as F13, one modifier by itself such as Right Option, or a combination with ⌃ or ⌥.",
+      "fn-key": "Use the fn (🌐) key",
+      "fn-key-hint": "Hold fn to dictate, just like the shortcut above (a quick tap follows the recording mode). fn pressed together with another key (fn+arrow…) does not start a recording. Needs Input Monitoring permission.",
+      "fn-status-starting": "Starting the fn key listener…",
+      "fn-status-ready": "The fn key is ready.",
+      "fn-status-no-permission": "Navide needs Input Monitoring permission to see the fn key. Allow Navide under System Settings → Privacy & Security → Input Monitoring, then check again (if it still is not seen, quit and reopen Navide).",
+      "fn-status-restarting": "The fn key listener stopped; restarting…",
+      "fn-status-failed": "The fn key listener could not run.",
+      "fn-open-input-monitoring": "Open Input Monitoring",
+      "fn-check-again": "Check again",
+      "fn-retry": "Try again",
+      "fn-usage-conflict": "macOS also acts on the 🌐 key ({action}). Set System Settings → Keyboard → “Press 🌐 key to” to “Do Nothing” so a press only dictates.",
+      "fn-usage-1": "changes the input source",
+      "fn-usage-2": "shows Emoji & Symbols",
+      "fn-usage-3": "starts macOS Dictation",
+      "fn-usage-unknown": "its default action",
+      "fn-open-keyboard-settings": "Open Keyboard Settings",
+      "shortcut-conflict": "Also bound to: {commands}",
+      "mode": "Recording mode",
+      "mode-hold-tap": "Hold, or tap to lock",
+      "mode-hold-tap-hint": "Hold the shortcut to talk and let go to insert the text; a quick tap keeps listening hands-free until you press it again (up to 5 minutes).",
+      "mode-hold": "Hold to talk",
+      "mode-hold-hint": "Hold the shortcut while you speak; letting go inserts the text. Up to 60 seconds.",
+      "mode-toggle": "Press to start, press again to stop",
+      "mode-toggle-hint": "Press the shortcut once to start and again to insert the text; Esc cancels. Up to 5 minutes.",
+      "script": "Chinese output",
+      "script-hint": "Whisper sometimes writes Chinese in Simplified characters; this converts every character to the chosen script. Words are not changed.",
+      "script-hant-tw": "Traditional (Taiwan)",
+      "script-hans": "Simplified",
+      "script-none": "No conversion",
+      "model": "Speech model",
+      "status-checking": "Checking…",
+      "status-unavailable": "Status unavailable (the backend is not responding)",
+      "sidecar-missing": "Speech engine not found in this build",
+      "model-missing": "Model not downloaded (about 148 MB)",
+      "model-ready": "Ready ({size} MB)",
+      "gpu-on": "GPU",
+      "gpu-off": "CPU",
+      "download": "Download",
+      "downloading": "Downloading…",
+      "recheck": "Re-check",
+      "download-starting": "Starting download…",
+      "download-progress": "{done} / {total} MB ({pct}%)",
+      "download-done": "Download complete",
+      "download-failed": "Download failed: {error}"
     },
     "general": {
       "auto-resume-reconnect": "Resume sessions after a backend restart",
@@ -1415,6 +1583,7 @@
       "marketplace": "Marketplace",
       "executionPolicy": "Execution Policy",
       "statusBadges": "Status badges",
+      "voice": "Voice Input",
       "keybindings": "Shortcuts",
       "updates": "Updates",
       "help": "Help"
@@ -4098,12 +4267,12 @@
             "pipeline_define": "Create / rename / delete a pipeline, set the active one, reset the built-ins; delete and set_active are refused while a run is in progress",
             "stage_define": "Add, edit, delete, reorder or reset stages; all four are refused while a run is using that pipeline",
             "role_define": "Add, edit, rename, delete or reset roles; a rename rewrites every slot referencing it, and a role still referenced cannot be deleted",
-            "scheduler_list": "List Navide's scheduled jobs; they fire only while Navide is running — nothing wakes the machine or the app",
-            "scheduler_upsert": "Create a scheduled job, or update one by passing its id: on a timetable (every N minutes, daily or weekly at HH:MM in a time zone) wake a CLI pane and send it an instruction. Unattended runs spend quota, so each job is capped per day and failures back off; a pane that names no target schedules itself",
-            "scheduler_remove": "Delete a scheduled job together with its run history",
-            "scheduler_set_enabled": "Pause or resume a scheduled job; resuming never fires a slot that passed while it was paused",
-            "scheduler_run_now": "Run a job once right now, outside its timetable; answers as soon as the run starts, clears a failure backoff and leaves the next scheduled slot where it was",
-            "scheduler_runs": "A job's run history, newest first: ok, error or skipped with its reason — a skip (no window, busy, daily cap or quota, a vanished target) is not an error",
+            "scheduler_list": "List Navide's scheduled jobs, including ones you may not change: each says who created it and whether you may edit it, and the answer reports the agent limits and how much of them is in use. Jobs fire only while Navide is running — nothing wakes the machine or the app",
+            "scheduler_upsert": "Create a scheduled job, or update one of your own by passing its id: on a timetable (every N minutes, daily or weekly at HH:MM in a time zone, or once) wake a CLI pane in your own workspace and send it an instruction. An agent's jobs are limited: 10 enabled per agent and 100 across agents, no more often than every 5 minutes, 300 runs a day between them, and a periodic job stops after 7 days unless renewed or kept by the user. A pane that names no target schedules itself",
+            "scheduler_remove": "Delete a scheduled job you created, together with its run history; jobs made in the Navide window, or whose creating pane has closed, are the user's",
+            "scheduler_set_enabled": "Pause or resume a scheduled job you created; resuming never fires a slot that passed while it was paused, and counts toward the enabled-job limits",
+            "scheduler_run_now": "Run a job you created once right now, outside its timetable; answers as soon as the run starts, clears a failure backoff, leaves the next scheduled slot where it was and counts toward the agents' 300 runs a day",
+            "scheduler_runs": "A job's run history, newest first: ok, error or skipped with its reason — a skip (no window, busy, daily cap or quota, agents' daily total, an expired agent job, a vanished target) is not an error. Any job's history can be read",
             "cli_permission_settings": "Read and write the CLI permission-bypass flag (yolo). It is a global setting, not pipeline-specific, and only affects panes opened afterwards; whether a given CLI actually carries the flag is in the returned agents[].skipFlag, not the global value alone",
             "workspace_open": "Open a project as a workspace in Navide; whether that is a new window or one that already has the project open is Navide's decision",
             "workspace_switch": "Switch my own window to another project it already holds; panes of the project being left keep running. Refused while a pipeline is running in that window, because switching would abort it",
@@ -5590,6 +5759,12 @@
       "disable": "Disable {name}",
       "invalid": "Invalid file",
       "native-conflict": "Native skill wins",
+      "sync-too-large": "Not synced: too large",
+      "sync-too-large-hint": "This skill's files are too large to sync between devices. Its on/off and delivery settings still sync.",
+      "sync-via-blobs": "Files sync separately",
+      "sync-via-blobs-hint": "This skill is too large for one sync record, so its files travel between your devices as encrypted file uploads. Its on/off and delivery settings sync as usual.",
+      "sync-uploading": "Uploading {percent}%",
+      "sync-downloading": "Downloading {percent}%",
       "editor-hint": "Known fields are editable. Other frontmatter values are preserved.",
       "open-folder": "Open folder",
       "name": "Name",
@@ -6016,6 +6191,11 @@
         "search-placeholder": "Search panes, workspaces or devices",
         "no-match": "No pane matches that.",
         "started-at": "Started {at}",
+        "git-dirty": "{count} dirty",
+        "git-stale": "may be stale",
+        "git-linked": "Linked worktree",
+        "git-fetched": "Last fetched {at}",
+        "git-never-fetched": "Never fetched — ahead/behind may be out of date",
         "collapse": "Collapse",
         "expand": "Expand"
       },
@@ -6356,6 +6536,7 @@
         "workbench_action_focusSourceControl": "Focus Source Control",
         "workbench_action_gotoSymbol": "Go To Symbol In File",
         "workbench_action_gotoWorkspaceSymbol": "Go To Symbol In Workspace",
+        "workbench_action_holdToTalk": "Hold To Talk (Voice Input)",
         "workbench_action_moveEditorLeftInGroup": "Move Editor Left In Group",
         "workbench_action_moveEditorRightInGroup": "Move Editor Right In Group",
         "workbench_action_navigateBack": "Navigate Back",
@@ -6383,6 +6564,7 @@
         "workbench_action_openPreviousEditor": "Open Previous Editor",
         "workbench_action_openSettings": "Open Settings",
         "workbench_action_openSettingsAccounts": "Open Settings Accounts",
+        "workbench_action_openSettingsChannels": "Open Settings Channels",
         "workbench_action_problems_focus": "Problems Focus",
         "workbench_action_quickOpen": "Quick Open File",
         "workbench_action_rebuildFocusedPane": "Rebuild Focused Pane",
@@ -7253,6 +7435,16 @@
     "expand-families": "Expand all pane families in this tab",
     "family-toggle-grid": "Family folding is available in Auto, Spotlight, and Fullscreen layouts",
     "family-toggle-empty": "This tab has no pane families to fold",
+    "rename": "Rename",
+    "open-in-window": "Open in its own window",
+    "rebuild-panes": "Rebuild this group's CLIs ({count})",
+    "reclaim-panes": "Reclaim this group's CLIs ({count})",
+    "close-group": "Close group",
+    "close-group-title": "Remove this group; its panes move to another group",
+    "close-group-and-panes": "Close group and its panes",
+    "close-running-confirm-body": "{count} CLI(s) in this group are running — closing will stop their in-progress turns. Close anyway?",
+    "close-running-confirm-confirm": "Close",
+    "remove-panes": "Remove this group's CLIs ({count})",
     "move-to-group": "Move to another group",
     "close-all-panes": "Close all panes"
   },
@@ -7807,6 +7999,20 @@
     "denied": "{label}: Navide manages {keys} itself, so the value you set never reached the CLI.",
     "overridden": "{label}: {keys} was accepted but then replaced by Navide's own setting, so your value is not in effect in this pane."
   },
+  "install-terminal": {
+    "input-lost": "Typing did not reach the command: {error}. Anything typed since (e.g. a password) was not received.",
+    "running": "Running — if it asks for a password or a confirmation, type it here.",
+    "exited-ok": "Finished (exit code 0).",
+    "exited-fail": "Failed with exit code {code}. The output above says why.",
+    "signal": "Stopped by {signal}.",
+    "cancelled": "Cancelled.",
+    "lost": "The connection to the backend was lost, so the command was stopped.",
+    "cancel": "Cancel",
+    "close": "Close output",
+    "fallback-title": "The built-in terminal could not start",
+    "fallback-desc": "Run the command in an external Terminal window instead, then re-detect.",
+    "open-in-terminal": "Open in Terminal"
+  },
   "cli-install": {
     "kicker": "Guided install",
     "title": "Install {label}",
@@ -7825,22 +8031,17 @@
     },
     "requirements-label": "Prerequisites",
     "chain-label": "Installation order",
-    "chain-desc": "{label} needs {count} steps on this machine. Start it and each step continues into the next by itself — you only step in where a Terminal window asks you something.",
+    "chain-desc": "{label} needs {count} steps on this machine. Start it and each step continues into the next by itself — you only step in where the terminal below asks you something.",
     "install-step": "Install {label} (1 of {total})",
     "requirement-missing": "missing",
     "command-label": "Command that will run",
-    "note-terminal": "This runs in an external Terminal window so you can answer any prompt it asks (password, sign-in). This dialog updates by itself once the CLI is detected.",
-    "note-inline": "This runs in the background and can take a few minutes.",
+    "note-terminal": "This runs in a terminal inside this dialog, so you can follow its output and answer any prompt it asks (password, sign-in).",
     "no-install-command": "{label} has no automatic install command. Follow the vendor's instructions, then re-detect.",
     "install": "Install",
     "retry": "Try again",
     "installing": "Installing… {seconds}s",
     "not-now": "Not now",
     "close": "Close",
-    "waiting-title": "Waiting for the install to finish",
-    "waiting-desc": "The command is running in a Terminal window. This dialog updates as soon as {label} is detected.",
-    "waiting-timeout": "Still no sign of {label}. Finish the install in the Terminal window, then re-detect.",
-    "terminal-failed": "Navide could not open a Terminal window. Run the command above yourself, then re-detect.",
     "requirement-manual": "{name} is missing and cannot be installed from here — install it manually, then try again.",
     "failed-title": "The install command failed",
     "docs": "Open the official docs",
@@ -7855,12 +8056,36 @@
     "signin-hint": "This opens a pane that runs the sign-in for you. Most CLIs then open your browser; finish there and come back.",
     "dont-ask": "Stop asking about {label}"
   },
+  "skill-approval": {
+    "kicker": "Skill install request",
+    "title": "Install skill “{name}”?",
+    "desc": "An agent asked to add this skill. Nothing is written until you approve it here; the agent cannot approve on your behalf.",
+    "queue": "{count} pending",
+    "requester": "Requested by",
+    "source": "Source",
+    "digest": "Digest",
+    "targets": "Delivery",
+    "targets-all": "All wired CLIs",
+    "targets-none": "No extra delivery (shared-root readers only)",
+    "expires": "Expires at",
+    "files": "Files ({count})",
+    "script": "script",
+    "show-skill-md": "Show SKILL.md",
+    "hide-skill-md": "Hide SKILL.md",
+    "write-note": "Approving writes this skill to the shared skills library and counts as permission for the first write there. Bundled scripts are never run.",
+    "approve": "Approve and install",
+    "reject": "Reject",
+    "installing": "Installing…",
+    "failed": "Installation failed",
+    "dismiss": "Close",
+    "expired": "This request expired before it was approved. Ask the agent to prepare the skill again."
+  },
   "cli-manage": {
     "title": "Installation and updates",
     "hint": "Navide runs each CLI's own official commands and never updates them itself. Commands come from the built-in registry; the exact command is shown before it runs.",
     "redetect": "Re-detect",
     "detecting": "Detecting…",
-    "opening": "Opening…",
+    "opening": "Running…",
     "update": "Update ({command})",
     "update-via-docs": "Update via vendor docs",
     "doctor": "Diagnose ({command})",
@@ -7869,10 +8094,16 @@
     "last-update": "Last update:",
     "duplicates": "{count} physical installations found",
     "active": "active",
+    "use-failed": "Could not switch {label} to this installation: {error}",
+    "use-done": "Navide will now launch {label} from {path}.",
+    "autoupdate-failed": "Could not change {label}'s auto-update setting; it is unchanged.",
     "use-this": "Use this one",
     "remove": "Remove",
     "autoupdate": "Auto-update",
     "terminal-opened": "Opened in Terminal: {command}. Click Re-detect when it finishes.",
+    "run-finished": "Finished: {command}",
+    "run-failed": "{command} did not succeed: {error}",
+    "start-failed": "Could not start the {label} command: {error}",
     "terminal-failed": "Could not open Terminal: {error}",
     "command-unavailable": "{label} ships no official command for this action.",
     "footnote": "Updates replace the binary; sessions already running keep the old one until they restart.",
@@ -7899,6 +8130,8 @@
     }
   },
   "cli-health": {
+    "override-missing": "The {label} install you chose ({path}) was not found, so Navide launches the default one. Choose again in Settings → CLI Agents.",
+    "override-refused": "Navide could not keep the {label} install you chose ({path}): {error}. It launches the default one; choose again in Settings → CLI Agents.",
     "kicker": "CLI health check",
     "title": "Navide found an agent CLI setup issue",
     "step": {
@@ -7935,7 +8168,10 @@
     "removal-opened": "A confirmation prompt for removing {label} was opened in Terminal. Return here and re-detect when it finishes.",
     "terminal-opened": "Diagnostic command opened in Terminal.",
     "terminal-failed": "Could not open Terminal: {error}",
+    "save-failed": "Could not save your choice: {error}. Try again.",
+    "binary-selected": "{label} will use this version in Navide. The issues below still need attention.",
     "still-detected": "The issue is still detected. Check the paths above and try again.",
+    "recheck-failed": "Detection failed: {error}. Try again in a moment.",
     "close": "Close and don't remind me"
   },
   "usage": {
@@ -8072,11 +8308,13 @@
     },
     "blocked-by": "Install {names} first — it is required before this can be installed here.",
     "go-install": "Install {name} first",
+    "complete-failed": "Could not save your setup progress: {error}. Try again.",
+    "ollama-start-failed": "Could not start the Ollama service. See the log for details, or run `ollama serve` in a terminal.",
     "install-failed": "Installation failed: {reason}",
     "run-by-hand": "You can also run this yourself in a terminal: {cmd}",
     "installed-not-detected": "The command finished, but {label} is still not detected. It may need a new shell session, or it landed outside PATH.",
-    "installed-still-outdated": "The install finished, but the {label} found on PATH is still the old {version}. The new one may sit behind the system copy — open a new shell session, then re-detect.",
-    "running-inline": "Running {cmd} in the background — this can take a few minutes and prints nothing until it finishes."
+    "installed-still-outdated": "The install finished, but the {label} found on PATH is still the old {version}. The new one may sit behind the system copy — move its directory ahead on PATH, then re-detect. A corrected PATH order takes effect on re-detect, no restart needed.",
+    "installed-still-outdated-python": "The install finished, but the {label} found on PATH is still the old {version}. Fix it either way, then re-detect: run brew link --overwrite python{'@'}3.x (with the version you installed), or add eval \"$(/opt/homebrew/bin/brew shellenv)\" to ~/.zprofile so Homebrew comes before the system copy."
   },
   "executions": {
     "last-scan": "Last scan {time}",
@@ -8226,6 +8464,8 @@
       "target_gone": "Target pane no longer exists",
       "missed": "Skipped: missed slot",
       "interrupted": "Skipped: interrupted",
+      "budget_global": "Skipped: agents' daily total used up",
+      "expired": "Expired: agent job not renewed in 7 days",
       "unknown": "Skipped"
     },
     "editor": {
@@ -8266,6 +8506,23 @@
       "remove-confirm": "Delete this scheduled job?",
       "cancel": "Cancel",
       "save": "Save"
+    },
+    "owner": {
+      "agent": "agent · {name}",
+      "external": "external agent",
+      "agent-title": "Created by the agent \"{name}\"; only it and you can change it",
+      "gone": "Creator closed",
+      "gone-title": "The pane that created this job is closed; agents can only read it now, and it is yours to manage",
+      "adopt": "Make it mine",
+      "expires-in": "Expires in {n} d",
+      "expires-title": "An agent's periodic job disables itself 7 days after it was last saved or enabled",
+      "keep": "Keep",
+      "updated-by": "Last changed by {name}"
+    },
+    "limit": {
+      "meter": "Agent jobs enabled {n}/{max} · runs today {runs}/{runsMax}",
+      "enabled-full": "Agents have reached the enabled-job limit ({n}/{max}) and cannot add or enable more; your own jobs are not affected",
+      "runs-full": "Agent jobs have used today's runs ({runs}/{max}); their remaining slots are skipped until tomorrow"
     }
   },
   "turn-stats": {
@@ -8650,5 +8907,322 @@
     "err-generic": "Something went wrong. Please try again.",
     "token-stored": "A token is stored on this device",
     "token-linked": "Linked with a token"
+  },
+  "channels": {
+    "nav": "Channels",
+    "platform": {
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "slack": "Slack",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "matrix": "Matrix",
+      "mattermost": "Mattermost",
+      "imessage": "iMessage"
+    },
+    "status": {
+      "not-configured": "Not set up",
+      "disabled": "Off"
+    },
+    "lifecycle": {
+      "stopped": "Stopped",
+      "starting": "Connecting…",
+      "ready": "Connected",
+      "recovering": "Reconnecting…",
+      "blocked": "Blocked — check the credentials"
+    },
+    "global": {
+      "title": "Chat channels",
+      "desc": "Turning this off disconnects every platform immediately."
+    },
+    "single-receiver-hint": "This bot can deliver messages to only one program. If Claude Code --channels or another bot program also uses it, the two will steal each other's messages.",
+    "section": {
+      "platforms": "Platforms"
+    },
+    "pending-count": "{n} pending",
+    "cancel": "Cancel",
+    "desc": {
+      "telegram": "Bot created with {'@'}BotFather",
+      "discord": "Bot application in your server",
+      "slack": "Socket Mode app in your workspace",
+      "feishu": "Custom app on Feishu or Lark",
+      "dingtalk": "Internal robot in Stream mode",
+      "matrix": "Bot user on any homeserver",
+      "mattermost": "Bot account on your server",
+      "imessage": "Messages on this Mac"
+    },
+    "error": {
+      "generic": "The request failed.",
+      "missing": "Fill in: {fields}"
+    },
+    "enable-platform": "Enable {platform}",
+    "manage": "Manage",
+    "connect": "Connect",
+    "needs": "Needs: {fields}",
+    "imessage-note": "No token needed. macOS only.",
+    "field": {
+      "token": "Bot token",
+      "app_token": "App-level token",
+      "bot_token": "Bot token",
+      "app_id": "App ID",
+      "app_secret": "App Secret",
+      "client_id": "Client ID",
+      "client_secret": "Client Secret",
+      "access_token": "Access token",
+      "server_url": "Server URL",
+      "homeserver": "Homeserver URL",
+      "domain": "Region",
+      "robot_code": "Robot code"
+    },
+    "secret-stored": "Stored ••••••••  (leave empty to keep)",
+    "remove": "Remove",
+    "save": "Save",
+    "pairing": {
+      "title": "Pending pairing requests",
+      "hint": "An unknown sender who messages the bot directly gets a code. Approve it here to let them talk to panes.",
+      "empty": "No pending requests.",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
+    "allow": {
+      "title": "Allowed senders",
+      "empty": "No one is allowed yet.",
+      "remove": "Remove"
+    },
+    "pane": {
+      "connect": "Connect to a chat",
+      "unbind": "Disconnect from chat",
+      "where": "Connect where?",
+      "loading": "Loading chats…",
+      "new-topic": "New topic “{name}”",
+      "use-existing": "Use this chat",
+      "kind-group": "Group",
+      "kind-direct": "DM",
+      "new-topic-short": "New topic",
+      "no-chats-yet": "Send the bot a message in a chat and it will show up here.",
+      "manage-chats": "Manage chat settings",
+      "taken-by": "Connected to {pane}",
+      "taken-hint": "Connected to another pane. Unbind it there to use this chat here."
+    },
+    "option": {
+      "feishu": "Feishu (China)",
+      "lark": "Lark (international)"
+    },
+    "optional": "(optional)",
+    "hint": {
+      "discord": "Turn on Message Content Intent for the bot in the Discord Developer Portal.",
+      "slack": "The app-level token starts with xapp- (connections:write); the bot token starts with xoxb-. Both are required.",
+      "feishu": "In groups the bot only receives messages that {'@'}mention it, unless the app has the permission to read all group messages.",
+      "dingtalk": "DingTalk has no threads: one group is one pane.",
+      "imessage": "Needs Full Disk Access (System Settings → Privacy & Security). The first reply triggers a macOS prompt to allow controlling Messages."
+    }
+  },
+  "guard": {
+    "nav": "Security",
+    "unavailable": "Navide Guard is not available from this backend yet. Restart Navide after updating.",
+    "enabled": {
+      "title": "Navide Guard",
+      "desc": "Judge each CLI action by how dangerous it is and who asked for it; stop or ask before the dangerous ones. The rules are fixed code, never an AI. Approving a high-risk action from a chat channel stays refused even when this is off."
+    },
+    "counts": {
+      "critical": "Critical {n}",
+      "high": "High {n}",
+      "asks": "Asked {n}",
+      "denies": "Denied (24h) {n}"
+    },
+    "policy": {
+      "title": "What Guard does",
+      "hint": "Each action is graded, then handled by where the request came from.",
+      "source": "Request source",
+      "levels": "Critical: deleting outside the workspace or home, disk/system commands, sudo, curl | sh, touching credentials, force-push to main, cloud teardown. High: rm -rf inside the workspace, git push / reset --hard, publishing packages, editing CI or git hooks.",
+      "row": {
+        "local": "You, on this computer",
+        "relay": "Approved from a chat app",
+        "remote": "Remote device, other pane or agent",
+        "tainted": "Pane with external influence"
+      }
+    },
+    "level": {
+      "critical": "Critical",
+      "high": "High",
+      "normal": "Normal"
+    },
+    "action": {
+      "allow": "Allow",
+      "allow-audit": "Allow + record",
+      "ask": "Ask on this computer",
+      "deny": "Deny"
+    },
+    "source": {
+      "local": "Local",
+      "relay": "Chat app",
+      "remote": "Remote",
+      "agent": "Other agent"
+    },
+    "vendors": {
+      "title": "Which CLIs Guard can block",
+      "hint": "Guard stops an action through the CLI's own hook. CLIs without one can only be protected by chat-approval refusal and by not running them in YOLO mode.",
+      "block": "Can be blocked",
+      "none": "Cannot be blocked",
+      "unknown": "Unknown"
+    },
+    "builtin": {
+      "title": "Built-in rules",
+      "hint": "How Guard grades each pattern it recognises. Raising a level applies at once; lowering one or turning it off needs confirmation. Rules marked as a safety floor go down to High at most. The table above (what asks, what is denied) stays fixed.",
+      "group": {
+        "critical": "Critical by default",
+        "high": "High by default",
+        "unanalyzable": "Cannot be judged statically (Normal by default; a pane with external content still treats them as High)"
+      },
+      "default": "Default: {level}",
+      "floor": "Safety floor: High at most",
+      "off": "Off (Normal)",
+      "rule": {
+        "credential-access": "Reads, writes or deletes a credential store",
+        "credential-exfil": "Uploads a secret file",
+        "dotenv-outside-workspace": "Touches a .env file outside the workspace",
+        "keychain-access": "Reads or changes the Keychain",
+        "sudo": "Runs with elevated privileges or as another user",
+        "pipe-download-to-shell": "Executes content fetched from the network",
+        "download-then-exec": "Executes a file downloaded in the same command",
+        "disk-write": "dd writes directly to a device",
+        "disk-format": "Formats, erases or repartitions a disk",
+        "rm-root-or-home": "Deletes the root, home, or a parent of the workspace",
+        "rm-workspace-root": "Recursively deletes the whole workspace",
+        "rm-outside-workspace": "Recursive delete outside the workspace",
+        "git-force-push-protected": "Force-pushes to or deletes a protected branch",
+        "cloud-destroy": "Destroys cloud infrastructure or cluster resources",
+        "credential-path-list": "Lists a credential location",
+        "git-hooks-write": "Writes a git hook",
+        "ci-workflow-write": "Writes a CI workflow",
+        "agent-config-write": "Writes agent CLI settings (hooks live there)",
+        "dd": "dd copies raw data",
+        "package-publish": "Publishes a package",
+        "git-push": "Pushes to a remote",
+        "git-push-force": "Force push (history rewrite on the remote)",
+        "git-reset-hard": "git reset --hard discards local changes",
+        "git-clean-force": "git clean -f deletes untracked files",
+        "rm-recursive-in-workspace": "Recursive delete inside the workspace",
+        "rm-file-outside-workspace": "Deletes a file outside the workspace",
+        "rm-unresolved-target": "rm target is computed at run time",
+        "decode-and-exec": "Pipes decoded data into an interpreter",
+        "http-upload-file": "Uploads a local file",
+        "too-long": "Command too long to analyse",
+        "dynamic-command": "Command name is computed at run time",
+        "eval": "eval / source of dynamic text",
+        "unbalanced-quotes": "Command has unbalanced quotes",
+        "nesting-too-deep": "Substitutions nested too deep to analyse",
+        "interpreter-inline-code": "Interpreter runs inline code",
+        "stdin-script": "Interpreter reads its script from stdin",
+        "unknown-script": "Runs a script Guard cannot see",
+        "dynamic-path": "File path is not static"
+      }
+    },
+    "branches": {
+      "title": "Protected branches",
+      "hint": "Force-pushing to or deleting these branches is Critical. Terminal command protection's force-push check uses the same list. Removing a branch needs confirmation.",
+      "placeholder": "Branch name, e.g. release"
+    },
+    "rules": {
+      "title": "Custom rules",
+      "hint": "Deny patterns raise a match to the level you pick (Critical or High). Allow patterns downgrade a High match to Normal (never Critical). Adding an allow or removing a deny needs confirmation.",
+      "kind": {
+        "allow": "Allow",
+        "deny": "Deny"
+      },
+      "kind-label": "Rule type",
+      "level-label": "Level",
+      "pattern": "Pattern, e.g. rm -rf build",
+      "note": "Note (optional)",
+      "add": "Add",
+      "remove": "Remove"
+    },
+    "test": {
+      "title": "Try it",
+      "placeholder": "Type a shell command, e.g. rm -rf ~",
+      "tainted": "Externally influenced pane",
+      "run": "Check",
+      "unparseable": "Cannot be judged statically (variable expansion, eval, encoded script).",
+      "user-deny": "Your deny pattern `{pattern}`",
+      "user-allow": "Your allow pattern `{pattern}`"
+    },
+    "terminal": {
+      "title": "Terminal command protection",
+      "hint": "Commands Navide never types into a plain terminal pane for an agent, an MCP client or a scheduled job — refused whatever the Guard switch says. Each part of a line (split at ; && {'|'}{'|'} {'|'} & and newlines) is checked; one refused part refuses the line. What you type yourself is not checked.",
+      "default-off": "Off by default",
+      "loosen-confirm": "Switching a category off asks for confirmation; switching one on does not.",
+      "category": {
+        "rm-system": "Recursive delete of root, home or outside the workspace",
+        "privilege": "Running as another user or administrator",
+        "disk": "Formatting, erasing or raw-writing a disk",
+        "power": "Shutdown, reboot, halt",
+        "mass-kill": "Killing processes by name or pattern",
+        "recursive-perms": "Recursive permission or owner change on root, home or system folders",
+        "system-write": "Writing into system folders",
+        "service-disable": "Stopping or disabling system services",
+        "fork-bomb": "Fork bombs",
+        "pipe-to-shell": "Running a script straight from the network",
+        "credential": "Credential files (SSH, cloud keys, Keychain, .env)",
+        "force-push-main": "Force-pushing to or deleting main / master",
+        "classifier-critical": "Anything else Guard rates critical",
+        "classifier-high": "Anything else Guard rates high (git push, git reset --hard, rm -rf inside the workspace)",
+        "unanalyzable": "Lines that cannot be judged statically"
+      },
+      "block": {
+        "title": "Extra block patterns",
+        "hint": "Refuse any part of a line matching one of these. Plain text matches anywhere; * ? [ ] make it a glob.",
+        "placeholder": "e.g. docker system prune"
+      },
+      "allow": {
+        "title": "Allow exceptions",
+        "warning": "A part of a line that starts with one of these prefixes skips every built-in check above — only add commands you fully trust. Block patterns still apply, and a download piped into a shell is never allowed. Adding one asks for confirmation.",
+        "placeholder": "Exact command prefix, e.g. git push origin"
+      },
+      "problem": {
+        "empty": "Type a pattern.",
+        "too-long": "The pattern is longer than 500 characters.",
+        "control": "The pattern contains a control character.",
+        "bracket": "The pattern has an unclosed [ ].",
+        "match-all": "This pattern would match every command."
+      },
+      "rule": {
+        "block-pattern": "Your block pattern"
+      },
+      "test": {
+        "title": "Test a command",
+        "placeholder": "e.g. ls && sudo rm -rf /opt/app",
+        "refused": "Would be refused",
+        "allowed": "Would be typed"
+      }
+    },
+    "taint": {
+      "title": "Panes with external influence",
+      "hint": "A pane that received content from a chat app, a remote device, another pane or an MCP caller asks here before any High or Critical action, until you clear it.",
+      "empty": "No pane is marked."
+    },
+    "audit": {
+      "title": "Recent decisions",
+      "empty": "No decisions recorded yet."
+    },
+    "pane": {
+      "badge": "External influence",
+      "tooltip": "Received content from {sources} since {since}",
+      "console": "Delivery log",
+      "expand": "Show the full text",
+      "text-missing": "text no longer in the message log",
+      "text-none": "no message text recorded",
+      "explain": "Its High and Critical actions need your confirmation on this computer. Clear the mark only if you have checked what it was sent.",
+      "clear": "Clear",
+      "no-hook-warning": "Navide Guard cannot block this CLI, and it runs without permission prompts. Be careful giving it commands from a chat room."
+    },
+    "notice": {
+      "denied": "Navide Guard blocked an action: {reason}",
+      "asked": "Navide Guard wants your confirmation: {reason}",
+      "failedOpen": "Navide Guard could not check an action and let it run: {reason}"
+    },
+    "error": {
+      "generic": "Something went wrong. Try again."
+    },
+    "cancel": "Cancel"
   }
 }

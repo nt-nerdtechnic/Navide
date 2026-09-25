@@ -102,6 +102,10 @@ function artifactTarget(manifest, target) {
   return target
 }
 
+function backendEntryForTarget(entry, target) {
+  return target.startsWith('win32-') && !entry.toLowerCase().endsWith('.exe') ? `${entry}.exe` : entry
+}
+
 function backendMatchesTarget(bytes, target) {
   const [platform, architecture] = target.split('-', 2)
   if (platform === 'linux') {
@@ -193,22 +197,24 @@ function validateFiles(manifest, files, target, root) {
     if (declaredTargetSchemas.has(path)) continue
     fail(`package entry '${path}' is outside the frontend/assets/backend package boundary`)
   }
+  const backendEntry = manifest.backend ? backendEntryForTarget(manifest.backend.entry, target) : null
   for (const path of manifestReferencedFiles(manifest)) {
-    if (!paths.has(path)) fail(`manifest references '${path}', but that file does not exist`)
+    const referenced = path === manifest.backend?.entry ? backendEntry : path
+    if (!paths.has(referenced)) fail(`manifest references '${referenced}', but that file does not exist`)
   }
   const backendEntries = [...paths].filter((path) => path.startsWith('backend/'))
   const frontendEntries = [...paths].filter((path) => path.startsWith('frontend/'))
-  if (manifest.backend) {
-    if (backendEntries.length !== 1 || backendEntries[0] !== manifest.backend.entry) {
+  if (backendEntry) {
+    if (backendEntries.length !== 1 || backendEntries[0] !== backendEntry) {
       fail('backend package must contain exactly its declared self-contained backend executable')
     }
-    const backend = files.find((file) => file.path === manifest.backend.entry)
-    const backendStat = lstatSync(join(root, manifest.backend.entry), { bigint: true })
+    const backend = files.find((file) => file.path === backendEntry)
+    const backendStat = lstatSync(join(root, backendEntry), { bigint: true })
     if (!backendStat.isFile() || (process.platform !== 'win32' && (backendStat.mode & 0o111n) === 0n)) {
-      fail(`backend entry '${manifest.backend.entry}' must be marked executable`)
+      fail(`backend entry '${backendEntry}' must be marked executable`)
     }
     if (!backend || backend.bytes.subarray(0, 2).equals(Buffer.from('#!')) || !backendMatchesTarget(backend.bytes, target)) {
-      fail(`backend entry '${manifest.backend.entry}' does not match declared target ${target}`)
+      fail(`backend entry '${backendEntry}' does not match declared target ${target}`)
     }
   } else if (backendEntries.length !== 0) {
     fail('frontend-only package must not contain backend entries')
@@ -352,7 +358,7 @@ function packageDirectory(directory, output, target) {
   mkdirSync(dirname(outputPath), { recursive: true })
   const files = result.files.map((file) => ({
     ...file,
-    executable: result.manifest.backend?.entry === file.path,
+    executable: result.manifest.backend && backendEntryForTarget(result.manifest.backend.entry, result.target) === file.path,
   }))
   writeFileSync(outputPath, makeZip(files))
   return { outputPath, manifest: result.manifest, target: result.target }

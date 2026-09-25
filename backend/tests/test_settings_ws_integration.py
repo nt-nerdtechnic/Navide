@@ -359,6 +359,7 @@ async def test_skills_handlers_run_store_operations_in_worker_threads(
     assert disabled["payload"]["skill"]["enabled"] is False
     assert listed["payload"]["root"] == str(skills_store.root)
     assert listed["payload"]["skills"][0]["enabled"] is False
+    assert listed["payload"]["skills"][0]["sync_too_large"] is False
     assert deleted["payload"] == {"name": "demo", "deleted": True}
     assert threaded == [
         "create_skill",

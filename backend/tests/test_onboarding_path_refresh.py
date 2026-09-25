@@ -115,6 +115,43 @@ def test_existing_paths_not_duplicated(monkeypatch):
     assert parts.count("/bin") == 1
 
 
+@_needs_login_shell_probe
+def test_login_shell_order_wins_for_entries_already_on_path(monkeypatch):
+    """The wizard tells a user whose `python3` is the old /usr/bin one to fix
+    their shell's PATH order and re-detect. Entries already on PATH used to
+    keep their inherited position, so /usr/bin stayed ahead of Homebrew and the
+    re-detect could never see the fix — only a new terminal would."""
+    _no_fallbacks(monkeypatch)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/opt/homebrew/bin")
+    shell_path = "/opt/homebrew/bin:/usr/bin:/bin"
+    with patch("subprocess.run", return_value=_make_run_result(_probe_output(shell_path))):
+        _refresh_path_from_login_shell()
+    assert os.environ["PATH"].split(os.pathsep) == ["/opt/homebrew/bin", "/usr/bin", "/bin"]
+
+
+@_needs_login_shell_probe
+def test_entries_only_the_process_has_follow_the_login_shell_ones(monkeypatch):
+    """Nothing the process PATH carries is dropped; it just no longer outranks
+    what the user's own terminal would resolve first."""
+    _no_fallbacks(monkeypatch)
+    monkeypatch.setenv("PATH", "/app/only:/usr/bin")
+    shell_path = "/opt/homebrew/bin:/usr/bin"
+    with patch("subprocess.run", return_value=_make_run_result(_probe_output(shell_path))):
+        _refresh_path_from_login_shell()
+    assert os.environ["PATH"].split(os.pathsep) == ["/opt/homebrew/bin", "/usr/bin", "/app/only"]
+
+
+@_needs_login_shell_probe
+def test_unanswered_probe_keeps_the_inherited_order(monkeypatch, tmp_path):
+    """Without an answer there is no order to prefer: fallbacks are guesses, so
+    they are only added, never allowed to reorder what is already there."""
+    _fallbacks(monkeypatch, str(tmp_path))
+    monkeypatch.setenv("PATH", f"/usr/bin:{tmp_path}")
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("zsh", 3)):
+        _refresh_path_from_login_shell()
+    assert os.environ["PATH"].split(os.pathsep) == ["/usr/bin", str(tmp_path)]
+
+
 # ── dedup ─────────────────────────────────────────────────────────────────────
 
 
@@ -206,8 +243,9 @@ def test_shell_paths_ordered_before_fallback(monkeypatch, tmp_path):
     with patch("subprocess.run", return_value=_make_run_result(_probe_output("/shell/bin:/usr/bin"))):
         _refresh_path_from_login_shell()
     parts = os.environ["PATH"].split(os.pathsep)
-    assert parts[0] == "/shell/bin"
-    assert parts[1] == str(fallback)
+    # Every entry the shell answered keeps the shell's order; a guessed
+    # fallback goes after them, never between them.
+    assert parts == ["/shell/bin", "/usr/bin", str(fallback)]
 
 
 @_needs_login_shell_probe

@@ -20,6 +20,7 @@ from tests.fixtures import (
     build_v2_package,
     contract_manifest,
     valid_manifest,
+    windows_backend_bytes,
 )
 
 
@@ -220,6 +221,61 @@ def test_backend_only_package_rejects_smuggled_frontend_entry() -> None:
     manifest = contract_manifest("backend-only-skills.json")
     with pytest.raises(PackageError, match="backend-only package"):
         read_package(build_v2_package(manifest, extra_files={"frontend/main/index.html": b"<!doctype html>"}))
+
+
+def _windows_backend_package(files: dict[str, bytes]) -> bytes:
+    manifest = contract_manifest("backend-only-skills.json")
+    return _zip_with_entries(
+        [("manifest.json", json.dumps(manifest).encode(), None)]
+        + [(name, data, None) for name, data in files.items()]
+    )
+
+
+@pytest.mark.parametrize("target, architecture", [("win32-x64", "x64"), ("win32-arm64", "arm64")])
+def test_windows_target_reads_bare_backend_entry_as_exe(target: str, architecture: str) -> None:
+    # Packed on Windows: no POSIX mode at all, as the Host accepts it there.
+    data = _windows_backend_package({"backend/navide-skills.exe": windows_backend_bytes(architecture)})
+    loaded = read_package(data, target=target)
+    assert "backend/navide-skills.exe" in {asset.path for asset in loaded.assets}
+
+
+def test_windows_target_rejects_wrong_architecture() -> None:
+    data = _windows_backend_package({"backend/navide-skills.exe": windows_backend_bytes("x64")})
+    with pytest.raises(PackageError, match="backend entry does not match declared target"):
+        read_package(data, target="win32-arm64")
+
+
+def test_windows_target_rejects_a_missing_exe_backend() -> None:
+    data = _windows_backend_package({"backend/navide-skills": windows_backend_bytes("x64")})
+    with pytest.raises(PackageError, match="'backend/navide-skills.exe' is not present"):
+        read_package(data, target="win32-x64")
+    with pytest.raises(PackageError, match="'backend/navide-skills.exe' is not present"):
+        read_package(_windows_backend_package({}), target="win32-x64")
+
+
+def test_windows_target_rejects_an_empty_exe_backend() -> None:
+    data = _windows_backend_package({"backend/navide-skills.exe": b""})
+    with pytest.raises(PackageError, match="backend entry is empty"):
+        read_package(data, target="win32-x64")
+
+
+@pytest.mark.parametrize("target", [None, "linux-x64", "darwin-arm64"])
+def test_non_windows_target_still_needs_the_bare_executable(target: str | None) -> None:
+    exe_only = _windows_backend_package({"backend/navide-skills.exe": windows_backend_bytes("x64")})
+    with pytest.raises(PackageError, match="'backend/navide-skills' is not present"):
+        read_package(exe_only, target=target)
+    manifest = contract_manifest("backend-only-skills.json")
+    with pytest.raises(PackageError, match="not marked executable"):
+        read_package(
+            build_v2_package(manifest, backend_mode=stat.S_IFREG | 0o644), target=target
+        )
+    linux_header = bytearray(20)
+    linux_header[:4] = b"\x7fELF"
+    linux_header[4:6] = b"\x02\x01"
+    linux_header[18:20] = (62).to_bytes(2, "little")
+    darwin_header = (0xFEEDFACF).to_bytes(4, "little") + (0x0100000C).to_bytes(4, "little")
+    backend_data = {"linux-x64": bytes(linux_header), "darwin-arm64": darwin_header}.get(target, b"backend")
+    assert read_package(build_v2_package(manifest, backend_data=backend_data), target=target)
 
 
 def test_manifest_v2_referenced_file_is_required() -> None:

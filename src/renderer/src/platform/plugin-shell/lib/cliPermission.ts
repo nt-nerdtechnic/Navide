@@ -15,8 +15,7 @@ export type CliPermissionMode = 'inherit' | 'force-on' | 'force-off'
 
 const MODES: readonly string[] = ['inherit', 'force-on', 'force-off']
 
-/** Settings key holding one vendor's override. Mirrors the existing
- *  `agentTeam.cliBinary.<key>` per-vendor key shape. */
+/** Settings key holding one vendor's override. */
 export function cliPermissionKey(agentKey: string): string {
   return `agentTeam.cliPermission.${agentKey}`
 }

@@ -222,13 +222,23 @@ export interface MessagingDeps {
    *  `shouldAbort` turns true when the user withdraws the message while the
    *  pane's PTY is holding it unread (see cancelMessage); an injection that
    *  honours it clears what it wrote and resolves false. */
-  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) => Promise<boolean>
+  /** true: typed. false: did not arrive. null: put it back at the head of the
+   *  queue, nothing spent. `{ failed }`: refused for good, with the reason the
+   *  sender is told (a terminal command the backend will not type). */
+  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) =>
+    Promise<boolean | null | { failed: MessageReason }>
   /** True when the pane can accept an injection right now (idle + settled). */
   isPaneIdle: (paneId: string) => boolean
   /** Why isPaneIdle() said no, as an i18n key suffix under `msg.hold-*`. Must
    *  be derived from the same gate as isPaneIdle so the log cannot claim a
    *  reason the gate does not actually apply. Absent → a generic 'busy'. */
   idleHoldKey?: (paneId: string) => string | null
+  /** Why the head message must not be typed into this pane at all, checked
+   *  once the gate is open (so it sees the pane as it will be typed into), or
+   *  null. A refusal fails the message instead of holding it — waiting would
+   *  not change the answer. Today: a multi-line command for a plain terminal
+   *  whose shell has no bracketed paste. */
+  refuseDelivery?: (paneId: string, envelope: string) => MessageReason | null
   /** The push channel that could take a message for this pane right now, or
    *  null when there is none — the vendor has no channel, it is not armed, or
    *  the gates that channel still answers to are closed. Non-null is what lets
@@ -319,6 +329,21 @@ const RATE_LIMIT_REASON: MessageReason = {
   params: { max: RATE_LIMIT_MAX, seconds: RATE_LIMIT_WINDOW_MS / 1000 },
 }
 const QUEUE_FULL_REASON: MessageReason = { key: 'queue-full', params: { cap: QUEUE_CAP } }
+
+/** A plain shell pane's agentKey. A message to one is typed in verbatim and
+ *  run as a command line, so it gets no envelope, no reply hint and no
+ *  correlation id — every extra line would be executed by the shell. */
+export const TERMINAL_AGENT_KEY = 'terminal'
+/** Navide's own text (a delivery-failure notice, a fallback report) is prose
+ *  for an agent to read; typed into a shell it would run as a command. */
+const TERMINAL_NOTICE_REASON = rawReason('a Navide notice is never typed into a plain terminal pane — the shell would run it')
+/** Content from outside this machine's user (a chat channel, a remote device)
+ *  would run as the user's own shell command in a terminal. */
+/** A command held that long is no longer the one the sender meant to run now:
+ *  typing it once the shell frees up, perhaps hours later, would surprise the
+ *  user at the keyboard — so it fails and the sender decides again. */
+const TERMINAL_STALE_REASON = rawReason('not typed: the terminal stayed busy for 2 minutes — a held command is never run late; resend it if it still applies')
+const TERMINAL_EXTERNAL_REASON = rawReason('external content is never typed into a plain terminal pane — the shell would run it')
 
 /** Handle Navide writes its own messages under — delivery-failure notices here,
  *  SPAWN feedback in App.vue. Reserved rather than merely unregistered: a pane
@@ -595,7 +620,8 @@ function failMessage(id: number, reason: MessageReason): void {
  *
  * Skipped for anything whose sender is not a live CLI pane in this window: an
  * inbound cross-workspace row (the sending window is told by reportDelivery and
- * notifies its own pane), a closed or plain-terminal pane (not in the registry),
+ * notifies its own pane), a closed pane (not in the registry), a plain terminal
+ * (sendMessage fails a notice addressed to one rather than typing it),
  * an MCP client (which polls `cli_check_message` instead), and a notice itself —
  * a bounced notice is logged and left there, never answered with another.
  */
@@ -865,7 +891,18 @@ function sendMessage(from: string, to: string, content: string, opts: SendOption
     markLoggedOnly(msg)
     return msg
   }
-  if (msg.kind === 'notice') {
+  const toTerminal = agentByPane.get(targetPane) === TERMINAL_AGENT_KEY
+  // Any labelled message left here (a notice or a fallback report; an ack
+  // returned above) is prose for an agent, never a command line.
+  if (toTerminal && msg.kind) {
+    failMessage(msg.id, TERMINAL_NOTICE_REASON)
+    return msg
+  }
+  if (toTerminal) {
+    // A shell runs exactly what it is given: the body alone, unsanitized, and
+    // no correlation id — nothing in a shell can echo one back.
+    envelopes.set(msg.id, content)
+  } else if (msg.kind === 'notice') {
     // A notice is Navide's own text, already in the form the pane must see: its
     // first line says "delivery failed", which is how an agent tells it apart
     // from a message. An envelope would bury that under `from: Navide` and ask
@@ -988,6 +1025,9 @@ function acceptRemoteMessage(args: {
   /** Only ever 'ack', and only from the MCP cli_send tool: the message is
    *  logged here and never injected. Absent for every other sender. */
   kind?: 'ack'
+  /** From a chat channel or a remote device: fence the body as external
+   *  content (see isExternalDelivery / renderEnvelope). */
+  external?: boolean
 }): boolean {
   if (!deps) return false
   const localName = nameByPane.get(args.targetPaneId)
@@ -1061,11 +1101,20 @@ function acceptRemoteMessage(args: {
     deps.reportDelivery?.(args.msgKey, false, QUEUE_FULL_REASON)
     return true
   }
+  const toTerminal = agentByPane.get(args.targetPaneId) === TERMINAL_AGENT_KEY
+  if (toTerminal && args.external) {
+    failMessage(msg.id, TERMINAL_EXTERNAL_REASON)
+    deps.reportDelivery?.(args.msgKey, false, TERMINAL_EXTERNAL_REASON)
+    return true
+  }
   // The routing key is what the sending side already knows this message by, so
-  // it is the correlation id the reply is asked to echo.
+  // it is the correlation id the reply is asked to echo. A terminal gets the
+  // bare content — see TERMINAL_AGENT_KEY.
   envelopes.set(
     msg.id,
-    renderEnvelope(args.fromDisplay, args.content, { correlationId: args.msgKey }),
+    toTerminal
+      ? args.content
+      : renderEnvelope(args.fromDisplay, args.content, { correlationId: args.msgKey, external: args.external }),
   )
   correlations.set(args.msgKey, { id: msg.id, sentAt: msg.createdAt })
   remoteInbound.set(msg.id, args.msgKey)
@@ -1206,8 +1255,12 @@ function sendBroadcast(
   content: string,
   opts: SendOptions & { only?: (paneId: string) => boolean } = {},
 ): AgentMessage[] {
+  // Never a terminal: a broadcast is prose for agents, and a shell would run it.
   const targets = [...paneByName.entries()]
-    .filter(([name, paneId]) => name !== from && (!opts.only || opts.only(paneId)))
+    .filter(([name, paneId]) =>
+      name !== from &&
+      agentByPane.get(paneId) !== TERMINAL_AGENT_KEY &&
+      (!opts.only || opts.only(paneId)))
     .map(([name]) => name)
   return targets.map((to) => sendMessage(from, to, content, opts))
 }
@@ -1233,8 +1286,25 @@ function pump(): void {
   }
   // After the pause check, not before: while delivery is paused everything is
   // held on purpose, and the notice itself would be stuck in the same queue.
+  expireStaleTerminalMessages(now)
   notifyStaleHolds(now)
   for (const paneId of queues.keys()) void pumpPane(paneId)
+}
+
+/** Fail every message that has sat queued for a plain terminal past
+ *  STALE_HOLD_MS — see TERMINAL_STALE_REASON. Only queued rows: one already
+ *  being typed is past the point of taking back. */
+function expireStaleTerminalMessages(now: number): void {
+  for (const [paneId, q] of queues) {
+    if (agentByPane.get(paneId) !== TERMINAL_AGENT_KEY) continue
+    for (const id of [...q]) {
+      const m = findMessage(id)
+      if (!m || m.status !== 'queued' || now - m.createdAt < STALE_HOLD_MS) continue
+      q.splice(q.indexOf(id), 1)
+      failMessage(id, TERMINAL_STALE_REASON)
+      ackInbound(id, false, TERMINAL_STALE_REASON)
+    }
+  }
 }
 
 /** How many messages are still waiting to reach this pane.
@@ -1278,6 +1348,13 @@ async function pumpPane(paneId: string): Promise<void> {
     ackInbound(id, false, { key: 'dropped' })
     return
   }
+  const refusal = push ? null : deps.refuseDelivery?.(paneId, envelope) ?? null
+  if (refusal) {
+    q.shift()
+    failMessage(id, refusal)
+    ackInbound(id, false, refusal)
+    return
+  }
   delivering.add(paneId)
   msg.status = 'delivering'
   deps.persistUpdate?.([{ uid: msg.uid, status: 'delivering' }])
@@ -1288,7 +1365,10 @@ async function pumpPane(paneId: string): Promise<void> {
     const ok = await deliverOnce(paneId, msg, envelope, push, () => cancelRequested.has(id))
     const stuck = ok === 'unclear'
       && (pushUnclearCount.get(id) ?? 0) + 1 >= PUSH_UNCLEAR_LIMIT
-    if (stuck) {
+    if (typeof ok === 'object' && ok !== null) {
+      ackReason = ok.failed
+      failMessage(id, ackReason)
+    } else if (stuck) {
       // The composer would not clear after PUSH_UNCLEAR_LIMIT pushes: the
       // message is never getting through this way, and re-queuing it again
       // would only park the pane's whole queue behind it. Fail it so the
@@ -1361,7 +1441,7 @@ async function deliverOnce(
   envelope: string,
   push: { kind: string } | null,
   shouldAbort: () => boolean,
-): Promise<boolean | null | 'unclear'> {
+): Promise<boolean | null | 'unclear' | { failed: MessageReason }> {
   if (!deps) return false
   if (push && deps.pushDeliver) {
     msg.route = `push:${push.kind}`

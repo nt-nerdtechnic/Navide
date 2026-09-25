@@ -18,6 +18,30 @@ export interface CliRiskSignal {
   expectedSetObservedAt?: string
   /** Label of the enabled shared-CDN range holding `ip`: recorded, never lights the pill. */
   sharedCdn?: string
+  /** Network: the pane processes that opened this endpoint, at the last observation. */
+  local?: CliRiskProcess[]
+  /** Loopback network only: the process listening on `port` when observed. */
+  listener?: CliRiskListener
+  /** Network: distinct observations, oldest first; the newest row's `at` is when it was last seen. */
+  history?: CliRiskHistoryRow[]
+}
+
+/** A process on one end of a connection; a null name or command is unknown, never empty. */
+export interface CliRiskProcess {
+  pid: number
+  name: string | null
+  command: string | null
+}
+
+export type CliRiskListener =
+  | ({ status: 'resolved'; observedAt?: string } & CliRiskProcess)
+  | { status: 'unknown' }
+
+export interface CliRiskHistoryRow {
+  at: string
+  connections: number
+  local: Pick<CliRiskProcess, 'pid' | 'name'>[]
+  listener?: { status: 'resolved'; pid: number; name: string | null } | { status: 'unknown' }
 }
 
 export interface CliRiskObservation {

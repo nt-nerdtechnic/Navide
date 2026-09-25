@@ -175,4 +175,17 @@ describe('useNotify', () => {
     n.resolveDialog(true)
     await second
   })
+
+  it('marks a confirm as danger only when asked, leaving the default dialog unchanged', async () => {
+    const plain = n.confirm('Sure?', { title: 'T', confirmText: 'OK' })
+    // No `danger` key at all: existing confirms render exactly as before.
+    expect(n.dialog.value).not.toHaveProperty('danger')
+    n.resolveDialog(true)
+    await plain
+
+    const destructive = n.confirm('Remove it?', { danger: true })
+    expect(n.dialog.value?.danger).toBe(true)
+    n.resolveDialog(false)
+    expect(await destructive).toBe(false)
+  })
 })

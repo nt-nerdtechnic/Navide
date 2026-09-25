@@ -110,11 +110,12 @@ function recordBackendArtifactFile() {
     throw new Error(`Plans artifact file list is invalid: ${artifactFileList}`)
   }
   const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'dist-plugins/navide-plans/manifest.json'), 'utf8'))
-  const backendEntry = `backend/${executableName}`
+  const backendEntry = 'backend/navide-plans'
   if (manifest.backend?.entry !== backendEntry) {
-    throw new Error(`Plans manifest must select its target executable: ${backendEntry}`)
+    throw new Error(`Plans manifest must declare its backend entry: ${backendEntry}`)
   }
-  const files = [...new Set([...listed.files, backendEntry])].sort()
+  const backendFile = `backend/${executableName}`
+  const files = [...new Set([...listed.files, backendFile])].sort()
   writeFileSync(artifactFileList, `${JSON.stringify({ files }, null, 2)}\n`)
 }
 

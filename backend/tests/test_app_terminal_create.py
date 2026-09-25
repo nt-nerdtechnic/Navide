@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import app
+from agent_team_backend import app, guard_hooks
 
 
 class FakeWebSocket:
@@ -71,6 +71,13 @@ class FakeCodexHomeManager:
 
     def resolve_user_thread_id(self, resume_id: str) -> str:
         return self.repairs.get(resume_id, resume_id)
+
+
+def _env_without_guard_token(env: dict[str, str] | None) -> dict[str, str] | None:
+    """The spawn env minus Navide Guard's per-pane token, which every claude,
+    copilot and qwen pane gets (guard_hooks.PANE_TOKEN_ENV)."""
+    rest = {k: v for k, v in (env or {}).items() if k != guard_hooks.PANE_TOKEN_ENV}
+    return rest or None
 
 
 def _session() -> app.Session:
@@ -682,7 +689,7 @@ async def test_terminal_create_kimi_sets_escape_timeout_without_affecting_other_
         },
     })
     qwen_created = qwen_session.terminals.created[0]  # type: ignore[attr-defined]
-    assert qwen_created["env"] is None
+    assert _env_without_guard_token(qwen_created["env"]) is None
 
 
 @pytest.mark.asyncio

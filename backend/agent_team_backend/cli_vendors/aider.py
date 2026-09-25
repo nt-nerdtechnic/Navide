@@ -50,7 +50,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .base import AccountSwitchSpec, Dep, VendorSpec, dotenv_extract, dotenv_merge
+from .base import AccountSwitchSpec, Dep, PlatformInstall, VendorSpec, dotenv_extract, dotenv_merge
 from ..log_readers.base import (
     ActivityEvent,
     IncrementalParseResult,
@@ -702,6 +702,10 @@ SPEC = VendorSpec(
         install_cmd="curl -LsSf https://aider.chat/install.sh | sh",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
         docs_url="https://aider.chat",
+        # Windows: verbatim from https://aider.chat/docs/install.html
+        install_cmds={"win32": PlatformInstall(
+            'powershell -ExecutionPolicy ByPass -c "irm https://aider.chat/install.ps1 | iex"',
+            needs_terminal=True)},
         # `--upgrade` says "from PyPI" while install_cmd above installs through
         # uv, so the two look mismatched. Verified against a real install (uv
         # tool, aider 0.86.2): it works. get_pip_install() builds

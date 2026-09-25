@@ -238,7 +238,13 @@ async function openWithWindowsTerminal(
   // `-NoExit` is PowerShell's `; exec bash`: the window stays open with a
   // shell once the command finishes. Windows Terminal when it is installed —
   // it takes the shell command line as argv, so nothing of ours is quoted.
-  const powershell = ['powershell.exe', '-NoExit', '-Command', command]
+  // Process-scoped Bypass: `npm` resolves to npm.ps1, which the default
+  // Restricted / AllSigned policy refuses to load; the user's policy is kept.
+  // A resolved binary comes back quoted (`'C:\...\claude.cmd' update`), which
+  // PowerShell parses as a string plus a stray token; the call operator makes
+  // it a command. Same rule as onboarding_deps.run_argv.
+  if (command.startsWith("'") || command.startsWith('"')) command = `& ${command}`
+  const powershell = ['powershell.exe', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', command]
   const wt = findOnPath('wt.exe', path)
   if (wt) {
     const result = await launch(wt, powershell)

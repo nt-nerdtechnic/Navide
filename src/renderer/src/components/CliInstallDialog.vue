@@ -17,10 +17,10 @@
  * never composes an install command of its own.
  */
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { useOnboarding, type InstallResult, type OnboardDep } from '../composables/useOnboarding'
 import { orderInstalls, providerFor } from '../lib/installPlan'
+import InstallTerminal from './InstallTerminal.vue'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -55,14 +55,12 @@ const emit = defineEmits<{
   'dismiss-changed': [payload: { depId: string; dismissed: boolean }]
 }>()
 
-const { t } = useI18n()
 const onboarding = useOnboarding(props.backend)
 const {
-  deps, installing, installElapsedSec, loading, watching, watchOutcome, installPromptDismissed,
+  deps, installing, installElapsedSec, loading, installPromptDismissed, run, runBusy, runFallback,
 } = onboarding
 
 const result = ref<InstallResult | null>(null)
-const terminalError = ref('')
 const dontAsk = ref(false)
 
 onMounted(() => { void onboarding.refresh() })
@@ -104,28 +102,39 @@ const chainTotal = computed(() => chain.value.length)
 const hasPrerequisites = computed(() => chainTotal.value > 1)
 
 /**
+ * The chain link currently installing, if any. This dialog owns its own
+ * onboarding instance, so anything in flight there is a link of this chain —
+ * often a prerequisite rather than the CLI itself.
+ */
+const activeLinkId = computed(() => installing.value)
+/** Label of the link in progress, falling back to the last one tried. */
+const progressLabel = computed(
+  () => deps.value.find((d) => d.id === activeLinkId.value)?.label || lastAttemptedLabel.value
+)
+
+/**
  * The one place that decides what the user is looking at. Derived rather than
- * assigned, so a background re-detect (the terminal watcher) can move the
- * dialog to 'done' without any explicit transition.
+ * assigned, so a re-detect can move the dialog to 'done' without any explicit
+ * transition.
  */
 const phase = computed<
-  'intro' | 'installing' | 'waiting' | 'blocked' | 'failed' | 'signin' | 'done'
+  'intro' | 'installing' | 'blocked' | 'failed' | 'signin' | 'done'
 >(() => {
-  if (installing.value === props.depId) return 'installing'
+  // Any link, not only the CLI: while a prerequisite ran the dialog used to
+  // sit at 'intro' with Install enabled, and a second press opened a second
+  // terminal for the same prerequisite.
+  if (installing.value) return 'installing'
   // Installed is not the same as ready. A signed-out CLI passes every check
   // here and then opens its own sign-in prompt in the pane, with nothing in
   // Navide explaining why — so the last step asks for the login instead of
   // declaring success. Only an explicit 'signed-out' qualifies (see the prop).
   if (dep.value?.status === 'ok') return props.signInState === 'signed-out' ? 'signin' : 'done'
-  if (watching.value === props.depId) return 'waiting'
   if (blockers.value.length) return 'blocked'
-  if (result.value && (!result.value.ok || result.value.terminal_opened === false)) return 'failed'
+  if (result.value && !result.value.ok) return 'failed'
   return 'intro'
 })
 
-const failureText = computed(
-  () => result.value?.error || result.value?.output || terminalError.value
-)
+const failureText = computed(() => result.value?.error || result.value?.output || '')
 
 // ── Steps (check → install → verify) ────────────────────────────────────────
 const STEPS = ['check', 'install', 'verify'] as const
@@ -169,7 +178,7 @@ const requestedStep = ref<Step>('check')
  */
 const step = computed<Step>(() => {
   if (dep.value?.status === 'ok') return 'verify'
-  if (phase.value === 'installing' || phase.value === 'waiting' || phase.value === 'failed') {
+  if (phase.value === 'installing' || phase.value === 'failed') {
     return 'install'
   }
   return requestedStep.value
@@ -210,14 +219,12 @@ async function installStep(target: OnboardDep | undefined): Promise<void> {
   attempted.value.add(target.id)
   lastAttemptedId.value = target.id
   result.value = null
-  terminalError.value = ''
   requestedStep.value = 'install'
+  // Resolves once the command has exited in the embedded terminal and a fresh
+  // re-detect has run, so what follows judges the machine as it is now.
   const r = await onboarding.install(target)
   result.value = r
-  if (r?.needs_terminal && r.terminal_opened === false) {
-    terminalError.value = t('cli-install.terminal-failed')
-  }
-  if (!r?.ok || r.terminal_opened === false) {
+  if (!r?.ok) {
     advancing.value = false
     // A blocked install belongs back at the check step: what is wrong is the
     // environment, not the install itself.
@@ -228,9 +235,6 @@ async function installStep(target: OnboardDep | undefined): Promise<void> {
     emit('installed', props.depId)
     return
   }
-  // An external terminal has only been HANDED the command; the watcher resumes
-  // the chain once the tool actually appears (see the watchOutcome watcher).
-  if (r.needs_terminal) return
   // "Installed" and "detectable" are not the same thing. Carrying on would run
   // the next command against a machine that still cannot see this one — which
   // is exactly the exit-127 failure the chain exists to avoid. Stop instead and
@@ -243,19 +247,19 @@ async function installStep(target: OnboardDep | undefined): Promise<void> {
 }
 
 async function runInstall(): Promise<void> {
+  // The button is disabled meanwhile; this covers a click landing before the
+  // re-render. Starting over here would clear `attempted` and re-run a link.
+  if (activeLinkId.value) return
   advancing.value = true
   attempted.value = new Set()
   await installStep(nextStep.value ?? dep.value)
 }
 
-// A prerequisite installed in an external terminal finishes outside this
-// dialog. When detection confirms it, carry on with the rest of the chain
-// instead of making the user press Install once per link.
-watch(watchOutcome, (outcome) => {
-  if (outcome !== 'detected' || !advancing.value) return
-  if (!nextStep.value) return
-  void installStep(nextStep.value)
-})
+/** Closing mid-run would orphan a prompt nobody can answer: Cancel first. */
+function close(): void {
+  if (runBusy.value) return
+  emit('close')
+}
 
 async function toggleDontAsk(): Promise<void> {
   const ok = await onboarding.dismissInstallPrompt(props.depId, dontAsk.value)
@@ -285,7 +289,7 @@ function signIn(): void {
 </script>
 
 <template>
-  <div class="ci-page nv-modal-overlay" @click.self="emit('close')">
+  <div class="ci-page nv-modal-overlay" @click.self="close">
     <section class="ci-dialog nv-modal-shell nv-modal-shell--standard" role="dialog" aria-modal="true">
       <header class="ci-top">
         <div>
@@ -360,11 +364,7 @@ function signIn(): void {
           <section v-if="dep && dep.can_install" class="ci-card">
             <div class="ci-card-label">{{ $t('cli-install.command-label') }}</div>
             <code class="ci-command">{{ result?.command || dep.install_cmd }}</code>
-            <p class="ci-note">
-              {{ dep.needs_terminal
-                ? $t('cli-install.note-terminal')
-                : $t('cli-install.note-inline') }}
-            </p>
+            <p class="ci-note">{{ $t('cli-install.note-terminal') }}</p>
           </section>
           <!-- Until the first status arrives `dep` is undefined; without this
                the card claimed the CLI had no install command at all. -->
@@ -385,20 +385,9 @@ function signIn(): void {
 
         <!-- Step 2 · Install -------------------------------------------------->
         <template v-else-if="step === 'install'">
-          <h2>{{ $t('cli-install.install-title', { label }) }}</h2>
+          <h2>{{ $t('cli-install.install-title', { label: progressLabel }) }}</h2>
 
-          <section v-if="phase === 'installing'" class="ci-card">
-            <strong>{{ $t('cli-install.installing', { seconds: installElapsedSec }) }}</strong>
-            <p class="ci-note">{{ $t('cli-install.note-inline') }}</p>
-          </section>
-
-          <section v-else-if="phase === 'waiting'" class="ci-card waiting">
-            <strong>{{ $t('cli-install.waiting-title') }}</strong>
-            <p class="ci-note">{{ $t('cli-install.waiting-desc', { label }) }}</p>
-            <code v-if="result?.command" class="ci-command">{{ result.command }}</code>
-          </section>
-
-          <section v-else-if="phase === 'failed'" class="ci-card failed">
+          <section v-if="phase === 'failed'" class="ci-card failed">
             <strong>{{ $t('cli-install.failed-title') }}</strong>
             <pre v-if="failureText" class="ci-error">{{ failureText }}</pre>
             <a
@@ -410,19 +399,18 @@ function signIn(): void {
             >{{ $t('cli-install.docs') }}</a>
           </section>
 
-          <section v-else class="ci-card">
+          <section v-else-if="!run" class="ci-card">
             <div class="ci-card-label">{{ $t('cli-install.command-label') }}</div>
             <code class="ci-command">{{ result?.command || dep?.install_cmd }}</code>
           </section>
 
-          <!-- The watcher gave up; nothing else will change on its own -------->
-          <p v-if="watchOutcome === 'timeout' && phase !== 'waiting'" class="ci-warn">
-            {{ $t('cli-install.waiting-timeout', { label }) }}
-          </p>
+          <!-- The live command: output, prompts, and how it ended. -->
+          <InstallTerminal v-if="run || runFallback" :onboarding="onboarding" />
+
           <!-- Names the link that stayed undetected, which in a chain is often
                a prerequisite rather than the CLI this dialog is titled after. -->
           <p
-            v-if="result?.ok && !result.needs_terminal && lastAttempted && lastAttempted.status !== 'ok'"
+            v-if="result?.ok && lastAttempted && lastAttempted.status !== 'ok'"
             class="ci-warn"
           >
             {{ $t('cli-install.installed-not-detected', { label: lastAttemptedLabel }) }}
@@ -476,13 +464,13 @@ function signIn(): void {
         <button class="ci-btn ghost ci-redetect nv-btn" :disabled="loading || !!installing" @click="onboarding.refresh({ fresh: true })">
           {{ loading ? $t('label.detecting') : $t('action.re-detect') }}
         </button>
-        <button class="ci-btn ghost ci-close nv-btn" @click="emit('close')">
+        <button class="ci-btn ghost ci-close nv-btn" :disabled="runBusy" @click="close">
           {{ step === 'verify' ? $t('cli-install.close') : $t('cli-install.not-now') }}
         </button>
         <button
           v-if="step !== 'verify' && dep && dep.can_install"
           class="ci-btn primary ci-install nv-btn nv-btn--primary"
-          :disabled="!!installing || phase === 'waiting'"
+          :disabled="!!installing || runBusy"
           @click="runInstall"
         >
           <template v-if="phase === 'installing'">

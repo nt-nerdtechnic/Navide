@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   chmodSync,
   existsSync,
@@ -37,6 +37,12 @@ import {
 
 // The real filesystem the suite runs on: NTFS has no POSIX mode bits to assert on.
 const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
+
+// Every write here is a real fsync (FlushFileBuffers on Windows), and one test
+// makes up to ~15 of them. A slow CI disk has taken ~400ms per flush, which
+// pushed whole tests past the default 5s timeout; stubbing the flush would stop
+// exercising the durable write path, so give these tests room instead.
+vi.setConfig({ testTimeout: 30_000 })
 
 const RECOMMENDED_POLICY: ExecutionPolicy = {
   schemaVersion: 1 as const,

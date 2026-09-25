@@ -41,7 +41,7 @@ import os
 import re
 from pathlib import Path
 
-from .base import AccountSwitchSpec, Dep, VendorSpec, command_text
+from .base import AccountSwitchSpec, Dep, PlatformInstall, VendorSpec, command_text
 from ..log_readers.base import (
     ActivityEvent,
     LogReader,
@@ -546,6 +546,11 @@ SPEC = VendorSpec(
         install_cmd="brew install --cask droid", needs_terminal=True,
         requires_binaries=("brew",),
         optional=True, docs_url="https://docs.factory.ai/cli/getting-started/overview",
+        # Windows: the official PowerShell installer, per
+        # https://docs.factory.ai/droid-cli/quickstart — not npm, whose builds
+        # ship with `droid update` disabled.
+        install_cmds={"win32": PlatformInstall(
+            "irm https://app.factory.ai/cli/windows | iex", needs_terminal=True)},
         update_cmd="droid update", doctor_cmd="droid doctor",
         config_home_default=".factory"),
 )

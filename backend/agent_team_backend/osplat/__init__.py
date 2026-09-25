@@ -100,4 +100,10 @@ collect_cli_connections = {
     "win32": cli_network.unsupported,
 }[platform_id]
 
-__all__ += ["collect_cli_connections"]
+resolve_loopback_listeners = {
+    "darwin": cli_network.listeners_lsof,
+    "linux": cli_network.listeners_ss,
+    "win32": cli_network.listeners_unsupported,
+}[platform_id]
+
+__all__ += ["collect_cli_connections", "resolve_loopback_listeners"]

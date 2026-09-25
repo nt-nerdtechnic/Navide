@@ -716,3 +716,22 @@ def test_launch_facts_are_bounded():
     assert pc.launch_slot(f"bound-pane-{pc._LAUNCH_FACTS_MAX + 49}") == "slot"
     for i in range(pc._LAUNCH_FACTS_MAX + 50):
         pc.forget_launch(f"bound-pane-{i}")
+
+
+@pytest.mark.asyncio
+async def test_spawn_gives_a_guard_pane_token_to_hooked_vendors_only(_wired):
+    """Navide Guard names a not-yet-attributed session's pane by this token;
+    it is minted by the backend (a renderer-supplied one is dropped)."""
+    from agent_team_backend import guard_hooks
+
+    session = _session()
+    message = _create()
+    message["payload"]["metadata"]["guard_pane_token"] = "forged"
+    await app.handle_message(session, message)
+    await app.handle_message(session, _create(pane="shell-pane", agent="terminal"))
+    claude, shell = session.terminals.created  # type: ignore[attr-defined]
+    token = claude["metadata"]["guard_pane_token"]
+    assert token and token != "forged"
+    assert claude["env"][guard_hooks.PANE_TOKEN_ENV] == token
+    assert "guard_pane_token" not in shell["metadata"]
+    assert guard_hooks.PANE_TOKEN_ENV not in (shell["env"] or {})

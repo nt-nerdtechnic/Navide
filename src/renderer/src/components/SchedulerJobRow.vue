@@ -20,6 +20,9 @@ const busy = computed(() => props.api.pendingId.value !== null)
 const backoff = computed(() => props.api.backoffLabel(props.job))
 const target = computed(() => props.api.targetLabel(props.job))
 const desc = computed(() => describeSchedule(props.job.schedule, tr, props.job.state))
+const owner = computed(() => props.api.ownerLabel(props.job))
+const expiry = computed(() => props.api.expiryLabel(props.job))
+const updatedBy = computed(() => props.api.updatedByLabel(props.job))
 </script>
 
 <template>
@@ -41,6 +44,19 @@ const desc = computed(() => describeSchedule(props.job.schedule, tr, props.job.s
       </span>
       <span v-else-if="light === 'skip' && !gone" class="sj-tag" data-test="skip-tag">
         {{ api.skipLabel(job) }}
+      </span>
+      <span v-if="owner" class="sj-owner" data-test="owner" :title="api.ownerTitle(job)">{{ owner }}</span>
+      <span v-if="job.owner_gone" class="sj-claim sj-orphan" data-test="owner-gone" :title="t('scheduler.owner.gone-title')">
+        {{ t('scheduler.owner.gone') }}
+        <button class="sj-claim-btn" data-test="adopt" :disabled="busy" @click="api.claim(job, 'adopt')">
+          {{ t('scheduler.owner.adopt') }}
+        </button>
+      </span>
+      <span v-if="expiry" class="sj-claim sj-expiry" data-test="expiry" :title="t('scheduler.owner.expires-title')">
+        {{ expiry }}
+        <button class="sj-claim-btn" data-test="keep" :disabled="busy" @click="api.claim(job, 'keep')">
+          {{ t('scheduler.owner.keep') }}
+        </button>
       </span>
       <span class="sj-src">Navide</span>
       <span class="sj-acts">
@@ -69,6 +85,10 @@ const desc = computed(() => describeSchedule(props.job.schedule, tr, props.job.s
       <span v-if="backoff" class="sj-when" data-test="when">· {{ backoff }}</span>
       <span class="sj-sep">·</span>
       <span class="sj-target" data-test="target">{{ target }}</span>
+      <template v-if="updatedBy">
+        <span class="sj-sep">·</span>
+        <span class="sj-updated" data-test="updated-by">{{ updatedBy }}</span>
+      </template>
     </div>
     <div v-if="gone" class="sj-gone" data-test="target-gone">
       <span>{{ t('scheduler.skip.target_gone') }}</span>
@@ -173,6 +193,50 @@ const desc = computed(() => describeSchedule(props.job.schedule, tr, props.job.s
   border-color: var(--accent-muted);
   background: var(--accent-subtle);
   color: var(--accent-fg);
+}
+.sj-owner,
+.sj-claim {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.sj-owner {
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sj-orphan {
+  border-style: dashed;
+}
+.sj-expiry {
+  border-color: var(--attention-muted);
+  background: var(--attention-subtle);
+  color: var(--attention-fg);
+}
+.sj-claim-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+.sj-claim-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.sj-updated {
+  flex: none;
+  white-space: nowrap;
 }
 .sj-acts {
   display: flex;

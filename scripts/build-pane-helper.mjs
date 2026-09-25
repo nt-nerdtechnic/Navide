@@ -49,6 +49,8 @@ execFileSync(
 // LSUIElement is the whole point: processes attributed to this bundle get no
 // Dock tile. The identifier must differ from the app's so LaunchServices
 // treats it as its own application rather than another Navide.
+// TCC attributes anything launched from a pane to this bundle, and without a
+// microphone usage string it denies mic access silently, with no prompt.
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -75,6 +77,8 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>A program running in a Navide terminal pane wants to use the microphone.</string>
 </dict>
 </plist>
 `

@@ -9,15 +9,26 @@
 //   grey    last run skipped — with the reason
 //   green   last run ok
 //   hollow  never run yet (none of the four is true of it)
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+//
+// Ownership: this window acts as the user and may change every job; the
+// labels only say which ones an agent created, which of those no agent can
+// change any more (creator gone), and when an agent's periodic job expires.
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from './useBackend'
-import { formatClock, shortId, type SchedulerJob } from '../lib/schedulerJobs'
+import {
+  formatClock,
+  shortId,
+  type JobOwner,
+  type SchedulerJob,
+  type SchedulerLimits,
+} from '../lib/schedulerJobs'
 
 /** After ▶ the row stays orange for at most this long, so a click never looks
  *  ignored while the backend is still waking the pane (NT-ClawLaunch's rule). */
 const GRACE_MS = 60_000
 const RPC_TIMEOUT_MS = 15_000
+const DAY_MS = 86_400_000
 
 export type Light = 'running' | 'off' | 'err' | 'skip' | 'ok' | 'new'
 
@@ -25,6 +36,8 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
   const { t } = useI18n()
 
   const jobs = ref<SchedulerJob[]>([])
+  /** From the last scheduler.list; runs today is not in the change broadcast. */
+  const limits = ref<SchedulerLimits | null>(null)
   const listError = ref('')
   const opError = ref('')
   /** Job id → when ▶ was pressed; cleared by a timer at GRACE_MS. */
@@ -70,6 +83,69 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
       : t('scheduler.target', { name })
   }
 
+  function isAgent(owner: JobOwner | null | undefined): boolean {
+    return !!owner && owner.kind !== 'user'
+  }
+
+  function whoLabel(owner: JobOwner): string {
+    return owner.kind === 'pane' ? owner.pane_name || shortId(owner.pane_id) : t('scheduler.owner.external')
+  }
+
+  /** '' for the user's own job. */
+  function ownerLabel(job: SchedulerJob): string {
+    if (!isAgent(job.owner)) return ''
+    const owner = job.owner as JobOwner
+    return owner.kind === 'pane' ? t('scheduler.owner.agent', { name: whoLabel(owner) }) : whoLabel(owner)
+  }
+
+  function ownerTitle(job: SchedulerJob): string {
+    return isAgent(job.owner) ? t('scheduler.owner.agent-title', { name: whoLabel(job.owner as JobOwner) }) : ''
+  }
+
+  /** '' unless an agent last changed it. */
+  function updatedByLabel(job: SchedulerJob): string {
+    return isAgent(job.updated_by) ? t('scheduler.owner.updated-by', { name: whoLabel(job.updated_by as JobOwner) }) : ''
+  }
+
+  /** '' unless this is an enabled agent job that will expire. */
+  function expiryLabel(job: SchedulerJob): string {
+    const at = job.owner?.expires_at
+    if (!job.enabled || !isAgent(job.owner) || typeof at !== 'number') return ''
+    return t('scheduler.owner.expires-in', { n: Math.max(0, Math.ceil((at - now.value) / DAY_MS)) })
+  }
+
+  const agentEnabled = computed(() => jobs.value.filter((j) => j.enabled && isAgent(j.owner)).length)
+
+  /** One-line notices for the panel: agents at their enabled-job or daily-run limit. */
+  const limitNotices = computed(() => {
+    const lim = limits.value
+    if (!lim) return [] as { key: string; text: string }[]
+    const out: { key: string; text: string }[] = []
+    if (agentEnabled.value >= lim.agent_enabled_total)
+      out.push({
+        key: 'enabled',
+        text: t('scheduler.limit.enabled-full', { n: agentEnabled.value, max: lim.agent_enabled_total }),
+      })
+    if (lim.agent_runs_today >= lim.agent_runs_per_day)
+      out.push({
+        key: 'runs',
+        text: t('scheduler.limit.runs-full', { runs: lim.agent_runs_today, max: lim.agent_runs_per_day }),
+      })
+    return out
+  })
+
+  /** '' until any agent job exists. */
+  const limitMeter = computed(() => {
+    const lim = limits.value
+    if (!lim || !jobs.value.some((j) => isAgent(j.owner))) return ''
+    return t('scheduler.limit.meter', {
+      n: agentEnabled.value,
+      max: lim.agent_enabled_total,
+      runs: lim.agent_runs_today,
+      runsMax: lim.agent_runs_per_day,
+    })
+  })
+
   /** Only what the timeline's time column cannot say: a backoff hold. */
   function backoffLabel(job: SchedulerJob): string {
     const until = job.state?.backoff_until
@@ -83,7 +159,12 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
     if (backend.status.value !== 'connected') return
     const seq = ++listSeq
     try {
-      const resp = await backend.send<{ ok: boolean; jobs?: SchedulerJob[]; error?: string }>(
+      const resp = await backend.send<{
+        ok: boolean
+        jobs?: SchedulerJob[]
+        limits?: SchedulerLimits
+        error?: string
+      }>(
         'scheduler.list',
         {},
         RPC_TIMEOUT_MS
@@ -91,6 +172,7 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
       if (seq !== listSeq) return
       if (resp.ok && resp.payload && resp.payload.ok !== false) {
         jobs.value = resp.payload.jobs ?? []
+        limits.value = resp.payload.limits ?? null
         listError.value = ''
       } else listError.value = resp.error?.message ?? resp.payload?.error ?? 'scheduler.list failed'
     } catch (err) {
@@ -156,6 +238,17 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
     }
   }
 
+  /** "Make it mine" (the job becomes the user's) or "keep" (it stops expiring). */
+  async function claim(job: SchedulerJob, how: 'adopt' | 'keep'): Promise<void> {
+    if (pendingId.value) return
+    pendingId.value = job.id
+    try {
+      if (await mutate(`scheduler.${how}`, { id: job.id })) await refresh()
+    } finally {
+      pendingId.value = null
+    }
+  }
+
   let offChanged: (() => void) | null = null
 
   onMounted(() => {
@@ -193,9 +286,17 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
     skipLabel,
     targetLabel,
     backoffLabel,
+    ownerLabel,
+    ownerTitle,
+    updatedByLabel,
+    expiryLabel,
+    limits,
+    limitNotices,
+    limitMeter,
     refresh,
     runNow,
     toggleEnabled,
+    claim,
   }
 }
 

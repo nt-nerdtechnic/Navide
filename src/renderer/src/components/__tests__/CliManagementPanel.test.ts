@@ -7,6 +7,37 @@ import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import { useOnboarding } from '../../composables/useOnboarding'
 import type { OnboardDep, OnboardStatus } from '../../composables/useOnboarding'
 
+// Maintenance commands run in an embedded xterm; happy-dom has no canvas for it.
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    cols = 100
+    rows = 24
+    loadAddon(): void {}
+    open(): void {}
+    onData(): { dispose(): void } { return { dispose(): void {} } }
+    write(): void {}
+    reset(): void {}
+    focus(): void {}
+    dispose(): void {}
+  },
+}))
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit(): void {}
+    dispose(): void {}
+  },
+}))
+
+/** Let the command in the embedded terminal end. */
+async function exitRun(
+  mock: ReturnType<typeof createMockBackend>,
+  exit: { exit_code: number | null; signal?: string },
+  runId = 'run-1',
+): Promise<void> {
+  mock.emit('terminal.exit', { terminal_session_id: runId, ...exit })
+  await flushPromises()
+}
+
 const depBase = {
   description: '', group: 'agent_cli' as const, min_version: '', optional: true,
   needs_terminal: true, can_install: true, docs_url: '',
@@ -47,6 +78,7 @@ function status(): OnboardStatus {
       entries: [{
         agent_key: 'claude',
         label: 'Claude Code',
+        npm_package: '@anthropic-ai/claude-code',
         diagnostic_command: 'claude doctor',
         update_command: 'claude update',
         docs_url: '',
@@ -63,7 +95,6 @@ function status(): OnboardStatus {
       needs_attention: true,
     },
     complete: true,
-    skip: false,
   }
 }
 
@@ -85,7 +116,7 @@ describe('CliManagementPanel', () => {
     stubTerminal()
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status())
-    mock.setResponse('onboarding.cli_maintenance', { ok: true, needs_terminal: true, command: 'claude update' })
+    mock.setResponse('onboarding.run', { ok: true, run_id: 'run-1', command: 'claude update' })
     wrapper = mount(CliManagementPanel, {
       props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
       global: { plugins: [i18n] },
@@ -106,6 +137,70 @@ describe('CliManagementPanel', () => {
     expect(wrapper!.get('.cm-update').classes()).toContain('failed')
   })
 
+  describe('choosing an installation', () => {
+    async function mountWithDuplicates(fingerprint = '0123456789abcdef') {
+      stubTerminal()
+      const mock = createMockBackend('connected')
+      const withDupes = status()
+      withDupes.cli_health.fingerprint = fingerprint
+      withDupes.cli_health.entries[0].candidates = [
+        { path: '/a/claude', resolved_path: '/a/claude', version: '2.1.219', status: 'ok', is_primary: true },
+        { path: '/b/claude', resolved_path: '/b/claude', version: '2.1.200', status: 'ok', is_primary: false },
+      ] as OnboardStatus['cli_health']['entries'][number]['candidates']
+      mock.setResponse('onboarding.status', withDupes)
+      wrapper = mount(CliManagementPanel, {
+        props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+        global: { plugins: [i18n] },
+      })
+      await flushPromises()
+      return mock
+    }
+
+    const useThis = () => wrapper!.findAll('button').find((button) => button.text() === 'Use this one')!
+
+    it('saves just the choice — no fingerprint needed — and says so', async () => {
+      const mock = await mountWithDuplicates('')
+      mock.setResponse('onboarding.cli_health.select_binary', { ok: true, agent_key: 'claude', path: '/b/claude' })
+
+      await useThis().trigger('click')
+      await flushPromises()
+
+      expect(mock.sent).toContainEqual({
+        type: 'onboarding.cli_health.select_binary',
+        payload: { agent_key: 'claude', path: '/b/claude' },
+      })
+      expect(wrapper!.get('.cm-message').text()).toBe(
+        i18n.global.t('cli-manage.use-done', { label: 'Claude Code', path: '/b/claude' })
+      )
+    })
+
+    it('shows a refused choice instead of dropping it', async () => {
+      const mock = await mountWithDuplicates()
+      mock.setResponse('onboarding.cli_health.select_binary', {
+        ok: false, error: 'binary is not an installed PATH candidate',
+      })
+
+      await useThis().trigger('click')
+      await flushPromises()
+
+      expect(wrapper!.get('.cm-message').text()).toBe(i18n.global.t('cli-manage.use-failed', {
+        label: 'Claude Code', error: 'binary is not an installed PATH candidate',
+      }))
+    })
+
+    it('shows a transport failure instead of rejecting unhandled', async () => {
+      const mock = await mountWithDuplicates()
+      mock.setRejection('onboarding.cli_health.select_binary', 'ws not open')
+
+      await useThis().trigger('click')
+      await flushPromises()
+
+      expect(wrapper!.get('.cm-message').text()).toBe(
+        i18n.global.t('cli-manage.use-failed', { label: 'Claude Code', error: 'ws not open' })
+      )
+    })
+  })
+
   it('runs the vendor update command rather than one of its own', async () => {
     const mock = await mountPanel()
 
@@ -113,11 +208,95 @@ describe('CliManagementPanel', () => {
     await update!.trigger('click')
     await flushPromises()
 
-    expect(mock.sent).toContainEqual({
-      type: 'onboarding.cli_maintenance',
-      payload: { agent_key: 'claude', action: 'update' },
+    expect(mock.sent).toContainEqual(expect.objectContaining({
+      type: 'onboarding.run',
+      payload: { kind: 'maintenance', agent_key: 'claude', action: 'update', cols: 100, rows: 24 },
+    }))
+    // In the embedded terminal, not an external one.
+    expect(opened).toEqual([])
+    expect(wrapper!.get('[data-testid="install-terminal"]').text()).toContain('claude update')
+    // One command at a time: every other maintenance button waits for it.
+    const actions = wrapper!.findAll('.cm-actions button')
+    expect(actions.length).toBeGreaterThan(0)
+    for (const button of actions) expect(button.attributes('disabled')).toBeDefined()
+
+    await exitRun(mock, { exit_code: 0 })
+
+    const probes = mock.sent.filter((s) => s.type === 'onboarding.status')
+    expect(probes[probes.length - 1].payload).toEqual({ fresh: true })
+    expect(wrapper!.get('.cm-message').text()).toBe(
+      i18n.global.t('cli-manage.run-finished', { command: 'claude update' })
+    )
+    for (const button of wrapper!.findAll('.cm-actions button')) {
+      expect(button.attributes('disabled')).toBeUndefined()
+    }
+  })
+
+  it('says so when the vendor command exits non-zero', async () => {
+    const mock = await mountPanel()
+
+    const update = wrapper!.findAll('button').find((button) => button.text().includes('claude update'))
+    await update!.trigger('click')
+    await flushPromises()
+    await exitRun(mock, { exit_code: 2 })
+
+    expect(wrapper!.get('.cm-message').text()).toBe(
+      i18n.global.t('cli-manage.run-failed', { command: 'claude update', error: 'Exited with code 2' })
+    )
+    expect(wrapper!.get('[data-testid="install-terminal-status"]').text()).toBe(
+      i18n.global.t('install-terminal.exited-fail', { code: 2 })
+    )
+  })
+
+  it('says a refused command is unavailable instead of starting anything', async () => {
+    const mock = await mountPanel()
+    mock.setResponse('onboarding.run', { ok: false, error: 'agent has no update command' })
+
+    const update = wrapper!.findAll('button').find((button) => button.text().includes('claude update'))
+    await update!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper!.get('.cm-message').text()).toBe(
+      i18n.global.t('cli-manage.command-unavailable', { label: 'Claude Code' })
+    )
+    expect(wrapper!.find('[data-testid="install-terminal"]').exists()).toBe(false)
+  })
+
+  it('says why when the command could not even be requested', async () => {
+    // Settings has no log view: a timed-out or disconnected start used to
+    // leave the panel showing nothing at all.
+    const mock = await mountPanel()
+    mock.setRejection('onboarding.run', 'request onboarding.run timeout')
+
+    const update = wrapper!.findAll('button').find((button) => button.text().includes('claude update'))
+    await update!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper!.get('.cm-message').text()).toBe(i18n.global.t('cli-manage.start-failed', {
+      label: 'Claude Code', error: 'request onboarding.run timeout',
+    }))
+  })
+
+  it('shows the backend\'s reason when an install is refused', async () => {
+    stubTerminal()
+    const mock = createMockBackend('connected')
+    const payload = status()
+    payload.deps = [{ ...claude, install_cmd: 'curl -fsSL https://claude.ai/install.sh | bash' }]
+    mock.setResponse('onboarding.status', payload)
+    mock.setResponse('onboarding.run', { ok: false, error: 'npm is required but was not found' })
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+      global: { plugins: [i18n] },
     })
-    expect(opened).toEqual(['claude update'])
+    await flushPromises()
+
+    const reinstall = wrapper.findAll('button').find((button) => button.text().includes('install.sh'))
+    await reinstall!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper!.get('.cm-message').text()).toBe(i18n.global.t('cli-manage.start-failed', {
+      label: 'Claude Code', error: 'npm is required but was not found',
+    }))
   })
 
   it('offers to reinstall an installed CLI through the vendor install command', async () => {
@@ -129,8 +308,8 @@ describe('CliManagementPanel', () => {
     const payload = status()
     payload.deps = [{ ...claude, install_cmd: 'curl -fsSL https://claude.ai/install.sh | bash' }]
     mock.setResponse('onboarding.status', payload)
-    mock.setResponse('onboarding.cli_maintenance', {
-      ok: true, needs_terminal: true, command: 'curl -fsSL https://claude.ai/install.sh | bash',
+    mock.setResponse('onboarding.run', {
+      ok: true, run_id: 'run-1', command: 'curl -fsSL https://claude.ai/install.sh | bash',
     })
     wrapper = mount(CliManagementPanel, {
       props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
@@ -145,11 +324,13 @@ describe('CliManagementPanel', () => {
     await reinstall!.trigger('click')
     await flushPromises()
 
-    expect(mock.sent).toContainEqual({
-      type: 'onboarding.cli_maintenance',
-      payload: { agent_key: 'claude', action: 'install' },
-    })
-    expect(opened).toEqual(['curl -fsSL https://claude.ai/install.sh | bash'])
+    expect(mock.sent).toContainEqual(expect.objectContaining({
+      type: 'onboarding.run',
+      payload: { kind: 'maintenance', agent_key: 'claude', action: 'install', cols: 100, rows: 24 },
+    }))
+    expect(opened).toEqual([])
+    expect(wrapper.get('[data-testid="install-terminal"]').text()).toContain('install.sh')
+    await exitRun(mock, { exit_code: 0 })
   })
 
   it('passes an unrecognised vendor outcome through verbatim', async () => {
@@ -187,6 +368,20 @@ describe('CliManagementPanel', () => {
     })
   })
 
+  it('says so and puts the select back when a policy change is refused', async () => {
+    const mock = await mountPanel()
+    mock.setResponse('onboarding.cli_autoupdate', { ok: false, error: 'agent has no vendor auto-update switch' })
+
+    const select = wrapper!.get('.cm-policy select')
+    await select.setValue('manual')
+    await flushPromises()
+
+    expect(wrapper!.get('.cm-message').text()).toBe(
+      i18n.global.t('cli-manage.autoupdate-failed', { label: 'Claude Code' })
+    )
+    expect((select.element as HTMLSelectElement).value).toBe('vendor')
+  })
+
   it('offers no policy control for a CLI without a vendor switch', async () => {
     await mountPanel()
 
@@ -214,7 +409,7 @@ describe('CliManagementPanel', () => {
     stubTerminal()
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status())
-    mock.setResponse('onboarding.cli_maintenance', { ok: true, needs_terminal: true, command: 'kimi doctor' })
+    mock.setResponse('onboarding.run', { ok: true, run_id: 'run-1', command: 'kimi doctor' })
     const onboarding = useOnboarding(mock.backend)
     await onboarding.refresh()
     wrapper = mount(CliManagementPanel, {
@@ -227,11 +422,12 @@ describe('CliManagementPanel', () => {
 
     await wrapper.get('button[title="kimi doctor"]').trigger('click')
     await flushPromises()
-    expect(mock.sent).toContainEqual({
-      type: 'onboarding.cli_maintenance',
-      payload: { agent_key: 'kimi', action: 'doctor' },
-    })
-    expect(opened).toEqual(['kimi doctor'])
+    expect(mock.sent).toContainEqual(expect.objectContaining({
+      type: 'onboarding.run',
+      payload: { kind: 'maintenance', agent_key: 'kimi', action: 'doctor', cols: 100, rows: 24 },
+    }))
+    expect(opened).toEqual([])
+    await exitRun(mock, { exit_code: 0 })
     onboarding.dispose()
   })
 
@@ -263,7 +459,7 @@ describe('CliManagementPanel', () => {
     await flushPromises()
 
     expect(wrapper.find('.ci-dialog').exists()).toBe(true)
-    expect(mock.sent.some((s) => s.type === 'onboarding.cli_maintenance')).toBe(false)
+    expect(mock.sent.some((s) => s.type === 'onboarding.run')).toBe(false)
     expect(wrapper.emitted('install-open-change')).toEqual([[true]])
 
     const panel = wrapper.vm as unknown as { closeInstallDialog: () => boolean }
@@ -272,6 +468,32 @@ describe('CliManagementPanel', () => {
     expect(wrapper.find('.ci-dialog').exists()).toBe(false)
     expect(wrapper.emitted('install-open-change')).toEqual([[true], [false]])
     expect(panel.closeInstallDialog()).toBe(false)
+  })
+
+  it('re-reads the account store once the install dialog reports an install', async () => {
+    // The store was loaded before the CLI existed, so its sign-in state is
+    // "unknown" until re-read — the dialog would skip the sign-in step.
+    stubTerminal()
+    const mock = createMockBackend('connected')
+    const payload = status()
+    payload.deps = [{ ...kimi, status: 'missing', version: '' }]
+    mock.setResponse('onboarding.status', payload)
+    const cliProfiles = { identityFor: () => null, refresh: vi.fn(() => Promise.resolve()) }
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend), cliProfiles: cliProfiles as never },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    const install = wrapper.findAll('button').find(
+      (button) => button.text() === i18n.global.t('cli-manage.install')
+    )
+    await install!.trigger('click')
+    await vi.dynamicImportSettled()
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'CliInstallDialog' }).vm.$emit('installed', 'kimi')
+    expect(cliProfiles.refresh).toHaveBeenCalledTimes(1)
   })
 
   it('focuses an enabled installer control while dependency detection is still pending', async () => {

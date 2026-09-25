@@ -51,7 +51,7 @@ describe('ControlPane — spawning a CLI that is not installed', () => {
     mock: ReturnType<typeof createMockBackend>
   }> {
     const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', statusWith(missing))
+    mock.setResponse('onboarding.status_quick', statusWith(missing))
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = shallowMount(ControlPane as any, {
       props: props(mock),
@@ -89,12 +89,26 @@ describe('ControlPane — spawning a CLI that is not installed', () => {
     expect(wrapper.emitted('spawn')).toHaveLength(1)
   })
 
+  it('asks the PATH-only quick pass, which never queues behind a full probe', async () => {
+    // The full `onboarding.status` waits on the backend's single-worker
+    // executor behind App's 45s probe, so at connect it timed out and the
+    // badges stayed empty. Presence is all this needs.
+    const mounted = await mountPane(['claude'])
+    wrapper = mounted.wrapper
+
+    const types = mounted.mock.sent.map((s) => s.type)
+    expect(types).toContain('onboarding.status_quick')
+    expect(types).not.toContain('onboarding.status')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect([...(wrapper.vm as any).missingClis]).toEqual(['claude'])
+  })
+
   it('re-detects before offering the install, so a just-finished install still spawns', async () => {
     // The dropdown status is cached for 10s; without the re-detect the user
     // would be shown the install dialog for a CLI they had just installed.
     const mounted = await mountPane(['claude'])
     wrapper = mounted.wrapper
-    mounted.mock.setResponse('onboarding.status', statusWith([]))
+    mounted.mock.setResponse('onboarding.status_quick', statusWith([]))
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(wrapper.vm as any).spawn()

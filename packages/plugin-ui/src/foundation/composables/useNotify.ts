@@ -28,6 +28,10 @@ export interface DialogState {
    *  Absent means no checkbox. Its state is read from `dialogCheckbox` after
    *  the promise settles. */
   checkboxLabel?: string
+  /** Confirm only: the confirmed action is destructive (remove, uninstall), so
+   *  the host renders the confirm button as a danger action. Absent means the
+   *  default rendering. */
+  danger?: boolean
   /** alert/confirm resolve with a boolean; prompt with the entered string (or
    *  null when cancelled). */
   resolve: (value: boolean | string | null) => void
@@ -110,6 +114,8 @@ function confirm(
     cancelText?: string
     /** Renders an opt-out checkbox; read `dialogCheckbox.value` after awaiting. */
     checkboxLabel?: string
+    /** Destructive action: rendered as a danger confirm. */
+    danger?: boolean
   } = {}
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
@@ -122,6 +128,8 @@ function confirm(
       confirmText: opts.confirmText ?? 'OK',
       cancelText: opts.cancelText ?? 'Cancel',
       checkboxLabel: opts.checkboxLabel,
+      // Only set when asked for, so every existing confirm stays identical.
+      ...(opts.danger ? { danger: true } : {}),
       resolve: resolve as (v: boolean | string | null) => void
     }
   })

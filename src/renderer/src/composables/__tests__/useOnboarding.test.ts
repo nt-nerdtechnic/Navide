@@ -43,7 +43,6 @@ function status(opts: { found?: boolean; cli?: boolean; ollama?: boolean; models
       suggested_model: 'qwen2.5-coder',
     },
     complete: false,
-    skip: false,
   }
 }
 
@@ -83,37 +82,20 @@ describe('useOnboarding', () => {
     scope.stop()
   })
 
-  it('install of a needs_terminal dep opens an external terminal', async () => {
-    const calls: string[] = []
-    ;(globalThis as unknown as { window: { agentTeam: { openTerminal: (c: string) => Promise<{ ok: boolean }> } } }).window = {
-      agentTeam: { openTerminal: (c: string) => { calls.push(c); return Promise.resolve({ ok: true }) } },
-    }
-    const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ cli: false }))
-    mock.setResponse('onboarding.install', { ok: true, needs_terminal: true, command: 'npm i -g x' })
-    const { result, scope } = withScope(() => useOnboarding(mock.backend))
-    await result.refresh()
-    await result.install(result.cliDeps.value[0])
+  // ── embedded runs (onboarding.run → terminal.* events) ─────────────────────
+  type Mock = ReturnType<typeof createMockBackend>
+
+  function startedRun(mock: Mock, command = 'npm i -g x', runId = 'run-1'): void {
+    mock.setResponse('onboarding.run', { ok: true, run_id: runId, command })
+  }
+
+  /** The command's exit, as the backend reports it after the last output. */
+  async function exitRun(mock: Mock, exitCode: number | null, extra: Record<string, unknown> = {}): Promise<void> {
     await flush()
-    expect(calls).toContain('npm i -g x')
-    scope.stop()
-  })
+    mock.emit('terminal.exit', { terminal_session_id: 'run-1', exit_code: exitCode, ...extra })
+    await flush()
+  }
 
-  it('install sends a request timeout that outlives inline brew installs', async () => {
-    const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ cli: false }))
-    mock.setResponse('onboarding.install', { ok: true, output: 'installed' })
-    const { result, scope } = withScope(() => useOnboarding(mock.backend))
-    await result.refresh()
-    await result.install(result.cliDeps.value[0])
-    const sent = mock.sent.find((s) => s.type === 'onboarding.install')
-    // Backend caps inline installs at 900s; the default 10s WS timeout would
-    // abort every real install mid-download.
-    expect(sent?.timeoutMs).toBeGreaterThan(900_000)
-    scope.stop()
-  })
-
-  // ── install failure reporting ───────────────────────────────────────────────
   function stubTerminal(result: { ok: boolean; error?: string }): string[] {
     const calls: string[] = []
     ;(globalThis as unknown as {
@@ -124,76 +106,250 @@ describe('useOnboarding', () => {
     return calls
   }
 
-  it('surfaces the backend failure text instead of "unknown"', async () => {
-    const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setResponse('onboarding.install', { ok: false, error: 'Error: no bottle available' })
-    const { result, scope } = withScope(() => useOnboarding(mock.backend))
-    await result.refresh()
-    await result.install(result.foundationDeps.value[0])
-    await flush()
-    const log = result.logLines.value.join('\n')
-    expect(log).toContain('no bottle available')
-    expect(log).not.toContain('unknown')
-    result.dispose()
-    scope.stop()
-  })
-
-  it('falls back to the captured output when the failure carries no error field', async () => {
-    // Guards the frontend half of the contract: the backend used to report a
-    // non-zero install through `output` alone, which rendered as "unknown".
-    const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setResponse('onboarding.install', { ok: false, output: 'sh: brew: command not found' })
-    const { result, scope } = withScope(() => useOnboarding(mock.backend))
-    await result.refresh()
-    await result.install(result.foundationDeps.value[0])
-    await flush()
-    expect(result.logLines.value.join('\n')).toContain('brew: command not found')
-    result.dispose()
-    scope.stop()
-  })
-
-  it('reports a failed terminal handoff instead of claiming one opened', async () => {
-    // TCC automation is granted in a LATER wizard step, so this is the common
-    // first-run path — it used to log success while nothing happened.
-    stubTerminal({ ok: false, error: 'not authorised' })
+  it('install asks for the dep by id and waits for the command to exit', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({ cli: false }))
-    mock.setResponse('onboarding.install', { ok: true, needs_terminal: true, command: 'npm i -g x' })
+    startedRun(mock)
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.install(result.cliDeps.value[0])
+    const pending = result.install(result.cliDeps.value[0])
     await flush()
-    const log = result.logLines.value.join('\n')
-    expect(log).not.toContain('Opened in external terminal')
-    expect(log).toContain('not authorised')
-    expect(log).toContain('npm i -g x') // the command to run by hand
-    result.dispose()
+    // The renderer names a kind and an id — never a command.
+    const sent = mock.sent.find((s) => s.type === 'onboarding.run')
+    expect(sent?.payload).toEqual({ kind: 'install', dep_id: 'claude', cols: 100, rows: 24 })
+    expect(result.installing.value).toBe('claude')
+    expect(result.runBusy.value).toBe(true)
+    expect(result.run.value?.state).toBe('running')
+
+    mock.setResponse('onboarding.status', status({ cli: true }))
+    await exitRun(mock, 0)
+    const r = await pending
+    expect(r?.ok).toBe(true)
+    expect(r?.exit_code).toBe(0)
+    expect(result.installing.value).toBe('')
+    expect(result.run.value?.state).toBe('exited')
+    // Exit 0 is followed by a fresh re-detect.
+    expect(mock.sent.filter((s) => s.type === 'onboarding.status').at(-1)?.payload).toEqual({ fresh: true })
+    expect(result.installErrors.value.claude).toBeUndefined()
     scope.stop()
   })
 
-  it('warns when an install reports success but detection still fails', async () => {
+  it('a non-zero exit is a failure that names the exit code and keeps the output', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    mock.emit('terminal.output', { terminal_session_id: 'run-1', data: new TextEncoder().encode('EACCES\r\n') })
+    // Another PTY's output must not leak into this run.
+    mock.emit('terminal.output', { terminal_session_id: 'pane-9', data: new TextEncoder().encode('other') })
+    await exitRun(mock, 3)
+    const r = await pending
+    expect(r?.ok).toBe(false)
+    expect(r?.exit_code).toBe(3)
+    expect(result.installErrors.value.claude.message).toContain('code 3')
+    expect(result.installErrors.value.claude.command).toBe('npm i -g x')
+    expect(result.run.value).toMatchObject({ state: 'exited', exitCode: 3 })
+    const replayed: string[] = []
+    result.attachRunOutput((d) => replayed.push(new TextDecoder().decode(d)))
+    expect(replayed.join('')).toBe('EACCES\r\n')
+    scope.stop()
+  })
+
+  it('records exit-0-but-undetected as its own kind of failure', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setResponse('onboarding.install', { ok: true, output: 'installed' })
+    startedRun(mock, 'brew install node')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.install(result.foundationDeps.value[0])
-    await flush()
+    const pending = result.install(result.foundationDeps.value[0])
+    await exitRun(mock, 0)
+    await pending
+    expect(result.installErrors.value.node.ranButUndetected).toBe(true)
     expect(result.logLines.value.join('\n')).toContain('still not detected')
-    result.dispose()
     scope.stop()
   })
 
-  // ── install failures the card has to show ───────────────────────────────────
-  // The log pane sits below the fold and dies with the modal, so a failure that
-  // only reached it left the button looking like it had done nothing at all.
+  it('drops a reported failure when re-detection finds the dep anyway', async () => {
+    // Homebrew exits non-zero on "already installed" often enough that the
+    // command can fail while the tool is in fact present.
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ found: false }))
+    startedRun(mock, 'brew install node')
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.foundationDeps.value[0])
+    mock.setResponse('onboarding.status', status({ found: true }))
+    await exitRun(mock, 1)
+    await pending
+    expect(result.installErrors.value.node).toBeUndefined()
+    scope.stop()
+  })
+
+  it('does not lose output or the exit that arrive before the reply naming the run', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const send = mock.backend.send
+    ;(mock.backend as { send: typeof send }).send = (async (type: string, payload?: Record<string, unknown>, timeoutMs?: number) => {
+      if (type === 'onboarding.run') {
+        mock.emit('terminal.output', { terminal_session_id: 'run-1', data: new TextEncoder().encode('fast') })
+        mock.emit('terminal.exit', { terminal_session_id: 'run-1', exit_code: 7 })
+      }
+      return send(type, payload, timeoutMs)
+    }) as typeof send
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const r = await result.install(result.cliDeps.value[0])
+    expect(r?.exit_code).toBe(7)
+    const replayed: string[] = []
+    result.attachRunOutput((d) => replayed.push(new TextDecoder().decode(d)))
+    expect(replayed.join('')).toBe('fast')
+    scope.stop()
+  })
+
+  it('holds a bounded amount of other panes\' output while the start is pending', async () => {
+    // Every pane's output arrives before the reply naming this run; a busy
+    // window used to pile all of it up for up to the 30s start budget.
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    let answer: (v: unknown) => void = () => {}
+    const reply = new Promise((resolve) => { answer = resolve })
+    const send = mock.backend.send
+    ;(mock.backend as unknown as { send: typeof send }).send = (async (type: string, payload?: Record<string, unknown>, t?: number) =>
+      type === 'onboarding.run' ? reply : send(type, payload, t)) as typeof send
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    const big = new Uint8Array(1_000_000)
+    // Held past the cap: pushed out by the 5 MB that follows it.
+    mock.emit('terminal.output', { terminal_session_id: 'run-1', data: new TextEncoder().encode('oldest') })
+    for (let i = 0; i < 5; i++) mock.emit('terminal.output', { terminal_session_id: `pane-${i}`, data: big })
+    // This run's own output is the newest by the time its id arrives.
+    mock.emit('terminal.output', { terminal_session_id: 'run-1', data: new TextEncoder().encode('mine') })
+    answer({ id: 't', type: 'onboarding.run', ok: true, payload: { ok: true, run_id: 'run-1', command: 'x' }, error: null, timestamp: '' })
+    await flush()
+    const seen: string[] = []
+    result.attachRunOutput((d) => seen.push(new TextDecoder().decode(d)))
+    expect(seen).toEqual(['mine'])
+    await exitRun(mock, 0)
+    await pending
+    scope.stop()
+  })
+
+  it('cancel kills the run and reports it as cancelled', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    await result.cancelRun()
+    expect(mock.sent.find((s) => s.type === 'terminal.kill')?.payload).toEqual({ terminal_session_id: 'run-1' })
+    await exitRun(mock, -15, { signal: 'SIGTERM', reason: 'killed' })
+    const r = await pending
+    expect(r?.ok).toBe(false)
+    expect(r?.cancelled).toBe(true)
+    expect(result.installErrors.value.claude.message).toBe('Cancelled')
+    scope.stop()
+  })
+
+  it('keystrokes and resizes go to the run PTY, never flagged as human input', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    result.runInput('hunter2\r')
+    result.runResize(120, 30)
+    expect(mock.sent.find((s) => s.type === 'terminal.input')?.payload)
+      .toEqual({ terminal_session_id: 'run-1', data: 'hunter2\r' })
+    expect(mock.sent.find((s) => s.type === 'terminal.resize')?.payload)
+      .toEqual({ terminal_session_id: 'run-1', cols: 120, rows: 30 })
+    await exitRun(mock, 0)
+    await pending
+    scope.stop()
+  })
+
+  it('dispose kills a command that is still running', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    void result.install(result.cliDeps.value[0])
+    await flush()
+    result.dispose()
+    await flush()
+    expect(mock.sent.filter((s) => s.type === 'terminal.kill')).toHaveLength(1)
+    scope.stop()
+  })
+
+  it('dispose kills a command whose start was still in flight once its id arrives', async () => {
+    // Closing Settings while onboarding.run is being answered used to leave the
+    // PTY running with no surface to show it or answer its sudo prompt.
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    void result.install(result.cliDeps.value[0])
+    expect(result.run.value?.state).toBe('starting')
+    result.dispose()
+    await flush()
+    expect(mock.sent.filter((s) => s.type === 'terminal.kill').map((s) => s.payload))
+      .toEqual([{ terminal_session_id: 'run-1' }])
+    scope.stop()
+  })
+
+  it('a cancel that could not be sent leaves Cancel usable and the run not cancelled', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    mock.setRejection('terminal.kill', 'ws not open')
+    await result.cancelRun()
+    expect(result.run.value?.cancelled).toBe(false)
+    expect(result.logLines.value.join('\n')).toContain('Could not cancel: ws not open')
+    mock.setResponse('onboarding.status', status({ cli: true }))
+    await exitRun(mock, 0)
+    const r = await pending
+    expect(r?.ok).toBe(true)
+    expect(r?.cancelled).toBeUndefined()
+    scope.stop()
+  })
+
+  it('a dropped connection ends the run instead of leaving it running forever', async () => {
+    // The backend kills the run with the connection, and that exit event goes
+    // to the dead socket — nothing else would ever settle the install.
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    startedRun(mock)
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    const pending = result.install(result.cliDeps.value[0])
+    await flush()
+    mock.backend.status.value = 'disconnected'
+    const r = await pending
+    expect(r?.ok).toBe(false)
+    expect(result.run.value?.lost).toBe(true)
+    expect(result.runBusy.value).toBe(false)
+    scope.stop()
+  })
 
   it('records a blocked install against the dep so its card can show it', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setResponse('onboarding.install', {
+    mock.setResponse('onboarding.run', {
       ok: false,
       error: 'brew is required to install Python. Install brew first, then retry.',
       missing_requirements: ['brew'],
@@ -201,142 +357,77 @@ describe('useOnboarding', () => {
     })
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.install(result.foundationDeps.value[0])
-    await flush()
+    const r = await result.install(result.foundationDeps.value[0])
+    expect(r?.missing_requirements).toEqual(['brew'])
     const failure = result.installErrors.value.node
-    expect(failure).toBeDefined()
     expect(failure.message).toContain('brew is required')
     expect(failure.command).toBe('brew install python3')
     expect(failure.ranButUndetected).toBe(false)
-    result.dispose()
+    expect(result.run.value).toBeNull()
+    expect(result.runFallback.value).toBeNull()
     scope.stop()
   })
 
-  it('records exit-0-but-undetected as its own kind of failure', async () => {
+  it('offers the external terminal when the embedded one cannot start', async () => {
+    const calls = stubTerminal({ ok: true })
     const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setResponse('onboarding.install', { ok: true, output: 'installed' })
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    mock.setResponse('onboarding.run', {
+      ok: false, spawn_failed: true, command: 'npm i -g x', error: 'executable not found: zsh',
+    })
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.install(result.foundationDeps.value[0])
-    await flush()
-    expect(result.installErrors.value.node.ranButUndetected).toBe(true)
-    result.dispose()
+    const r = await result.install(result.cliDeps.value[0])
+    expect(r?.ok).toBe(false)
+    expect(result.installErrors.value.claude.message).toContain('executable not found')
+    expect(result.runFallback.value).toMatchObject({ key: 'claude', command: 'npm i -g x' })
+    expect(await result.openFallbackInTerminal()).toBe(true)
+    expect(calls).toEqual(['npm i -g x'])
     scope.stop()
   })
 
-  it('drops a reported failure when re-detection finds the dep anyway', async () => {
-    // Homebrew exits non-zero on "already installed" often enough that the
-    // command can fail while the tool is in fact present. Leaving the card red
-    // in that state is its own kind of lie.
+  it('reports a failed external-terminal fallback instead of claiming one opened', async () => {
+    stubTerminal({ ok: false, error: 'not authorised' })
     const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setResponse('onboarding.install', { ok: false, error: 'no bottle available' })
+    mock.setResponse('onboarding.status', status({ cli: false }))
+    mock.setResponse('onboarding.run', { ok: false, spawn_failed: true, command: 'npm i -g x', error: 'no pty' })
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.install(result.foundationDeps.value[0])
-    await flush()
-    expect(result.installErrors.value.node).toBeDefined()
-
-    // Same failing install, but this time the post-install re-detect finds it.
-    mock.setResponse('onboarding.status', status({ found: true }))
-    await result.install(result.foundationDeps.value[0])
-    await flush()
-    expect(result.installErrors.value.node).toBeUndefined()
-    result.dispose()
+    await result.install(result.cliDeps.value[0])
+    expect(await result.openFallbackInTerminal()).toBe(false)
+    const log = result.logLines.value.join('\n')
+    expect(log).not.toContain('Opened in external terminal')
+    expect(log).toContain('not authorised')
+    expect(log).toContain('npm i -g x') // the command to run by hand
     scope.stop()
   })
 
   it('records a transport error against the dep too', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({ found: false }))
-    mock.setRejection('onboarding.install', 'ws not open')
+    mock.setRejection('onboarding.run', 'ws not open')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
     await result.install(result.foundationDeps.value[0])
-    await flush()
     expect(result.installErrors.value.node.message).toContain('ws not open')
-    result.dispose()
+    expect(result.runBusy.value).toBe(false)
     scope.stop()
   })
 
   it('says why a second install did not start instead of returning silently', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({ found: false, cli: false }))
-    mock.setResponse('onboarding.install', { ok: true, output: 'installed' })
+    startedRun(mock)
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-
-    // Do not await the first: it holds `installing` while the second arrives.
     const first = result.install(result.foundationDeps.value[0])
     const second = await result.install(result.cliDeps.value[0])
-    await first
-    await flush()
-
     expect(second).toBeNull()
-    // One install request, and a line saying why the other did not happen.
-    expect(mock.sent.filter((s) => s.type === 'onboarding.install')).toHaveLength(1)
+    expect(mock.sent.filter((s) => s.type === 'onboarding.run')).toHaveLength(1)
     expect(result.logLines.value.join('\n')).toContain('has to wait for')
-    result.dispose()
+    await exitRun(mock, 0)
+    await first
     scope.stop()
-  })
-
-  it('skips the immediate re-detect when the install moved to a terminal', async () => {
-    // That detection cannot possibly pass yet; the watcher polls for it instead.
-    stubTerminal({ ok: true })
-    const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ cli: false }))
-    mock.setResponse('onboarding.install', { ok: true, needs_terminal: true, command: 'npm i -g x' })
-    const { result, scope } = withScope(() => useOnboarding(mock.backend))
-    await result.refresh()
-    await result.install(result.cliDeps.value[0])
-    await flush()
-    expect(mock.sent.filter((s) => s.type === 'onboarding.status')).toHaveLength(1)
-    expect(result.watching.value).toBe('claude')
-    result.dispose()
-    expect(result.watching.value).toBe('')
-    scope.stop()
-  })
-
-  it('marks a terminal handoff that failed to open', async () => {
-    // `ok: true` alone described BOTH "terminal opened" and "nothing happened";
-    // the dialog needs them apart to know whether to show an error.
-    stubTerminal({ ok: false, error: 'not authorised' })
-    const mock = createMockBackend('connected')
-    mock.setResponse('onboarding.status', status({ cli: false }))
-    mock.setResponse('onboarding.install', { ok: true, needs_terminal: true, command: 'npm i -g x' })
-    const { result, scope } = withScope(() => useOnboarding(mock.backend))
-    await result.refresh()
-    const r = await result.install(result.cliDeps.value[0])
-    await flush()
-    expect(r?.terminal_opened).toBe(false)
-    result.dispose()
-    scope.stop()
-  })
-
-  it('reports when the terminal watcher gives up instead of stopping silently', async () => {
-    // Polling used to end after ~5 minutes with no message at all, leaving the
-    // user staring at a card that would never change.
-    stubTerminal({ ok: true })
-    vi.useFakeTimers()
-    try {
-      const mock = createMockBackend('connected')
-      mock.setResponse('onboarding.status', status({ cli: false }))
-      mock.setResponse('onboarding.install', { ok: true, needs_terminal: true, command: 'npm i -g x' })
-      const { result, scope } = withScope(() => useOnboarding(mock.backend))
-      await result.refresh()
-      await result.install(result.cliDeps.value[0])
-      expect(result.watching.value).toBe('claude')
-      // 60 polls at 5s each is the ceiling; one extra tick trips the give-up.
-      await vi.advanceTimersByTimeAsync(5_000 * 61)
-      expect(result.watching.value).toBe('')
-      expect(result.watchOutcome.value).toBe('timeout')
-      expect(result.logLines.value.join('\n')).toContain('Stopped watching')
-      result.dispose()
-      scope.stop()
-    } finally {
-      vi.useRealTimers()
-    }
   })
 
   it('records the opt-out for one CLI without touching the others', async () => {
@@ -375,45 +466,140 @@ describe('useOnboarding', () => {
   })
 
   it('ignores a second model pull while one is in flight', async () => {
-    stubTerminal({ ok: true })
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({}))
-    mock.setResponse('onboarding.pull_model', { ok: true, needs_terminal: true, command: 'ollama pull a' })
+    startedRun(mock, 'ollama pull a')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
     const first = result.pullModel('a')
     const second = await result.pullModel('b')
-    await first
-    await flush()
     expect(second).toBeNull()
-    result.dispose()
+    expect(mock.sent.find((s) => s.type === 'onboarding.run')?.payload)
+      .toMatchObject({ kind: 'pull_model', model: 'a' })
+    await exitRun(mock, 0)
+    expect((await first)?.ok).toBe(true)
     scope.stop()
   })
 
-  it('startOllamaService opens the official service command', async () => {
-    const calls = stubTerminal({ ok: true })
+  it('startOllamaService runs the service command and re-detects after it', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({}))
-    mock.setResponse('onboarding.start_ollama', {
-      ok: true, needs_terminal: true, command: 'brew services start ollama',
-    })
+    startedRun(mock, 'brew services start ollama')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.startOllamaService()
+    const pending = result.startOllamaService()
     await flush()
-    expect(calls).toContain('brew services start ollama')
-    result.dispose()
+    expect(mock.sent.find((s) => s.type === 'onboarding.run')?.payload)
+      .toMatchObject({ kind: 'start_ollama' })
+    await exitRun(mock, 0)
+    expect((await pending)?.ok).toBe(true)
+    expect(mock.sent.filter((s) => s.type === 'onboarding.status').at(-1)?.payload).toEqual({ fresh: true })
     scope.stop()
   })
 
-  it('markComplete sends onboarding.complete', async () => {
+  it('startOllamaService reports a transport failure instead of rejecting', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({}))
+    mock.setRejection('onboarding.run', 'ws not open')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
-    await result.markComplete()
-    expect(mock.sent.some((s) => s.type === 'onboarding.complete')).toBe(true)
+    await expect(result.startOllamaService()).resolves
+      .toEqual({ ok: false, error: 'ws not open', unanswered: true })
+    expect(result.logLines.value.join('\n')).toContain('ws not open')
     scope.stop()
+  })
+
+  it('setAutoupdatePolicy reports whether the policy was stored', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({}))
+    mock.setResponse('onboarding.cli_autoupdate', { ok: true })
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    await expect(result.setAutoupdatePolicy('claude', 'manual')).resolves.toBe(true)
+    mock.setResponse('onboarding.cli_autoupdate', { ok: false, error: 'unknown agent' })
+    await expect(result.setAutoupdatePolicy('claude', 'manual')).resolves.toBe(false)
+    mock.setRejection('onboarding.cli_autoupdate', 'ws not open')
+    await expect(result.setAutoupdatePolicy('claude', 'manual')).resolves.toBe(false)
+    expect(result.logLines.value.join('\n')).toContain('ws not open')
+    scope.stop()
+  })
+
+  it('dismissInstallPrompt reports a transport failure instead of rejecting', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status({}))
+    mock.setRejection('onboarding.install_prompt', 'ws not open')
+    const { result, scope } = withScope(() => useOnboarding(mock.backend))
+    await result.refresh()
+    await expect(result.dismissInstallPrompt('claude')).resolves.toBe(false)
+    expect(result.installPromptDismissed.value.has('claude')).toBe(false)
+    expect(result.logLines.value.join('\n')).toContain('ws not open')
+    scope.stop()
+  })
+
+  describe('overlapping refreshes', () => {
+    /** Every onboarding.status call waits until the test settles it. */
+    function deferredStatus(mock: ReturnType<typeof createMockBackend>) {
+      const pending: { type: string; resolve: (s: OnboardStatus) => void }[] = []
+      const send = mock.backend.send.bind(mock.backend)
+      mock.backend.send = ((type: string, payload: Record<string, unknown>, timeoutMs?: number) => {
+        if (type !== 'onboarding.status' && type !== 'onboarding.status_quick') {
+          return send(type, payload, timeoutMs)
+        }
+        return new Promise<unknown>((resolve) => {
+          pending.push({ type, resolve: (s) => resolve({ ok: true, payload: s }) })
+        })
+      }) as typeof mock.backend.send
+      return pending
+    }
+
+    it('keeps the newer answer when an older one arrives last', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', status({}))
+      const { result, scope } = withScope(() => useOnboarding(mock.backend))
+      await result.refresh()
+      const pending = deferredStatus(mock)
+
+      const older = result.refresh()
+      const newer = result.refresh({ fresh: true })
+      await flush()
+      expect(pending.map((p) => p.type)).toEqual(['onboarding.status', 'onboarding.status'])
+
+      pending[1].resolve(status({ cli: true }))
+      await newer
+      // The latest answer is in; nothing still in flight may change it.
+      expect(result.loading.value).toBe(false)
+      pending[0].resolve(status({ cli: false }))
+      await older
+
+      expect(result.hasAnyCli.value).toBe(true)
+      expect(result.loading.value).toBe(false)
+      scope.stop()
+    })
+
+    it('never lets a late quick pass overwrite a newer full answer', async () => {
+      const mock = createMockBackend('connected')
+      const { result, scope } = withScope(() => useOnboarding(mock.backend))
+      const pending = deferredStatus(mock)
+
+      const first = result.refresh()
+      await flush()
+      const second = result.refresh()
+      await flush()
+      // Both started before any status existed, so both asked for a quick pass.
+      expect(pending.map((p) => p.type)).toEqual(['onboarding.status_quick', 'onboarding.status_quick'])
+      pending[1].resolve(status({ cli: true }))
+      await flush()
+      pending[2].resolve(status({ cli: true }))
+      await second
+      expect(result.hasAnyCli.value).toBe(true)
+
+      pending[0].resolve(status({ cli: false }))
+      await flush()
+      pending[3].resolve(status({ cli: false }))
+      await first
+      expect(result.hasAnyCli.value).toBe(true)
+      scope.stop()
+    })
   })
 
   it('shows CLI health guide only for completed onboarding with an undismissed finding', () => {
@@ -459,42 +645,35 @@ describe('useOnboarding', () => {
     expect(cliHealthGuideForLaunch(ready)?.fingerprint).toBe('0123456789abcdef')
   })
 
-  it('maintenance runs the vendor command in a terminal and never composes one', async () => {
-    const calls: string[] = []
-    ;(globalThis as unknown as { window: { agentTeam: { openTerminal: (c: string) => Promise<{ ok: boolean }> } } }).window = {
-      agentTeam: { openTerminal: (c: string) => { calls.push(c); return Promise.resolve({ ok: true }) } },
-    }
+  it('maintenance runs the vendor command by action id and never composes one', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({}))
-    mock.setResponse('onboarding.cli_maintenance', { ok: true, needs_terminal: true, command: 'claude update' })
+    startedRun(mock, 'claude update')
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
 
-    await result.runMaintenance('claude', 'update')
+    const pending = result.runMaintenance('claude', 'update')
     await flush()
-
-    expect(calls).toEqual(['claude update'])
-    const sent = mock.sent.find((s) => s.type === 'onboarding.cli_maintenance')
-    expect(sent?.payload).toEqual({ agent_key: 'claude', action: 'update' })
+    expect(result.maintaining.value).toBe('claude:update')
+    const sent = mock.sent.find((s) => s.type === 'onboarding.run')
+    expect(sent?.payload).toEqual({ kind: 'maintenance', agent_key: 'claude', action: 'update', cols: 100, rows: 24 })
+    await exitRun(mock, 0)
+    const outcome = await pending
+    expect(outcome).toMatchObject({ ok: true, command: 'claude update', exit_code: 0 })
+    expect(result.maintaining.value).toBe('')
     scope.stop()
   })
 
-  it('maintenance opens no terminal when the vendor ships no such command', async () => {
-    const calls: string[] = []
-    ;(globalThis as unknown as { window: { agentTeam: { openTerminal: (c: string) => Promise<{ ok: boolean }> } } }).window = {
-      agentTeam: { openTerminal: (c: string) => { calls.push(c); return Promise.resolve({ ok: true }) } },
-    }
+  it('maintenance starts nothing when the vendor ships no such command', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({}))
-    mock.setResponse('onboarding.cli_maintenance', { ok: false, error: 'no official update command', docs_url: 'https://docs' })
+    mock.setResponse('onboarding.run', { ok: false, error: 'no official update command', docs_url: 'https://docs' })
     const { result, scope } = withScope(() => useOnboarding(mock.backend))
     await result.refresh()
 
     const outcome = await result.runMaintenance('kimi', 'update')
-    await flush()
-
-    expect(calls).toEqual([])
     expect(outcome?.ok).toBe(false)
+    expect(result.run.value).toBeNull()
     scope.stop()
   })
 })

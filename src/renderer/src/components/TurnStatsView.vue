@@ -742,7 +742,9 @@ defineExpose({ buildCsv })
 </template>
 
 <style scoped>
+/* One gutter for every band, matching the page title above the view. */
 .ts-view {
+  --ts-gutter: 24px;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -753,58 +755,72 @@ defineExpose({ buildCsv })
 }
 .ts-spacer { flex: 1; }
 
+/* ── Header: pane name, session, actions ─────────────────────────────────── */
 .ts-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-muted);
+  padding: 4px var(--ts-gutter) 10px;
 }
 .ts-pane-name {
   color: var(--text-bright);
   font-weight: 600;
-  font-size: var(--font-sm);
+  font-size: var(--font-md);
   max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ts-session {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
   color: var(--text-muted);
-  font-size: var(--font-2xs);
+  font-family: var(--font-mono);
+  font-size: var(--font-3xs);
   font-variant-numeric: tabular-nums;
 }
 .ts-ghost {
-  padding: 4px 10px;
-  border: 1px solid var(--border-muted);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
   color: var(--text-secondary);
   font-size: var(--font-2xs);
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
 }
-.ts-ghost:hover { color: var(--text-bright); }
+.ts-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text-bright);
+}
+.ts-ghost:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
 .ts-ghost:disabled { color: var(--text-disabled); cursor: default; }
 
+/* ── Headline ────────────────────────────────────────────────────────────── */
 .ts-summary {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-muted);
+  padding: 6px var(--ts-gutter) 14px;
 }
 .ts-summary-main {
   color: var(--text-bright);
-  font-weight: 600;
-  font-size: var(--font-sm);
+  font-weight: 700;
+  font-size: var(--font-xl);
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 .ts-method {
-  padding: 1px 8px;
+  padding: 2px 10px;
   border-radius: var(--radius-pill);
   background: var(--accent-subtle);
   color: var(--accent-fg);
   font-size: var(--font-3xs);
+  font-weight: 600;
 }
 .ts-method[data-method='inferred'] {
   background: transparent;
@@ -817,39 +833,45 @@ defineExpose({ buildCsv })
   flex: 1 1 auto;
   min-height: 120px;
   overflow: auto;
+  border-top: 1px solid var(--border-muted);
 }
 .ts-empty {
   margin: 0;
-  padding: 24px 16px;
+  padding: 32px var(--ts-gutter);
   color: var(--text-muted);
   text-align: center;
 }
 .ts-error { color: var(--attention-fg); }
 
+/* ── The turns table ─────────────────────────────────────────────────────── */
 .ts-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 .ts-table th,
 .ts-table td {
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border-muted);
   white-space: nowrap;
 }
 .ts-table th {
   position: sticky;
   top: 0;
-  background: var(--bg-subtle);
+  z-index: 1;
+  background: var(--bg-base);
+  border-bottom-color: var(--border-default);
   color: var(--text-muted);
-  font-weight: 400;
+  font-weight: 500;
   font-size: var(--font-3xs);
+  letter-spacing: 0.02em;
   text-align: left;
 }
 .ts-table th:first-child,
-.ts-table td:first-child { padding-left: 16px; }
+.ts-table td:first-child { padding-left: var(--ts-gutter); }
 .ts-table th:last-child,
-.ts-table td:last-child { padding-right: 16px; }
+.ts-table td:last-child { padding-right: var(--ts-gutter); }
 .c-idx { width: 3ch; color: var(--text-muted); text-align: right; }
 .c-time { width: 9ch; color: var(--text-muted); }
 .c-prompt {
@@ -862,45 +884,55 @@ defineExpose({ buildCsv })
 .ts-no-prompt { color: var(--text-muted); font-style: italic; }
 .ts-table th.c-num,
 .ts-table td.c-num { text-align: right; }
-.c-total { color: var(--text-bright); font-weight: 600; }
-.ts-row { cursor: pointer; }
+.ts-table td.c-num { color: var(--text-secondary); }
+.ts-table td.c-total { color: var(--text-bright); font-weight: 600; }
+.ts-table th.c-total { color: var(--text-secondary); font-weight: 600; }
+.ts-row { cursor: pointer; transition: background-color 100ms ease; }
 .ts-row:hover { background: var(--bg-hover-faint); }
 .ts-row[data-expanded='true'] { background: var(--bg-hover-faint); }
+.ts-row[data-expanded='true'] td { border-bottom-color: transparent; }
 
 .ts-detail td {
-  padding: 4px 16px 8px 40px;
-  background: var(--bg-subtle);
+  padding: 4px var(--ts-gutter) 10px 56px;
+  background: var(--bg-hover-faint);
 }
 .ts-detail-empty { margin: 0; color: var(--text-muted); font-size: var(--font-3xs); }
 .ts-calls { border-collapse: collapse; font-size: var(--font-3xs); }
-.ts-calls td { padding: 2px 10px 2px 0; border: 0; color: var(--text-muted); }
+.ts-calls td { padding: 2px 14px 2px 0; border: 0; color: var(--text-muted); }
 .ts-calls .c-model { color: var(--text-secondary); }
 
+/* The grand total stays in view while the turns scroll under it. */
 .ts-total td {
+  position: sticky;
+  bottom: 0;
   border-top: 1px solid var(--border-default);
   border-bottom: 0;
   color: var(--text-bright);
-  font-weight: 600;
+  font-weight: 700;
   background: var(--bg-subtle);
 }
+.ts-table .ts-total td.c-num { color: var(--text-bright); }
 
 /* ── Quota (from the usage badge's snapshot) ─────────────────────────────── */
 .ts-quota {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: baseline;
-  gap: 6px 14px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-muted);
+  gap: 6px 16px;
+  margin: 0 var(--ts-gutter) 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-card);
+  background: var(--bg-subtle);
   font-size: var(--font-2xs);
   color: var(--text-muted);
 }
-.ts-quota-title { color: var(--text-secondary); font-weight: 600; }
+.ts-quota-title { grid-column: 1; color: var(--text-secondary); font-weight: 600; }
 .ts-quota-window { font-variant-numeric: tabular-nums; }
 .ts-quota-window[data-exhausted='true'] { color: var(--danger-fg); font-weight: 600; }
 .ts-quota-spend { flex-basis: 100%; font-variant-numeric: tabular-nums; }
 .ts-quota-spend strong { color: var(--text-bright); font-weight: 600; }
-.ts-quota-none { color: var(--text-muted); }
+.ts-quota-none { grid-column: 2; color: var(--text-muted); }
 
 /* The turn that ran into the quota limit. */
 .ts-row[data-limit-hit='true'] .c-idx { color: var(--danger-fg); }
@@ -911,26 +943,25 @@ defineExpose({ buildCsv })
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 8px 16px;
+  padding: 10px var(--ts-gutter);
   border-top: 1px solid var(--border-muted);
-  background: var(--bg-subtle);
   font-size: var(--font-3xs);
   color: var(--text-muted);
 }
-.ts-foot-note { line-height: 1.45; }
+.ts-foot-note { line-height: 1.5; }
 /* ── Account filter chips ────────────────────────────────────────────────── */
 .ts-filter {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-muted);
+  padding: 0 var(--ts-gutter) 12px;
   font-size: var(--font-2xs);
 }
 .ts-filter-title { color: var(--text-muted); margin-right: 4px; }
 .ts-chip {
-  padding: 2px 10px;
+  height: 24px;
+  padding: 0 11px;
   border: 1px solid var(--border-muted);
   border-radius: var(--radius-pill);
   background: transparent;
@@ -938,14 +969,16 @@ defineExpose({ buildCsv })
   font-size: var(--font-2xs);
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
 }
-.ts-chip:hover { color: var(--text-bright); border-color: var(--border-default); }
+.ts-chip:hover { color: var(--text-bright); border-color: var(--border-default); background: var(--bg-hover-faint); }
 .ts-chip.on {
   background: var(--accent-subtle);
   border-color: var(--accent-muted);
   color: var(--accent-fg);
+  font-weight: 600;
 }
-.ts-chip.unknown { font-style: italic; }
+.ts-chip.unknown:not(.on) { color: var(--text-muted); }
 
 /* ── Account and version columns ─────────────────────────────────────────── */
 .c-account {
@@ -954,8 +987,8 @@ defineExpose({ buildCsv })
   text-overflow: ellipsis;
   color: var(--text-secondary);
 }
-.c-account.unknown { color: var(--text-muted); font-style: italic; }
-.c-version { width: 8ch; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.c-account.unknown { color: var(--text-disabled); }
+.c-version { width: 8ch; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-3xs); }
 .ts-subtotal td {
   border-top: 1px solid var(--border-default);
   border-bottom: 0;
@@ -967,7 +1000,7 @@ defineExpose({ buildCsv })
 
 /* ── Per-account quota rows ──────────────────────────────────────────────── */
 .ts-quota-row {
-  flex-basis: 100%;
+  grid-column: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -993,12 +1026,12 @@ defineExpose({ buildCsv })
   background: var(--success-subtle);
 }
 .ts-quota-asof { font-size: var(--font-3xs); color: var(--text-muted); }
-.ts-quota-unknown { color: var(--text-muted); font-style: italic; }
+.ts-quota-unknown { color: var(--text-muted); }
 
 /* ── Version chart (folded by default) ───────────────────────────────────── */
 .ts-chart {
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--border-muted);
+  padding: 8px var(--ts-gutter);
+  border-top: 1px solid var(--border-muted);
 }
 .ts-chart-toggle {
   display: flex;

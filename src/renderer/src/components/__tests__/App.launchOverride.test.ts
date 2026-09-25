@@ -47,14 +47,14 @@ describe('resolveCommand — the stored launch-command override', () => {
     const overrideIdx = body.indexOf("if (launch.source !== 'none') {")
     expect(overrideIdx).toBeGreaterThan(-1)
     expect(body.indexOf('modelArgsFor(')).toBeGreaterThan(overrideIdx)
-    expect(body).toContain('command: commandWithSelectedBinary(agentKey, launch.command), source: launch.source')
+    expect(body).toContain('return { command: launch.command, source: launch.source }')
   })
 
-  it('keeps the custom binary on the no-override path — the one a login pane takes', () => {
-    // A login pane gets source 'none', so it must fall through to the vendor's
-    // own default command still wrapped by commandWithSelectedBinary: the
-    // `agentTeam.cliBinary.<key>` path setting applies to logins too.
-    expect(body).toContain("return { command: commandWithSelectedBinary(agentKey, parts.join(' ')), source: 'none' }")
+  it('leaves the custom binary to the backend on the no-override path — the one a login pane takes', () => {
+    // A login pane gets source 'none', so it falls through to the vendor's own
+    // default command. The custom binary is swapped in by terminal.create
+    // (backend cli_binary_overrides), for logins too.
+    expect(body).toContain("return { command: parts.join(' '), source: 'none' }")
   })
 })
 
@@ -103,7 +103,7 @@ describe('the launch-command override stops at a fresh spawn — and says so', (
   // session id belongs inside a line Navide did not write, and for codex and
   // muse `resume` is a SUBCOMMAND — args placed on the wrong side of it break
   // the resume outright. Replacing only argv[0] would be safe but is already
-  // what `agentTeam.cliBinary.<key>` does, so it would add nothing.
+  // what the backend's binary override does, so it would add nothing.
   //
   // These two assertions are the pair: the builder stays pure, and the page
   // keeps saying what that costs. Wiring the override into resume later means

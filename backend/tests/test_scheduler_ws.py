@@ -86,8 +86,8 @@ def changed(events: list) -> list:
     return [(e, ex) for e, ex in events if e["type"] == "scheduler.changed"]
 
 
-async def test_all_six_handlers_are_registered() -> None:
-    for name in ("list", "upsert", "remove", "set_enabled", "run_now", "runs"):
+async def test_all_handlers_are_registered() -> None:
+    for name in ("list", "upsert", "remove", "set_enabled", "run_now", "runs", "adopt", "keep"):
         assert ws_handlers.lookup(f"scheduler.{name}") is not None
 
 
@@ -175,3 +175,26 @@ async def test_runs(wired) -> None:
     assert (await call(session, "scheduler.runs", {"id": job["id"], "limit": "x"}))["error"]["code"] == "BAD_REQUEST"
     assert (await call(session, "scheduler.runs", {}))["error"]["code"] == "BAD_REQUEST"
     assert (await call(session, "scheduler.runs", {"id": "nope"}))["payload"]["ok"] is False
+
+
+async def test_adopt_makes_a_job_the_users(wired) -> None:
+    session = _Session()
+    job = await create(session)
+    await wired["service"].store.put_job({**job, "owner": {"kind": "external"}})
+    wired["events"].clear()
+    assert (await call(session, "scheduler.adopt", {}))["error"]["code"] == "BAD_REQUEST"
+    reply = await call(session, "scheduler.adopt", {"id": job["id"]})
+    assert reply["payload"]["ok"] is True and reply["payload"]["job"]["owner"] == {"kind": "user"}
+    assert changed(wired["events"])[0][1] is session
+    assert (await call(session, "scheduler.adopt", {"id": "nope"}))["payload"]["ok"] is False
+
+
+async def test_keep_stops_an_agent_job_from_expiring(wired) -> None:
+    session = _Session()
+    job = await create(session)
+    await wired["service"].store.put_job({**job, "owner": {"kind": "external", "expires_at": 5}})
+    wired["events"].clear()
+    assert (await call(session, "scheduler.keep", {}))["error"]["code"] == "BAD_REQUEST"
+    reply = await call(session, "scheduler.keep", {"id": job["id"]})
+    assert reply["payload"]["job"]["owner"] == {"kind": "external", "expires_at": None}
+    assert changed(wired["events"])[0][1] is session

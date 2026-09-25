@@ -74,7 +74,6 @@ const emitManifest: Plugin = {
   },
   closeBundle() {
     const manifest = { ...sourceManifest, version: artifactVersion }
-    if (process.platform === 'win32') manifest.backend.entry = 'backend/navide-plans.exe'
     mkdirSync(pluginDistDir, { recursive: true })
     writeFileSync(resolve(pluginDistDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     writeFileSync(

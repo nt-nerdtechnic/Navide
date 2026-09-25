@@ -82,11 +82,15 @@ export { KeyResolver } from './keybindings/keyResolver'
 
 export {
   canonicalizeKeySpec,
+  eventLoneModifier,
   eventToKeyString,
   eventToParsedKey,
   formatParsedKey,
+  isLoneModifierKey,
   isMacPlatform,
+  LONE_MODIFIER_KEYS,
   matchesEvent,
+  MODIFIER_KEYS,
   parseKey,
   parseKeySpec,
   parsedKeyEquals,

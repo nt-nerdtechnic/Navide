@@ -97,6 +97,67 @@ def _asks_user_question(msg: dict) -> bool:
     )
 
 
+# Background work the CLI keeps running after its own turn ends: a Bash call
+# with run_in_background (or one moved there by its timeout) and an async
+# subagent. The main turn still ends with end_turn, so without these the pane
+# reads as idle while the work runs. Detail values are the cross-end contract
+# the frontend's RUNNING badge keys on; the task ids ride in `text`, one per
+# line, because an end record can name several tasks at once.
+BACKGROUND_START_DETAIL = "background:start"
+BACKGROUND_END_DETAIL = "background:end"
+# Tools the agent uses to stop a background task itself. Such a stop writes no
+# <task-notification>, so the tool call is the only end record it leaves.
+_TASK_STOP_TOOLS = frozenset({"TaskStop", "KillShell", "KillBash"})
+_TASK_NOTIFICATION_ID_RE = re.compile(r"<task-id>([^<]+)</task-id>")
+
+
+def _background_task_started(rec: dict) -> str:
+    """Task id a tool_result record launched in the background, or ""."""
+    result = rec.get("toolUseResult")
+    if not isinstance(result, dict):
+        return ""
+    task_id = result.get("backgroundTaskId")
+    if task_id:
+        return str(task_id)
+    status = result.get("status")
+    if status == "async_launched" or (status == "forked" and result.get("background")):
+        return str(result.get("agentId") or "")
+    return ""
+
+
+def _background_tasks_stopped_by_tool(msg: dict) -> list[str]:
+    """Task ids an assistant message stops with TaskStop (or its older names)."""
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return []
+    ids: list[str] = []
+    for b in content:
+        if not (isinstance(b, dict) and b.get("type") == "tool_use"
+                and b.get("name") in _TASK_STOP_TOOLS):
+            continue
+        inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+        task_id = inp.get("task_id") or inp.get("shell_id")
+        if task_id:
+            ids.append(str(task_id))
+    return ids
+
+
+def _background_tasks_finished(rec: dict) -> list[str]:
+    """Task ids a queued <task-notification> reports as finished.
+
+    Only notifications carrying a <status> end a task: a Monitor event rides
+    the same wrapper without one, and its task keeps running.
+    """
+    if rec.get("operation") != "enqueue":
+        return []
+    content = rec.get("content")
+    if not isinstance(content, str) or "<task-notification>" not in content:
+        return []
+    if "<status>" not in content:
+        return []
+    return _TASK_NOTIFICATION_ID_RE.findall(content)
+
+
 _PREVIEW_MAX_CHARS = 80
 
 
@@ -529,6 +590,15 @@ class ClaudeLogReader(LogReader):
                                 dedup_key=f"q:{line_no}", timestamp=ts,
                                 detail="assistant:question",
                             ))
+                        stopped = _background_tasks_stopped_by_tool(msg)
+                        if stopped:
+                            out.append(ActivityEvent(
+                                vendor="claude",
+                                event_type="agent_active",
+                                cwd=cwd, session_id=session_id, file_path=str(path),
+                                dedup_key=f"bg:{line_no}", timestamp=ts,
+                                detail=BACKGROUND_END_DETAIL, text="\n".join(stopped),
+                            ))
                         # end_turn = clean finish, not a tool_use pause.
                         if stop_reason == "end_turn":
                             out.append(ActivityEvent(
@@ -556,6 +626,28 @@ class ClaudeLogReader(LogReader):
                             dedup_key=key, timestamp=ts,
                             detail=str(rtype), text=text,
                         ))
+                        started = _background_task_started(rec) if rtype == "user" else ""
+                        if started:
+                            out.append(ActivityEvent(
+                                vendor="claude",
+                                event_type="agent_active",
+                                cwd=cwd, session_id=session_id, file_path=str(path),
+                                dedup_key=f"bg:{line_no}", timestamp=ts,
+                                detail=BACKGROUND_START_DETAIL, text=started,
+                            ))
+                    elif rtype == "queue-operation":
+                        # A background task's end is queued for the agent as a
+                        # <task-notification>; the enqueue is written the moment
+                        # it lands, whether or not the agent is mid-turn.
+                        finished = _background_tasks_finished(rec)
+                        if finished:
+                            out.append(ActivityEvent(
+                                vendor="claude",
+                                event_type="agent_active",
+                                cwd=cwd, session_id=session_id, file_path=str(path),
+                                dedup_key=f"bg:{line_no}", timestamp=ts,
+                                detail=BACKGROUND_END_DETAIL, text="\n".join(finished),
+                            ))
         finally:
             set_activity_high_water(seen_keys, last_line)
         return out

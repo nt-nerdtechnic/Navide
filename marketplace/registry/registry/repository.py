@@ -189,14 +189,30 @@ class RegistryRepository:
 
     # -- versions -------------------------------------------------------
     def get_version(
-        self, extension_id: int, version: str
+        self, extension_id: int, version: str, target: str | None = None
     ) -> ExtensionVersion | None:
-        return self.session.exec(
-            select(ExtensionVersion).where(
-                ExtensionVersion.extension_id == extension_id,
-                ExtensionVersion.version == version,
-            )
-        ).first()
+        """One artifact of a version: the given target's, or (target None) the
+        first by target name, which suits target-independent reads such as the
+        manifest, README and assets."""
+        artifacts = self.list_version_artifacts(extension_id, version)
+        if target is None:
+            return artifacts[0] if artifacts else None
+        return next((row for row in artifacts if row.target == target), None)
+
+    def list_version_artifacts(
+        self, extension_id: int, version: str
+    ) -> list[ExtensionVersion]:
+        """Every target's artifact of one version, ordered by target."""
+        return list(
+            self.session.exec(
+                select(ExtensionVersion)
+                .where(
+                    ExtensionVersion.extension_id == extension_id,
+                    ExtensionVersion.version == version,
+                )
+                .order_by(ExtensionVersion.target)
+            ).all()
+        )
 
     def list_versions(self, extension_id: int) -> list[ExtensionVersion]:
         return list(
@@ -250,12 +266,12 @@ class RegistryRepository:
         self.session.refresh(record)
         return record
 
-    def yank_version(self, version_row: ExtensionVersion) -> ExtensionVersion:
-        version_row.yanked = True
-        self.session.add(version_row)
+    def yank_version(self, artifacts: list[ExtensionVersion]) -> None:
+        """Yank a version: every target's artifact of it, in one commit."""
+        for row in artifacts:
+            row.yanked = True
+            self.session.add(row)
         self.session.commit()
-        self.session.refresh(version_row)
-        return version_row
 
     def list_assets(self, version_id: int) -> list[ExtensionAsset]:
         return list(

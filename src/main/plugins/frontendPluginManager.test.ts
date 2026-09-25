@@ -5800,7 +5800,7 @@ describe('loadInstalledPlugins official receipt gate', () => {
         pinnedRootKey: officialPem,
         snapshot: null,
         registryAuthority: 'self-hosted',
-        officialRegistryUrl: 'https://registry.navide.dev',
+        officialRegistryUrl: 'https://server.navide.dev/registry',
       },
     })
     expect(result.loaded).toEqual([])

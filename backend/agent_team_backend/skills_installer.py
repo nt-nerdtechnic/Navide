@@ -26,15 +26,23 @@ import uuid
 from . import osplat
 from .skills_store import SkillValidationError, SkillsStore, _safe_relative, _validate_bundle_paths
 
-MAX_FILES = SkillsStore.MAX_CONTENT_FILES
-MAX_FILE_BYTES = SkillsStore.CONTENT_FILE_LIMIT
-MAX_TOTAL_BYTES = SkillsStore.CONTENT_TOTAL_LIMIT
-MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024
-MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+MAX_FILES = SkillsStore.MAX_INSTALL_FILES
+MAX_FILE_BYTES = SkillsStore.INSTALL_FILE_LIMIT
+MAX_TOTAL_BYTES = SkillsStore.INSTALL_TOTAL_LIMIT
+MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 4096
 MAX_PREVIEWS = 8
-MAX_CACHE_BYTES = MAX_PREVIEWS * MAX_TOTAL_BYTES
+#: A fixed budget, not MAX_PREVIEWS full-size skills: eight 32 MiB previews
+#: would pin a quarter gigabyte of backend memory for fifteen minutes.
+MAX_CACHE_BYTES = 64 * 1024 * 1024
 PREVIEW_TTL = 15 * 60
+
+#: Repository housekeeping a source may carry but a skill never needs. They are
+#: left out of the installation and listed in the preview; every other dotfile
+#: (the .navide marker above all) still refuses the whole source.
+EXCLUDED_FILES = {".gitignore", ".gitkeep", ".DS_Store"}
+EXCLUDED_DIRS = {".git", ".github"}
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -68,6 +76,31 @@ def _check_path(relative: str) -> str:
     if filename in {"auth.json", "credentials.json", "credentials", "id_rsa", "id_ed25519"} or filename.endswith((".pem", ".key", ".p12", ".pfx")):
         raise SkillValidationError(f"credential-like file is not installable: {relative}")
     return safe
+
+
+def _exclusion(relative: str) -> dict | None:
+    """The preview entry for a path that is left out, or None to keep it."""
+    parts = relative.split("/")
+    for index, part in enumerate(parts[:-1]):
+        if part in EXCLUDED_DIRS:
+            return {"path": "/".join(parts[:index + 1]) + "/", "reason": "repository metadata"}
+    if parts[-1] in EXCLUDED_DIRS:
+        return {"path": relative + "/", "reason": "repository metadata"}
+    if parts[-1] in EXCLUDED_FILES:
+        return {"path": relative, "reason": "repository housekeeping file"}
+    return None
+
+
+def _exclude(files: dict) -> tuple[dict, list[dict]]:
+    """Split ``files`` into what installs and what is left out (one entry per excluded folder)."""
+    kept, excluded = {}, {}
+    for path, entry in files.items():
+        reason = _exclusion(path)
+        if reason is None:
+            kept[path] = entry
+        else:
+            excluded.setdefault(reason["path"], reason)
+    return kept, [excluded[key] for key in sorted(excluded)]
 
 
 def _manifest(files: dict) -> list[dict]:
@@ -125,13 +158,14 @@ class SkillInstaller:
             files, origin = self._github(source, ref, subdir)
             if files is None:
                 return origin
+            files, excluded = _exclude(files)
         else:
             if ref or subdir:
                 raise SkillValidationError("local source must name the skill folder directly")
             local_root = Path(source).expanduser()
             if not local_root.is_absolute():
                 raise SkillValidationError("local source must be an absolute skill folder path")
-            files = self._local(local_root)
+            files, excluded = self._local(local_root)
             origin = {"kind": "local", "path": str(Path(source).expanduser().absolute())}
         self._validate(files)
         fields, _ = self.store._parse_skill_file(files["SKILL.md"]["data"].decode("utf-8"))
@@ -142,6 +176,8 @@ class SkillInstaller:
             warnings.append("The package contains scripts or executable files; review them before installation.")
         if any(entry["executable"] for entry in files.values()) and osplat.platform_id == "win32":
             warnings.append("Windows does not preserve POSIX executable permission bits.")
+        if excluded:
+            warnings.append(f"{len(excluded)} repository metadata item(s) will not be installed; see excluded.")
         with self._lock:
             # Recounted here: other previews may have landed during the fetch.
             self._expire()
@@ -150,7 +186,8 @@ class SkillInstaller:
                 raise SkillValidationError("preview cache size limit reached")
             preview_id = uuid.uuid4().hex
             result = {"preview_id": preview_id, "digest": _digest(files), "name": fields["name"],
-                      "source": origin, "files": _manifest(files), "skill_md": files["SKILL.md"]["data"].decode("utf-8"),
+                      "source": origin, "files": _manifest(files), "excluded": excluded,
+                      "skill_md": files["SKILL.md"]["data"].decode("utf-8"),
                       "warnings": warnings, "expires_at": time.time() + PREVIEW_TTL,
                       "prepared_at": datetime.now(timezone.utc).isoformat()}
             self._previews[preview_id] = {**result, "owner": owner_key, "bundle": files, "size": total, "result": None}
@@ -164,6 +201,24 @@ class SkillInstaller:
         """Caller holds the lock."""
         if sum(record["result"] is None for record in self._previews.values()) >= MAX_PREVIEWS:
             raise SkillValidationError("too many active previews; wait for expiry")
+
+    def peek(self, preview_id: str, expected_digest: str, *, owner_key: str,
+             targets: list[str] | None) -> dict:
+        """Check a preview without writing: {"receipt": ...} once installed, else {"preview": ...}."""
+        with self._lock:
+            self._expire()
+            record = self._previews.get(preview_id)
+            if record is None:
+                raise SkillValidationError("preview missing or expired; create a new preview")
+            if record["owner"] != owner_key or record["digest"] != expected_digest:
+                raise SkillValidationError("preview owner or digest mismatch")
+            if record["result"] is not None:
+                if targets != record["installed_targets"]:
+                    raise SkillValidationError("preview already installed with different targets; use delivery settings")
+                return {"receipt": copy.deepcopy({**record["result"], "changed": False})}
+            keys = ("preview_id", "digest", "name", "source", "files", "excluded", "skill_md",
+                    "warnings", "expires_at", "prepared_at")
+            return {"preview": copy.deepcopy({key: record[key] for key in keys})}
 
     def install(self, preview_id: str, expected_digest: str, *, owner_key: str,
                 targets: list[str] | None, consent: bool = False) -> dict:
@@ -218,6 +273,7 @@ class SkillInstaller:
         if root.is_symlink() or not root.is_dir():
             raise SkillValidationError("local source must be a regular skill directory")
         files = {}
+        excluded = []
         total = 0
         entries = 0
         snapshots = {}
@@ -235,11 +291,18 @@ class SkillInstaller:
                 raise SkillValidationError("source changed while reading")
             snapshots[directory_path] = signature(info)
             for name in dirs + names:
+                path = Path(directory) / name
+                relative = path.relative_to(root).as_posix()
+                # Checked before lstat or read: a clone's .git is never walked.
+                reason = _exclusion(relative)
+                if reason is not None:
+                    excluded.append(reason)
+                    if name in dirs:
+                        dirs.remove(name)
+                    continue
                 entries += 1
                 if entries > MAX_ARCHIVE_ENTRIES:
                     raise SkillValidationError("source exceeds entry limit")
-                path = Path(directory) / name
-                relative = path.relative_to(root).as_posix()
                 _check_path(relative)
                 info = path.lstat()
                 if stat.S_ISDIR(info.st_mode):
@@ -265,7 +328,7 @@ class SkillInstaller:
                 snapshots[path] = signature(info)
         if any(signature(path.lstat()) != expected for path, expected in snapshots.items()):
             raise SkillValidationError("source changed while reading")
-        return files
+        return files, sorted(excluded, key=lambda item: item["path"])
 
     def _github(self, source: str, ref: str, subdir: str) -> tuple[dict | None, dict]:
         url = urlsplit(source)
@@ -332,7 +395,8 @@ class SkillInstaller:
         except (tarfile.TarError, EOFError, OSError) as exc:
             raise SkillValidationError("invalid skill archive") from exc
         _validate_bundle_paths(all_files, directories=directories, allow_hidden=True)
-        candidates = sorted(path.removesuffix("SKILL.md").rstrip("/") for path in all_files if PurePosixPath(path).name == "SKILL.md")
+        candidates = sorted(path.removesuffix("SKILL.md").rstrip("/") for path in all_files
+                            if PurePosixPath(path).name == "SKILL.md" and _exclusion(path) is None)
         origin = {"kind": "github", "repository": f"{owner}/{repo}", "commit": commit}
         if ref:
             origin["requested_ref"] = ref
@@ -343,7 +407,7 @@ class SkillInstaller:
                 summaries = []
                 for candidate in candidates:
                     prefix = candidate + "/" if candidate else ""
-                    selected = {path[len(prefix):]: value for path, value in all_files.items() if path.startswith(prefix)}
+                    selected, _ = _exclude({path[len(prefix):]: value for path, value in all_files.items() if path.startswith(prefix)})
                     summary = {"path": candidate or "."}
                     try:
                         self._validate(selected)

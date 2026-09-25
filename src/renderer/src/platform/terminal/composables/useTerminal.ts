@@ -111,6 +111,13 @@ const PASTE_CHUNK = 512
  * handler's first line, long before the ack gets its turn.
  */
 const PASTE_ACK_TIMEOUT_MS = 60_000
+/** Pause between a dictated paste landing and the Enter that submits it: a
+ *  CLI that tells a paste from typing by timing would otherwise read a CR in
+ *  the same burst as a newline inside the paste. */
+const SUBMIT_AFTER_PASTE_MS = 150
+/** How long a dictated paste may wait for its acks before its Enter is given
+ *  up on: a late Enter could land on whatever the user typed meanwhile. */
+const SUBMIT_ACK_WAIT_MS = 3_000
 
 /** Why a paste chunk never got a positive ack. */
 type PasteChunkFailure =
@@ -819,6 +826,19 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // signal is trustworthy but a single miss (a reader dropping a record, a
   // turn aborted with ESC) must not park the badge on RUNNING forever.
   const DELIVERED_PENDING_FUSE_MS = 120_000
+  // Background tasks (a backgrounded shell, an async subagent) the CLI started
+  // and has not reported finished, from its transcript. They outlive the turn
+  // that launched them — that turn still ends with a normal turn_complete — so
+  // without this the pane reads as idle while the work runs. Ids, not a count:
+  // a fast command's completion is logged BEFORE the record that launched it,
+  // so ids that already ended are remembered and a late start for one is
+  // ignored. Fused like delivered-pending: a task killed outside TaskStop (a
+  // `kill <pid>`, a dev server left running) writes no end record, and nothing
+  // but a respawn would otherwise take the badge off RUNNING. Past the fuse a
+  // task no longer holds the badge; its id stays tracked so an end still clears it.
+  const BACKGROUND_TASK_FUSE_MS = 30 * 60_000
+  const backgroundTaskIds = ref<Map<string, number>>(new Map())
+  const endedBackgroundTaskIds = new Set<string>()
   // Tick so displayStatus re-evaluates after output goes quiet.
   const nowTick = ref<number>(Date.now())
   const isOnScreen = (): boolean => opts?.onScreen?.() ?? true
@@ -924,6 +944,12 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       questionAt.value > 0 &&
       lastCleanBurstAt.value < questionAt.value + AWAITING_SETTLE_MS
     ) return 'awaiting'
+    // Background work still running is work, whatever the turn end says. Below
+    // both AWAITING paths for the same reason as the delivered-pending check
+    // that follows: a pane parked on a prompt needs the user, not patience.
+    for (const startedAt of backgroundTaskIds.value.values()) {
+      if (nowTick.value - startedAt <= BACKGROUND_TASK_FUSE_MS) return 'running'
+    }
     // A message we delivered that the CLI has not consumed yet means it still
     // has work queued, whatever the PTY says. Below both AWAITING paths on
     // purpose: a pane parked on a prompt or a question cannot consume anything
@@ -1109,6 +1135,22 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    *  text, where the next turn end is the only consume signal there is. */
   function clearDeliveredPending(all = false): void {
     deliveredPendingCount.value = all ? 0 : Math.max(0, deliveredPendingCount.value - 1)
+  }
+
+  /** The CLI's transcript shows background tasks starting or finishing.
+   *  Called from App.vue on the reader's `background:start` / `background:end`
+   *  details. */
+  function noteBackgroundTasks(kind: 'start' | 'end', ids: string[]): void {
+    const next = new Map(backgroundTaskIds.value)
+    for (const id of ids) {
+      if (kind === 'end') {
+        endedBackgroundTaskIds.add(id)
+        next.delete(id)
+      } else if (!endedBackgroundTaskIds.has(id)) {
+        next.set(id, Date.now())
+      }
+    }
+    backgroundTaskIds.value = next
   }
 
   function markBufferPosition(): number {
@@ -2902,6 +2944,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     awaitingInputAt.value = 0
     questionAt.value = 0
     deliveredPendingCount.value = 0
+    // A new process has none of the old one's background tasks.
+    backgroundTaskIds.value = new Map()
+    endedBackgroundTaskIds.clear()
     error.value = ''
     stallReason.value = null  // a retry must not inherit the last attempt's exit
     status.value = 'starting'
@@ -3010,8 +3055,11 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    *
    * Chunking at 512 bytes is the same thing App.vue's injectText does, to keep
    * large pastes off the tty's write limits.
+   *
+   * Resolves true once every chunk is acked as written; false when anything
+   * was dropped, refused or is still un-acked at the deadline.
    */
-  function pasteFromClipboard(text: string): void {
+  function pasteFromClipboard(text: string): Promise<boolean> {
     // Both rejections below are silent by design, and that is what made "the
     // paste vanished" unanswerable: an empty clipboard (a copy that never
     // landed — see the Cmd+C path above and menu.ts) and a still-preparing
@@ -3023,7 +3071,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         `pane=${paneId} paste ignored — no text to send`,
         'empty'
       )
-      return
+      return Promise.resolve(false)
     }
     // The pane gates stdin while it is still preparing, and a paste respects
     // that too. Rejected rather than buffered: a clipboard paste is a discrete
@@ -3034,7 +3082,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         'preparing',
         text.length
       )
-      return
+      return Promise.resolve(false)
     }
     // Same gate pasteText applies. Checked up front so a paste into a dead pane
     // cannot clear `isStopped` (and fire onUserResume) while sending nothing.
@@ -3044,7 +3092,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         'no-session',
         text.length
       )
-      return
+      return Promise.resolve(false)
     }
     // Same normalization xterm applies: a PTY expects CR, never CRLF/LF.
     const normalized = text.replace(/\r?\n/g, '\r')
@@ -3070,7 +3118,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     const chunks = chunkForPty(payload, PASTE_CHUNK)
     // ⌘V and a file drop are the person at the keyboard; injection never
     // comes through here (App.vue's injectText has its own path).
-    void Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk, HUMAN_KEY))).then((outcomes) => {
+    const written = Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk, HUMAN_KEY))).then((outcomes) => {
       const lost = outcomes.filter((o) => o === 'transport' || o === 'refused').length
       const late = outcomes.filter((o) => o === 'timeout').length
       // A late ack is not a lost chunk: the backend writes the bytes into the
@@ -3084,18 +3132,65 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
           `un-acked after ${PASTE_ACK_TIMEOUT_MS}ms (bytes were written)`,
           'warning'
         )
-        return
+        return false
       }
-      if (!lost) return
+      if (!lost) return true
       _clipboardFailure(
         `pane=${paneId} paste truncated — ${lost}/${chunks.length} chunk(s) never left` +
         (late ? ` (${late} more un-acked)` : ''),
         lost === chunks.length ? 'send-failed-all' : 'send-failed',
         normalized.length
       )
+      return false
     })
     term.scrollToBottom()
     term.clearSelection()
+    return written
+  }
+
+  /**
+   * pasteFromClipboard for text that exists nowhere else (voice dictation):
+   * false, with nothing sent, when the paste would be dropped — the pane is
+   * still preparing, has no live session, or the transport is down — so the
+   * caller can keep the text instead of losing it.
+   *
+   * `submit` then presses Enter for the user, once every chunk of the paste is
+   * acked and SUBMIT_AFTER_PASTE_MS has passed — so the CR arrives after the
+   * bracketed-paste end, never inside it. A paste that lost a chunk, or is
+   * not fully acked within SUBMIT_ACK_WAIT_MS, is left in the input box
+   * unsent. `onSubmit` hears which of the two happened.
+   */
+  function insertText(
+    text: string,
+    { submit = false, onSubmit }: { submit?: boolean; onSubmit?: (sent: boolean) => void } = {}
+  ): boolean {
+    if (!text || _stdinGated || !inputTransportReady()) return false
+    if (!sessionId.value || status.value === 'exited' || status.value === 'error') return false
+    const written = pasteFromClipboard(text)
+    if (submit) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), SUBMIT_ACK_WAIT_MS) })
+      void Promise.race([written, late]).then((ok) => {
+        clearTimeout(timer)
+        if (!ok) {
+          onSubmit?.(false)
+          return
+        }
+        setTimeout(() => onSubmit?.(submitAsTyped()), SUBMIT_AFTER_PASTE_MS)
+      })
+    }
+    return true
+  }
+
+  /** The Enter a person would type: the same bytes and bookkeeping as a CR
+   *  through term.onData, sent as human input. False when it could not go. */
+  function submitAsTyped(): boolean {
+    if (_stdinGated || isDisposed) return false
+    if (!pasteText('\r', HUMAN_KEY)) return false
+    if (isStopped.value) { isStopped.value = false; opts?.onUserResume?.() }
+    inputBuffer = ''
+    syncDraft()
+    return true
   }
 
   /** Returns whether the interrupt was actually issued. The two early exits
@@ -3272,6 +3367,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     redraw,
     pasteText,
     pasteFromClipboard,
+    insertText,
     status,
     displayStatus,
     awaitingKind,
@@ -3297,6 +3393,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     clearQuestion,
     markDeliveredPending,
     clearDeliveredPending,
+    noteBackgroundTasks,
     markBufferPosition,
     recleanBuffer,
     flushPendingClean,

@@ -39,7 +39,7 @@ watch(dialog, async (d) => {
 
     <!-- Alert / Confirm dialog (blocking) -->
     <div v-if="dialog" ref="modalEl" class="modal" tabindex="-1" @click.self="resolveDialog(false)" @keydown.esc="resolveDialog(false)" @keydown.enter="resolveDialog(true)">
-      <div class="card" :class="dialog.kind">
+      <div class="card" :class="[dialog.kind, { danger: dialog.danger }]">
         <header>
           <span class="dot"></span>
           <strong>{{ dialog.title }}</strong>
@@ -69,7 +69,7 @@ watch(dialog, async (d) => {
           >
             {{ dialog.cancelText }}
           </button>
-          <button class="primary" @click="resolveDialog(true)">
+          <button class="primary" :class="{ danger: dialog.danger }" @click="resolveDialog(true)">
             {{ dialog.confirmText }}
           </button>
         </footer>
@@ -290,6 +290,26 @@ button.primary {
 }
 button.primary:hover {
   background: var(--success-strong);
+}
+/* Destructive confirm (opt-in via `danger`): red action, and prose rather
+   than the monospace the default body keeps for paths and command output. */
+.card.danger {
+  border-left-color: var(--danger-fg);
+}
+.card.danger .dot {
+  background: var(--danger-fg);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger-fg) 20%, transparent);
+}
+.card.danger .body pre {
+  font-family: inherit;
+  font-size: var(--font-sm);
+}
+button.primary.danger {
+  background: var(--danger-emphasis);
+  border-color: var(--danger-emphasis);
+}
+button.primary.danger:hover {
+  background: var(--danger-fg);
 }
 button.ghost {
   background: transparent;

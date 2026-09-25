@@ -41,6 +41,7 @@ from pathlib import Path
 import re
 
 from .base import (
+    PlatformInstall,
     AccountSwitchSpec,
     Dep,
     McpServerConfig,
@@ -844,6 +845,11 @@ SPEC = VendorSpec(
         install_cmd="curl -fsSL https://opencode.ai/install | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
         docs_url="https://opencode.ai/docs",
+        # Windows: no PowerShell installer exists (install.ps1 is a 404);
+        # https://opencode.ai/docs lists Scoop, Chocolatey and npm. npm is the
+        # one `opencode upgrade --method` knows, and Navide already has it.
+        install_cmds={"win32": PlatformInstall(
+            "npm install -g opencode-ai", ("npm",), needs_terminal=True)},
         update_cmd="opencode upgrade",
         npm_package="opencode-ai",
         config_home_env="OPENCODE_CONFIG_DIR",

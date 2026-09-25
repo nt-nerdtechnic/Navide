@@ -71,13 +71,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
 import threading
 from typing import Any
 
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from . import device_crypto
 
@@ -483,6 +486,17 @@ def encrypt(plaintext: str, *, scope: str, item_id: str) -> str:
     return _encode(_ENVELOPE_V2 + bytes.fromhex(kid) + nonce + sealed)
 
 
+def sealed_length(plaintext: str) -> int:
+    """How many bytes ``encrypt(plaintext, ...)`` returns, without a key.
+
+    Envelope byte, key id, nonce and the 16-byte GCM tag around the UTF-8
+    plaintext, then base64. Lets a caller ask whether a record will fit
+    before it holds, or spends, a key.
+    """
+    raw = 1 + _KID_LEN + _NONCE_LEN + len(plaintext.encode("utf-8")) + 16
+    return 4 * ((raw + 2) // 3)
+
+
 def _v2_key_id(raw: bytes) -> str | None:
     """The key id a body names if it is shaped like a v2 envelope, else None."""
     if len(raw) < 1 + _KID_LEN + _NONCE_LEN + 16 or raw[:1] != _ENVELOPE_V2:
@@ -554,6 +568,78 @@ def resealed(wire: str, *, scope: str, item_id: str) -> str:
 
 
 # ---- handing the ring to another device ----------------------------------------
+
+
+# ---- blob segments ------------------------------------------------------------
+#
+# Large skill files do not ride inside a record; they are stored once as a blob
+# (``skill_blobs``) and a record names them by id. A blob is a run of segments,
+# each sealed on its own so that neither side ever holds the whole file:
+#
+#     segment = nonce (12) ‖ AES-256-GCM(plaintext ≤ segment size) ‖ tag (16)
+#
+# The AEAD data binds the key id, the blob id, the segment's index and the total
+# count, so segments cannot be swapped between blobs, reordered, or cut short —
+# a truncated object is missing segments the count says must be there.
+
+_BLOB_AAD_PREFIX = b"navide/blob/v2"
+_BLOB_ID_CONTEXT = b"navide/blob-id/v1"
+#: What sealing adds to each segment.
+BLOB_SEGMENT_OVERHEAD = _NONCE_LEN + 16
+
+
+def _held_key(kid: str) -> bytes:
+    held = _load_ring()
+    if held is None:
+        raise KeyringError("this machine has no sync key yet")
+    if kid not in held["keys"]:
+        raise UnknownKeyId(f"the blob is sealed under key {kid}, which this machine does not hold")
+    return held["keys"][kid]
+
+
+def blob_hasher(kid: str | None = None) -> tuple[str, hmac.HMAC]:
+    """A keyed hash to name a blob by, under key *kid* (the active one by default).
+
+    Keyed rather than a plain SHA-256 so the server cannot tell that two
+    accounts hold the same file, nor confirm a guess of one; every device of
+    this account derives the same key, so identical files still share one blob.
+    Returns the key id alongside, because the name is only meaningful with it.
+    """
+    if kid is None:
+        kid = active_key_id()
+        if kid is None:
+            raise KeyringError("this machine has no sync key yet")
+    derived = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_BLOB_ID_CONTEXT).derive(
+        _held_key(kid)
+    )
+    return kid, hmac.new(derived, digestmod=hashlib.sha256)
+
+
+def _blob_aad(kid: str, blob_id: str, index: int, count: int) -> bytes:
+    return b"\x00".join(
+        (_BLOB_AAD_PREFIX, kid.encode("ascii"), blob_id.encode("ascii"), str(index).encode(), str(count).encode())
+    )
+
+
+def seal_segment(plaintext: bytes, *, kid: str, blob_id: str, index: int, count: int) -> bytes:
+    """Seal one blob segment under key *kid*. See the layout above."""
+    nonce = os.urandom(_NONCE_LEN)
+    return nonce + AESGCM(_held_key(kid)).encrypt(nonce, plaintext, _blob_aad(kid, blob_id, index, count))
+
+
+def open_segment(sealed: bytes, *, kid: str, blob_id: str, index: int, count: int) -> bytes:
+    """Open one blob segment; any tampering, reordering or relabelling raises."""
+    if len(sealed) < BLOB_SEGMENT_OVERHEAD:
+        raise KeyringError("the blob segment is too short to be sealed")
+    # Outside the try: a key this machine lacks is UnknownKeyId ("wait for the
+    # ring"), not a segment that failed to open ("tampered").
+    key = _held_key(kid)
+    try:
+        return AESGCM(key).decrypt(
+            sealed[:_NONCE_LEN], sealed[_NONCE_LEN:], _blob_aad(kid, blob_id, index, count)
+        )
+    except Exception as err:  # noqa: BLE001 - cryptography raises a bare InvalidTag
+        raise KeyringError(f"blob segment {index} of {count} did not open") from err
 
 
 def _require_namespace(expected: str | None) -> None:

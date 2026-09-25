@@ -97,10 +97,10 @@ function harness() {
     workspaceRestoreSession: () => ({}), explicitRestoreDecision: () => 'fresh',
     deferredPaneStillCurrent: () => true, skipFlagFor: () => '',
     canResumeSession: async () => false, savedHistoryFile: async () => '',
-    commandWithSelectedBinary: (_agent: string, command: string) => command,
     stripPinnedSessionId: (command: string) => command,
     stripDeadOpencodeAutoFlag: (_agent: string, command: string) => command,
     minimizedPanes: { value: new Set<string>() },
+    useChannels: () => ({ paneReplaced: vi.fn(), paneClosed: vi.fn() }),
   }
   const actions = new Function(...Object.keys(deps), `${javascript}; return {
     spawnPane, onManualSpawn, rebuildPaneClean, performRealizeRestoredPane,

@@ -1001,6 +1001,13 @@ class ServerLink:
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
             engine.register(sync_scopes.McpScope())
             engine.register(sync_scopes.SkillsStateScope())
+            # Files of skills too large for one record, as blobs; rides with
+            # the Skills switch. Its transfers report progress to every window.
+            skill_files = sync_scopes.skill_files_scope()
+            skill_files.set_notify(
+                lambda progress: self._spawn(app.broadcast(make_event("skills.sync_progress", progress)))
+            )
+            engine.register(skill_files)
             engine.register(sync_scopes.MemoryScope())
             # One instance, shared with the spawn and sign-out paths; see
             # sync_scopes.credentials_scope.
@@ -3363,6 +3370,13 @@ class ServerLink:
         from . import app
         from .ipc import make_event
 
+        # A plain terminal runs what it is typed; another device's text is
+        # never that. Refused before anything is marked or broadcast — the
+        # window refuses it as well, but not only the window.
+        if pane.agent_key == "terminal":
+            await self._ack(msg_key, "rejected", reason="terminal-external")
+            return
+
         from_display = "/".join(
             part
             for part in (
@@ -3372,11 +3386,15 @@ class ServerLink:
             )
             if part
         )
+        from .guard.taint import safe_mark_tainted
+
+        safe_mark_tainted(pane.pane_id, "remote", f"message from device {from_display}", msg_key)
         await app.broadcast(
             make_event(
                 "agent_msg.deliver",
                 {
                     "msg_key": msg_key,
+                    "origin": "remote",
                     "target_pane_id": pane.pane_id,
                     "target_workspace_path": pane.workspace_path,
                     "target_name": pane.name,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import posixpath
 import stat
 import zipfile
 from dataclasses import dataclass, field
@@ -221,10 +222,27 @@ def _backend_matches_target(data: bytes, target: str) -> bool:
     )
 
 
+def backend_entry_for_target(entry: str, target: str | None) -> str:
+    """The archive file a manifest's `backend.entry` names for `target`.
+
+    Mirrors the Host's `backendEntryOnDisk` (src/main/plugins/pluginManifest.ts):
+    a package ships one manifest for every platform, so the entry is written
+    without an extension, and for a Windows target a bare entry names the
+    `.exe` beside it. Every other target, and no target, reads it as written.
+    """
+    if target is None or not target.startswith("win32-"):
+        return entry
+    if posixpath.splitext(entry)[1] != "":
+        return entry
+    return f"{entry}.exe"
+
+
 def read_package(data: bytes, *, target: str | None = None) -> LoadedPackage:
     """Parse and validate a `.vsix`-style archive.
 
-    Rejects malformed archives with a clear PackageError.
+    Rejects malformed archives with a clear PackageError. `target` is the
+    Registry target the package is published for; it only decides which file
+    the manifest's backend entry names (see `backend_entry_for_target`).
     """
     if not zipfile.is_zipfile(BytesIO(data)):
         raise PackageError("package is not a valid ZIP archive")
@@ -295,7 +313,12 @@ def read_package(data: bytes, *, target: str | None = None) -> LoadedPackage:
         if is_manifest_v2(manifest):
             for path in file_names - {MANIFEST_NAME}:
                 _assert_publishable_file_path(path)
+            backend_entry = (
+                manifest.backend.entry if manifest.backend is not None else None
+            )
             for path in manifest_referenced_files(manifest):
+                if path == backend_entry:
+                    path = backend_entry_for_target(path, target)
                 if path not in file_names:
                     raise PackageError(
                         f"manifest referenced file '{path}' is not present in the archive"
@@ -307,11 +330,11 @@ def read_package(data: bytes, *, target: str | None = None) -> LoadedPackage:
             if manifest.backend is None and backend_entries:
                 raise PackageError("frontend-only package must not contain backend entries")
             if manifest.backend is not None:
-                if len(backend_entries) != 1 or backend_entries[0] != manifest.backend.entry:
+                backend_path = backend_entry_for_target(manifest.backend.entry, target)
+                if len(backend_entries) != 1 or backend_entries[0] != backend_path:
                     raise PackageError(
                         "backend package must contain exactly its declared self-contained backend executable"
                     )
-                backend_path = manifest.backend.entry
                 backend_info = next(
                     info
                     for info, path, kind in validated_entries
@@ -320,7 +343,14 @@ def read_package(data: bytes, *, target: str | None = None) -> LoadedPackage:
                 backend_data = entry_bytes[backend_path]
                 if not backend_data:
                     raise PackageError(f"backend entry is empty: {backend_path}")
-                if not _archive_entry_is_executable(backend_info):
+                # A Windows target has no exec bit to set; there, as on the Host,
+                # the `.exe` extension stands in for it.
+                executable = (
+                    posixpath.splitext(backend_path)[1].lower() == ".exe"
+                    if target is not None and target.startswith("win32-")
+                    else _archive_entry_is_executable(backend_info)
+                )
+                if not executable:
                     raise PackageError(
                         f"backend entry is not marked executable: {backend_path}"
                     )
@@ -360,7 +390,7 @@ def read_package(data: bytes, *, target: str | None = None) -> LoadedPackage:
     )
 
 
-def build_package(src_dir: Path | str, files: list[str]) -> bytes:
+def build_package(src_dir: Path | str, files: list[str], *, target: str | None = None) -> bytes:
     """Build a `.vsix`-style ZIP from a plugin source directory.
 
     Zips the caller's explicit canonical file list, then validates the result
@@ -417,5 +447,5 @@ def build_package(src_dir: Path | str, files: list[str]) -> bytes:
             zf.writestr(info, path.read_bytes(), compresslevel=9)
     data = buffer.getvalue()
     # Validate the built archive (also surfaces a bad manifest early).
-    read_package(data)
+    read_package(data, target=target)
     return data

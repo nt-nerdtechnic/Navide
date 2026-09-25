@@ -107,6 +107,38 @@ describe('resolveMarketplaceRegistryRoot', () => {
     ).toThrow(/not provisioned/)
   })
 
+  it('matches the Official Registry by host and path prefix only', () => {
+    const resolve = (registryUrlOverride: string) =>
+      resolveMarketplaceRegistryRoot({
+        registryUrlOverride,
+        defaultRegistryUrl: 'http://localhost:8787',
+        officialRegistryUrl: 'https://server.navide.dev/registry',
+        officialRootPublicKey: official,
+      })
+    for (const url of [
+      'https://server.navide.dev/registry',
+      'https://server.navide.dev/registry/',
+      'https://SERVER.navide.dev:443/registry',
+    ]) {
+      expect(resolve(url)).toMatchObject({
+        registryUrl: 'https://server.navide.dev/registry',
+        authority: 'official',
+        source: 'app',
+      })
+    }
+    for (const url of [
+      'https://server.navide.dev/',
+      'https://server.navide.dev',
+      'https://server.navide.dev/registry-evil',
+      'https://server.navide.dev/registry/evil',
+      'https://server.navide.dev/Registry',
+      'http://server.navide.dev/registry',
+      'https://server.navide.dev.evil.test/registry',
+    ]) {
+      expect(() => resolve(url)).toThrow(/explicit root approval/)
+    }
+  })
+
   it('rejects a mismatched confirmed fingerprint', () => {
     expect(() =>
       resolveMarketplaceRegistryRoot({

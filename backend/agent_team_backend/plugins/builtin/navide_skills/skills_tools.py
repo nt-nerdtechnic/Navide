@@ -16,6 +16,7 @@ from mcp.server.fastmcp import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from agent_team_backend.mcp_server.toolkit import CallerUnknown, resolve_caller
+from agent_team_backend.skills_approvals import SkillApprovalError
 from agent_team_backend.skills_store import (
     SKILL_FILE_SIZE_LIMIT,
     SkillConflictError,
@@ -83,6 +84,8 @@ def _error(err: Exception) -> dict[str, Any]:
         code = "SKILL_CONFLICT"
     elif isinstance(err, SkillNotFoundError):
         code = "SKILL_NOT_FOUND"
+    elif isinstance(err, SkillApprovalError):
+        code = err.code
     elif isinstance(err, (SkillValidationError, UnicodeError)):
         code = "SKILL_VALIDATION_ERROR"
     return {"ok": False, "error": {"code": code, "message": str(err), "details": details}}
@@ -186,7 +189,10 @@ async def skills_prepare_install(
     selects the repository root. Multiple candidates return selection_required
     and candidates without an installable preview_id; select a path and retry.
     A selected preview contains immutable instructions, a file inventory,
-    source, digest and warnings. Unauthenticated GitHub retrieval never runs
+    source, digest and warnings. Repository housekeeping (.gitignore,
+    .gitkeep, .DS_Store, .git/, .github/) is left out and listed in excluded;
+    any other dotfile refuses the source. A skill may hold up to 512 files,
+    8 MiB per file and 32 MiB in total. Unauthenticated GitHub retrieval never runs
     package code or changes the shared library. The preview belongs to this
     caller, expires in 15 minutes and is lost on backend restart. Review it
     before skills_install; a digest is not human approval or write permission.
@@ -219,31 +225,82 @@ async def skills_install(
     expected_digest: str,
     targets: list[str] | None,
     ctx: Context,
-    consent: bool = False,
 ) -> dict[str, Any]:
-    """Install the exact reviewed preview without overwriting an existing skill.
+    """Ask the user to approve installing the exact reviewed preview.
 
-    Use the preview id and digest from skills_prepare_install. Supply explicit
-    targets (null means all wired vendors); shared-root readers discover the
-    skill automatically regardless of targets. consent records the user's
-    authorization for the first shared-root write, not proof they reviewed the
-    content. Installation never executes bundled scripts or configures secrets.
-    Existing panes may need reopening. Enabled Skills sync can copy managed
-    content and delivery settings to the user's other devices.
+    This never writes on its own: it files a request that the user approves or
+    rejects in the Navide window, and returns status "pending_approval" with an
+    approval_id. You cannot consent on the user's behalf; poll
+    skills_install_status with that id for the outcome. Use the preview id and
+    digest from skills_prepare_install and explicit targets (null means all
+    wired vendors); shared-root readers discover the skill automatically
+    regardless of targets. Repeating the call for the same preview returns the
+    same pending request, a preview the user rejected returns
+    SKILL_APPROVAL_REJECTED, and an already installed preview returns its
+    original receipt. Installation never executes bundled scripts or configures
+    secrets, is add-only, and existing panes may need reopening. Enabled
+    Skills sync can copy managed content and delivery settings to the user's
+    other devices.
     """
+    from agent_team_backend import app
+    from agent_team_backend.ipc import make_event
+    from agent_team_backend.skills_approvals import public, registry
+
     try:
         owner = _owner(ctx)
         installer = _installer()
         context = await asyncio.to_thread(_delivery_context)
-        result = await asyncio.to_thread(
-            installer.install, preview_id, expected_digest,
-            owner_key=owner, targets=targets, consent=consent,
+        checked = await asyncio.to_thread(
+            installer.peek, preview_id, expected_digest, owner_key=owner, targets=targets,
         )
-        warnings = list(result.get("warnings") or [])
-        if result.get("changed", True):
-            warnings.extend(await _notify(result["name"], "installed"))
-        return {**result, **context, "ok": True, "warnings": warnings}
+        if "receipt" in checked:
+            return {**checked["receipt"], **context, "ok": True, "status": "installed"}
+        record = registry.request(owner=owner, targets=targets, preview=checked["preview"])
+        await app.broadcast(make_event("skills.install_approval_request", public(record)))
+        return {
+            **context,
+            "ok": True,
+            "status": "pending_approval",
+            "approval_id": record["approval_id"],
+            "name": record["name"],
+            "digest": record["digest"],
+            "expires_at": record["expires_at"],
+        }
     except (CallerUnknown, SkillsStoreError, OSError, UnicodeError) as err:
+        return _error(err)
+
+
+async def skills_install_status(approval_id: str, ctx: Context, wait_s: float = 0) -> dict[str, Any]:
+    """Read the user's decision on a skills_install approval request.
+
+    Only requests filed by this caller are visible. wait_s (capped at 60)
+    waits for a decision instead of returning "pending" at once. Status is
+    pending, installing, installed (with the install result), rejected,
+    failed (with error) or expired; an expired request needs a new preview.
+    """
+    from agent_team_backend import skills_approvals
+
+    try:
+        owner = _owner(ctx)
+        record = skills_approvals.registry.get(approval_id)
+        if record is not None and record["owner"] == owner and wait_s > 0:
+            record = await skills_approvals.wait(approval_id, min(float(wait_s), 60.0))
+        if record is None or record["owner"] != owner:
+            raise skills_approvals.SkillApprovalError(
+                "SKILL_APPROVAL_NOT_FOUND",
+                "approval request not found; requests are lost on a backend restart "
+                "and old ones are pruned, so prepare a new preview",
+            )
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "status": record["status"],
+            "name": record["name"],
+            "expires_at": record["expires_at"],
+            "result": record["result"],
+            "error": record["error"],
+        }
+    except (CallerUnknown, SkillsStoreError) as err:
         return _error(err)
 
 
@@ -316,6 +373,7 @@ def install(server: Any) -> None:
         (skills_inspect, True, False),
         (skills_prepare_install, True, True),
         (skills_install, False, False),
+        (skills_install_status, True, False),
         (skills_set_delivery, False, False),
     ):
         server.tool(annotations=ToolAnnotations(

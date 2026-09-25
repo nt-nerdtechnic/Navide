@@ -152,11 +152,12 @@ describe('release workflow verifies the Plans artifact it signs', () => {
   })
 
   it('asserts each release artifact carries its exact official Plans package backend', () => {
+    expect(verifyStep).toContain('artifact_version="$(node -p "require(\'./package.json\').version")"')
     expect(verifyStep).toContain(
-      'Contents/Resources/official-artifacts/navide.plans/0.2.1/darwin-arm64/package/backend/navide-plans',
+      'Contents/Resources/official-artifacts/navide.plans/${artifact_version}/darwin-arm64/package/backend/navide-plans',
     )
     expect(linuxValidationStep).toContain(
-      'squashfs-root/resources/official-artifacts/navide.plans/0.2.1/linux-x64/package/backend/navide-plans',
+      'squashfs-root/resources/official-artifacts/navide.plans/${artifact_version}/linux-x64/package/backend/navide-plans',
     )
   })
 })

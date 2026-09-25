@@ -41,7 +41,7 @@ export interface CliAgentRowFacts {
   /** null = this CLI keeps no credential file Navide can read. */
   signedIn: boolean | null
   accountCount: number
-  /** A `agentTeam.cliBinary.<agentKey>` override is in effect. */
+  /** The backend launches a user-chosen install (`binary_override`). */
   binaryOverride: boolean
   /** A `agentTeam.cliCommand.<agentKey>` override is in effect. Amber, not
    *  neutral: it also switches off the model and effort above it. */

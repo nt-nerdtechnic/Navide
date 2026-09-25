@@ -312,8 +312,15 @@ def _refresh_path_from_login_shell(
     # minutes of detection on a PATH the probe had contributed nothing to.
     _path_refreshed_at = time.monotonic()
     _path_probe_answered = bool(shell_paths)
+    # An answered probe is the order the user's own terminal resolves in, so
+    # its entries take that order even when PATH already had them further
+    # down. Otherwise a re-detect after fixing PATH order in ~/.zprofile kept
+    # finding /usr/bin/python3 ahead of Homebrew's until the app restarted.
+    login_set = set(shell_paths)
     shell_paths.extend(d for d in _fallback_path_dirs() if os.path.isdir(d))
-    current_paths = os.environ.get("PATH", "").split(os.pathsep)
+    current_paths = [
+        p for p in os.environ.get("PATH", "").split(os.pathsep) if p not in login_set
+    ]
     current_set = set(current_paths)
     seen: set[str] = set()
     new_paths: list[str] = []
@@ -438,6 +445,47 @@ def resolve_executable(dep: Dep, quick: bool = False) -> str:
     return fallback
 
 
+# Where an unlinked (or versioned, never-`python3`-linked) Homebrew keg keeps
+# its interpreter: <root>/python@3.N/bin/python3.
+_HOMEBREW_OPT_ROOTS = ("/opt/homebrew/opt", "/usr/local/opt")
+# Newest minor probed. Only names that exist on disk cost a subprocess.
+_PYTHON_MINOR_CEILING = 30
+
+
+def _suitable_versioned_python(dep: Dep) -> tuple[str, str]:
+    """(path, version) of the newest Python meeting dep.min_version that is not
+    reachable as `python3`, or ('', '').
+
+    Nothing Navide runs needs `python3` itself to be new — the packaged backend
+    is frozen, dev runs under uv's venv, and the curl-less hook fallback runs
+    on any Python 3 — so Xcode's /usr/bin/python3 3.9.6 winning PATH must not
+    block the wizard when Homebrew's python@3.13 (which links only
+    `python3.13`) or an unlinked keg is installed. `brew install python3`
+    reports those as already installed and changes nothing.
+    """
+    min_minor = _version_tuple(dep.min_version)[1:2] or (0,)
+    for minor in range(_PYTHON_MINOR_CEILING, min_minor[0] - 1, -1):
+        candidates = [osplat.paths.resolve_program(f"python3.{minor}")]
+        candidates += [
+            os.path.join(root, f"python@3.{minor}", "bin", "python3")
+            for root in _HOMEBREW_OPT_ROOTS
+        ]
+        for path in candidates:
+            if not path or not os.path.isfile(path):
+                continue
+            try:
+                proc = subprocess.run(
+                    osplat.paths.launch_argv(path, dep.check_cmd[1:]),
+                    capture_output=True, text=True, timeout=8,
+                )
+            except (subprocess.SubprocessError, OSError):
+                continue
+            version = _parse_version((proc.stdout or "") + (proc.stderr or ""), dep.version_regex)
+            if _meets_min(version, dep.min_version):
+                return path, version
+    return "", ""
+
+
 def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
     """Run the dep's check_cmd and classify ok | missing | outdated.
 
@@ -449,6 +497,10 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
     exit_code: int | None = None
     signal_name = ""
     duration_ms: int | None = None
+    # A `--version` that outlives its ceiling says nothing about the binary: a
+    # loaded cold start does it and the next launch answers. Kept distinct from
+    # a definitive failure so the health guide does not report it.
+    probe_timed_out = False
     if not binary_path:
         status = "missing"
         version = ""
@@ -477,10 +529,15 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
                 status = "ok"
             else:
                 status = "missing"
-        except (subprocess.SubprocessError, OSError):
+        except (subprocess.SubprocessError, OSError) as exc:
             duration_ms = max(0, round((time.monotonic() - started) * 1000))
             status = "missing"
             version = ""
+            probe_timed_out = isinstance(exc, subprocess.TimeoutExpired)
+    if dep.id == "python" and not quick and status in ("outdated", "missing"):
+        found_path, found_version = _suitable_versioned_python(dep)
+        if found_path:
+            binary_path, version, status = found_path, found_version, "ok"
     # Resolved once: `can_install`, `needs_terminal` and `install_cmd` below
     # all have to describe the same install, or the dialog shows one command
     # and runs another.
@@ -521,6 +578,10 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         "exit_code": exit_code,
         "signal": signal_name,
         "duration_ms": duration_ms,
+        "probe_timed_out": probe_timed_out,
+        # The install the user picked for Navide to launch ("use this
+        # version"); '' = the PATH default. The backend is its only store.
+        "binary_override": cli_binary_override(dep.id) if dep.group == "agent_cli" else "",
     }
 
 
@@ -752,6 +813,9 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             "diagnostic_command": dep.doctor_cmd or " ".join(dep.check_cmd),
             "update_command": dep.update_cmd,
             "docs_url": dep.docs_url,
+            # The guide's same-install check must use the package the removal
+            # gate above used ("" when the vendor is not npm-installed).
+            "npm_package": dep.npm_package,
             "update_state": update_records,
             "candidates": detailed_candidates,
         }
@@ -769,7 +833,23 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
                 "label": dep.label,
                 "records": failed_updates,
             })
-        if primary["status"] != "ok":
+        # The user already chose which install Navide launches for this CLI
+        # (onboarding's "use this version"). A working choice is the repair
+        # for both a duplicate install and a broken primary, since spawns no
+        # longer reach the PATH default; a broken choice repairs nothing.
+        override = cli_binary_override(dep.id)
+        if override and any(
+            candidate["status"] == "ok"
+            and (override == candidate["path"] or override in candidate.get("aliases", []))
+            for candidate in detailed_candidates
+        ):
+            continue
+        # A timed-out primary probe is transient, not a finding: reporting it
+        # added an entry to the fingerprint and re-opened a dismissed guide
+        # on every loaded cold start.
+        if primary["status"] != "ok" and not (
+            primary["is_primary"] and dep_status.get("probe_timed_out")
+        ):
             findings.append({
                 "type": "probe_failed",
                 "agent_key": dep.id,
@@ -788,11 +868,14 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
     # in the launch guide: which repairable findings, for which CLIs, on which
     # binaries. Two things are deliberately left out, because each brought a
     # dismissed guide back on the next launch with nothing the user could see
-    # having changed: probe outcomes (version, status, exit code, signal) come
+    # having changed: probe details (version, status, exit code, signal) come
     # from `--version` subprocesses under a few-second ceiling and flip on a
     # loaded cold start; update_failed findings are not shown by the guide at
     # all (CLI management surfaces them), so a vendor's next failed
-    # auto-update must not re-open it.
+    # auto-update must not re-open it. A probe outcome still decides whether a
+    # probe_failed finding exists, so a primary timeout emits none (above) —
+    # only a definitive failure (non-zero exit with no version, a signal, a
+    # binary that cannot run) moves the fingerprint.
     fingerprint_source = [
         {
             "type": finding["type"],
@@ -849,11 +932,6 @@ def detect_ollama_status() -> dict[str, Any]:
         if name:
             models.append(name)
     return {"models": models, "reachable": True, "detail": ""}
-
-
-def detect_ollama_models() -> list[str]:
-    """Return installed Ollama model names (empty if ollama missing/unreachable)."""
-    return list(detect_ollama_status()["models"])
 
 
 def ollama_reachable() -> bool:
@@ -1002,9 +1080,6 @@ def _command_on_the_resolved_binary(dep: Dep, command: str) -> str:
     return f"{shlex.quote(resolved)} {rest}".strip()
 
 # ── Install (whitelist-driven) ────────────────────────────────────────────────
-INSTALL_TIMEOUT_S = 900
-
-
 def missing_requirements(dep: Dep) -> list[str]:
     """Bootstrap binaries this platform's install needs that are not on PATH.
 
@@ -1015,35 +1090,11 @@ def missing_requirements(dep: Dep) -> list[str]:
     return [name for name in install.requires_binaries if osplat.paths.resolve_program(name) is None]
 
 
-def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
-    """Kill an install's whole process group, not just the `/bin/sh` wrapper.
-
-    `shell=True` puts brew/curl one level below sh, so killing the direct child
-    leaves them running AND keeps the inherited pipes open — the reaping call
-    would then block far past the timeout it was supposed to enforce.
-    """
-    for force in (False, True):
-        try:
-            osplat.process_tree.kill_group(
-                osplat.process_tree.group_of(proc.pid), force=force
-            )
-        except (ProcessLookupError, PermissionError, OSError):
-            proc.kill()
-        try:
-            proc.communicate(timeout=5)
-            return
-        except subprocess.TimeoutExpired:
-            continue
-        except (ValueError, OSError):
-            return
-
-
 def install_dep(dep_id: str) -> dict[str, Any]:
-    """Install a dep by id. Only ids in the registry whitelist are accepted.
+    """Resolve the install command for a dep id. Only registry ids are accepted.
 
-    Interactive deps (sudo / OAuth) are handed back to the caller so the main
-    process can open an external Terminal; non-interactive ones run inline and
-    return captured output.
+    Nothing runs here: `onboarding.run` spawns the resolved command in a PTY
+    the window shows, so sudo, OAuth and progress output all reach the user.
     """
     dep = DEPS_BY_ID.get(dep_id)
     if dep is None:
@@ -1074,56 +1125,73 @@ def install_dep(dep_id: str) -> dict[str, Any]:
             "missing_requirements": missing,
             "command": install.command,
         }
-    if install.needs_terminal:
-        # Caller (frontend → main process) opens Terminal.app with this command.
-        log.info("install for %s handed to an external terminal", dep.id)
-        return {**context, "ok": True, "needs_terminal": True, "command": install.command}
-    # start_new_session puts the shell and its children in their own process
-    # group so a timeout can reap the whole tree (see _terminate_process_group).
-    # Windows ignores the flag; there the tree is reached by walking it from
-    # the shell's pid, which is what osplat.process_tree.kill_group does.
-    try:
-        proc = subprocess.Popen(
-            install.command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
+    return {**context, "ok": True, "command": install.command}
+
+
+# ── Embedded run (onboarding.run) ─────────────────────────────────────────────
+RUN_KINDS = ("install", "maintenance", "pull_model", "start_ollama")
+
+
+def resolve_run(request: dict[str, Any]) -> dict[str, Any]:
+    """The whitelisted command an `onboarding.run` request stands for.
+
+    The window names a kind plus ids, never a command: each kind goes through
+    the same resolver (and prerequisite checks) its old one-shot handler used.
+    """
+    kind = request.get("kind")
+    if kind == "install":
+        return install_dep(str(request.get("dep_id") or ""))
+    if kind == "maintenance":
+        return maintenance_command(
+            str(request.get("agent_key") or ""), str(request.get("action") or "")
         )
-    except OSError as exc:
-        log.warning("install for %s could not start: %s", dep.id, exc)
-        return {**context, "ok": False, "error": str(exc), "command": install.command}
-    try:
-        stdout, stderr = proc.communicate(timeout=INSTALL_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        _terminate_process_group(proc)
-        log.warning("install for %s timed out after %ds", dep.id, INSTALL_TIMEOUT_S)
-        return {
-            **context,
-            "ok": False,
-            "error": f"install timed out after {INSTALL_TIMEOUT_S}s",
-            "command": install.command,
-        }
-    output = (stdout or "") + (stderr or "")
-    if proc.returncode == 0:
-        log.info("install for %s succeeded", dep.id)
-        return {**context, "ok": True, "output": output, "command": install.command}
-    # The frontend reports `error`; returning only `output` here is what made
-    # every failed install read as "unknown".
-    # Logged too: the wizard's in-memory log dies with the modal, so a failed
-    # install left no trace anywhere afterwards.
-    log.warning(
-        "install for %s failed with exit %s: %s",
-        dep.id, proc.returncode, output.strip()[-500:] or "(no output)",
-    )
-    return {
-        **context,
-        "ok": False,
-        "error": output.strip() or f"exit code {proc.returncode}",
-        "output": output,
-        "command": install.command,
-    }
+    if kind == "pull_model":
+        return pull_model(str(request.get("model") or _SUGGESTED_MODEL))
+    if kind == "start_ollama":
+        return start_ollama_service()
+    return {"ok": False, "error": f"unknown run kind: {kind!r}"}
+
+
+# PowerShell's own exit status is 0 after a failed native command unless the
+# script says otherwise; this carries the last native exit code (or a cmdlet
+# failure) out as the process exit code the window reports.
+# `$?` is judged first: it describes the command's last statement, while
+# $LASTEXITCODE keeps the code of whichever native program ran last — inside
+# an `irm ... | iex` installer that can be a probe that returned non-zero
+# before the install went on to succeed.
+_POWERSHELL_EXIT_TAIL = (
+    "\n$navideOk = $?; $navideCode = $LASTEXITCODE\n"
+    "if ($navideOk) { exit 0 }\n"
+    "if ($navideCode) { exit $navideCode }\n"
+    "exit 1"
+)
+
+
+def run_argv(command: str) -> list[str]:
+    """How a resolved command is started in the run's PTY.
+
+    The same shells the external terminal used, minus the keep-open flag, so
+    the command's own exit code ends the run. POSIX picks the rc-reading flags
+    of `login_path_probe`: an install that follows another one must see the
+    PATH export the first one wrote into ~/.zshrc / ~/.bashrc.
+    """
+    if osplat.platform_id == "win32":
+        # A resolved binary comes back quoted (`'C:\...\claude.cmd' update`),
+        # which PowerShell parses as a string followed by a stray token; the
+        # call operator makes it a command.
+        if command.startswith(("'", '"')):
+            command = "& " + command
+        # `npm` resolves to npm.ps1, which the default Restricted / AllSigned
+        # policy refuses to load. Bypass is scoped to this one process: the
+        # user's own policy is untouched, and it covers every .ps1 shim.
+        return [
+            "powershell.exe", "-NoLogo", "-ExecutionPolicy", "Bypass",
+            "-Command", command + _POWERSHELL_EXIT_TAIL,
+        ]
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    name = os.path.basename(shell)
+    interactive = name == "zsh" or (name == "bash" and osplat.platform_id == "linux")
+    return [shell, "-ilc" if interactive else "-lc", command]
 
 
 # Ollama model names may be namespaced (`hf.co/user/repo`, `library/llama3`),
@@ -1145,7 +1213,7 @@ def pull_model(model: str) -> dict[str, Any]:
             "error": "Ollama is installed but its service is not running.",
             "needs_service": True,
         }
-    # Long download — hand to an external Terminal so progress is visible.
+    # Long download — onboarding.run streams its progress into the window.
     return {"ok": True, "needs_terminal": True, "command": f"ollama pull {name}"}
 
 
@@ -1155,7 +1223,7 @@ OLLAMA_SERVICE_CMD = "brew services start ollama"
 
 
 def start_ollama_service() -> dict[str, Any]:
-    """Hand the official service-start command to an external Terminal."""
+    """Resolve the official service-start command for onboarding.run."""
     if osplat.paths.resolve_program("ollama") is None:
         return {"ok": False, "error": "ollama not installed"}
     if osplat.paths.resolve_program("brew") is None:
@@ -1269,14 +1337,15 @@ def is_complete() -> bool:
         return False
 
 
-def set_complete(value: bool) -> None:
+def set_complete(value: bool) -> dict[str, Any]:
     try:
         with _STATE_LOCK:
             data = _read_state()
             data["complete"] = value
             _write_state(data)
-    except OSError:
-        pass
+    except OSError as error:
+        return {"ok": False, "error": str(error)}
+    return {"ok": True}
 
 
 def _dismissed_cli_health_fingerprint() -> str:
@@ -1284,17 +1353,18 @@ def _dismissed_cli_health_fingerprint() -> str:
     return str(_read_state().get("dismissed_cli_health") or "")
 
 
-def dismiss_cli_health(fingerprint: str) -> None:
+def dismiss_cli_health(fingerprint: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{16}", fingerprint or ""):
-        return
+        return {"ok": False, "error": "invalid fingerprint"}
     _migrate_legacy_flag()
     try:
         with _STATE_LOCK:
             data = _read_state()
             data["dismissed_cli_health"] = fingerprint
             _write_state(data)
-    except OSError:
-        pass
+    except OSError as error:
+        return {"ok": False, "error": str(error)}
+    return {"ok": True}
 
 
 def install_prompt_dismissals() -> list[str]:
@@ -1349,13 +1419,15 @@ def cli_binary_override(agent_key: str) -> str:
     return path if Path(path).is_file() and osplat.paths.is_executable(Path(path)) else ""
 
 
-def select_cli_binary(agent_key: str, path: str, fingerprint: str) -> dict[str, Any]:
-    """Persist a verified CLI choice and its dismissal in one atomic transaction."""
+def select_cli_binary(agent_key: str, path: str) -> dict[str, Any]:
+    """Persist a verified CLI choice.
+
+    Nothing is dismissed here: the override itself resolves this CLI's
+    findings (see build_cli_health), so other CLIs' findings stay visible.
+    """
     dep = DEPS_BY_ID.get(agent_key)
     if dep is None or dep.group != "agent_cli":
         return {"ok": False, "error": "unknown agent CLI"}
-    if not re.fullmatch(r"[0-9a-f]{16}", fingerprint or ""):
-        return {"ok": False, "error": "invalid fingerprint"}
     candidates = _distinct_executables(dep.check_cmd[0])
     selected = next((candidate for candidate in candidates if path in candidate.get("aliases", [])), None)
     if selected is None:
@@ -1371,7 +1443,6 @@ def select_cli_binary(agent_key: str, path: str, fingerprint: str) -> dict[str, 
                 overrides = {}
             overrides[agent_key] = canonical_path
             data["cli_binary_overrides"] = overrides
-            data["dismissed_cli_health"] = fingerprint
             _write_state(data)
     except OSError as error:
         return {"ok": False, "error": str(error)}

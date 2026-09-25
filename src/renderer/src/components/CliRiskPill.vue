@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { CliRiskContext } from '../composables/useResourceUsage'
-import type { CliRiskAction, CliRiskPaneState, CliRiskSignal } from '../lib/cliRisk'
+import type { CliRiskAction, CliRiskHistoryRow, CliRiskPaneState, CliRiskSignal } from '../lib/cliRisk'
+import { buildCliRiskAnalysisPrompt, cliRiskAnalysisPaneName, type CliRiskAnalysisSpawn } from '../lib/cliRiskAnalysisPrompt'
 
 const props = defineProps<{
   paneId: string
@@ -10,6 +11,11 @@ const props = defineProps<{
   available?: boolean
   compact?: boolean
   act: CliRiskContext['actOnCliRisk']
+  /** Observed pane's CLI vendor; the analysis pane runs the same vendor. */
+  agentKey?: string
+  workspacePath?: string
+  /** Spawns the "Analyze with CLI" pane; the analyze buttons hide without it. */
+  spawn?: CliRiskAnalysisSpawn
 }>()
 
 const t = i18n.global.t
@@ -47,6 +53,49 @@ function label(signal: CliRiskSignal): string {
         size: size(signal), path: signal.path ?? t('cli-risk.unknown-value'),
       })
 }
+
+function processLabel(process: { pid: number; name: string | null }): string {
+  return `${process.name ?? t('cli-risk.unknown-value')}(${process.pid})`
+}
+
+/** The command line is kept for the latest observation only; older rows name the pid. */
+function listenerLabel(signal: CliRiskSignal, listener: NonNullable<CliRiskHistoryRow['listener']>): string {
+  if (listener.status !== 'resolved') return t('cli-risk.listener-unknown')
+  const name = listener.name ?? t('cli-risk.unknown-value')
+  const command = signal.listener?.status === 'resolved' && signal.listener.pid === listener.pid
+    ? signal.listener.command
+    : null
+  return command ? `${name} (pid ${listener.pid}, ${command})` : `${name} (pid ${listener.pid})`
+}
+
+function clock(at: string): string {
+  const date = new Date(at)
+  return Number.isNaN(date.getTime()) ? at : date.toLocaleTimeString(i18n.global.locale.value, { hour12: false })
+}
+
+/** One line per observation across every signal, newest first. */
+const consoleLines = computed(() => {
+  const lines: { key: string; at: string; text: string }[] = []
+  for (const signal of props.state?.signals ?? []) {
+    if (signal.kind !== 'network') {
+      const path = signal.path ?? t('cli-risk.unknown-value')
+      lines.push({ key: signal.id, at: signal.lastObservedAt, text: `${heading(signal)}  ${size(signal)}  ${path}` })
+      continue
+    }
+    // Signals recorded before attribution existed have no history.
+    const rows: CliRiskHistoryRow[] = signal.history?.length
+      ? signal.history
+      : [{ at: signal.lastObservedAt, connections: signal.connections ?? 0, local: signal.local ?? [], listener: signal.listener }]
+    rows.forEach((row, index) => {
+      const local = row.local.length ? row.local.map(processLabel).join(', ') : t('cli-risk.unknown-value')
+      const parts = [`${local} → ${endpoint(signal)}`]
+      if (row.listener) parts.push(`← ${listenerLabel(signal, row.listener)}`)
+      parts.push(t('cli-risk.console-conn', { count: row.connections }))
+      lines.push({ key: `${signal.id}:${index}`, at: row.at, text: parts.join('  ') })
+    })
+  }
+  return lines.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+})
 
 function position(): void {
   const rect = badgeRef.value?.getBoundingClientRect()
@@ -142,6 +191,54 @@ async function act(signal: CliRiskSignal, action: CliRiskAction['action']): Prom
   }
 }
 
+const analyzing = ref(false)
+const analysisVendor = computed(() => props.agentKey || first.value?.vendor || '')
+const canAnalyze = computed(() => !!props.spawn && !!props.workspacePath && !!analysisVendor.value)
+
+/** ui.pane.create words its errors for MCP callers. The one that leaves a pane
+ *  behind — spawned, but its task never typed in — is said in the UI's words,
+ *  and says so; the rest keep their detail inside a localized sentence. */
+function analyzeErrorText(detail?: string): string {
+  if (detail?.includes('failed to inject task')) return t('cli-risk.analyze-inject-failed')
+  return detail ? t('cli-risk.analyze-failed-detail', { detail }) : t('cli-risk.analyze-failed')
+}
+
+/** Spawning waits for the CLI to come up, so the dialog may have been closed
+ *  by the time it fails; reopen it (without taking focus from the terminal)
+ *  rather than leave the error where nobody sees it. */
+async function showAnalyzeError(message: string): Promise<void> {
+  error.value = message
+  if (open.value) return
+  open.value = true
+  await nextTick()
+  position()
+}
+
+async function analyze(signals: CliRiskSignal[]): Promise<void> {
+  if (!props.spawn || !props.workspacePath || !props.state || analyzing.value) return
+  analyzing.value = true
+  error.value = ''
+  try {
+    const response = await props.spawn({
+      agent: analysisVendor.value,
+      name: cliRiskAnalysisPaneName(),
+      task: buildCliRiskAnalysisPrompt({
+        paneId: props.paneId,
+        vendor: analysisVendor.value,
+        workspacePath: props.workspacePath,
+        state: props.state,
+        signals,
+        locale: i18n.global.locale.value,
+      }),
+    })
+    if (!response.ok) await showAnalyzeError(analyzeErrorText(response.error))
+  } catch (err) {
+    await showAnalyzeError(analyzeErrorText(err instanceof Error ? err.message : undefined))
+  } finally {
+    analyzing.value = false
+  }
+}
+
 async function reveal(signal: CliRiskSignal): Promise<void> {
   if (!signal.path || pending.value) return
   pending.value = true
@@ -189,7 +286,10 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
     >
       <div class="cli-risk-pop-head">
         <strong>{{ t('cli-risk.details') }}</strong>
-        <button type="button" :aria-label="t('cli-risk.close')" @click="close(true)">×</button>
+        <span class="cli-risk-head-actions">
+          <button v-if="canAnalyze" type="button" class="cli-risk-analyze-all" :title="t('cli-risk.analyze-hint', { vendor: analysisVendor })" :disabled="analyzing" @click="analyze(state.signals)">{{ t('cli-risk.analyze-all') }}</button>
+          <button type="button" :aria-label="t('cli-risk.close')" @click="close(true)">×</button>
+        </span>
       </div>
       <p v-if="available === false" class="cli-risk-stale">{{ t('cli-risk.unavailable') }}</p>
       <section v-for="signal in state.signals" :key="signal.id" class="cli-risk-signal" :data-signal-id="signal.id">
@@ -203,6 +303,16 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
               <dt>{{ t('cli-risk.shared-cdn-field') }}</dt><dd>{{ t('cli-risk.shared-cdn', { label: signal.sharedCdn }) }}</dd>
             </template>
             <dt>{{ t('cli-risk.connections') }}</dt><dd>{{ signal.connections === undefined ? t('cli-risk.unknown-value') : t('cli-risk.connection-count', { count: signal.connections }) }}</dd>
+            <template v-if="signal.local?.length">
+              <dt>{{ t('cli-risk.opened-by') }}</dt>
+              <dd><div v-for="process in signal.local" :key="process.pid"><code>{{ processLabel(process) }}</code> {{ process.command ?? '' }}</div></dd>
+            </template>
+            <template v-if="signal.listener">
+              <dt>{{ t('cli-risk.listener') }}</dt>
+              <!-- A resolved listener outlives failed lookups, so say when it was seen. -->
+              <dd v-if="signal.listener.status === 'resolved'"><code>{{ processLabel(signal.listener) }}</code> {{ signal.listener.command ?? '' }}<time v-if="signal.listener.observedAt" data-testid="cli-risk-listener-at" :datetime="signal.listener.observedAt">{{ ' · ' + clock(signal.listener.observedAt) }}</time></dd>
+              <dd v-else>{{ t('cli-risk.listener-unknown') }}</dd>
+            </template>
           </template>
           <template v-else>
             <dt>{{ t('cli-risk.path') }}</dt><dd><code>{{ signal.path ?? t('cli-risk.unknown-value') }}</code></dd>
@@ -230,8 +340,15 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
           <button type="button" :disabled="pending" @click="act(signal, 'ignore')">{{ t(signal.kind === 'network' ? 'cli-risk.ignore-ip' : 'cli-risk.ignore') }}</button>
           <button v-if="signal.kind === 'network' && signal.ip" type="button" :disabled="pending" @click="act(signal, 'allow')">{{ t('cli-risk.allow-ip', { vendor: signal.vendor }) }}</button>
           <button v-if="signal.kind === 'disk' && signal.path" type="button" :disabled="pending" @click="reveal(signal)">{{ t('cli-risk.reveal') }}</button>
+          <button v-if="canAnalyze" type="button" class="cli-risk-analyze" :title="t('cli-risk.analyze-hint', { vendor: analysisVendor })" :disabled="analyzing" @click="analyze([signal])">{{ t('cli-risk.analyze') }}</button>
         </div>
       </section>
+      <details class="cli-risk-console" data-testid="cli-risk-console">
+        <summary>{{ t('cli-risk.console') }}</summary>
+        <ol>
+          <li v-for="line in consoleLines" :key="line.key"><time :datetime="line.at">{{ clock(line.at) }}</time>{{ '  ' + line.text }}</li>
+        </ol>
+      </details>
       <p v-if="error" role="alert" class="cli-risk-error">{{ error }}</p>
     </div>
   </Teleport>
@@ -280,6 +397,7 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
   overflow-wrap: anywhere;
 }
 .cli-risk-pop-head { display: flex; align-items: center; justify-content: space-between; color: var(--text-bright); }
+.cli-risk-head-actions { display: flex; align-items: center; gap: 6px; }
 .cli-risk-signal + .cli-risk-signal { border-top: 1px solid var(--border-muted); margin-top: 10px; padding-top: 8px; }
 h3 { margin: 6px 0; font-size: inherit; }
 .yellow, .cli-risk-stale { color: var(--attention-fg); }
@@ -290,4 +408,8 @@ p { margin: 6px 0; }
 .cli-risk-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .cli-risk-pop button { font: inherit; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-xs); padding: 3px 7px; cursor: pointer; }
 .cli-risk-pop button:disabled { opacity: 0.5; cursor: default; }
+.cli-risk-console { border-top: 1px solid var(--border-muted); margin-top: 10px; padding-top: 8px; }
+.cli-risk-console summary { cursor: pointer; color: var(--text-bright); }
+/* Lines keep their shape and scroll inside; the popover never widens. */
+.cli-risk-console ol { list-style: none; margin: 6px 0 0; padding: 6px 8px; max-height: 180px; overflow: auto; background: var(--bg-inset); border-radius: var(--radius-xs); font-family: var(--font-mono); white-space: pre; overflow-wrap: normal; color: var(--text-primary); }
 </style>

@@ -35,7 +35,8 @@ dependencies = [
     # Process-tree walking and per-process counters for the Windows
     # implementation of osplat.process_tree / resource_probe (psutil has
     # binary wheels for every platform the backend ships on, so it costs the
-    # POSIX builds nothing to carry). osplat/_windows.py is its only importer.
+    # POSIX builds nothing to carry). osplat/_windows.py imports it, and
+    # osplat/cli_network.py for CLI risk process names on every platform.
     "psutil>=7",
     # ConPTY bindings for osplat/_windows.py's terminal backend. Windows-only
     # wheels, so the marker keeps macOS/Linux resolution and PyInstaller

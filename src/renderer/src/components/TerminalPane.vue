@@ -17,11 +17,14 @@ import { paneStatusLabelText } from '../lib/paneStatusLabel'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { isMacPlatform } from '@navide/plugin-ui/shared'
+import { invokeCommand, isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
+import PaneChannelButton from './PaneChannelButton.vue'
+import PaneGuardBadge from './PaneGuardBadge.vue'
 import CliRiskPill from './CliRiskPill.vue'
 import { cliRiskKey } from '../composables/useResourceUsage'
+import type { CliRiskAnalysisSpawn } from '../lib/cliRiskAnalysisPrompt'
 import RestoredPanePlaceholder from './RestoredPanePlaceholder.vue'
 
 interface Props {
@@ -229,6 +232,8 @@ const terminal = useTerminal(props.paneId, props.terminalPort, {
 // that same backend-owned identity, just like the resource usage projection.
 const cliRiskPaneId = computed(() => cliRisk?.paneIdByKey.value.get(terminal.sessionId.value) ?? props.paneId)
 const cliRiskState = computed(() => cliRisk?.cliRisksByPaneId.value.get(cliRiskPaneId.value))
+/** Spawns the "Analyze with CLI" pane through the same command MCP ui_invoke uses. */
+const spawnCliRiskAnalysis: CliRiskAnalysisSpawn = (request) => invokeCommand('ui.pane.create', request)
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 
@@ -349,6 +354,9 @@ defineExpose({
   lastUserKeyAt: terminal.lastUserKeyAt,
   // What the CLI on the other end actually asked for, for injectText's guards.
   isBracketedPasteActive: terminal.isBracketedPasteActive,
+  // The ⌘V path (never submits), false when the text would be dropped; voice
+  // dictation types its text through it.
+  insertText: terminal.insertText,
   markTurnComplete: terminal.markTurnComplete,
   markNeedsInput: terminal.markNeedsInput,
   clearNeedsInput: terminal.clearNeedsInput,
@@ -356,6 +364,7 @@ defineExpose({
   clearQuestion: terminal.clearQuestion,
   markDeliveredPending: terminal.markDeliveredPending,
   clearDeliveredPending: terminal.clearDeliveredPending,
+  noteBackgroundTasks: terminal.noteBackgroundTasks,
   markBufferPosition: terminal.markBufferPosition,
   recleanBuffer: terminal.recleanBuffer,
   flushPendingClean: terminal.flushPendingClean,
@@ -532,7 +541,11 @@ const { skills: promptSkills } = usePromptSkills()
 /** The skill picker is showing (or about to). The header's own native tooltip
  *  would otherwise be drawn on top of the ring. */
 const skillMenuActive = ref(false)
-const castableSkills = computed(() => castablePromptSkills(promptSkills.value))
+/** While the loop runs the default skill is left out: casting it would toggle
+ *  the loop off, and the badge is already the off-switch. */
+const castableSkills = computed(() =>
+  castablePromptSkills(promptSkills.value).filter((s) => !(props.loopActive && s.isDefault))
+)
 
 /** Single source for the loop badge's 3-way state machine (waiting /
  *  estimate / plain): which i18n keys to render and the formatted time they
@@ -555,8 +568,8 @@ const loopBadge = computed(() => {
   return { textKey: null as string | null, titleKey: 'pane.terminal.loop-badge-tooltip', time: '' }
 })
 
-/** The badge is the off-switch while the loop runs (the ∞ start button is
- *  hidden then); while waiting it is a click-to-resume-now affordance. */
+/** The badge is the off-switch while the loop runs; while waiting it is a
+ *  click-to-resume-now affordance. */
 function onLoopBadgeClick(e: MouseEvent): void {
   e.stopPropagation()
   if (props.loopWaitUntil != null) emit('loop-resume-now')
@@ -631,14 +644,14 @@ onMounted(() => {
           @click="onLoopBadgeClick"
         >{{ loopBadge.textKey ? $t(loopBadge.textKey, { time: loopBadge.time }) : '∞ Loop' }}</span>
         <PromptSkillPicker
-          v-if="!loopActive && displayStatus !== 'exited' && displayStatus !== 'error'"
+          v-if="displayStatus !== 'exited' && displayStatus !== 'error' && (!loopActive || castableSkills.length > 0)"
           :skills="castableSkills"
           @cast="(id: string) => emit('toggle-loop', id)"
           @active="(v: boolean) => (skillMenuActive = v)"
         >
           <button
             class="loop-btn"
-            @click.stop="emit('toggle-loop')"
+            @click.stop="!loopActive && emit('toggle-loop')"
             :aria-label="$t('pane.terminal.loop-tooltip')"
           >∞</button>
         </PromptSkillPicker>
@@ -674,7 +687,11 @@ onMounted(() => {
           :available="cliRisk.cliRisksAvailable.value"
           :compact="loginExpired && usageLimitHit"
           :act="cliRisk.actOnCliRisk"
+          :agent-key="agentKey"
+          :workspace-path="workspacePath"
+          :spawn="spawnCliRiskAnalysis"
         />
+        <PaneGuardBadge :pane-id="paneId" :compact="loginExpired && usageLimitHit" />
         <span
           class="status"
           :data-status="displayStatus"
@@ -682,6 +699,7 @@ onMounted(() => {
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
         <UsageBadge v-if="agentKey" :agent-key="agentKey" :cli-profiles="cliProfiles" />
+        <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
     </header>
@@ -797,6 +815,12 @@ onMounted(() => {
   position: absolute;
   top: 5px;
   z-index: 10;
+}
+/* The chat-channel connect button sits in the header row but is the same
+   icon button as its two corner neighbours. */
+.minimize-btn,
+.rebuild-btn,
+.header-main :deep(.pch-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -820,23 +844,31 @@ onMounted(() => {
 .rebuild-btn {
   right: 26px;
 }
-.rebuild-btn svg {
+.rebuild-btn svg,
+.header-main :deep(.pch-btn svg) {
   width: 14px;
   height: 14px;
 }
 .minimize-btn:hover,
-.rebuild-btn:hover:not(:disabled) {
+.rebuild-btn:hover:not(:disabled),
+.header-main :deep(.pch-btn:hover) {
   color: var(--text-primary);
   background: var(--bg-muted);
 }
 .minimize-btn:focus-visible,
-.rebuild-btn:focus-visible {
+.rebuild-btn:focus-visible,
+.header-main :deep(.pch-btn:focus-visible) {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .rebuild-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* In flow, a 20px button would make the header row taller than the badges. */
+.header-main :deep(.pch-btn) {
+  flex-shrink: 0;
+  margin: -3px 0;
 }
 .pane-header {
   container: cli-pane-header / inline-size;

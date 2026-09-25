@@ -3,8 +3,8 @@
  * CLI management — one row per registered agent CLI.
  *
  * Everything runnable here comes from the backend registry: Navide surfaces the
- * vendor's own update/doctor/install commands and runs them in a terminal the
- * user can see. It never wraps, parses or substitutes a vendor command, and it
+ * vendor's own update/doctor/install commands and runs them in an embedded
+ * terminal the user can see and answer. It never wraps, parses or substitutes a vendor command, and it
  * never downloads or installs anything itself.
  */
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -15,6 +15,7 @@ import type { useOnboarding } from '../composables/useOnboarding'
 import type {
   AutoupdatePolicy, CliHealthEntry, CliUpdateRecord, MaintenanceAction, OnboardDep,
 } from '../composables/useOnboarding'
+import InstallTerminal from './InstallTerminal.vue'
 
 const CliInstallDialog = defineAsyncComponent(() => import('./CliInstallDialog.vue'))
 
@@ -43,7 +44,7 @@ function signInStateFor(depId: string): 'signed-in' | 'signed-out' | 'unknown' {
 const { t } = useI18n()
 
 const onboarding = props.onboarding
-const { cliDeps, cliHealth, loading, maintaining } = onboarding
+const { cliDeps, cliHealth, loading, maintaining, run: activeRun, runBusy, runFallback } = onboarding
 const message = ref('')
 /** Dep id whose guided install dialog is open ('' = none). */
 const installTarget = ref('')
@@ -97,16 +98,27 @@ function busy(dep: OnboardDep, action: MaintenanceAction): boolean {
 }
 
 async function run(dep: OnboardDep, action: MaintenanceAction): Promise<void> {
+  message.value = ''
+  // Resolves once the command has exited in the terminal below (or was refused).
   const result = await onboarding.runMaintenance(dep.id, action)
   if (!result) return
-  message.value = result.ok
-    ? t('cli-manage.terminal-opened', { command: result.command })
-    : t('cli-manage.command-unavailable', { label: dep.label })
+  if (result.ok) message.value = t('cli-manage.run-finished', { command: result.command })
+  else if (result.run_id) message.value = t('cli-manage.run-failed', { command: result.command, error: result.error })
+  // An install refusal carries the reason (e.g. a missing prerequisite); the
+  // generic text below fits only an action the vendor never shipped.
+  else if (result.unanswered || (action === 'install' && result.error)) {
+    message.value = t('cli-manage.start-failed', { label: dep.label, error: result.error })
+  }
+  // A PTY that could not start shows its external-terminal fallback below.
+  else if (!result.spawn_failed) message.value = t('cli-manage.command-unavailable', { label: dep.label })
 }
 
 async function setPolicy(dep: OnboardDep, event: Event): Promise<void> {
-  const policy = (event.target as HTMLSelectElement).value as AutoupdatePolicy
-  await onboarding.setAutoupdatePolicy(dep.id, policy)
+  const select = event.target as HTMLSelectElement
+  if (await onboarding.setAutoupdatePolicy(dep.id, select.value as AutoupdatePolicy)) return
+  // The select already shows the refused value; put back what is in effect.
+  select.value = dep.autoupdate_policy
+  message.value = t('cli-manage.autoupdate-failed', { label: dep.label })
 }
 
 async function removeAlternate(command: string): Promise<void> {
@@ -117,12 +129,18 @@ async function removeAlternate(command: string): Promise<void> {
 }
 
 async function useBinary(dep: OnboardDep, path: string): Promise<void> {
-  const fingerprint = cliHealth.value?.fingerprint || ''
-  if (!fingerprint) return
-  await props.backend.send('onboarding.cli_health.select_binary', {
-    agent_key: dep.id, path, fingerprint,
-  })
-  await onboarding.refresh()
+  let error = ''
+  try {
+    const resp = await props.backend.send<{ ok: boolean; error?: string }>(
+      'onboarding.cli_health.select_binary', { agent_key: dep.id, path })
+    if (resp.payload?.ok === false) error = resp.payload.error || 'unknown'
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e)
+  }
+  message.value = error
+    ? t('cli-manage.use-failed', { label: dep.label, error })
+    : t('cli-manage.use-done', { label: dep.label, path })
+  if (!error) await onboarding.refresh()
 }
 
 const hasFailedUpdate = computed(() => new Set(
@@ -203,7 +221,7 @@ function formatTime(value: string): string {
         <button
           v-if="dep.update_cmd"
           class="cm-btn"
-          :disabled="!!maintaining"
+          :disabled="!!maintaining || runBusy"
           :title="dep.update_cmd"
           @click="run(dep, 'update')"
         >
@@ -213,14 +231,14 @@ function formatTime(value: string): string {
           {{ $t('cli-manage.update-via-docs') }}
         </a>
 
-        <button v-if="dep.doctor_cmd" class="cm-btn" :disabled="!!maintaining" :title="dep.doctor_cmd" @click="run(dep, 'doctor')">
+        <button v-if="dep.doctor_cmd" class="cm-btn" :disabled="!!maintaining || runBusy" :title="dep.doctor_cmd" @click="run(dep, 'doctor')">
           {{ $t('cli-manage.doctor', { command: dep.doctor_cmd }) }}
         </button>
 
         <button
           v-if="dep.status === 'missing' && dep.can_install"
           class="cm-btn"
-          :disabled="!!maintaining"
+          :disabled="!!maintaining || runBusy"
           @click="installTarget = dep.id"
         >
           {{ $t('cli-manage.install') }}
@@ -232,7 +250,7 @@ function formatTime(value: string): string {
         <button
           v-else-if="dep.can_install && dep.install_cmd"
           class="cm-btn"
-          :disabled="!!maintaining"
+          :disabled="!!maintaining || runBusy"
           :title="dep.install_cmd"
           @click="run(dep, 'install')"
         >
@@ -249,6 +267,9 @@ function formatTime(value: string): string {
       </div>
     </div>
 
+    <!-- The maintenance command running (or last run) from this panel. -->
+    <InstallTerminal v-if="activeRun || runFallback" class="cm-terminal" :onboarding="onboarding" />
+
     <p class="cm-footnote">{{ $t('cli-manage.footnote') }}</p>
 
     <!-- Same guided flow the spawn dropdown and a 127 exit open, so an install
@@ -260,6 +281,7 @@ function formatTime(value: string): string {
       origin="settings"
       :sign-in-state="signInStateFor(installTarget)"
       @close="closeInstall"
+      @installed="() => void cliProfiles?.refresh()"
       @login="(agentKey: string) => emit('login', agentKey)"
       @vue:mounted="() => nextTick(() => panelRef?.querySelector<HTMLElement>('.ci-dialog .ci-close')?.focus())"
     />
@@ -313,5 +335,6 @@ function formatTime(value: string): string {
 .cm-btn.small { padding: 2px 8px; }
 .cm-btn.danger { color: #c0392b; }
 .cm-policy { display: flex; align-items: center; gap: 6px; font-size: var(--font-xs); margin-left: auto; }
+.cm-terminal { margin: 4px 0 8px; }
 .cm-footnote { font-size: 11.5px; color: var(--text-muted, #8b95a3); margin: 0; }
 </style>

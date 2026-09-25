@@ -47,7 +47,9 @@ vi.mock('electron', () => ({
   },
 }))
 
+import { app as electronApp } from 'electron'
 import {
+  OFFICIAL_MARKETPLACE_URL,
   isTrustedPluginManagementSender,
   registerPluginIpc,
   resolveConfiguredMarketplace,
@@ -862,7 +864,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       approvalFile,
       JSON.stringify({
         schemaVersion: 1,
-        registryUrl: 'https://registry.navide.dev',
+        registryUrl: 'https://server.navide.dev/registry',
         rootPublicKeyPem: registrySigner.pubPem,
         confirmedFingerprint: registryRootFingerprint(registrySigner.pubPem),
       })
@@ -875,11 +877,11 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       configurable: true,
       value: root,
     })
-    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://registry.navide.dev'
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
     process.env['AGENT_TEAM_REGISTRY_ROOT_APPROVAL_FILE'] = approvalFile
     try {
       expect(resolveConfiguredMarketplace()).toMatchObject({
-        registryUrl: 'https://registry.navide.dev',
+        registryUrl: 'https://server.navide.dev/registry',
         trust: {
           pinnedRegistryRootKey: registryRoot.pubPem,
           registryAuthority: 'official',
@@ -893,6 +895,159 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       }
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('defaults a packaged App to the Official Registry and a dev App to localhost', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-packaged-default-'))
+    const resources = join(root, 'resources')
+    mkdirSync(resources, { recursive: true })
+    writeFileSync(join(resources, 'official-registry-root.pem'), registryRoot.pubPem)
+    const previousResourcesDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      'resourcesPath'
+    )
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: root,
+    })
+    delete process.env['AGENT_TEAM_MARKETPLACE_URL']
+    delete process.env['AGENT_TEAM_REGISTRY_ROOT_APPROVAL_FILE']
+    const mutableApp = electronApp as { isPackaged: boolean }
+    try {
+      mutableApp.isPackaged = true
+      expect(resolveConfiguredMarketplace()).toMatchObject({
+        registryUrl: OFFICIAL_MARKETPLACE_URL,
+        trust: {
+          pinnedRegistryRootKey: registryRoot.pubPem,
+          registryAuthority: 'official',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
+        },
+      })
+      mutableApp.isPackaged = false
+      // The development default is a self-hosted Registry and never inherits
+      // the packaged Official root.
+      expect(() => resolveConfiguredMarketplace()).toThrow(/root approval file/)
+    } finally {
+      mutableApp.isPackaged = false
+      if (previousResourcesDescriptor) {
+        Object.defineProperty(process, 'resourcesPath', previousResourcesDescriptor)
+      } else {
+        Reflect.deleteProperty(process, 'resourcesPath')
+      }
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the Registry path prefix when searching the marketplace', async () => {
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry/'
+    const fetchMock = vi.fn(async (_url: unknown) => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return { items: [] }
+      },
+    }))
+    global.fetch = fetchMock as unknown as typeof fetch
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG)
+    const handler = handlers.get('plugins:marketplaceSearch')
+    if (!handler) throw new Error('marketplaceSearch handler not registered')
+    await handler(null, 'git')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://server.navide.dev/registry/api/extensions?q=git'
+    )
+  })
+
+  it('fetches detail and download under the Registry path prefix', async () => {
+    const { bytes, digest } = buildPkg()
+    installFetch(signedDetail(digest), bytes, digest)
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+    await register()(null, { namespace: 'acme', name: 'demo' })
+    const urls = vi.mocked(global.fetch).mock.calls.map((call) => String(call[0]))
+    expect(urls).toEqual([
+      'https://server.navide.dev/registry/api/extensions/acme/demo',
+      'https://server.navide.dev/registry/api/extensions/acme/demo/1.0.0/download',
+    ])
+  })
+
+  /** The same version published once per platform: each row signs its target. */
+  function perTargetDetail(digest: string, targets: string[]): WireDetail {
+    const base = signedDetail(digest)
+    const versions = targets.map((target) => {
+      const registryEnvelope = { ...base.versions[0].registry_envelope, target }
+      return {
+        ...base.versions[0],
+        target,
+        registry_envelope: registryEnvelope,
+        registry_signature: signCanonical(registryEnvelope, registrySigner.privateKey),
+      }
+    })
+    return { ...base, versions }
+  }
+
+  function registerForHost(expectedTarget: string): (...a: unknown[]) => unknown {
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, {
+      ...TRUST_CONFIG,
+      expectedTarget,
+    })
+    const handler = handlers.get('plugins:prepareInstall')
+    if (!handler) throw new Error('prepareInstall handler not registered')
+    return handler
+  }
+
+  it("downloads the Host platform's artifact when a version has several targets", async () => {
+    const { bytes, digest } = buildPkg()
+    const detail = perTargetDetail(digest, ['darwin-arm64', 'win32-x64'])
+    global.fetch = vi.fn(async (url: unknown) => {
+      if (String(url).includes('/download')) {
+        const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        return { ok: true, status: 200, arrayBuffer: async () => ab, headers: { get: () => digest } }
+      }
+      return { ok: true, status: 200, json: async () => detail }
+    }) as unknown as typeof fetch
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+
+    const result = (await registerForHost('win32-x64')(null, { namespace: 'acme', name: 'demo' })) as {
+      id: string
+    }
+
+    expect(result.id).toBe('acme.demo')
+    expect(vi.mocked(global.fetch).mock.calls.map((call) => String(call[0]))).toEqual([
+      'https://server.navide.dev/registry/api/extensions/acme/demo',
+      'https://server.navide.dev/registry/api/extensions/acme/demo/1.0.0/download?target=win32-x64',
+    ])
+  })
+
+  it('names the available targets and downloads nothing when none fits the Host', async () => {
+    const { digest } = buildPkg()
+    const detail = perTargetDetail(digest, ['darwin-arm64', 'linux-x64'])
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => detail })) as unknown as typeof fetch
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+
+    await expect(
+      registerForHost('win32-x64')(null, { namespace: 'acme', name: 'demo' })
+    ).rejects.toThrow(
+      "version 1.0.0 has no artifact for host target 'win32-x64' (available: darwin-arm64, linux-x64)"
+    )
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('still rejects a row whose signed envelope names another target', async () => {
+    const { bytes, digest } = buildPkg()
+    const detail = perTargetDetail(digest, ['darwin-arm64'])
+    // The row claims the Host target, but the Registry signed darwin-arm64.
+    detail.versions[0].target = 'win32-x64'
+    global.fetch = vi.fn(async (url: unknown) => {
+      if (String(url).includes('/download')) {
+        const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        return { ok: true, status: 200, arrayBuffer: async () => ab, headers: { get: () => digest } }
+      }
+      return { ok: true, status: 200, json: async () => detail }
+    }) as unknown as typeof fetch
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+
+    await expect(
+      registerForHost('win32-x64')(null, { namespace: 'acme', name: 'demo' })
+    ).rejects.toThrow(/registry envelope target does not match/)
   })
 
   it('does not activate a self-hosted reserved package after restart', () => {
@@ -958,7 +1113,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           pinnedRootKey: registryRoot.pubPem,
           snapshot: readRegistryTrustSnapshot(root),
           registryAuthority: 'self-hosted',
-          officialRegistryUrl: 'https://registry.navide.dev',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
           now: FIXED_NOW,
         },
       })
@@ -2302,13 +2457,13 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     installFetch(signedDetail(digest), bytes, digest)
     const root = mkdtempSync(join(tmpdir(), 'navide-official-post-commit-'))
     const previousUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
-    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://registry.navide.dev'
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, {
         ...TRUST_CONFIG,
         registryAuthority: 'official',
-        officialRegistryUrl: 'https://registry.navide.dev',
+        officialRegistryUrl: 'https://server.navide.dev/registry',
       }, undefined, { ...TEST_PREFLIGHT_OPTIONS })
       const prepareHandler = handlers.get('plugins:prepareInstall')
       const commitHandler = handlers.get('plugins:commitInstall')
@@ -2345,13 +2500,13 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     installFetch(detail, bytes, digest)
     const root = mkdtempSync(join(tmpdir(), 'navide-official-publisher-trust-'))
     const previousUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
-    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://registry.navide.dev'
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, {
         ...TRUST_CONFIG,
         registryAuthority: 'official',
-        officialRegistryUrl: 'https://registry.navide.dev',
+        officialRegistryUrl: 'https://server.navide.dev/registry',
       })
       const prepareHandler = handlers.get('plugins:prepareInstall')
       if (!prepareHandler) throw new Error('prepareInstall handler not registered')
@@ -2805,5 +2960,206 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('plugins:marketplaceDetail / plugins:checkUpdates', () => {
+  const savedFetch = global.fetch
+  const savedMarketplaceUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
+  beforeEach(() => {
+    handlers.clear()
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+  })
+  afterEach(() => {
+    global.fetch = savedFetch
+    if (savedMarketplaceUrl === undefined) delete process.env['AGENT_TEAM_MARKETPLACE_URL']
+    else process.env['AGENT_TEAM_MARKETPLACE_URL'] = savedMarketplaceUrl
+    vi.restoreAllMocks()
+  })
+
+  function respond(routes: Record<string, { status?: number; body?: unknown } | Error>) {
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const route = routes[String(url)]
+      if (route instanceof Error) throw route
+      if (!route) return { ok: false, status: 404, async json() { return {} } }
+      const status = route.status ?? 200
+      return { ok: status < 400, status, async json() { return route.body } }
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+    return fetchMock
+  }
+
+  const BASE = 'https://server.navide.dev/registry/api/extensions'
+
+  it('returns display fields plus the raw README and never forwards trust material', async () => {
+    respond({
+      [`${BASE}/acme/demo`]: {
+        body: {
+          namespace: 'acme',
+          name: 'demo',
+          identity: 'acme.demo',
+          display_name: 'Demo',
+          description: 'd',
+          categories: ['tools'],
+          latest_version: '1.1.0',
+          updated_at: '2026-09-01T00:00:00Z',
+          download_count: 3,
+          rating_average: 4,
+          rating_count: 1,
+          featured: false,
+          publisher: 'acme',
+          trust_metadata: { secret: true },
+          trust_metadata_signature: 'sig',
+          versions: [
+            {
+              version: '1.1.0',
+              published_at: '2026-09-01T00:00:00Z',
+              target: 'universal',
+              yanked: false,
+              trust_tier: 'signed-verified',
+              capabilities: ['fs'],
+              sensitive_capabilities: ['fs'],
+              download_count: 3,
+              registry_envelope: { a: 1 },
+              registry_signature: 'x',
+              package_digest: 'd',
+            },
+          ],
+        },
+      },
+      [`${BASE}/acme/demo/readme`]: { body: { version: '1.1.0', markdown: '# Demo' } },
+    })
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG)
+    const detail = (await handlers.get('plugins:marketplaceDetail')!(null, {
+      namespace: 'acme',
+      name: 'demo',
+    })) as Record<string, unknown> & { versions: Array<Record<string, unknown>> }
+    expect(detail.readme).toBe('# Demo')
+    expect(detail.publisher).toBe('acme')
+    expect(detail).not.toHaveProperty('trust_metadata')
+    expect(detail).not.toHaveProperty('trust_metadata_signature')
+    expect(detail.versions[0]).not.toHaveProperty('registry_envelope')
+    expect(detail.versions[0]).not.toHaveProperty('registry_signature')
+    expect(detail.versions[0].capabilities).toEqual(['fs'])
+    expect(detail.versions[0].installable).toBe(true)
+    expect(detail.latest_installable_version).toBe('1.1.0')
+    expect(detail.host_target).toBe(`${process.platform}-${process.arch}`)
+  })
+
+  it('tolerates a Registry without the README endpoint and rejects bad identifiers', async () => {
+    respond({
+      [`${BASE}/acme/demo`]: { body: { namespace: 'acme', name: 'demo', versions: [] } },
+    })
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG)
+    const handler = handlers.get('plugins:marketplaceDetail')!
+    const detail = (await handler(null, { namespace: 'acme', name: 'demo' })) as { readme: unknown }
+    expect(detail.readme).toBeNull()
+    await expect(handler(null, { namespace: '', name: 'demo' })).rejects.toThrow(/invalid/)
+    await expect(handler(null, { namespace: 'acme', name: 7 })).rejects.toThrow(/invalid/)
+  })
+
+  it('reports only strictly newer Registry versions of official-registry packages', async () => {
+    const row = (version: string, target = 'universal', yanked = false) => ({ version, target, yanked })
+    const host = `${process.platform}-${process.arch}`
+    const other = host === 'win32-x64' ? 'linux-x64' : 'win32-x64'
+    const fetchMock = respond({
+      [`${BASE}/acme/old`]: { body: { versions: [row('1.2.0'), row('1.0.0')] } },
+      [`${BASE}/acme/current`]: { body: { versions: [row('1.0.0')] } },
+      [`${BASE}/acme/offline`]: new Error('network down'),
+      // A newer release published only for another platform is not an update
+      // here; the newest release for this Host is.
+      [`${BASE}/acme/split`]: {
+        body: {
+          latest_version: '3.0.0',
+          versions: [row('3.0.0', other), row('2.5.0', 'universal', true), row('2.0.0', host), row('1.0.0')],
+        },
+      },
+      [`${BASE}/acme/elsewhere`]: { body: { latest_version: '9.0.0', versions: [row('9.0.0', other)] } },
+    })
+    const manager = {
+      listInstalledPackages: () => [
+        { id: 'acme.old', requires: [], packageVersion: '1.0.0', provenance: 'official-registry' },
+        { id: 'acme.current', requires: [], packageVersion: '1.0.0', provenance: 'official-registry' },
+        { id: 'acme.offline', requires: [], packageVersion: '1.0.0', provenance: 'official-registry' },
+        { id: 'acme.split', requires: [], packageVersion: '1.0.0', provenance: 'official-registry' },
+        { id: 'acme.elsewhere', requires: [], packageVersion: '1.0.0', provenance: 'official-registry' },
+        { id: 'acme.local', requires: [], packageVersion: '0.1.0', provenance: 'developer-local-unpacked' },
+      ],
+    } as unknown as FrontendPluginManager
+    registerPluginIpc(manager, '/plugins', () => true, TRUST_CONFIG)
+    const updates = await handlers.get('plugins:checkUpdates')!(null)
+    expect(updates).toEqual([
+      { id: 'acme.old', namespace: 'acme', name: 'old', installedVersion: '1.0.0', latestVersion: '1.2.0' },
+      { id: 'acme.split', namespace: 'acme', name: 'split', installedVersion: '1.0.0', latestVersion: '2.0.0' },
+    ])
+    // Developer-local packages are never looked up in the Registry.
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).not.toContain(`${BASE}/acme/local`)
+  })
+
+  it('exposes the check on the refresh controller and caches it for pendingUpdates', async () => {
+    respond({
+      [`${BASE}/acme/old`]: { body: { versions: [{ version: '1.2.0', target: 'universal', yanked: false }] } },
+    })
+    const manager = {
+      listInstalledPackages: () => [
+        { id: 'acme.old', requires: [], packageVersion: '1.0.0', provenance: 'official-registry' },
+      ],
+    } as unknown as FrontendPluginManager
+    const controller = registerPluginIpc(manager, '/plugins', () => true, TRUST_CONFIG)
+    expect(await handlers.get('plugins:pendingUpdates')!(null)).toEqual([])
+    const updates = await controller.checkUpdates()
+    expect(updates).toHaveLength(1)
+    // The cached answer needs no network round trip.
+    respond({})
+    expect(await handlers.get('plugins:pendingUpdates')!(null)).toEqual(updates)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects unauthorized senders before any network request', async () => {
+    const fetchMock = respond({})
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => false, TRUST_CONFIG)
+    for (const channel of ['plugins:marketplaceDetail', 'plugins:checkUpdates', 'plugins:pendingUpdates']) {
+      await expect(
+        Promise.resolve().then(() => handlers.get(channel)!(null, { namespace: 'a', name: 'b' }))
+      ).rejects.toThrow(/unauthorized/)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('forwards only a known sort to the search endpoint', async () => {
+    const host = `${process.platform}-${process.arch}`
+    const fetchMock = respond({})
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          items: [
+            { identity: 'a.universal', latest_targets: ['universal'] },
+            { identity: 'a.host', latest_targets: [host] },
+            { identity: 'a.other', latest_targets: ['plan9-mips'] },
+            { identity: 'a.legacy' },
+          ],
+        }
+      },
+    }))
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG)
+    const search = handlers.get('plugins:marketplaceSearch')!
+    const result = (await search(null, undefined, 'downloads')) as {
+      items: Array<{ identity: string; installable: boolean }>
+    }
+    // Compatibility is decided main-side with the install rule; a Registry
+    // without per-target data stays installable.
+    expect(result.items.map((i) => [i.identity, i.installable])).toEqual([
+      ['a.universal', true],
+      ['a.host', true],
+      ['a.other', false],
+      ['a.legacy', true],
+    ])
+    await search(null, undefined, 'evil&x=1')
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+      `${BASE}?sort=downloads`,
+      BASE,
+    ])
   })
 })

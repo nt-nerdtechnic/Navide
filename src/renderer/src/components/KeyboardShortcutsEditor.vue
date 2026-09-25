@@ -27,16 +27,21 @@ import {
   splitKeyTokens,
   type ExternalKeyRow,
 } from '@navide/plugin-ui/shared'
-import { eventToKeyString, validateKeySpec } from '@navide/plugin-ui/shared'
+import { validateKeySpec } from '@navide/plugin-ui/shared'
 import {
   getUserRules,
   onUserRulesChanged,
   saveUserRules,
-  setKeyCaptureActive,
 } from '@navide/plugin-ui/shared'
 import type { KeybindingRule } from '@navide/plugin-ui/shared'
+import { useKeyChordRecorder } from '../composables/useKeyChordRecorder'
 
 type FilterMode = 'all' | 'customized' | 'conflicts'
+
+const props = defineProps<{
+  /** Search text to open with, e.g. a command id another settings page links to. */
+  initialQuery?: string
+}>()
 
 const { t, te } = useI18n()
 
@@ -51,7 +56,7 @@ function labelFor(row: BindingRow): string {
 }
 
 const userRules = ref<KeybindingRule[]>([...getUserRules()])
-const query = ref('')
+const query = ref(props.initialQuery ?? '')
 const filterMode = ref<FilterMode>('all')
 const saveError = ref('')
 
@@ -149,10 +154,10 @@ function onRemoveKey(row: BindingRow, key: string): Promise<void> {
 interface Recording {
   rowId: string
   replacing: string | null // the chip being re-recorded, null when adding
-  segments: string[]
 }
 
 const recording = ref<Recording | null>(null)
+const recorder = useKeyChordRecorder({ onCancel: () => { recording.value = null } })
 
 function isRecordingRow(row: BindingRow): boolean {
   return recording.value?.rowId === row.id
@@ -163,49 +168,23 @@ function isRecording(row: BindingRow, key: string): boolean {
   return !!r && r.rowId === row.id && r.replacing === key
 }
 
-function onRecordKeydown(e: KeyboardEvent): void {
-  // The recorder swallows the event outright rather than letting the dispatcher
-  // see it, so nothing it captures can fire a command mid-recording.
-  e.preventDefault()
-  e.stopImmediatePropagation()
-  if (e.isComposing) return
-  // Bare Escape abandons the recording — the convention every editor follows.
-  // Without it the recorder has no keyboard exit at all: Escape, Tab and Enter
-  // are all swallowed, leaving keyboard-only users stuck until they reach for
-  // the mouse. Modified Escape (⇧Esc and the like) stays recordable, and plain
-  // Escape can still be bound by hand in keybindings.json if someone wants it.
-  if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-    stopRecording()
-    return
-  }
-  const segment = eventToKeyString(e)
-  if (!segment) return // modifiers alone: keep waiting
-  const r = recording.value
-  if (!r) return
-  // Two segments is the resolver's chord limit; a third would parse but never
-  // match, so cycle back to a fresh single key instead of silently dead-ending.
-  r.segments = r.segments.length >= 2 ? [segment] : [...r.segments, segment]
-}
-
 function startRecording(row: BindingRow, replacing: string | null): void {
   if (recording.value) stopRecording()
-  recording.value = { rowId: row.id, replacing, segments: [] }
-  setKeyCaptureActive(true)
-  window.addEventListener('keydown', onRecordKeydown, { capture: true })
+  recording.value = { rowId: row.id, replacing }
+  recorder.start()
 }
 
 function stopRecording(): void {
-  window.removeEventListener('keydown', onRecordKeydown, { capture: true })
-  setKeyCaptureActive(false)
+  recorder.stop()
   recording.value = null
 }
 
-const recordedSpec = computed(() => recording.value?.segments.join(' ') ?? '')
+const recordedSpec = recorder.spec
 
 async function confirmRecording(row: BindingRow): Promise<void> {
   const r = recording.value
-  if (!r || !r.segments.length) return
-  const spec = r.segments.join(' ')
+  const spec = recordedSpec.value
+  if (!r || !spec) return
   const current = row.keys.map((k) => k.key)
   const next = r.replacing
     ? current.map((k) => (k === r.replacing ? spec : k))
@@ -226,7 +205,7 @@ async function confirmRecording(row: BindingRow): Promise<void> {
 }
 
 function clearRecording(): void {
-  if (recording.value) recording.value.segments = []
+  recorder.clear()
 }
 
 // ── Import / export ───────────────────────────────────────────────────────────

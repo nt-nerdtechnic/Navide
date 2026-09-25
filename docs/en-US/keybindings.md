@@ -49,6 +49,60 @@ rules the editor writes.
 | `⌘⇧L` | Open Debug (backend log, shell, AI) — outside the Mini IDE, where this chord belongs to the editor |
 | `Escape` / `⌘W` | Close modal dialog (⌘W also works with focus in an embedded terminal, where Escape belongs to the CLI) |
 
+### Voice Input
+
+Only while **Settings → General → Voice input** is on (off by default); with it
+off the chord is not consumed and reaches the focused terminal as before.
+
+| Shortcut | Action |
+|----------|--------|
+| `⌃⌥M` (hold) | Dictate into the focused CLI pane (the recording mode in Settings decides hold, tap-to-lock or press-to-toggle). The words appear in the capsule as you speak; when the take ends this way, the text is typed into the pane's input box like a paste — it is **not** sent: review it and press Enter yourself. It goes straight to the pane, even while the CLI is busy. Releasing any key of the chord stops a held take. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
+| `Escape` | During a take only: cancel the recording or its transcription; nothing is typed in. Not a rule in the table — it is only listened for while a take records or transcribes |
+| `Enter` | During a take only, with its pane focused: end it and **send** — once the final text is typed in, Enter is pressed for you (after the paste, as if you typed it). Works while the take is starting, recording or transcribing, and is handiest hands-free: speak, then Enter. Nothing is sent when nothing was heard or the pane cannot take the text; if the text went in but its Enter could not follow (the paste was not confirmed within a few seconds), the capsule says so and the text waits in the input box for your own Enter. An Enter that confirms an IME candidate, or one with a modifier, is left alone. Like Esc, not a rule in the table; once the take is over, Enter reaches the CLI as usual |
+
+Once the capsule shows an error, Esc is left alone so it still interrupts the
+CLI as usual; the error closes with its **✕** or by itself after a few seconds.
+A pane that is asleep (not yet started) refuses dictation — open it first.
+
+The chord can also be changed in **Settings → Voice Input → Shortcut**, which
+edits the same rule as the Shortcuts tab. It takes one key combination, and a
+single key works too:
+
+| Accepted | Refused |
+|----------|---------|
+| A function key on its own (`F13`–`F19` are unused by macOS and ideal; `F1`–`F24` all work) | A key that types or edits — a letter, digit, space, punctuation, `Enter`, `Tab`, `Backspace`, `Delete`, `Escape` — with no `⌃` or `⌥` (`⇧` alone still types). Holding it would type into the CLI, and Enter / Esc already mean send / cancel |
+| One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`… (recorded by pressing and releasing it alone) | `⌘` in a combination: macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
+| Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | `⌘` by itself: its own key-up does arrive, but every `⌘` shortcut (`⌘C`, `⌘V`…) starts with it, so each would start a take |
+
+A lone modifier cannot tell on key-down whether it will be held alone or used
+for a combination, so the take starts at once and is dropped quietly — nothing
+typed, no error — the moment another key goes down while it is held
+(`Right ⌥` + `E` still types `é`). In rule files a lone modifier is written
+`leftctrl`, `rightctrl`, `leftalt`, `rightalt`, `leftshift`, `rightshift`
+(`leftcmd` / `rightcmd` parse but the voice row refuses them). A key refused
+here can still be written into `keybindings.json` or the Shortcuts tab; the
+voice row then shows a warning.
+
+#### The fn (🌐) key (macOS, optional)
+
+**Settings → Voice Input → Use the fn (🌐) key** (off by default, hidden off
+macOS) makes fn behave exactly like the shortcut: hold to talk, and a quick
+tap follows the recording mode. The browser never receives fn, so while this
+is on — and only then — Navide runs a small native helper
+(`Contents/Resources/bin/navide-fn-key`) with a listen-only event tap; turning
+the setting (or voice input) off, or quitting, stops it.
+
+- Only a **lone** fn press counts: fn pressed with another key or modifier
+  (fn+arrow, fn+Delete, ⌃fn…) drops the take and starts nothing.
+- A press is taken only while a Navide window has focus; fn's own release ends
+  it (window blur does not).
+- It needs **Input Monitoring** (System Settings → Privacy & Security → Input
+  Monitoring). Without it the row says so and offers the settings pane and a
+  re-check.
+- If **System Settings → Keyboard → "Press 🌐 key to"** is anything but
+  **Do Nothing**, macOS also switches the input source / opens Emoji /
+  starts Dictation on every press; the row points this out.
+
 ### Quick Open
 
 | Shortcut | Action |
@@ -430,7 +484,7 @@ condition that greys out the matching toolbar button.
 
 ## When-Clause Conditions
 
-Keybindings can be gated by context conditions. These eight are the whole set —
+Keybindings can be gated by context conditions. These nine are the whole set —
 every condition any rule tests, and every one any window publishes.
 
 **Window identity.** No window ever sets two of these, which is what lets the
@@ -456,6 +510,7 @@ stays open, so a rule that waits on one is not dead — it just waits.
 | `findOpen` | The find widget is currently open |
 | `modalOpen` | A modal dialog is currently open |
 | `terminalFocus` | A terminal has focus — ESC and friends belong to the PTY |
+| `voiceInput` | Voice input is switched on in Settings (main window only) |
 
 Conditions support `&&` (and), `||` (or), `!` (not); `!editorTextFocus` reads as
 "the editor is there but the text area does not have focus". There are no

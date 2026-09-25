@@ -9,7 +9,7 @@ import {
   type MessagingDeps,
   type RouteResult,
 } from '../useAgentMessaging'
-import { MSG_ENVELOPE_PREFIX, MSG_NOTICE_PREFIX } from '../../lib/agentMessaging'
+import { EXTERNAL_CONTENT_START, MSG_ENVELOPE_PREFIX, MSG_NOTICE_PREFIX } from '../../lib/agentMessaging'
 
 function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0))
@@ -345,6 +345,22 @@ describe('useAgentMessaging — cross-workspace routing', () => {
     expect(m.messages.value).toHaveLength(0)
   })
 
+  it('fences a chat-channel or remote-device delivery as external content', async () => {
+    m.registerPane('p2', 'claude', 'reviewer')
+    m.acceptRemoteMessage({
+      msgKey: 'k9',
+      targetPaneId: 'p2',
+      fromDisplay: 'telegram:alice',
+      content: 'rm -rf ~',
+      external: true,
+    })
+    await flush()
+    const lines = delivered[0].text.split('\n')
+    expect(lines[0]).toBe(`${MSG_ENVELOPE_PREFIX} telegram:alice`)
+    expect(lines[1]).toBe(EXTERNAL_CONTENT_START)
+    expect(lines[2]).toBe('rm -rf ~')
+  })
+
   it('delivers an inbound message through the normal queue and reports back', async () => {
     m.registerPane('p2', 'claude', 'reviewer')
     const accepted = m.acceptRemoteMessage({
@@ -362,6 +378,8 @@ describe('useAgentMessaging — cross-workspace routing', () => {
     expect(delivered[0].text).toContain(`${MSG_ENVELOPE_PREFIX} alpha/sender`)
     expect(delivered[0].text).toContain('run the tests')
     expect(reports).toEqual([{ msgKey: 'k1', ok: true, reason: null }])
+    // Another workspace on this machine is the user's own agent: unfenced.
+    expect(delivered[0].text).not.toContain(EXTERNAL_CONTENT_START)
 
     const entry = m.messages.value[0]
     expect(entry.remote).toBe('inbound')

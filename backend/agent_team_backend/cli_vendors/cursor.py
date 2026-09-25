@@ -80,6 +80,7 @@ from ..log_readers.base import (
     user_prompt_text,
 )
 from .base import (
+    PlatformInstall,
     AccountSwitchSpec,
     Dep,
     McpServerConfig,
@@ -898,5 +899,8 @@ SPEC = VendorSpec(
         install_cmd="curl https://cursor.com/install -fsS | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
         docs_url="https://cursor.com/docs/cli",
+        # Windows (native): per https://cursor.com/docs/cli/installation
+        install_cmds={"win32": PlatformInstall(
+            "irm 'https://cursor.com/install?win32=true' | iex", needs_terminal=True)},
         update_cmd="agent update"),
 )

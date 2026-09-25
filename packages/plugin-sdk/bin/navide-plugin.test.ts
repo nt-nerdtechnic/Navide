@@ -106,13 +106,14 @@ describe('navide-plugin canonical artifacts', () => {
 
   it('requires one native backend executable and its exact build-host target', () => {
     const directory = root()
-    packageDirectory(directory, backendManifest(), { 'backend/acme-backend': targetBinary() })
-    chmodSync(join(directory, 'backend/acme-backend'), 0o755)
+    const backendPath = process.platform === 'win32' ? 'backend/acme-backend.exe' : 'backend/acme-backend'
+    packageDirectory(directory, backendManifest(), { [backendPath]: targetBinary() })
+    chmodSync(join(directory, backendPath), 0o755)
     expect(run(['package', directory, '--target', 'universal'], directory).status).not.toBe(0)
     const archive = join(directory, 'backend.vsix')
     const packaged = run(['package', directory, '--target', target, '--out', archive], directory)
     expect(packaged.status, packaged.stderr).toBe(0)
-    const backend = readZipEntries(readFileSync(archive)).find((entry) => entry.path === 'backend/acme-backend')
+    const backend = readZipEntries(readFileSync(archive)).find((entry) => entry.path === backendPath)
     expect(backend?.executable).toBe(true)
   })
 

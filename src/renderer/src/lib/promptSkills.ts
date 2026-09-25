@@ -255,7 +255,7 @@ export const RING_R_MAX = 92
  *  spreads, so two slots keep the same left/right span but sit closer to the
  *  button — the gap the cursor has to cross is what made them hard to hit. */
 export const RING_STEP_DEG = 56
-export const RING_SPAN_MAX_DEG = 140
+export const RING_SPAN_MAX_DEG = 160
 /** Above this many skills the ring is replaced by the list layout. */
 export const RING_MAX_SLOTS = 5
 
@@ -280,7 +280,8 @@ export function ringGeometry(count: number): RingGeometry {
   }
 }
 
-/** Slot center offsets from the ring origin (the button's bottom center).
+/** Slot center offsets from the ring origin (the button's center, so every
+ *  slot is the same distance from what the eye reads as the middle).
  *
  *  Index 0 is the LEFTMOST slot: the list arrives default-first and the digit
  *  keys are 1..n, so reading order has to run left-to-right like every other

@@ -2,7 +2,7 @@
 {% block title %}Navide Marketplace — discover extensions{% endblock %}
 
 {% macro card(e) %}
-<a class="card" href="/extensions/{{ e.namespace }}/{{ e.name }}">
+<a class="card" href="{{ base }}/extensions/{{ e.namespace }}/{{ e.name }}">
   <div class="card-head">
     <h3 class="card-title">{{ e.display_name }}</h3>
     {% if e.trust_tier == 'signed-verified' %}
@@ -16,6 +16,12 @@
   <div class="card-cats">
     {% for c in e.categories %}<span class="chip">{{ c }}</span>{% endfor %}
   </div>
+  {% if e.latest_targets %}
+  <div class="card-targets" title="Platforms v{{ e.latest_version }} is published for">
+    {% if 'universal' in e.latest_targets %}<span class="chip chip-target">All platforms</span>
+    {% else %}{% for t in e.latest_targets %}<span class="chip chip-target">{{ t }}</span>{% endfor %}{% endif %}
+  </div>
+  {% endif %}
   {% if e.sensitive_capabilities %}
   <div class="warn" title="Requests filesystem/terminal access">
     ⚠ sensitive: {{ e.sensitive_capabilities|join(', ') }}
@@ -45,7 +51,7 @@
 <section class="browse">
   <div class="browse-head">
     <h2 class="section-title">Browse{% if query %} — “{{ query }}”{% endif %}</h2>
-    <form class="filters" action="/" method="get">
+    <form class="filters" action="{{ base }}/" method="get">
       <input type="hidden" name="q" value="{{ query }}">
       <label>Category
         <select name="category" onchange="this.form.submit()">

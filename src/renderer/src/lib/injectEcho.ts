@@ -355,3 +355,14 @@ export function submitEvidence(opts: {
 export function echoTimeoutFor(textLength: number): number {
   return Math.min(8_000, Math.max(6_000, Math.floor(textLength / 6)))
 }
+
+/** Did Enter submit a line typed into a plain shell? submitEvidence cannot
+ *  say: the command line a shell executed stays on screen above its output,
+ *  so "our tail is still showing" is the normal result of a success. What does
+ *  move is the cursor — onto the command's output or the next prompt — so the
+ *  line before it no longer ends in our text. `cursorLine` is that line
+ *  (useTerminal.readLineBeforeCursor), null when it cannot be read. */
+export function shellSubmitEvidence(cursorLine: string | null, tail: string): SubmitEvidence | null {
+  if (cursorLine === null || !tail) return null
+  return normalizeForMatch(cursorLine).endsWith(tail) ? null : 'tail-left'
+}

@@ -348,14 +348,21 @@ class WindowsProcessTree:
 
     def snapshot(self) -> dict[int, ProcInfo]:
         rows: dict[int, tuple[int, float | None]] = {}
+        # A fresh Process per pid, not process_iter(): that caches one Process
+        # per pid module-wide, and when Windows recycles a pid between two
+        # snapshots the cached instance notices the reuse mid-read and the
+        # pid's new, live process is dropped from this snapshot altogether.
         try:
-            for proc in psutil.process_iter(["ppid", "create_time"]):
-                info = proc.info
+            for pid in psutil.pids():
+                try:
+                    info = psutil.Process(pid).as_dict(["ppid", "create_time"])
+                except psutil.NoSuchProcess:
+                    continue
                 try:
                     ppid = int(info.get("ppid") or 0)
                 except (TypeError, ValueError):
                     ppid = 0
-                rows[proc.pid] = (ppid, info.get("create_time"))
+                rows[pid] = (ppid, info.get("create_time"))
         except psutil.Error:
             return {}
         snap: dict[int, ProcInfo] = {}
@@ -829,6 +836,7 @@ class WindowsTerminalBackend:
     """`winpty.PTY` (ConPTY) with the child assigned to a kill-on-close job."""
 
     helper_waits_for_child: bool = True
+    reports_foreground: bool = False
 
     def parse_command(self, command: str) -> list[str]:
         return _split_command_line(command)
@@ -1503,6 +1511,7 @@ class WindowsScripts:
         timeout_s: int,
         keep_body: bool = False,
         exit_zero: bool = False,
+        env_header: tuple[str, str] | None = None,
     ) -> str:
         # `curl.exe`, never `curl`: the bare name is a PowerShell alias for
         # Invoke-WebRequest, which takes none of these arguments. `'@-'` and
@@ -1510,12 +1519,13 @@ class WindowsScripts:
         # `exit_zero` costs nothing to honour -- the line already ends that
         # way, because a PowerShell failure otherwise surfaces as a hook error.
         sink = "" if keep_body else "-o NUL "
+        extra = f"-H ('{env_header[0]}: ' + $env:{env_header[1]}) " if env_header else ""
         return (
             f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
             f"if ($PORT) {{ curl.exe -fsS -m {timeout_s} {sink}-X POST "
             f"-H 'Content-Type: application/json' "
             f"-H 'X-Agent-Team-Event: {event}' "
-            f"-H {_ps_quote('@' + header_file)} "
+            f"-H {_ps_quote('@' + header_file)} {extra}"
             f"--data-binary '@-' "
             f'"http://127.0.0.1:$PORT{url_path}" }}; exit 0'
         )

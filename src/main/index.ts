@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, protocol, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, protocol, safeStorage, session, shell, systemPreferences, type IpcMainInvokeEvent } from 'electron'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
 import { guardLastWindowClose } from './last-window-close'
 import { join, dirname, basename, isAbsolute, relative, sep } from 'node:path'
@@ -31,6 +31,7 @@ import {
   registerPluginIpc,
   resolveConfiguredMarketplace,
 } from './plugins/pluginIpc'
+import { refreshTrustThenUpdates } from './plugins/pluginUpdateReminder'
 import { readRegistryTrustSnapshot } from './plugins/pluginInstalledTrust'
 import { contributionIcon } from './plugins/pluginContributionIcon'
 import { broadcastQuitStage } from './quit-progress'
@@ -153,6 +154,8 @@ import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
 import { isMac } from '../shared/osplat'
+import { installMediaPermissionHandlers } from './media-permissions'
+import { registerFnKeyIpc } from './fn-key-ipc'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -1535,9 +1538,25 @@ async function refreshInstalledPluginTrust(): Promise<void> {
     )
   }
 }
+// Update reminder: runs after each trust refresh settles, never inside it, so
+// a failed check cannot touch trust state or quarantine decisions. Detection
+// only — installing an update still goes through the consent dialogs.
+const refreshInstalledPluginTrustAndUpdates = (): void => {
+  void refreshTrustThenUpdates({
+    refreshTrust: refreshInstalledPluginTrust,
+    checkUpdates: () => pluginTrustRefresh.checkUpdates(),
+    publish: (updates) => {
+      for (const hostWindow of mainWindows) {
+        if (hostWindow.isDestroyed() || detachedWindowIds.has(hostWindow.id)) continue
+        hostWindow.webContents.send('plugins:updatesChanged', updates)
+      }
+    },
+    warn: (message) => console.warn(message),
+  })
+}
 app.whenReady().then(() => {
-  void refreshInstalledPluginTrust()
-  const timer = setInterval(() => void refreshInstalledPluginTrust(), 15 * 60 * 1000)
+  refreshInstalledPluginTrustAndUpdates()
+  const timer = setInterval(refreshInstalledPluginTrustAndUpdates, 15 * 60 * 1000)
   timer.unref()
 })
 const approvedBackendPluginCatalog = () =>
@@ -4168,15 +4187,36 @@ ipcMain.handle('shell:openTerminal', async (event, command: string) => {
 
 // macOS TCC permissions (onboarding wizard). Requests are user-initiated only —
 // a request may raise a system prompt, status never does.
-ipcMain.handle('permissions:status', async () => await getPermissionStatuses())
+ipcMain.handle('permissions:status', async (event) => {
+  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+  return await getPermissionStatuses()
+})
 
 ipcMain.handle(
   'permissions:request',
-  async (_event, key: PermissionKey, payload?: { title?: string; body?: string }) =>
-    await requestPermission(key, payload)
+  async (event, key: PermissionKey, payload?: { title?: string; body?: string }) => {
+    if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+    return await requestPermission(key, payload)
+  }
 )
 
-ipcMain.handle('permissions:open-settings', async (_event, key: PermissionKey) => {
+// Voice input: ask macOS for microphone access right before the first capture.
+// Only the voice feature calls this, and only once the user turned it on and
+// pressed the hotkey — nothing prompts at startup. Elsewhere there is no OS
+// gate beyond getUserMedia itself, so this answers granted.
+ipcMain.handle('media:ask-microphone', async () => {
+  if (!isMac()) return { granted: true, status: 'not-applicable', prompted: false }
+  const status = systemPreferences.getMediaAccessStatus('microphone')
+  if (status === 'granted') return { granted: true, status, prompted: false }
+  // 'denied'/'restricted' never prompt again; askForMediaAccess answers false.
+  // 'not-determined' shows the system dialog: `prompted` lets the caller know
+  // the user spent this press answering it rather than speaking.
+  const granted = await systemPreferences.askForMediaAccess('microphone')
+  return { granted, status: granted ? 'granted' : status, prompted: status === 'not-determined' }
+})
+
+ipcMain.handle('permissions:open-settings', async (event, key: PermissionKey) => {
+  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
   try {
     await openPermissionSettings(key)
     return { ok: true }
@@ -4241,6 +4281,20 @@ const TRUST_CONFIRM_ACTIONS = new Set([
   // Destroys every pairing on this machine, so it is exactly the kind of act
   // this list exists for: only a window can ask for it.
   'p2p.trust.rebuild',
+  // Writes an agent-requested skill into the shared library.
+  'skills.install_approval.decide',
+  // Loosening terminal command protection (switching a category off, adding
+  // an allow prefix, removing a block pattern) — the backend demands a token
+  // only for those, so tightening needs no prompt.
+  'guard.terminal.set_category',
+  'guard.terminal.add_pattern',
+  'guard.terminal.remove_pattern',
+  // Loosening Navide Guard's grading (lowering a built-in rule, adding an
+  // allow pattern, removing a deny pattern or a protected branch).
+  'guard.builtin.set_level',
+  'guard.rules.add',
+  'guard.rules.remove',
+  'guard.branches.remove',
 ])
 ipcMain.handle('trust:confirm', async (event, action: unknown, deviceId: unknown, subject: unknown) => {
   // Minting is the one thing this list exists to keep away from anything
@@ -4748,6 +4802,16 @@ registerTerminalContextMenu()
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
   protocol.handle(PLUGIN_FRAME_SCHEME, handlePluginFrameAssetRequest)
+  // Keeps every permission on Electron's default (allow) except `media`, which
+  // only a main window's own renderer gets, audio only. See media-permissions.ts.
+  installMediaPermissionHandlers(session.defaultSession, (wc) =>
+    wc !== null && [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
+  )
+  // The fn (🌐) key helper for voice input; spawned only on a renderer's request.
+  const fnKey = registerFnKeyIpc((wc) =>
+    [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
+  )
+  app.on('will-quit', () => fnKey.dispose())
   if (gitRecoveryEnabled) {
     const recovery = registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,

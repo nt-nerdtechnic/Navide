@@ -74,7 +74,7 @@ describe('Settings ▸ quota failover policy and capability table', { timeout: 1
   async function mountGeneral(state: FailoverState | null) {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', {
-      deps: [], models: [], model_catalog: [], complete: true, skip: false,
+      deps: [], models: [], model_catalog: [], complete: true,
       gate: {}, cli_health: { entries: [], findings: [], needs_attention: false },
     })
     if (state) {
