@@ -53,8 +53,8 @@ describe('evaluateSpawnRequest', () => {
     expect(res).toEqual({ ok: true, agentKey: 'claude', name: 'worker-2', task: 'do the thing' })
   })
 
-  it('rejects a missing or non-whitelisted agent (terminal is not whitelisted)', () => {
-    for (const agent of ['', 'terminal', 'gpt']) {
+  it('rejects a missing or non-whitelisted agent', () => {
+    for (const agent of ['', 'gpt']) {
       const res = evaluateSpawnRequest({ ...goodReq, agent }, ctx())
       expect(res.ok).toBe(false)
       if (!res.ok) expect(res.reason).toContain('agent')
@@ -82,6 +82,22 @@ describe('evaluateSpawnRequest', () => {
     // that changes the answer.
     const res = evaluateSpawnRequest({ ...goodReq, task: '', resumesSession: true }, ctx())
     expect(res).toEqual({ ok: true, agentKey: 'claude', name: 'worker-2', task: '' })
+  })
+
+  it('accepts a terminal with an empty task — a bare shell prompt is a pane', () => {
+    const res = evaluateSpawnRequest(
+      { ...goodReq, agent: 'terminal', task: '' },
+      ctx({ validAgentKeys: ['claude', 'terminal'] }),
+    )
+    expect(res).toEqual({ ok: true, agentKey: 'terminal', name: 'worker-2', task: '' })
+  })
+
+  it('refuses a model or effort for a terminal — a shell takes neither', () => {
+    const terminalCtx = ctx({ validAgentKeys: ['terminal'] })
+    for (const extra of [{ model: 'sonnet' }, { effort: 'high' }]) {
+      const res = evaluateSpawnRequest({ ...goodReq, agent: 'terminal', ...extra }, terminalCtx)
+      expect(res.ok).toBe(false)
+    }
   })
 
   it('rejects a name collision without renaming', () => {
@@ -478,8 +494,12 @@ describe('evaluateSpawnRequest — a stored launch command', () => {
 describe('assertAgentKeyAllowed', () => {
   const validAgentKeys = ['claude', 'codex', 'cursor', 'droid']
 
-  it('rejects "terminal" — it is not in the whitelist', () => {
+  it('rejects a key that is not in the whitelist', () => {
     expect(() => assertAgentKeyAllowed('terminal', validAgentKeys)).toThrow()
+  })
+
+  it('accepts "terminal" when the whitelist lists it, as App.vue\'s does', () => {
+    expect(assertAgentKeyAllowed('terminal', [...validAgentKeys, 'terminal'])).toBe('terminal')
   })
 
   it('returns the key when it is in the whitelist', () => {

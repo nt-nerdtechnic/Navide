@@ -320,6 +320,17 @@ const RATE_LIMIT_REASON: MessageReason = {
 }
 const QUEUE_FULL_REASON: MessageReason = { key: 'queue-full', params: { cap: QUEUE_CAP } }
 
+/** A plain shell pane's agentKey. A message to one is typed in verbatim and
+ *  run as a command line, so it gets no envelope, no reply hint and no
+ *  correlation id — every extra line would be executed by the shell. */
+export const TERMINAL_AGENT_KEY = 'terminal'
+/** Navide's own text (a delivery-failure notice, a fallback report) is prose
+ *  for an agent to read; typed into a shell it would run as a command. */
+const TERMINAL_NOTICE_REASON = rawReason('a Navide notice is never typed into a plain terminal pane — the shell would run it')
+/** Content from outside this machine's user (a chat channel, a remote device)
+ *  would run as the user's own shell command in a terminal. */
+const TERMINAL_EXTERNAL_REASON = rawReason('external content is never typed into a plain terminal pane — the shell would run it')
+
 /** Handle Navide writes its own messages under — delivery-failure notices here,
  *  SPAWN feedback in App.vue. Reserved rather than merely unregistered: a pane
  *  answering to it would share the feedback rate-limit budget, and paneIdOf()
@@ -595,7 +606,8 @@ function failMessage(id: number, reason: MessageReason): void {
  *
  * Skipped for anything whose sender is not a live CLI pane in this window: an
  * inbound cross-workspace row (the sending window is told by reportDelivery and
- * notifies its own pane), a closed or plain-terminal pane (not in the registry),
+ * notifies its own pane), a closed pane (not in the registry), a plain terminal
+ * (sendMessage fails a notice addressed to one rather than typing it),
  * an MCP client (which polls `cli_check_message` instead), and a notice itself —
  * a bounced notice is logged and left there, never answered with another.
  */
@@ -865,7 +877,18 @@ function sendMessage(from: string, to: string, content: string, opts: SendOption
     markLoggedOnly(msg)
     return msg
   }
-  if (msg.kind === 'notice') {
+  const toTerminal = agentByPane.get(targetPane) === TERMINAL_AGENT_KEY
+  // Any labelled message left here (a notice or a fallback report; an ack
+  // returned above) is prose for an agent, never a command line.
+  if (toTerminal && msg.kind) {
+    failMessage(msg.id, TERMINAL_NOTICE_REASON)
+    return msg
+  }
+  if (toTerminal) {
+    // A shell runs exactly what it is given: the body alone, unsanitized, and
+    // no correlation id — nothing in a shell can echo one back.
+    envelopes.set(msg.id, content)
+  } else if (msg.kind === 'notice') {
     // A notice is Navide's own text, already in the form the pane must see: its
     // first line says "delivery failed", which is how an agent tells it apart
     // from a message. An envelope would bury that under `from: Navide` and ask
@@ -1064,11 +1087,20 @@ function acceptRemoteMessage(args: {
     deps.reportDelivery?.(args.msgKey, false, QUEUE_FULL_REASON)
     return true
   }
+  const toTerminal = agentByPane.get(args.targetPaneId) === TERMINAL_AGENT_KEY
+  if (toTerminal && args.external) {
+    failMessage(msg.id, TERMINAL_EXTERNAL_REASON)
+    deps.reportDelivery?.(args.msgKey, false, TERMINAL_EXTERNAL_REASON)
+    return true
+  }
   // The routing key is what the sending side already knows this message by, so
-  // it is the correlation id the reply is asked to echo.
+  // it is the correlation id the reply is asked to echo. A terminal gets the
+  // bare content — see TERMINAL_AGENT_KEY.
   envelopes.set(
     msg.id,
-    renderEnvelope(args.fromDisplay, args.content, { correlationId: args.msgKey, external: args.external }),
+    toTerminal
+      ? args.content
+      : renderEnvelope(args.fromDisplay, args.content, { correlationId: args.msgKey, external: args.external }),
   )
   correlations.set(args.msgKey, { id: msg.id, sentAt: msg.createdAt })
   remoteInbound.set(msg.id, args.msgKey)
@@ -1209,8 +1241,12 @@ function sendBroadcast(
   content: string,
   opts: SendOptions & { only?: (paneId: string) => boolean } = {},
 ): AgentMessage[] {
+  // Never a terminal: a broadcast is prose for agents, and a shell would run it.
   const targets = [...paneByName.entries()]
-    .filter(([name, paneId]) => name !== from && (!opts.only || opts.only(paneId)))
+    .filter(([name, paneId]) =>
+      name !== from &&
+      agentByPane.get(paneId) !== TERMINAL_AGENT_KEY &&
+      (!opts.only || opts.only(paneId)))
     .map(([name]) => name)
   return targets.map((to) => sendMessage(from, to, content, opts))
 }

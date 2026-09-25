@@ -171,7 +171,7 @@ describe('cli_open_agent(session_id) — the MCP resume path, station by station
     // answered at once instead.
     const body = fn('kickoffRequestedPane')
     expect(body).toContain('if (!task) {')
-    expect(body).toContain("emitKickoffVerdict('sent', 'no task — the resumed conversation was left as it was')")
+    expect(body).toContain("emitKickoffVerdict('sent', 'no task — the pane was left as it was')")
     expect(body).toContain("pane.kickoffStatus = 'none'")
   })
 

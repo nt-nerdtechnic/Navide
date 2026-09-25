@@ -616,6 +616,42 @@ async def test_open_agent_validates_its_arguments(captured: list[dict[str, Any]]
 
 
 @pytest.mark.asyncio
+async def test_open_agent_opens_a_terminal_with_no_task(captured: list[dict[str, Any]]) -> None:
+    """A terminal's task is an optional first command; a bare prompt is a pane."""
+    _seed()
+
+    async def answer() -> None:
+        for _ in range(200):
+            keys = list(plan_mcp._pending_spawns)
+            if keys:
+                agent_messaging.register("sh-pane", "shell", "/ws/alpha", agent_key="terminal")
+                plan_mcp.resolve_spawn(keys[0], {"ok": True, "pane_id": "sh-pane", "name": "shell"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "sh-pane", "kickoff": "sent"})
+                return
+            await asyncio.sleep(0.005)
+
+    task = asyncio.create_task(answer())
+    result = await plan_mcp.cli_open_agent("terminal", "shell", "", _ctx())
+    await task
+
+    assert result["ok"] is True and result["pane_id"] == "sh-pane"
+    payload = captured[0]["payload"]
+    assert payload["agent_key"] == "terminal"
+    assert payload["task"] == ""
+
+
+@pytest.mark.asyncio
+async def test_open_agent_refuses_model_effort_or_session_for_a_terminal(
+    captured: list[dict[str, Any]],
+) -> None:
+    _seed()
+    for kwargs in ({"model": "sonnet"}, {"effort": "high"}, {"session_id": "abc"}):
+        result = await plan_mcp.cli_open_agent("terminal", "shell", "ls", _ctx(), **kwargs)
+        assert result["ok"] is False and "plain shell" in result["error"]
+    assert captured == []
+
+
+@pytest.mark.asyncio
 async def test_open_agent_refuses_an_unidentified_caller(
     captured: list[dict[str, Any]],
 ) -> None:
@@ -638,6 +674,20 @@ async def test_list_targets_reports_whether_a_target_is_busy() -> None:
     result = await plan_mcp.cli_list_targets(_ctx())
     busy = {t["address"]: t["busy"] for t in result["targets"]}
     assert busy == {"beta/reviewer": True, "alpha/helper": False}
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_pane_is_a_roster_entry_that_settles_on_quiet_period() -> None:
+    """A plain shell has no turn end: once it stops printing (not busy), the
+    wait settles on the silence, which is all a terminal can offer."""
+    _seed()
+    agent_messaging.register("ps", "shell", "/ws/alpha", agent_key="terminal")
+    listed = await plan_mcp.cli_list_targets(_ctx())
+    # The roster shape is frozen; cli_get_status is where agent_key is read.
+    assert "alpha/shell" in {t["address"] for t in listed["targets"]}
+
+    result = await plan_mcp.cli_wait_idle("shell", _ctx(), timeout_s=1.0)
+    assert result["idle"] is True and result["source"] == "quiet_period"
 
 
 def test_set_busy_reports_whether_it_changed() -> None:

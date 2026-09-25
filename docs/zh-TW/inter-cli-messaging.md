@@ -26,7 +26,9 @@ Pane 空下來時，把訊息輸入進去。
   取消則整個放棄這次重新命名。
 - 清空 Pane 標題會讓 Handle 回到自動推導的標題，若沒有則回到 Vendor 標籤。
 - Handle 在重新啟動後仍然保留。
-- 一般 Terminal Pane 沒有 Handle。它們不能傳送也不能接收。
+- 一般 Terminal Pane（登入 shell，agent key `terminal`）也有 Handle，但只能接收
+  —— shell 沒有 MCP 工具，也沒有東西會掃描它的輸出找訊息區塊。見
+  [一般 Terminal Pane](#一般-terminal-pane)。
 - `Navide` 是保留名稱 —— 它是 Navide 自己的訊息所使用的來源名稱。標題取成這個
   名字的 Pane 會被加上後綴（`Navide-2`），而把 Pane 改名成它會被拒絕。
 
@@ -106,6 +108,29 @@ MCP 呼叫端還有第二種、範圍更窄的廣播：`cli_send` 的 `to: "grou
 `agent_msg.register` 不帶群組 id —— 所以 MCP Server 會去問擁有寄件者的那個視窗誰
 與它同群組，再走一般的單則訊息路徑逐一遞送。
 
+### 一般 Terminal Pane
+
+一般 Terminal Pane 是登入 shell，不是 Agent，**送進去的任何文字都會以你的權限當成
+shell 指令執行**。所以寄給 Terminal 的訊息是裸打進去的 —— 只有內文加 Enter，沒有
+`[Navide MSG] from:` 行、沒有回覆說明、沒有 correlation id；標記字串也不會被中和，
+因為 shell 必須拿到原封不動的文字。其餘規則都由此而來：
+
+- Terminal 不在任何廣播的收件人之列（`to: all` 與 `cli_send` 的 `to: "group"`）：
+  廣播是寫給 Agent 讀的文字。
+- Navide 絕不把自己的文字打進 Terminal —— 寄給它的失敗通知或代轉回報會直接判定
+  失敗。
+- 來自這台機器使用者以外的內容（聊天軟體、遠端裝置）寄給 Terminal 會被拒絕，而
+  不是加上邊界框送進去。
+- Terminal 沒有回合結束訊號。它在輸出中時會被保留（正在跑的指令會把文字當成自己
+  的輸入），其餘時間都算 idle，所以 `cli_wait_idle`／`cli_send_and_wait` 對它
+  會以 `quiet_period` 結束。結果請用 `cli_read_log` 讀。
+- Terminal 無法回覆：它沒有 MCP 工具，它的輸出也從不會被掃描訊息或 spawn 區塊。
+
+`cli_open_agent(agent="terminal")` 可以開一個。它的 `task` 可省略 —— 是提示字元
+出現後打進去一次的指令列，後面不附加任何東西 —— 而 `model`、`effort`、
+`session_id` 會被拒絕。指令絕不重打（第二份會讓它再跑一次），所以無法確認的
+kickoff 會回 `unverified`：重送前先讀 `cli_read_log`。
+
 ### 另一個 Workspace
 
 以 `<folder>/<pane>` 對另一個 Workspace 視窗中的 Pane 定址：
@@ -165,7 +190,8 @@ reason: No pane named “reviewer”
 產生第二則通知。
 
 不是視窗中活著的 CLI Pane 的寄件者不會收到通知：在失敗前就關閉的 Pane、一般
-Terminal，或外部 MCP Client（它有 `cli_check_message` 可以改用輪詢）。
+Terminal（寄給它的通知或代轉回報會直接判定失敗，不會打進 shell），或外部 MCP
+Client（它有 `cli_check_message` 可以改用輪詢）。
 
 ### 仍被保留的通知
 

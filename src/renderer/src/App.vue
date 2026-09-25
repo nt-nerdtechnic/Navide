@@ -55,7 +55,7 @@ import Welcome from './components/Welcome.vue'
 import { agentUsesBracketedPaste } from '@navide/plugin-shell'
 import { useNotify, useTheme } from '@navide/plugin-ui/foundation'
 import { collapseHomePath, migrateTerminalPtyKey, saveAllScrollSnapshots, type DisplayStatus } from '@navide/terminal'
-import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER } from './composables/useAgentMessaging'
+import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER, TERMINAL_AGENT_KEY } from './composables/useAgentMessaging'
 import type { PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
@@ -166,7 +166,7 @@ import { failedInjectReleasesHold } from './lib/deliveryHold'
 import {
   awaitEcho, awaitInputUnblocked, createInputBlockTracker, needsInputWait, PROBE_SESSION_GONE
 } from './lib/ptyInputBlock'
-import { createKickoffReporter, runKickoffAttempts } from './lib/spawnKickoff'
+import { TERMINAL_KICKOFF_REASON, createKickoffReporter, runKickoffAttempts, terminalKickoffOutcome } from './lib/spawnKickoff'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import { injectStandaloneTask, type StandaloneTaskInjectionDeps } from './lib/standalonePaneTask'
@@ -1993,11 +1993,11 @@ function dropPersistedMessagingName(paneId: string): void {
   }
 }
 
-/** Register a CLI pane in the messaging name registry (no-op for plain
- *  terminals). preferredName: persisted name on restore; falls back to the
- *  pipeline slot label, then to the `<agentKey>-<n>` default. */
+/** Register a pane in the messaging name registry — plain terminals too: a
+ *  message to one is typed in as a shell command line (see TERMINAL_AGENT_KEY).
+ *  preferredName: persisted name on restore; falls back to the pipeline slot
+ *  label, then to the `<agentKey>-<n>` default. */
 function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
-  if (pane.agentKey === 'terminal') return
   // The handle IS the pane's displayed name: persisted (restore) → your title
   // (customName) → auto-title → pipeline slot label → the vendor label. A
   // duplicate gets a `-N` suffix, which shows in the title too — so there is
@@ -2115,7 +2115,11 @@ async function deliverAgentMessage(
   // user record the moment it submits, and that record can reach the handler
   // inside injectPane's 200ms submit poll; a consume that lands before its
   // mark is dropped, and the mark then holds RUNNING for the whole fuse.
-  paneRefs[paneId]?.markDeliveredPending?.()
+  // Not for a shell: it writes no user record, so nothing would ever release
+  // the hold and the badge would sit on RUNNING until the fuse.
+  if (panes.value.find((p) => p.id === paneId)?.agentKey !== TERMINAL_AGENT_KEY) {
+    paneRefs[paneId]?.markDeliveredPending?.()
+  }
   const outcome: { leftInComposer?: boolean } = {}
   // A PTY that stops reading holds the message on `pty-blocked` for as long
   // as it takes; the hold is what cli_check_message shows the sender meanwhile.
@@ -2206,6 +2210,10 @@ function messagingHoldKey(
     const lastKey = (typist?.lastUserKeyAt as number | undefined) ?? 0
     if (hasDraft || (lastKey > 0 && now - lastKey < TYPING_HOLD_MS)) return 'typing'
   }
+  // A shell reports no turns, so its output is the only sign of work: while
+  // the badge reads RUNNING a command is printing, and a line typed now would
+  // go to that command's stdin rather than to the shell.
+  if (pane.agentKey === TERMINAL_AGENT_KEY && status === 'running') return 'mid-turn'
   const lastActive = paneLastActiveAt.get(paneId) ?? 0
   const inFlight = isTurnInFlight(lastActive, paneTurnCompleteAt.get(paneId) ?? 0, now, {
     inferEndFromSilence: VENDORS_WITHOUT_TURN_END.has(pane.agentKey),
@@ -2741,10 +2749,12 @@ async function createStandaloneRequestedPane(
  *  cap still applies. */
 function standaloneSpawnGateContext() {
   return {
-    validAgentKeys: agentSpecs.filter((s) => s.agentKey !== 'terminal').map((s) => s.agentKey),
+    validAgentKeys: agentSpecs.map((s) => s.agentKey),
     isNameTaken: (name: string) => messaging.paneIdOf(name) !== null,
     parentDepth: 0,
     parentChildCount: 0,
+    // Agent panes only: the advisory is about CLI agents' cost (tokens, memory,
+    // quota), which a plain shell does not carry.
     cliPaneCount: panes.value.filter((p) => p.agentKey !== 'terminal').length,
     modelCapabilityFor: (agentKey: string) => agentSpecs.find((s) => s.agentKey === agentKey),
     launchCommandOverridden: storedLaunchCommandApplies,
@@ -2825,14 +2835,15 @@ async function kickoffRequestedPane(
     emitKickoffVerdict('failed', 'the pane was gone before its task could be typed')
     return false
   }
-  // A resumed conversation with no task: leave it exactly as it was. Typing
-  // renderSpawnKickoff('') would submit a bare report-back instruction into a
-  // conversation that was asked nothing, and the tool would then block on a
-  // verdict for a task that does not exist. The gate only lets an empty task
-  // through on a resume, so this branch is that case and nothing else.
+  // No task: a resumed conversation, or a terminal opened on a bare prompt.
+  // Leave it exactly as it was. Typing renderSpawnKickoff('') would submit a
+  // bare report-back instruction into a pane that was asked nothing, and the
+  // tool would then block on a verdict for a task that does not exist. The
+  // gate only lets an empty task through for those two, so this branch is
+  // those cases and nothing else.
   if (!task) {
     pane.kickoffStatus = 'none'
-    emitKickoffVerdict('sent', 'no task — the resumed conversation was left as it was')
+    emitKickoffVerdict('sent', 'no task — the pane was left as it was')
     return true
   }
   // The pane's own task has to land before anything else may type into it: a
@@ -2873,6 +2884,20 @@ async function kickoffRequestedPane(
     // is still painting its first screen the echo check passes on buffer growth
     // alone, so a `true` here can mean "we wrote bytes and cannot say where they
     // went" — which used to be reported as an outright success.
+    if (pane.agentKey === TERMINAL_AGENT_KEY) {
+      // A shell runs what it is typed: the task alone, with no report-back
+      // footer, typed once — a retype would run the command a second time.
+      const seen: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+      const typed = promptReady || !paneStarting
+        ? await injectPane(paneId, task, 'agent-spawn', true, undefined, seen)
+        : false
+      const outcome = terminalKickoffOutcome({
+        typed, echo: seen.echo ?? null, submit: seen.submit ?? null, promptReady,
+      })
+      pane.kickoffStatus = outcome
+      emitKickoffVerdict(outcome, outcome === 'sent' ? undefined : TERMINAL_KICKOFF_REASON[outcome])
+      return outcome !== 'failed'
+    }
     const text = renderSpawnKickoff(task, parentName)
     const tail = normalizeForMatch(text).slice(-TAIL_MATCH_LEN)
     const screenTail = (): string => {
@@ -3007,13 +3032,15 @@ async function spawnRequestedPane(
  *  path and the cli_open_agent MCP tool so both are held to the same limits. */
 function spawnGateContextFor(parentPaneId: string) {
   return {
-    validAgentKeys: agentSpecs.filter((s) => s.agentKey !== 'terminal').map((s) => s.agentKey),
+    validAgentKeys: agentSpecs.map((s) => s.agentKey),
     isNameTaken: (name: string) => messaging.paneIdOf(name) !== null,
     parentDepth: computeSpawnDepth(
       parentPaneId,
       (id) => panes.value.find((p) => p.id === id)?.spawnedBy ?? null,
     ),
     parentChildCount: panes.value.filter((p) => p.spawnedBy === parentPaneId).length,
+    // Agent panes only: the advisory is about CLI agents' cost (tokens, memory,
+    // quota), which a plain shell does not carry.
     cliPaneCount: panes.value.filter((p) => p.agentKey !== 'terminal').length,
     modelCapabilityFor: (agentKey: string) => agentSpecs.find((s) => s.agentKey === agentKey),
     launchCommandOverridden: storedLaunchCommandApplies,
@@ -8711,8 +8738,8 @@ registerCommand('ui.pane.create', async (args) => {
   // child-count limits and the workspace CLI-pane cap do NOT apply here,
   // which the SPAWN-block and cli_open_agent paths do enforce. The agent key
   // is checked via assertAgentKeyAllowed against gateCtx.validAgentKeys
-  // before spawnPane runs, so "terminal" (a user-shell pane, not an agent)
-  // and any other unlisted key are refused rather than silently cast. A
+  // before spawnPane runs, so an unlisted key is refused rather than silently
+  // cast ("terminal" is listed, as it is for cli_open_agent). A
   // taken name is still rejected rather than silently suffixed, and the
   // advisories reach the caller via ui.invoke.result's warnings channel (see
   // useUiActionBus).
@@ -8969,7 +8996,8 @@ registerCommand('ui.groupPeers', (args) => {
   // carries no group), so a group-scoped broadcast has to ask the window that
   // owns the sender. Unassigned panes share the synthetic 'manual' group, so
   // they broadcast to each other rather than to nobody.
-  const peers = groupPeers(panes.value, paneId) ?? []
+  // Never a terminal: a broadcast is prose for agents, and a shell would run it.
+  const peers = (groupPeers(panes.value, paneId) ?? []).filter((p) => p.agentKey !== TERMINAL_AGENT_KEY)
   return {
     group_id: sender.runGroupId ?? '',
     peers: peers.map((p) => ({ pane_id: p.id, name: p.messagingName as string })),
@@ -17875,23 +17903,21 @@ async function setPaneCustomName(paneId: string, rawName: string): Promise<void>
   // address CLIs use. A non-empty title that collides with another pane's
   // handle prompts for a unique name (cancel abandons the whole rename);
   // clearing the title reverts the handle to the auto-title or vendor label.
-  if (pane.agentKey !== 'terminal') {
-    if (nextCustomName) {
-      const resolved = await resolveManualHandle(paneId, nextCustomName)
-      if (resolved === null) return // cancelled → abandon (title unchanged too)
-      const applied = messaging.setDerivedName(pane.id, resolved, pane.agentKey)
-      if (applied) {
-        pane.messagingName = applied
-        persistMessagingName(pane.id, applied)
-        mirrorMessagingHandle(pane)
-      }
-    } else {
-      const reverted = messaging.setDerivedName(pane.id, pane.autoName || pane.agentLabel, pane.agentKey)
-      if (reverted) {
-        pane.messagingName = reverted
-        persistMessagingName(pane.id, reverted)
-        mirrorMessagingHandle(pane)
-      }
+  if (nextCustomName) {
+    const resolved = await resolveManualHandle(paneId, nextCustomName)
+    if (resolved === null) return // cancelled → abandon (title unchanged too)
+    const applied = messaging.setDerivedName(pane.id, resolved, pane.agentKey)
+    if (applied) {
+      pane.messagingName = applied
+      persistMessagingName(pane.id, applied)
+      mirrorMessagingHandle(pane)
+    }
+  } else {
+    const reverted = messaging.setDerivedName(pane.id, pane.autoName || pane.agentLabel, pane.agentKey)
+    if (reverted) {
+      pane.messagingName = reverted
+      persistMessagingName(pane.id, reverted)
+      mirrorMessagingHandle(pane)
     }
   }
   pane.customName = nextCustomName
@@ -17963,13 +17989,11 @@ function setPaneAutoName(paneId: string, name: string, source: 'heuristic' | 'll
   // The auto-title becomes the pane's name, so sync the messaging handle to it
   // (silently — auto-naming is not a manual rename, so no collision prompt;
   // duplicates just take a -N suffix).
-  if (pane.agentKey !== 'terminal') {
-    const derived = messaging.setDerivedName(pane.id, name, pane.agentKey)
-    if (derived) {
-      pane.messagingName = derived
-      persistMessagingName(pane.id, derived)
-      mirrorMessagingHandle(pane)
-    }
+  const derived = messaging.setDerivedName(pane.id, name, pane.agentKey)
+  if (derived) {
+    pane.messagingName = derived
+    persistMessagingName(pane.id, derived)
+    mirrorMessagingHandle(pane)
   }
   syncViews()
   // No workspace → the backend has no project.json to persist into; keep it

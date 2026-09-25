@@ -27,7 +27,9 @@ shows as its title. The name you see is the address.
 - Clearing a pane's title returns the handle to the auto-derived title, or to
   the vendor label when there is none.
 - Handles survive a restart.
-- Plain terminal panes have no handle. They cannot send or receive.
+- Plain terminal panes (login shells, agent key `terminal`) have a handle too,
+  but they only receive — a shell has no MCP tools and nothing scans its
+  output for message blocks. See [Plain terminal panes](#plain-terminal-panes).
 - `Navide` is reserved — it is the name Navide's own messages come from. A pane
   titled that takes a suffix (`Navide-2`), and renaming a pane to it is refused.
 
@@ -118,6 +120,34 @@ UI state the backend never learns — `agent_msg.register` carries no group id �
 so the MCP server asks the window that owns the sender which panes share its
 group, then delivers to each one down the ordinary single-message path.
 
+### Plain terminal panes
+
+A plain terminal pane is a login shell, not an agent, and **whatever reaches it
+runs as a shell command line with your privileges**. So a message to a
+terminal is typed in bare — the body and Enter, with no `[Navide MSG] from:`
+line, no reply instructions and no correlation id; marker tokens are not
+neutralized either, because the shell must get exactly the text that was sent.
+The rest follows from that:
+
+- Terminals are left out of every broadcast (`to: all` and `cli_send`'s
+  `to: "group"`): a broadcast is prose for agents.
+- Navide never types its own text into one — a failure notice or a stand-in
+  report addressed to a terminal is failed instead.
+- Content from outside this machine's user (a chat channel, a remote device)
+  is refused for a terminal rather than fenced.
+- A terminal has no turn end. It is held while it is printing (a running
+  command would read the text as its own input) and is otherwise idle, so
+  `cli_wait_idle` / `cli_send_and_wait` settle on `quiet_period` for it. Read
+  the result with `cli_read_log`.
+- A terminal cannot reply: it has no MCP tools, and its output is never scanned
+  for message or spawn blocks.
+
+`cli_open_agent(agent="terminal")` opens one. Its `task` is optional — a
+command line typed once after the prompt is up, with nothing appended — and
+`model`, `effort` and `session_id` are refused. The command is never retyped
+(a second copy would run it twice), so a kickoff that could not be confirmed
+answers `unverified`: read `cli_read_log` before resending.
+
 ### Another workspace
 
 Address a pane in another workspace window as `<folder>/<pane>`:
@@ -185,8 +215,9 @@ A notice is not an address: nothing should reply to it, and a notice that
 itself fails to deliver is only logged — it never produces a second notice.
 
 Senders that are not a live CLI pane in the window get no notice: a pane that
-closed before the failure, a plain terminal, or an external MCP client (which
-has `cli_check_message` to poll instead).
+closed before the failure, a plain terminal (a notice or stand-in report
+addressed to one is failed rather than typed into the shell), or an external
+MCP client (which has `cli_check_message` to poll instead).
 
 ### Still-held notices
 

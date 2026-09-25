@@ -30,7 +30,10 @@ Navide で動作する 2 つの CLI Agent は互いに会話できます。ど�
 - Pane のタイトルを消すと、Handle は自動導出されたタイトルに戻ります。それも
   ない場合はベンダーラベルに戻ります。
 - Handle は再起動しても保持されます。
-- プレーンな Terminal Pane に Handle はありません。送信も受信もできません。
+- プレーンな Terminal Pane（ログインシェル、agent key `terminal`）にも Handle
+  はありますが、受信専用です。シェルには MCP ツールがなく、その出力からメッセージ
+  ブロックを探すこともありません。[プレーンな Terminal Pane](#プレーンな-terminal-pane)
+  を参照してください。
 - `Navide` は予約語です。Navide 自身のメッセージの送信元名だからです。この
   タイトルの Pane には Suffix が付き（`Navide-2`）、Pane をこの名前に変更する
   ことは拒否されます。
@@ -123,6 +126,34 @@ Group Broadcast が返す `msg_key` は送信ごとに一つではなく**受信
 ——そのため MCP Server は送信者を所有する Window にどの Pane が同じ Group かを尋ね、
 そのうえで通常の単一メッセージ経路で一つずつ配信します。
 
+### プレーンな Terminal Pane
+
+プレーンな Terminal Pane は Agent ではなくログインシェルであり、**届いたものは何で
+あれ、あなたの権限でシェルのコマンドラインとして実行されます**。そのため Terminal
+宛てのメッセージは本文と Enter だけがそのまま打ち込まれます。`[Navide MSG] from:`
+行も、返信方法の説明も、correlation id も付きません。マーカー文字列も無害化され
+ません。シェルは送られたとおりのテキストを受け取る必要があるからです。残りの規則
+はすべてここから導かれます。
+
+- Terminal はどの Broadcast（`to: all` と `cli_send` の `to: "group"`）の宛先にも
+  含まれません。Broadcast は Agent 向けの文章です。
+- Navide は自分の文章を Terminal に打ち込みません。Terminal 宛ての失敗通知や代理
+  レポートは失敗扱いになります。
+- このマシンのユーザー以外からの内容（チャットチャネル、リモートデバイス）は、
+  境界で囲むのではなく Terminal への配信自体が拒否されます。
+- Terminal には Turn の終了がありません。出力中は保留され（実行中のコマンドが
+  テキストを自分の入力として読んでしまうため）、それ以外は Idle とみなされるので、
+  `cli_wait_idle`／`cli_send_and_wait` は `quiet_period` で終わります。結果は
+  `cli_read_log` で読んでください。
+- Terminal は返信できません。MCP ツールを持たず、その出力からメッセージや Spawn
+  ブロックが探されることもありません。
+
+`cli_open_agent(agent="terminal")` で開けます。`task` は省略可能で、プロンプトが
+出たあとに一度だけ打ち込まれるコマンドラインです（後ろには何も付け足されません）。
+`model`、`effort`、`session_id` は拒否されます。コマンドは再入力されない（2 つ目の
+コピーは 2 回目の実行になる）ため、確認できなかった Kickoff は `unverified` を
+返します。再送する前に `cli_read_log` を読んでください。
+
 ### 別の Workspace
 
 別の Workspace Window にある Pane は `<folder>/<pane>` の形式で指定します。
@@ -188,7 +219,8 @@ reason は常に英語です。Agent がそれを読むためであり、Message
 失敗した場合は Log に記録されるだけで、2 つ目の通知が生まれることはありません。
 
 Window 内の生きた CLI Pane ではない送信者に通知は届きません。失敗より前に閉じた
-Pane、プレーンな Terminal、そして外部の MCP Client（こちらは代わりに Poll する
+Pane、プレーンな Terminal（宛先が Terminal の通知や代理レポートはシェルに打ち込ま
+れず、失敗扱いになります）、そして外部の MCP Client（こちらは代わりに Poll する
 ための `cli_check_message` があります）です。
 
 ### まだ保留中であることの通知

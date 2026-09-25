@@ -497,6 +497,10 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     with same_workspace false and "you" set to the credential kind ("host" or
     "external"); always use the qualified address. Read-only.
 
+    Plain terminal panes (login shells) are listed too; cli_get_status reports
+    their `agent_key` as "terminal", and whatever you cli_send one runs as a
+    shell command — see cli_send.
+
     This is who exists, not who is related to you — the list carries no
     lineage. The panes you opened with cli_open_agent are yours to keep track
     of; that record lives in your own context, not in this answer. Refer to
@@ -921,6 +925,10 @@ def _taint_spawned(caller: _Caller, pane_id: str) -> None:
     if detail:
         safe_mark_tainted(pane_id, "agent", detail)
 
+#: agent key of a plain login-shell pane (see cli_open_agent / cli_send).
+_TERMINAL_AGENT = "terminal"
+
+
 @server.tool()
 async def cli_open_agent(
     agent: str,
@@ -947,6 +955,15 @@ async def cli_open_agent(
     `agent` is the CLI to run (e.g. "claude", "codex"), `name` is what the pane
     will be called — that name is also its messaging address, so pick something
     role-shaped like "reviewer" — and `task` is what it should do.
+
+    `agent: "terminal"` opens a plain login-shell pane instead of an agent.
+    Its `task` is optional: a shell command line typed once after the prompt
+    is up, exactly as given — nothing is appended, so the report-back advice
+    below does not apply (a shell cannot report). Empty `task` opens it on a
+    bare prompt. `model`, `effort` and `session_id` are refused for it. Its
+    kickoff is typed once and never retyped (a retype would run the command
+    twice), so an unconfirmed one answers "unverified": read cli_read_log
+    before resending. Talk to it afterwards with cli_send — see there.
 
     The pane you open is related to you: you opened it, so its result needs to
     come back to you. When you talk to the user about it, use whatever reads
@@ -1097,8 +1114,13 @@ async def cli_open_agent(
     # conversation already has its own context and the caller may only want it
     # back on screen, talking to it later with cli_send. So an empty task is
     # refused only when there is no session to resume.
-    if not (task or "").strip() and not resume_id:
+    if not (task or "").strip() and not resume_id and agent_key != _TERMINAL_AGENT:
         return {"ok": False, "error": "task is empty"}
+    if agent_key == _TERMINAL_AGENT and ((model or "").strip() or (effort or "").strip() or resume_id):
+        return {
+            "ok": False,
+            "error": "a terminal pane is a plain shell — it takes no model, effort or session_id",
+        }
     refusal = _refuse_unsupported_model(agent_key, (model or "").strip(), (effort or "").strip())
     if refusal:
         return {"ok": False, "error": refusal}
@@ -1807,6 +1829,16 @@ async def cli_send(
     text is delivered verbatim and submitted for the receiving agent to act on,
     once that pane is idle; it is queued if the pane is mid-turn. An unknown or
     ambiguous target is refused rather than guessed.
+
+    A plain terminal pane (agent_key "terminal" in cli_get_status) is a
+    login shell, not an agent: `text` is typed in bare — no sender line, no
+    reply instructions — and Enter runs it as a shell command line with the
+    user's privileges. It is held while the terminal is printing (a running
+    command would read it as its own input) and never gets a turn end, so
+    cli_wait_idle / cli_send_and_wait settle on "quiet_period" for it; read
+    cli_read_log for the result. A terminal cannot reply, is left out of
+    `to: "group"` broadcasts, and refuses content from a chat channel or remote
+    device.
 
     `to: "group"` broadcasts instead: every other pane in YOUR OWN tab group,
     in your own workspace. Deliberately narrower than the bare-line protocol's
