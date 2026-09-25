@@ -1130,7 +1130,23 @@ export function registerPluginIpc(
             await manager.revokePackageVersion(id, promotedSelection?.active?.packageVersion ?? selectedBeforeRestart.candidate.packageVersion)
             lifecycleSelector.rollbackPromotedActivation(id)
             manager.removeInstalledPlugin(id, { restoreBuiltin: false })
-            options.onActivationChange?.({ pluginId: id })
+            if (isFactory && previousDescriptor?.packageDir) {
+              // A factory package has no retained Registry selection; its
+              // return path is the App bundle it was loaded from.
+              const restored = manager.loadFactoryPlugin(previousDescriptor.packageDir, id)
+              if (!restored.loaded) throw new Error(`Factory package restoration failed: ${restored.reason}`)
+              if (previousGrant) capabilityGrants.set(id, previousGrant)
+              else capabilityGrants.remove(id)
+              manager.setPluginStorageSnapshotSelection(id, { activeVersion: restored.packageVersion })
+              options.onActivationChange?.({ pluginId: id, activation: restored.activation })
+              if (restartTransaction) {
+                await manager.restorePackageRestart(restartTransaction, restored.packageVersion)
+                manager.completePackageRestart(restartTransaction)
+                restartTransaction = undefined
+              }
+            } else {
+              options.onActivationChange?.({ pluginId: id })
+            }
           }
         } catch (rollbackError) {
           if (restartTransaction) manager.cancelPackageRestart(restartTransaction)

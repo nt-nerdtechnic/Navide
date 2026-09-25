@@ -1560,6 +1560,53 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('restores the factory-bundled package when a promoted update fails', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-update-'))
+    const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-bundle-'))
+    const manager = new FrontendPluginManager()
+    const activationChanges: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
+    try {
+      for (const entry of readZipEntries(buildPkg('acme.demo', 'acme', {}, '1.0.0').bytes)) {
+        if (entry.kind !== 'file') continue
+        const output = join(factoryDir, entry.path)
+        mkdirSync(join(output, '..'), { recursive: true })
+        writeFileSync(output, entry.data)
+      }
+      expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
+      const factoryGrant = { packageVersion: '1.0.0', system: [], storage: true as const }
+      new PluginCapabilityGrantStore(root).set('acme.demo', factoryGrant)
+
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: (change) => activationChanges.push(change),
+      })
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      vi.spyOn(manager, 'restorePackageRestart').mockRejectedValueOnce(new Error('injected placement failure'))
+
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow('injected placement failure')
+      expect(manager.getDescriptor('acme.demo')).toMatchObject({ packageVersion: '1.0.0', packageDir: factoryDir })
+      expect(manager.listInstalledPackages()).toMatchObject([{ id: 'acme.demo', provenance: 'factory-bundled' }])
+      expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.0')).toEqual(factoryGrant)
+      expect(activationChanges.at(-1)).toMatchObject({
+        pluginId: 'acme.demo',
+        activation: { packageVersion: '1.0.0', provenance: 'factory-bundled' },
+      })
+      const selection = new PluginActivationSelector(root).read('acme.demo')
+      expect(selection?.active).toBeUndefined()
+      expect(selection?.activation).toBeUndefined()
+      expect(selection?.candidate).toMatchObject({ packageVersion: '1.0.1' })
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+      rmSync(factoryDir, { recursive: true, force: true })
+    }
+  })
+
   it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
