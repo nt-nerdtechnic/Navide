@@ -17,10 +17,12 @@ mid-speech they can be seconds late), so the next window starts
 pass on stop — first drops the text that repeats the end of the committed text
 (``_strip_overlap``, an alignment like whisper_streaming's n-gram overlap
 removal), and an advance only stands once the first hypothesis of the new
-window re-hears that committed text; otherwise the window rolls back to where
-it started, so a late boundary cannot lose words. ``committed`` only ever grows. Stop transcribes what is left of
-the window and answers ``committed + tail``, so the final text always starts
-with the last committed text the window was shown.
+window re-hears that committed text; otherwise the window steps back toward
+where it started (never so far that it outgrows ``WINDOW_CAP_BYTES``), so a
+late boundary cannot lose words. ``committed`` only ever grows. Stop transcribes what is left of
+the window (again from before an advance its tail does not re-hear) and
+answers ``committed + tail``, so the final text always starts with the last
+committed text the window was shown.
 """
 
 from __future__ import annotations
@@ -98,6 +100,9 @@ _OVERLAP_MAX_CHARS = 64
 # -1 per mismatch or gap) that counts as having re-heard the committed text.
 _OVERLAP_MAX_SKIP = 4
 _OVERLAP_MIN_SCORE = 5
+# Characters past the shortest best alignment that may still count as overlap
+# when they reach a segment end with the same score (see _overlap_len).
+_OVERLAP_MAX_TIE = 2
 # Committed text carried in the prompt for context (whisper keeps <=224 tokens).
 _PROMPT_TAIL_CHARS = 120
 
@@ -498,12 +503,13 @@ def _norm_map(texts: list[str]) -> list[tuple[str, int, int]]:
     ]
 
 
-def _overlap_len(done: str, hyp: str) -> tuple[int, int]:
+def _overlap_len(done: str, hyp: str, ends: frozenset[int] = frozenset()) -> tuple[int, int]:
     """Align a suffix of ``done`` with a prefix of ``hyp`` (both normalized;
     up to _OVERLAP_MAX_SKIP leading characters of ``hyp`` are free), scoring
     +2 per matching character and -1 per mismatch or gap, so rewordings and
     dropped or extra characters still align. Returns (characters of ``hyp``
-    covered, score) for the best alignment, or (0, 0)."""
+    covered, score) for the best alignment, or (0, 0). ``ends`` are the
+    lengths of ``hyp`` at which one of its segments ends."""
     n, m = len(done), len(hyp)
     if not n or not m:
         return 0, 0
@@ -521,8 +527,15 @@ def _overlap_len(done: str, hyp: str) -> tuple[int, int]:
             )
         prev = cur
     # On a tie take less of hyp: repeating a character beats losing one.
+    # Except up to a segment end: committed text ends where a segment did, so
+    # a misheard last character there (a substitution tying with a gap) is
+    # still the overlap.
     score, j = max((prev[j], -j) for j in range(m + 1))
-    return (-j, score) if score > 0 else (0, 0)
+    if score <= 0:
+        return 0, 0
+    j = -j
+    j = next((k for k in range(j, min(j + _OVERLAP_MAX_TIE, m) + 1) if prev[k] == score and k in ends), j)
+    return j, score
 
 
 def _strip_overlap(done: str, texts: list[str]) -> tuple[list[str], bool]:
@@ -532,8 +545,9 @@ def _strip_overlap(done: str, texts: list[str]) -> tuple[list[str], bool]:
     Known cost: a word the speaker really repeats across the boundary
     ("好，好，") is taken for overlap and appears once."""
     tail = _norm(done)[-_OVERLAP_MAX_CHARS:]
-    chars = _norm_map(texts)
-    cut, score = _overlap_len(tail, "".join(ch for ch, _, _ in chars[: 2 * _OVERLAP_MAX_CHARS]))
+    chars = _norm_map(texts)[: 2 * _OVERLAP_MAX_CHARS]
+    ends = frozenset(k for k in range(1, len(chars) + 1) if k == len(chars) or chars[k][1] != chars[k - 1][1])
+    cut, score = _overlap_len(tail, "".join(ch for ch, _, _ in chars), ends)
     # A very short committed text cannot reach the full score.
     if not cut or score < min(_OVERLAP_MIN_SCORE, 2 * len(tail) - 1):
         return texts, False
@@ -556,8 +570,18 @@ def _apply_hypothesis(rec: _Recording, segments: list, window_bytes: int) -> str
     texts, reheard = _strip_overlap(rec.committed, [text for text, _, _ in segs])
     if rec.rollback_to is not None:
         if not reheard:
-            # The last advance skipped words (its boundary was late): go back.
-            rec.win_start, rec.rollback_to, rec.prev_segs = rec.rollback_to, None, []
+            # The last advance skipped words (its boundary was late): step
+            # back by an overlap, as far as where the advance started but
+            # never so far that the window outgrows the cap. Once back there
+            # (or at the cap) the advance is settled; until then the next
+            # hypothesis checks again.
+            end = rec.win_start + window_bytes
+            back = max(rec.win_start - _OVERLAP_BYTES, rec.rollback_to, end - WINDOW_CAP_BYTES)
+            rec.win_start = min(back, rec.win_start)
+            rec.win_start -= rec.win_start % 2
+            if rec.win_start <= max(rec.rollback_to, end - WINDOW_CAP_BYTES):
+                rec.rollback_to = None
+            rec.prev_segs = []
             rec.context = rec.context_before
             return ""
         rec.rollback_to = None
@@ -576,7 +600,11 @@ def _apply_hypothesis(rec: _Recording, segments: list, window_bytes: int) -> str
     ):
         agreed += 1
     # Commit the agreed segments up to the last boundary that is a real time.
-    n = next((k + 1 for k in range(agreed - 1, -1, -1) if _trusted(segs, k, window_bytes)), 0)
+    # A segment with no real duration means whisper collapsed its timestamps
+    # (the window ends mid-speech) and stretched the ones before it, often
+    # by seconds: no boundary of such a hypothesis is a real time.
+    collapsed = any(t1 - t0 < _MIN_SEG_BYTES for _, t0, t1 in segs)
+    n = 0 if collapsed else next((k + 1 for k in range(agreed - 1, -1, -1) if _trusted(segs, k, window_bytes)), 0)
     cut = segs[n - 1][2] if n else 0
     if n == 0 and segs and window_bytes >= WINDOW_CAP_BYTES:
         # No usable agreement across a whole window: commit up to its last
@@ -701,33 +729,39 @@ async def voice_stop(session: "Session", msg_id: str, msg_type: str, payload: di
         rec.partial.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await rec.partial
-    if rec.rollback_to is not None:  # unverified advance
-        rec.win_start, rec.rollback_to, rec.context = rec.rollback_to, None, rec.context_before
     started = time.monotonic()
-    try:
-        result = await _transcribe_window(rec, size, pad=True, segments=True)
-    except stt_service.SidecarError as err:
-        log.warning("voice.stop: sidecar failed: %s", err)
-        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-failed"})
-        return
-    if not result.get("ok"):
-        log.warning("voice.stop: transcription failed: %s", result.get("error"))
-        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "transcribe-failed"})
-        return
+    redone = False
+    while True:
+        try:
+            result = await _transcribe_window(rec, size, pad=True, segments=True)
+        except stt_service.SidecarError as err:
+            log.warning("voice.stop: sidecar failed: %s", err)
+            await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-failed"})
+            return
+        if not result.get("ok"):
+            log.warning("voice.stop: transcription failed: %s", result.get("error"))
+            await _reply(session, msg_id, msg_type, {"ok": False, "reason": "transcribe-failed"})
+            return
+        segments = result.get("segments")
+        segs = [s for s in segments if isinstance(s, dict)] if isinstance(segments, list) else []
+        texts = [str(s.get("text") or "") for s in segs] if segs else [str(result.get("text") or "")]
+        texts, reheard = _strip_overlap(rec.committed, texts)
+        if rec.rollback_to is None or reheard:
+            break
+        # An unverified advance that the tail does not re-hear skipped words:
+        # redo the tail from where the window was before it.
+        rec.win_start, rec.rollback_to, rec.context = rec.rollback_to, None, rec.context_before
+        redone = True
     committed_before = len(rec.committed)
-    segments = result.get("segments")
-    segs = [s for s in segments if isinstance(s, dict)] if isinstance(segments, list) else []
-    texts = [str(s.get("text") or "") for s in segs] if segs else [str(result.get("text") or "")]
-    texts, reheard = _strip_overlap(rec.committed, texts)
     overlap = max(rec.committed_until - rec.win_start, 0)
     if segs and overlap and not reheard:
         # As in _apply_hypothesis: leave out what lies inside committed audio.
         texts = [t for t, s in zip(texts, segs) if int(s.get("t1_ms") or 0) * 32 > overlap]
     rec.committed = _join(rec.committed, "".join(texts).strip())
     log.info(
-        "voice.final window_ms=%d waited_ms=%d took_ms=%d committed_before=%d",
+        "voice.final window_ms=%d waited_ms=%d took_ms=%d committed_before=%d redone=%d",
         (size - rec.win_start) * 1000 // _BYTES_PER_SECOND, int((started - waited) * 1000),
-        int((time.monotonic() - started) * 1000), committed_before,
+        int((time.monotonic() - started) * 1000), committed_before, redone,
     )
     await _reply(session, msg_id, msg_type, {
         "ok": True,

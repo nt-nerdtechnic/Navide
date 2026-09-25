@@ -636,6 +636,9 @@ def test_strip_overlap() -> None:
     assert strip("今天天氣真的不錯", ["天氣不錯,我們"]) == ["我們"]  # a dropped one
     assert strip("run the tests", [" the tests now"]) == ["now"]
     assert strip("", ["abc"]) == ["abc"]
+    # The last overlapped character misheard: dropping it or matching it
+    # scores the same; the segment end decides, so it is not repeated.
+    assert strip("而且準確度沒有下降,就把它射成預設值,", ["把他射程預設職,", "最後別忘了"]) == ["", "最後別忘了"]
     assert voice_handlers._strip_overlap("最後,", ["當你放開按鍵,"])[1] is False
 
 
@@ -659,6 +662,88 @@ async def test_force_trim_when_no_agreement_at_cap(stream: Path, monkeypatch: py
     # lost: every character, in order.
     heard = iter(stop["text"])
     assert all(ch in heard for ch in _text(40)), stop["text"]
+
+
+async def test_late_boundaries_step_back_but_never_past_the_cap(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Boundaries 2.5 s late, more than the overlap: every advance skips words
+    # and is not re-heard (whisper's timestamps stretch like this when a
+    # window ends mid-speech). The window steps back instead of returning to
+    # where the advance started, so it never outgrows the cap, and no word is
+    # lost or repeated.
+    monkeypatch.setenv("FAKE_STT_SKEW_MS", "2500")
+    monkeypatch.setattr(voice_handlers, "WINDOW_CAP_BYTES", 6 * SECOND)
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak_in_step(session, sid, range(64))  # 16 s of speech
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    committed = [p["committed"] for p in _partials(session)]
+    assert committed[-1] and all(_text(64).startswith(c) for c in committed)
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == _text(64)
+    *partials, final = _requests(stream)
+    # One partial's worth of new audio (0.5 s) may arrive past the cap.
+    assert max(r["bytes"] for r in partials) <= 6 * SECOND + SECOND // 2
+    assert final["bytes"] <= 6 * SECOND + SECOND // 2 + PAD
+
+
+def test_collapsed_timestamps_never_place_a_boundary() -> None:
+    # A real hypothesis (ggml-base) of a window that ends mid-speech: its last
+    # segments collapse onto the window end and the ones before are stretched;
+    # "所以反應有點慢," really ends 3.4 s into the window, not 9.0 s. It agrees
+    # with the previous hypothesis, but committing it there would advance past
+    # words the committed text does not cover.
+    ms = SECOND // 1000
+    rec = voice_handlers._Recording(id="s", owner=None)
+    rec.committed = "目前的做法是每隔一秒辨識,一次還沒確定的那一段聲音,"
+    rec.prev_segs = ["所以反應有點慢", "我打算先兩側每一個階段"]
+    segments = [
+        {"t0_ms": 0, "t1_ms": 4760, "text": "確定的那一段聲音,"},
+        {"t0_ms": 4760, "t1_ms": 8970, "text": "所以反應有點慢,"},
+        {"t0_ms": 8970, "t1_ms": 10960, "text": "我打算先兩側每一個階段,"},
+        {"t0_ms": 10960, "t1_ms": 10960, "text": "花了多少時間,"},
+        {"t0_ms": 10960, "t1_ms": 10960, "text": "再決定要從哪裡下手,"},
+    ]
+    tentative = voice_handlers._apply_hypothesis(rec, segments, 10970 * ms)
+    assert rec.win_start == 0 and rec.committed.endswith("聲音,")
+    assert tentative.startswith("所以反應有點慢")
+    # The same words with real times do commit.
+    segments = [
+        {"t0_ms": 0, "t1_ms": 1820, "text": "確定的那一段聲音,"},
+        {"t0_ms": 1820, "t1_ms": 3370, "text": "所以反應有點慢,"},
+        {"t0_ms": 3370, "t1_ms": 5770, "text": "我打算先兩側每一個階段,"},
+        {"t0_ms": 5770, "t1_ms": 7330, "text": "花了多少時間,"},
+        {"t0_ms": 7330, "t1_ms": 11960, "text": "再決定"},
+    ]
+    voice_handlers._apply_hypothesis(rec, segments, 11970 * ms)
+    assert rec.committed.endswith("所以反應有點慢,我打算先兩側每一個階段,花了多少時間,")
+    assert rec.win_start == (7330 * ms - voice_handlers._OVERLAP_BYTES)
+
+
+async def test_stop_after_an_unverified_advance_transcribes_only_the_short_tail(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An advance is verified by the next partial; stop can come first. When
+    # the tail pass re-hears the committed text, the advance stood: the tail
+    # is not redone from where the window was before it.
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak_in_step(session, sid, range(40))
+    await _settle(session)
+    rec = voice_handlers._active
+    deadline = time.monotonic() + 5
+    while rec.rollback_to is None:  # speak until a partial advances the window
+        assert time.monotonic() < deadline, "no advance"
+        await _speak(session, sid, range(40 + rec.partial_seq, 41 + rec.partial_seq), pause=0.0)
+        await _settle(session)
+    spoken = rec.size // BLOCK
+    unverified_start = rec.win_start
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == _text(spoken)
+    final = _requests(stream)[-1]
+    assert final["bytes"] == rec.size - unverified_start + PAD
 
 
 async def test_busy_partials_are_skipped_not_queued(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
