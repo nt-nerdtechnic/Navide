@@ -21,7 +21,7 @@ import FilePreviewPane from './editor/FilePreviewPane.vue'
 import { previewKind, isMarkdownFile } from './editor/previewTypes'
 import { rebindTabs } from './editor/tabRebind'
 import { initKeybindingsPort, useKeybindings, registerCommand, setContext, executeCommand } from '@navide/plugin-ui/shared'
-import { useTheme, BUILTIN_THEMES } from '@navide/plugin-ui/foundation'
+import { useTheme, BUILTIN_THEMES, i18n } from '@navide/plugin-ui/foundation'
 import { initSettingsBackend, settingsGet, settingsSet, onSettingsChanged } from '@navide/plugin-ui/shared'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import { allDiagnosticsSorted, setDiagnostics, diagnosticsKey } from './editor/diagnostics'
@@ -527,8 +527,8 @@ async function closeFile(key: string): Promise<void> {
     return
   }
   if (f?.dirty) {
-    const ok = await confirm(`"${f.name}" has unsaved changes. Close anyway?`, {
-      title: 'Close File', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-file-dirty', { name: f.name }), {
+      title: i18n.global.t('editorWindow.close-file'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -583,7 +583,7 @@ async function ctxCloseOthers(key: string): Promise<void> {
   closeTabCtxMenu()
   const closing = openFiles.value.filter((f) => tabKey(f) !== key)
   const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close other tabs anyway?`, { title: 'Close Other Tabs', confirmText: 'Close' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-others-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-others'), confirmText: i18n.global.t('action.close') }); if (!ok) return }
   if (!(await requestCloseProviderTabs(closing))) return
   openFiles.value = openFiles.value.filter((f) => tabKey(f) === key || f.kind === 'provider')
 }
@@ -593,7 +593,7 @@ async function ctxCloseRight(key: string): Promise<void> {
   if (idx < 0) return
   const closing = openFiles.value.slice(idx + 1)
   const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, { title: 'Close Tabs to the Right', confirmText: 'Close' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-right-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-to-right'), confirmText: i18n.global.t('action.close') }); if (!ok) return }
   const retained = new Set(openFiles.value.slice(0, idx + 1).map(tabKey))
   if (!(await requestCloseProviderTabs(closing))) return
   openFiles.value = openFiles.value.filter((f) => retained.has(tabKey(f)) || f.kind === 'provider')
@@ -604,7 +604,7 @@ async function ctxCloseLeft(key: string): Promise<void> {
   if (idx <= 0) return
   const closing = openFiles.value.slice(0, idx)
   const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, { title: 'Close Tabs to the Left', confirmText: 'Close' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-left-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-to-left'), confirmText: i18n.global.t('action.close') }); if (!ok) return }
   const retained = new Set(openFiles.value.slice(idx).map(tabKey))
   if (!(await requestCloseProviderTabs(closing))) return
   openFiles.value = openFiles.value.filter((f) => retained.has(tabKey(f)) || f.kind === 'provider')
@@ -612,7 +612,7 @@ async function ctxCloseLeft(key: string): Promise<void> {
 async function ctxCloseAll(): Promise<void> {
   closeTabCtxMenu()
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, { title: 'Close All Tabs', confirmText: 'Close All' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-all-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-all'), confirmText: i18n.global.t('action.close-all') }); if (!ok) return }
   if (!(await requestCloseProviderTabs(openFiles.value))) return
   openFiles.value = openFiles.value.filter((f) => f.kind === 'provider')
   activeKey.value = openFiles.value[0] ? tabKey(openFiles.value[0]) : ''
@@ -942,8 +942,8 @@ registerCommand('workbench.action.reloadWindow', async () => {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
     const ok = await confirm(
-      `${dirty.length} file(s) have unsaved changes. Reload and discard them?`,
-      { title: 'Reload Window', confirmText: 'Reload' }
+      i18n.global.t('editorWindow.reload-dirty', { count: dirty.length }),
+      { title: i18n.global.t('settings.keybindings.cmd.workbench_action_reloadWindow'), confirmText: i18n.global.t('action.reload') }
     )
     if (!ok) return
   }
@@ -961,8 +961,8 @@ registerCommand('workbench.action.saveAll', saveDirtyFiles)
 registerCommand('workbench.action.closeAllEditors', async () => {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, {
-      title: 'Close All Tabs', confirmText: 'Close All',
+    const ok = await confirm(i18n.global.t('editorWindow.close-all-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-all'), confirmText: i18n.global.t('action.close-all'),
     })
     if (!ok) return
   }
@@ -976,8 +976,8 @@ registerCommand('workbench.action.closeOtherEditors', async () => {
   const closing = openFiles.value.filter((f) => tabKey(f) !== cur)
   const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close other tabs anyway?`, {
-      title: 'Close Other Tabs', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-others-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-others'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -992,8 +992,8 @@ registerCommand('workbench.action.closeEditorsToTheRight', async () => {
   const closing = openFiles.value.slice(idx + 1)
   const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, {
-      title: 'Close Tabs to the Right', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-right-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-to-right'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -1009,8 +1009,8 @@ registerCommand('workbench.action.closeEditorsToTheLeft', async () => {
   const closing = openFiles.value.slice(0, idx)
   const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, {
-      title: 'Close Tabs to the Left', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-left-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-to-left'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -1749,8 +1749,8 @@ async function closeEditorWindow(): Promise<void> {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
     const ok = await confirm(
-      `${dirty.length} file(s) have unsaved changes. Close the editor anyway?`,
-      { title: 'Close Editor', confirmText: 'Close' }
+      i18n.global.t('editorWindow.close-editor-dirty', { count: dirty.length }),
+      { title: i18n.global.t('editorWindow.close-editor'), confirmText: i18n.global.t('action.close') }
     )
     if (!ok) return
   }
@@ -2121,13 +2121,15 @@ async function confirmReceiverFileClose(reason: PluginReceiverCloseGuardReason):
   const reload = reason === 'reload'
   const quit = reason === 'quit'
   const question = reload
-    ? `${dirty.length} file(s) have unsaved changes. Reload and discard them?`
+    ? i18n.global.t('editorWindow.reload-dirty', { count: dirty.length })
     : quit
-      ? `${dirty.length} file(s) have unsaved changes. Quit and discard them?`
-      : `${dirty.length} file(s) have unsaved changes. Close the editor anyway?`
+      ? i18n.global.t('editorWindow.quit-dirty', { count: dirty.length })
+      : i18n.global.t('editorWindow.close-editor-dirty', { count: dirty.length })
   const ok = await confirm(question, {
-    title: reload ? 'Reload Window' : quit ? 'Quit' : 'Close Editor',
-    confirmText: reload ? 'Reload' : quit ? 'Quit' : 'Close',
+    title: reload
+      ? i18n.global.t('settings.keybindings.cmd.workbench_action_reloadWindow')
+      : quit ? i18n.global.t('confirm-close.quit') : i18n.global.t('editorWindow.close-editor'),
+    confirmText: reload ? i18n.global.t('action.reload') : quit ? i18n.global.t('confirm-close.quit') : i18n.global.t('action.close'),
   })
   return ok ? { accepted: true, reason: 'accepted' } : { accepted: false, reason: 'refused' }
 }

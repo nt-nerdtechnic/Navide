@@ -15,6 +15,7 @@
     "close-left-dirty": "{count} 個のファイルに未保存の変更があります。それでも左側のタブを閉じますか？",
     "close-all-dirty": "{count} 個のファイルに未保存の変更があります。それでもすべて閉じますか？",
     "reload-dirty": "{count} 個のファイルに未保存の変更があります。変更を破棄して再読み込みしますか？",
+    "quit-dirty": "{count} 個のファイルに未保存の変更があります。変更を破棄して終了しますか？",
     "select-theme": "カラーテーマを選択…",
     "search-shortcuts": "キーボードショートカットを検索…",
     "select-language": "言語モードを選択…",

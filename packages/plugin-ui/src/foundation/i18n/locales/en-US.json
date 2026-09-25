@@ -15,6 +15,7 @@
     "close-left-dirty": "{count} file(s) have unsaved changes. Close tabs to the left anyway?",
     "close-all-dirty": "{count} file(s) have unsaved changes. Close all anyway?",
     "reload-dirty": "{count} file(s) have unsaved changes. Reload and discard them?",
+    "quit-dirty": "{count} file(s) have unsaved changes. Quit and discard them?",
     "select-theme": "Select color theme…",
     "search-shortcuts": "Search keyboard shortcuts…",
     "select-language": "Select language mode…",

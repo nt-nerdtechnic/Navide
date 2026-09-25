@@ -44,6 +44,7 @@ export default defineConfig({
       'packages/plugin-ui/src/**/*.{test,spec}.ts',
       'plugins/navide-git/src/**/*.{test,spec}.ts',
       'plugins/navide-git/tests/**/*.{test,spec}.ts',
+      'plugins/navide-mini-ide/src/**/*.{test,spec}.ts',
       'plugins/navide-plans/src/**/*.{test,spec}.ts',
       'plugins/navide-plans/tests/**/*.{test,spec}.ts'
     ],

@@ -15,6 +15,7 @@
     "close-left-dirty": "{count} 個檔案有未儲存的變更。仍要關閉左側分頁嗎？",
     "close-all-dirty": "{count} 個檔案有未儲存的變更。仍要全部關閉嗎？",
     "reload-dirty": "{count} 個檔案有未儲存的變更。要重新載入並捨棄嗎？",
+    "quit-dirty": "{count} 個檔案有未儲存的變更。要結束並捨棄嗎？",
     "select-theme": "選擇色彩主題…",
     "search-shortcuts": "搜尋鍵盤快捷鍵…",
     "select-language": "選擇語言模式…",

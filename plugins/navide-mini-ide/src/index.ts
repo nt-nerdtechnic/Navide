@@ -12,7 +12,10 @@ if (theme) {
   seedSettings({ 'agent-team:theme': JSON.stringify(theme) })
 }
 const locale = params.get('locale')
-if (locale === 'en-US' || locale === 'zh-TW') i18n.global.locale.value = locale
+if (locale && i18n.global.availableLocales.includes(locale)) {
+  i18n.global.locale.value = locale
+  seedSettings({ 'agent-team:language': locale })
+}
 
 const app = createApp(MiniIdeApp)
 app.use(i18n)
