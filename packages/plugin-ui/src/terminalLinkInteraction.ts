@@ -152,6 +152,10 @@ export interface TerminalFileLinkRequest {
   sessionId?: string
   /** Raw, untrusted path candidates. Host performs resolution and stat. */
   candidates: string[]
+  /** The candidate to open when none stat-verifies: the piece under the
+   *  click, shed of surrounding CJK prose. Not derivable from `candidates`,
+   *  which are de-duplicated and so have no fixed positions. */
+  fallback: string
 }
 
 export interface TerminalPlanLinkRequest {
@@ -267,7 +271,7 @@ export function installTerminalLinks(options: TerminalLinkInteractionOptions): I
       return
     }
     const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
-    options.openFilePicker({ query: basename, line: lineNum, sessionId: options.sessionId?.(), candidates: cands })
+    options.openFilePicker({ query: basename, line: lineNum, sessionId: options.sessionId?.(), candidates: cands, fallback: chosen })
   }
   return { handler, dispose: () => provider.dispose() }
 }

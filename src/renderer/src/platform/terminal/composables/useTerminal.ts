@@ -1842,11 +1842,12 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
               return
             }
           }
-          const chosenRaw = okIdx >= 0 ? request.candidates[okIdx] : (request.candidates[1] ?? request.candidates[0])
+          const chosenRaw = okIdx >= 0 ? request.candidates[okIdx] : request.fallback
           const { filepath, line: lineNum } = splitTerminalLinkSuffix(chosenRaw)
           if (!filepath) return
+          const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
           filePicker.open({
-            initialQuery: request.query,
+            initialQuery: basename,
             lineNum,
             preferredAbsPath: okIdx >= 0 ? absList[okIdx] : undefined,
             displayText: filepath,
