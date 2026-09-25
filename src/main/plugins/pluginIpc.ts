@@ -1287,7 +1287,7 @@ export function registerPluginIpc(
         }
       }
       if (restartTransaction) {
-        manager.completePackageRestart(restartTransaction)
+        manager.completePackageRestartWithoutFrontend(restartTransaction)
         restartTransaction = undefined
       }
       lifecycleSelector.completeRollback(id)

@@ -1819,6 +1819,46 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('completes a rollback to a backend-only package while a view of the current version is open', async () => {
+    const first = buildBackendPkg('1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-backend-only-rollback-open-view-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')!
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+
+      // Stand in for one open detached-window view of 1.0.1 captured by the drain.
+      const hostWindow = { isDestroyed: () => false, close: vi.fn() }
+      vi.spyOn(manager as unknown as { snapshotPackageRestart: () => unknown }, 'snapshotPackageRestart')
+        .mockReturnValueOnce([{
+          pluginId: 'acme.demo', packageVersion: '1.0.1', contributionKey: 'acme.demo.left',
+          hostWindow, bounds: 'fill', query: '', closeHostOnHide: true, mirrorTitle: false,
+          initiallyVisible: true, contributionRegistered: true, carrier: 'native',
+        }])
+
+      await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.0' })
+      expect(hostWindow.close).toHaveBeenCalled()
+      expect(new PluginActivationSelector(root).read('acme.demo')?.activation).toBeUndefined()
+      expect(manager.getDescriptor('acme.demo')).toBeUndefined()
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('releases the frontend barrier while retaining a promoted rollback journal after failure', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')

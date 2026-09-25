@@ -4659,6 +4659,68 @@ describe('immutable package restart frontend seam', () => {
       await mgr.closeBackendPlugins()
     }
   })
+
+  it('closes drained placements when the selected package has no frontend', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.to-backend-only'
+    const oldVersion = '1.0.1'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey: `${pluginId}.main`, kind: 'custom', location: 'window', title: 'Window',
+      entryFile: '/plugins/acme.to-backend-only/index.html',
+    }
+    const oldDescriptor: PluginLaunchDescriptor = {
+      id: pluginId, packageVersion: oldVersion, packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: view.entryFile, views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    }
+    const host = new FakeBrowserWindow()
+    const close = vi.fn()
+    Object.assign(host, { close })
+    mgr.registerDescriptor(oldDescriptor)
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      await mgr.openView(oldDescriptor, view, {
+        hostWindow: asHost(host), bounds: 'fill', workspacePath: '/workspace', closeHostOnHide: true,
+        capabilityContext: {
+          publisherEligible: false, userGrant: { packageVersion: oldVersion, system: [], storage: true },
+          runtimeBinding: { pluginId, packageVersion: oldVersion, workspaceId: 'workspace-1', instanceId: null, audience: view.contributionKey },
+        },
+      })
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      mgr.registerInstalledPackage({ id: pluginId, requires: [], packageVersion: '1.0.0' }, undefined, {}, process.cwd())
+      expect(() => mgr.completePackageRestart(transaction)).toThrow(/required placements/)
+
+      mgr.completePackageRestartWithoutFrontend(transaction)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect((mgr as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has(pluginId)).toBe(false)
+      expect(() => mgr.completePackageRestart(transaction)).toThrow(/not active/)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('refuses to drop placements while the selected package still has a frontend', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.still-frontend'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey: `${pluginId}.main`, kind: 'custom', location: 'main', title: 'Main',
+      entryFile: '/plugins/acme.still-frontend/index.html',
+    }
+    mgr.registerDescriptor({
+      id: pluginId, packageVersion: '1.0.0', packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: view.entryFile, views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      const transaction = await mgr.beginPackageRestart(pluginId, '1.0.0')
+      expect(() => mgr.completePackageRestartWithoutFrontend(transaction)).toThrow(/still has a frontend/)
+      mgr.cancelPackageRestart(transaction)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
 })
 
 describe('registerDescriptor reserved-id guard', () => {

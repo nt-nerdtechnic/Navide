@@ -11423,6 +11423,21 @@ export class FrontendPluginManager {
     this.finishPackageRestart(transaction, pending)
   }
 
+  /** Complete a restart whose selected package contributes no frontend. Its
+   * drained placements have nothing to restore into, so a Host window that
+   * existed only to carry one closes, as hiding that view would. */
+  completePackageRestartWithoutFrontend(transaction: PluginPackageRestartTransaction): void {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (!pending || pending.restored) throw new Error('package restart transaction is not active')
+    if (this.descriptors.has(pending.pluginId)) {
+      throw new Error('package restart selected package still has a frontend')
+    }
+    for (const snapshot of pending.snapshots) {
+      if (snapshot.closeHostOnHide && !snapshot.hostWindow.isDestroyed()) snapshot.hostWindow.close()
+    }
+    this.finishPackageRestart(transaction, pending)
+  }
+
   /** Release a failed Host-side selector/re-registration transaction. This
    * does not attempt rollback or claim to undo completed external effects. */
   cancelPackageRestart(transaction: PluginPackageRestartTransaction): void {
