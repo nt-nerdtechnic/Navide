@@ -810,14 +810,23 @@ async def test_a_partial_over_its_budget_is_cancelled_and_streaming_goes_on(
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
     await _speak(session, sid, range(40))
-    await _settle(session)
-    requests = [r for r in _requests(stream) if r["segments"]]
-    stalled = requests[2]
+
+    def logged() -> list[dict]:
+        return [r for r in _requests(stream) if r["segments"]]
+
+    # The sidecar logs a request from its own process once it has ended, and
+    # the stalled one may end after the speech does: wait for the stalled
+    # partial and the one after it rather than for whatever is in flight.
+    deadline = time.monotonic() + 15
+    while len(logged()) < 4 or len(_partials(session)) < 3:
+        assert time.monotonic() < deadline, logged()
+        await asyncio.sleep(0.01)
+    stalled, after = logged()[2:4]
     budget = voice_handlers._PARTIAL_BUDGET_MIN_S
     assert stalled["cancelled"] and stalled["end"] - stalled["start"] < budget + 1, stalled
-    later = requests[3:]
-    assert later and not any(r["cancelled"] for r in later)
-    assert len(_partials(session)) >= 3
+    # Streaming resumed at once (timed by the sidecar's own clock).
+    assert not after["cancelled"] and after["start"] - stalled["end"] < 0.5, (stalled, after)
+    await _settle(session)
     stop = await _send(session, "voice.stop", {"sessionId": sid})
     assert stop["text"] == _text(40)
 
