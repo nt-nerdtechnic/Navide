@@ -930,13 +930,20 @@ export function registerPluginIpc(
       artifactDigest: currentTrust.artifactDigest,
     }
     const previousDescriptor = manager.getDescriptor(id)
+    const installedSummary = manager.listInstalledPackages().find((item) => item.id === id)
+    const isFactory = installedSummary?.provenance === 'factory-bundled'
+    const legacyDir = join(pluginsRoot, id)
+    // A v0.2.9 backend-only install has neither a descriptor nor a selector
+    // record; its installed summary still names the version living at the
+    // mutable legacy path.
+    const legacyBackendOnly = !previousDescriptor && !selectedBeforeRestart.active && !isFactory &&
+      installedSummary?.provenance === 'official-registry'
     // Backend-only packages deliberately have no frontend descriptor. The
     // durable active selector remains the authoritative runtime identity, so
     // it must still be drained before candidate promotion.
-    const previousVersion = previousDescriptor?.packageVersion ?? selectedBeforeRestart.active?.packageVersion
+    const previousVersion = previousDescriptor?.packageVersion ?? selectedBeforeRestart.active?.packageVersion ??
+      (legacyBackendOnly ? installedSummary?.packageVersion : undefined)
     const previousGrant = previousVersion ? capabilityGrants.get(id, previousVersion) : null
-    const isFactory = manager.listInstalledPackages().some((item) =>
-      item.id === id && item.provenance === 'factory-bundled')
     if (previousVersion && !previousGrant && !isFactory) {
       throw new Error(`active package grant is unavailable for ${id}`)
     }
@@ -983,8 +990,7 @@ export function registerPluginIpc(
     let promoted = false
     try {
       if (!selectedBeforeRestart.active && previousVersion && previousGrant &&
-          previousDescriptor?.packageDir === join(pluginsRoot, id)) {
-        const legacyDir = join(pluginsRoot, id)
+          (previousDescriptor?.packageDir === legacyDir || legacyBackendOnly)) {
         const legacyScanned = loadPluginDir(legacyDir)
         if (!legacyScanned.activation || legacyScanned.activation.packageVersion !== previousVersion) {
           throw new Error('legacy active package is unavailable for migration')

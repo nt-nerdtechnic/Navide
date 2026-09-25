@@ -1469,6 +1469,97 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  /** Lay out a v0.2.9-shaped install: mutable `<root>/<id>`, no selector record. */
+  function writeV029Install(root: string, pkg: { bytes: Uint8Array; digest: string }): void {
+    const detail = signedDetail(pkg.digest)
+    const legacyDir = join(root, 'acme.demo')
+    for (const entry of readZipEntries(pkg.bytes)) {
+      if (entry.kind !== 'file') continue
+      const output = join(legacyDir, entry.path)
+      mkdirSync(join(output, '..'), { recursive: true })
+      writeFileSync(output, entry.data, entry.executable ? { mode: 0o755 } : undefined)
+    }
+    writeFileSync(join(legacyDir, REGISTRY_ARTIFACT_NAME), pkg.bytes)
+    writeFileSync(join(legacyDir, REGISTRY_RECEIPT_NAME), JSON.stringify(registryReceiptFromEvidence({
+      packageId: 'acme.demo', version: '1.0.0', publisherId: 'acme', target: 'universal',
+      artifactDigest: pkg.digest,
+      envelope: detail.versions[0]!.registry_envelope,
+      envelopeSignature: detail.versions[0]!.registry_signature!,
+      registryAuthority: 'self-hosted',
+    })))
+    writeFileSync(join(root, REGISTRY_TRUST_SNAPSHOT_NAME), JSON.stringify({
+      schemaVersion: 1,
+      metadata: detail.trust_metadata,
+      metadataSignature: detail.trust_metadata_signature,
+    }))
+    new PluginCapabilityGrantStore(root).set('acme.demo', {
+      packageVersion: '1.0.0', system: [], storage: true,
+    })
+  }
+
+  /** The Host's cold-start/activation-change backend registration (index.ts). */
+  function registerActivationBackend(manager: FrontendPluginManager, activation?: PluginActivationCatalogEntry): void {
+    if (!activation?.backend || manager.hasBackendActivation(activation.pluginId, activation.packageVersion)) return
+    manager.registerBackendActivation({
+      pluginId: activation.pluginId,
+      packageVersion: activation.packageVersion,
+      packageDir: activation.packageDir,
+      entryFile: activation.backend.entryFile,
+      protocolVersion: activation.backend.protocolVersion,
+      activation: activation.backend.activation,
+      approvedMethods: [],
+      approvedEvents: [],
+      approvedBridgePorts: [],
+    })
+  }
+
+  it('activates an update over a v0.2.9 mutable backend-only install and drains its old backend', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-plugin-legacy-backend-upgrade-')))
+    const manager = new FrontendPluginManager()
+    const first = buildBackendPkg('1.0.0')
+    try {
+      writeV029Install(root, first)
+      const loaded = manager.loadInstalledPlugins(root, {
+        provenance: 'official-registry',
+        trust: {
+          pinnedRootKey: registryRoot.pubPem,
+          snapshot: readRegistryTrustSnapshot(root),
+          registryAuthority: 'self-hosted',
+          now: FIXED_NOW,
+        },
+      })
+      expect(loaded.errors).toEqual([])
+      expect(loaded.activationCatalog.map((entry) => entry.pluginId)).toContain('acme.demo')
+      for (const activation of loaded.activationCatalog) registerActivationBackend(manager, activation)
+      expect(manager.getDescriptor('acme.demo')).toBeUndefined()
+      expect(manager.hasBackendActivation('acme.demo', '1.0.0')).toBe(true)
+
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: ({ activation }) => registerActivationBackend(manager, activation),
+      })
+      const second = buildBackendPkg('1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' })).resolves.toMatchObject({
+        packageVersion: '1.0.1',
+      })
+      expect(manager.hasBackendActivation('acme.demo', '1.0.0')).toBe(false)
+      expect(manager.hasBackendActivation('acme.demo', '1.0.1')).toBe(true)
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.1' },
+        previous: { packageVersion: '1.0.0', artifactDigest: first.digest, layout: 'legacy-mutable' },
+        previousGrant: { packageVersion: '1.0.0' },
+      })
+      expect(new PluginActivationSelector(root).read('acme.demo')?.candidate).toBeUndefined()
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
