@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { validatePluginDetailTarget } from './pluginDetailTargetSchema'
 
@@ -205,7 +205,7 @@ describe('validatePluginDetailTarget', () => {
 
     let replaced = false
     fsRace.onOpen = (path) => {
-      if (!replaced && String(path).endsWith('/schemas/target.json')) {
+      if (!replaced && String(path).endsWith(`${sep}${join('schemas', 'target.json')}`)) {
         replaced = true
         renameSync(schemaPath, join(schemasDir, 'initial.json'))
         renameSync(replacementPath, schemaPath)
@@ -234,7 +234,7 @@ describe('validatePluginDetailTarget', () => {
 
     let replaced = false
     fsRace.onOpen = (path) => {
-      if (!replaced && String(path).endsWith('/schemas/target.json')) {
+      if (!replaced && String(path).endsWith(`${sep}${join('schemas', 'target.json')}`)) {
         replaced = true
         renameSync(schemasDir, join(packageDir, 'schemas-initial'))
         renameSync(replacementDir, schemasDir)
