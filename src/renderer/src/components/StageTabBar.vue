@@ -395,6 +395,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   justify-content: center;
   width: var(--icon-btn-sm);
   height: var(--icon-btn-sm);
+  padding: 0;
   margin-left: 4px;
   border: 1px solid var(--border-muted);
   border-radius: var(--radius-sm);
