@@ -717,12 +717,29 @@ describe('commitInstall', () => {
   beforeEach(() => setPlatformId('linux'))
   afterEach(() => setPlatformId(BASELINE))
 
+  // Whether a directory can be flushed is a fact about the kernel these tests
+  // run on, not about the pinned package platform: a Windows runner refuses a
+  // directory fsync, so real-filesystem writes flush under the host's own id.
+  function onHostKernel<T>(write: () => T): T {
+    const pinned = platformId()
+    setPlatformId(BASELINE)
+    try {
+      return write()
+    } finally {
+      setPlatformId(pinned)
+    }
+  }
+  const hostInstallerDeps: InstallerDeps = {
+    ...defaultInstallerDeps,
+    syncDirectory: (path) => onHostKernel(() => defaultInstallerDeps.syncDirectory!(path)),
+  }
+
   it('stages a Registry package into its immutable target directory without replacing the active install', async () => {
     const { bytes, digest } = v2Pkg()
     const root = mkdtempSync(join(tmpdir(), 'navide-plugin-candidate-'))
     try {
       const deps: InstallerDeps = {
-        ...defaultInstallerDeps,
+        ...hostInstallerDeps,
         async download() {
           return { bytes, digestHeader: digest }
         },
@@ -744,7 +761,7 @@ describe('commitInstall', () => {
     const root = mkdtempSync(join(tmpdir(), 'navide-plugin-candidate-existing-'))
     try {
       const deps: InstallerDeps = {
-        ...defaultInstallerDeps,
+        ...hostInstallerDeps,
         async download() {
           return { bytes, digestHeader: digest }
         },
@@ -774,11 +791,13 @@ describe('commitInstall', () => {
       mkdirSync(activeDir, { recursive: true })
       writeFileSync(join(activeDir, 'retained.txt'), 'keep')
       const selector = new PluginActivationSelector(root)
-      selector.stageCandidate('acme.demo', active)
-      selector.activateCandidate('acme.demo')
-      selector.completeActivation('acme.demo')
+      onHostKernel(() => {
+        selector.stageCandidate('acme.demo', active)
+        selector.activateCandidate('acme.demo')
+        selector.completeActivation('acme.demo')
+      })
       const deps: InstallerDeps = {
-        ...defaultInstallerDeps,
+        ...hostInstallerDeps,
         async download() {
           return { bytes, digestHeader: digest }
         },
