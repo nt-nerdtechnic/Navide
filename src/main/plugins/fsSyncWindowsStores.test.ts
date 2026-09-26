@@ -27,7 +27,9 @@ vi.mock('node:fs', async (importOriginal) => {
       throw Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM', errno: -4048 })
     }
     fsyncLog.synced.push(handle)
-    actual.fsyncSync(fd)
+    // Record directory flushes without asking the kernel: the POSIX case
+    // below must also pass on a Windows runner, whose kernel refuses them.
+    if (!handle.directory) actual.fsyncSync(fd)
   }) as typeof actual.fsyncSync
   const patched = { ...actual, openSync, fsyncSync }
   return { ...patched, default: patched }
