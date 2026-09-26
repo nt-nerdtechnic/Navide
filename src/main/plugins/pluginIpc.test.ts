@@ -47,6 +47,17 @@ vi.mock('electron', () => ({
   },
 }))
 
+// The install/commit/restart flows here fsync ~20 times per test. None of these
+// tests can observe durability, and a real flush is the one filesystem call
+// whose latency spikes on a contended CI disk: on the shared Windows runner a
+// burst of slow flushes pushed a 150ms test past the 5s timeout. Only the flush
+// is stubbed; the O_RDWR open/close around it still run, so the Windows
+// handle-mode behaviour in fsSync stays covered.
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
+  fsyncSync: () => {},
+}))
+
 import { app as electronApp } from 'electron'
 import {
   OFFICIAL_MARKETPLACE_URL,
