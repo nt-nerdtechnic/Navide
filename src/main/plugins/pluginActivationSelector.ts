@@ -1,10 +1,7 @@
 import {
   chmodSync,
-  closeSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -14,6 +11,7 @@ import {
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { fsyncFileSync, syncDirectorySync } from './fsSync'
 import { isPluginTargetCompatible } from './pluginTarget'
 import { isValidManifestV2PluginId } from './pluginManifestV2'
 import { parseHostTrustJsonObject } from './pluginTrustJson'
@@ -219,12 +217,10 @@ function writeAtomic(path: string, record: PluginActivationSelectorRecord): void
   try {
     writeFileSync(temporary, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
     chmodSync(temporary, 0o600)
-    const file = openSync(temporary, 'r')
-    try { fsyncSync(file) } finally { closeSync(file) }
+    fsyncFileSync(temporary)
     renameSync(temporary, path)
     chmodSync(path, 0o600)
-    const parent = openSync(dirname(path), 'r')
-    try { fsyncSync(parent) } finally { closeSync(parent) }
+    syncDirectorySync(dirname(path))
   } finally {
     rmSync(temporary, { force: true })
   }

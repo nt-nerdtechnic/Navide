@@ -10,6 +10,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { syncDirectorySync } from './fsSync'
 import type { HostStorageSnapshotIdentity } from './pluginStorage'
 
 export const MINI_IDE_PLUGIN_ID = 'navide.mini-ide'
@@ -182,12 +183,7 @@ export class MiniIdeStorageLifecycleSelector {
       descriptor = null
       this.fileOps.renameSync(temporaryPath, this.recordPath)
       temporaryPath = ''
-      const parentDescriptor = this.fileOps.openSync(parentPath, constants.O_RDONLY)
-      try {
-        this.fileOps.fsyncSync(parentDescriptor)
-      } finally {
-        this.fileOps.closeSync(parentDescriptor)
-      }
+      syncDirectorySync(parentPath, { ops: this.fileOps })
       return true
     } catch (error) {
       if (descriptor !== null) {

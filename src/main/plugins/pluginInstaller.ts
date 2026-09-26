@@ -13,11 +13,8 @@
 
 import {
   chmodSync,
-  closeSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -25,6 +22,7 @@ import {
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
+import { fsyncFileSync, syncDirectorySync } from './fsSync'
 import { isWindows } from '../../shared/osplat'
 import { canonicalArchivePath, portableArchiveCollisionKey } from './pluginPathPolicy'
 import {
@@ -201,8 +199,7 @@ export const defaultInstallerDeps: InstallerDeps = {
   },
   writeFile(path, data) {
     writeFileSync(path, data)
-    const file = openSync(path, 'r')
-    try { fsyncSync(file) } finally { closeSync(file) }
+    fsyncFileSync(path)
   },
   readFile(path) {
     try {
@@ -225,8 +222,7 @@ export const defaultInstallerDeps: InstallerDeps = {
     return existsSync(path)
   },
   syncDirectory(path) {
-    const directory = openSync(path, 'r')
-    try { fsyncSync(directory) } finally { closeSync(directory) }
+    syncDirectorySync(path)
   },
 }
 
