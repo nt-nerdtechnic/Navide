@@ -39,20 +39,26 @@ function packageManager(): { command: string; prefix: string[] } {
 
 function pnpm(args: string[], cwd: string): string {
   const invocation = packageManager()
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CI: '1',
+    PNPM_CONFIG_PM_ON_FAIL: 'ignore',
+    // A newer pnpm re-verifies the workspace before `run` and can replace
+    // node_modules on a config mismatch.
+    npm_config_verify_deps_before_run: 'false',
+    PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
+  }
+  // Vitest sets NODE_ENV=test in this process. Inherited, it makes Vite and
+  // @vitejs/plugin-vue emit a development build of plugin-ui that differs from
+  // what `pnpm run build:public-packages` produces — and the Plans build ID
+  // hashes these dists, so an artifact built before the run no longer matched.
+  delete env.NODE_ENV
   return execFileSync(invocation.command, [...invocation.prefix, ...args], {
     cwd,
     encoding: 'utf8',
     stdio: 'pipe',
     maxBuffer: 16 * 1024 * 1024,
-    env: {
-      ...process.env,
-      CI: '1',
-      PNPM_CONFIG_PM_ON_FAIL: 'ignore',
-      // A newer pnpm re-verifies the workspace before `run` and can replace
-      // node_modules on a config mismatch.
-      npm_config_verify_deps_before_run: 'false',
-      PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
-    },
+    env,
   })
 }
 
