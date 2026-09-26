@@ -6,6 +6,7 @@ import {
   immutablePluginPackageDir,
   PluginActivationSelector,
 } from './pluginActivationSelector'
+import { currentPluginHostTarget } from './pluginTarget'
 
 const roots: string[] = []
 
@@ -196,7 +197,7 @@ describe('PluginActivationSelector', () => {
     reloaded.clear('acme.demo')
     const changed = {
       packageVersion: second.packageVersion,
-      target: 'darwin-arm64',
+      target: currentPluginHostTarget(),
       artifactDigest: 'c'.repeat(64),
     } as const
     expect(() => reloaded.stageCandidate('acme.demo', changed, {
@@ -211,7 +212,7 @@ describe('PluginActivationSelector', () => {
     expect(reloaded.read('acme.demo')).toMatchObject({
       candidate: {
         packageVersion: second.packageVersion,
-        target: 'darwin-arm64',
+        target: currentPluginHostTarget(),
         artifactDigest: 'c'.repeat(64),
       },
     })
