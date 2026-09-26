@@ -349,7 +349,7 @@ describe('FilePickerHostService', () => {
       const rows = await electron.invoke('file-picker:search', readyEvent(view.webContents), id, 'inside') as Array<Record<string, unknown>>
       expect(rows).toHaveLength(1)
       expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['id', 'label', 'path'])
-      expect(rows[0]?.path).toBe(realpathSync(selected))
+      expect(rows[0]?.path).toBe(realpathSync.native(selected))
       pickerService.cancelInstance(invocation.instanceId)
       await expect(pending).resolves.toEqual({ opened: false })
     } finally {
@@ -377,14 +377,14 @@ describe('FilePickerHostService', () => {
       const id = invocationId(view)
       const rows = await electron.invoke('file-picker:search', readyEvent(view.webContents), id, 'target') as Array<{ id: string; path: string }>
       expect(rows).toHaveLength(1)
-      expect(rows[0]?.path).toBe(realpathSync(target))
+      expect(rows[0]?.path).toBe(realpathSync.native(target))
 
       electron.emit('file-picker:select', readyEvent(view.webContents), id, rows[0]?.id)
       await expect(pending).resolves.toEqual({ opened: true })
       expect(openSelected).toHaveBeenCalledOnce()
       expect(openSelected).toHaveBeenCalledWith({
         workspacePath: workspace,
-        canonicalPath: realpathSync(target),
+        canonicalPath: realpathSync.native(target),
         line: 12,
         canDispatch: expect.any(Function),
       })
@@ -409,7 +409,7 @@ describe('FilePickerHostService', () => {
       await expect(pending).resolves.toEqual({ opened: true })
       expect(openPreview).toHaveBeenCalledWith({
         workspacePath: workspace,
-        canonicalPath: realpathSync(previewPath),
+        canonicalPath: realpathSync.native(previewPath),
         canDispatch: expect.any(Function),
       })
       expect(openSelected).not.toHaveBeenCalled()
@@ -438,7 +438,7 @@ describe('FilePickerHostService', () => {
       expect(openPreview).toHaveBeenCalledOnce()
       expect(openPreview).toHaveBeenCalledWith({
         workspacePath: workspace,
-        canonicalPath: realpathSync(first),
+        canonicalPath: realpathSync.native(first),
         canDispatch: expect.any(Function),
       })
       expect(openSelected).not.toHaveBeenCalled()
@@ -583,7 +583,7 @@ describe('FilePickerHostService', () => {
       const rows = await electron.invoke('file-picker:search', readyEvent(view.webContents), id, 'outside') as Array<Record<string, unknown>>
       expect(rows).toHaveLength(1)
       expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['id', 'label', 'path'])
-      expect(rows[0]?.path).toBe(realpathSync(externalTarget))
+      expect(rows[0]?.path).toBe(realpathSync.native(externalTarget))
       expect(rows[0]).not.toHaveProperty('stat')
       expect(rows[0]).not.toHaveProperty('grant')
 
@@ -591,7 +591,7 @@ describe('FilePickerHostService', () => {
       await expect(pending).resolves.toEqual({ opened: true })
       expect(openSelected).toHaveBeenCalledWith({
         workspacePath: workspace,
-        canonicalPath: realpathSync(externalTarget),
+        canonicalPath: realpathSync.native(externalTarget),
         canDispatch: expect.any(Function),
       })
       expect(openSelected.mock.calls[0]?.[0]).not.toHaveProperty('stat')
