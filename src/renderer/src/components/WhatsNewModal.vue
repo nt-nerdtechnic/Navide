@@ -50,7 +50,7 @@ const features = computed(() =>
 const details = computed(() => pickText(WHATS_NEW_CHROME.details, locale.value))
 // An entry with a tour asks a question instead of saying "Got it": take the
 // tour, or not now (with where to find it again).
-const hasTour = computed(() => !!props.entry.tour)
+const hasTour = computed(() => (props.entry.tour?.length ?? 0) > 0)
 const takeTour = computed(() =>
   pickText(props.tourDone ? WHATS_NEW_CHROME.retakeTour : WHATS_NEW_CHROME.takeTour, locale.value),
 )

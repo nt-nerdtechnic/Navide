@@ -10,6 +10,18 @@ fail() {
   exit 1
 }
 
+# A version with no What's New entry ships without an in-app announcement or
+# guided tour (docs/en-US/release-announcements.md). A warning, not a failure:
+# a quiet patch may not need one, but skipping it should be a decision.
+warn_missing_announcement() {
+  local version="$1"
+  local file="${2:-src/renderer/src/lib/whatsNew.ts}"
+  if ! grep -Eq "^[[:space:]]*version: '${version//./\\.}',[[:space:]]*$" "$file"; then
+    echo "WARNING: no What's New entry for ${version} in ${file}; users updating will see no announcement or tour."
+    echo "         See docs/en-US/release-announcements.md."
+  fi
+}
+
 [[ $# -eq 1 ]] || fail "usage: ./release.sh <X.Y.Z | patch | minor | major>"
 
 REQUEST="${1#v}"
@@ -67,6 +79,7 @@ if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; the
 fi
 
 pnpm release:check
+warn_missing_announcement "$VERSION"
 
 CURRENT="$(node -p "require('./package.json').version")"
 echo ""

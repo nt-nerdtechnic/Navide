@@ -298,3 +298,5 @@ By participating you agree to abide by its terms.
 ## Documentation
 
 User-facing behavior changes must update the relevant canonical document under [`docs/en-US/`](docs/en-US/README.md), synchronize an existing localized counterpart in the same change, and add an entry under `CHANGELOG.md`'s Unreleased section. Avoid describing configurable registries with fixed counts, document any new external data flow in `docs/en-US/privacy.md`, and keep future vision distinct from shipped capability claims.
+
+A release announces itself in the app: add the version's What's New entry — its highlights and, optionally, a guided tour — as described in [Release announcements](docs/en-US/release-announcements.md). `./release.sh` prints a warning when the version being released has no entry.

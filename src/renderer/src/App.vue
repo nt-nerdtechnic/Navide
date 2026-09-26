@@ -258,7 +258,8 @@ const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/whatsNew'
-import { TOURS, tourDoneKey, type TourPrepare, type TourStep } from './lib/tours'
+import type { TourPrepare } from './lib/tours'
+import { useReleaseTour } from './composables/useReleaseTour'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -611,25 +612,31 @@ function closeWhatsNew(): void {
   }
   dismissWhatsNew()
 }
-// ── Guided tour ─────────────────────────────────────────────────────────────
-// Offered by a What's New entry that names one (lib/tours.ts). Null = no tour.
-const activeTourId = ref<string | null>(null)
-const activeTourSteps = computed<TourStep[] | null>(() =>
-  activeTourId.value ? (TOURS[activeTourId.value] ?? null) : null,
-)
+// ── Release tour ────────────────────────────────────────────────────────────
+// A version's announcement may carry a guided tour (WhatsNewEntry.tour). The
+// popup, Help → What's New… and the announcement centre all start it through
+// useReleaseTour, so it behaves — and records "done" — the same from each.
+const releaseTour = useReleaseTour()
+const activeTourVersion = releaseTour.activeVersion
+const activeTourSteps = releaseTour.steps
 const whatsNewTourDone = computed(() => {
-  const id = whatsNewEntry.value?.tour
-  return !!id && settingsGet<boolean>(tourDoneKey(id), false) === true
+  const entry = whatsNewEntry.value
+  return !!entry?.tour?.length && releaseTour.isDone(entry.version)
 })
 function startWhatsNewTour(): void {
-  const id = whatsNewEntry.value?.tour
+  const version = whatsNewEntry.value?.version
   closeWhatsNew()
-  if (id && TOURS[id]) activeTourId.value = id
+  if (version) releaseTour.start(version)
+}
+// From the announcement centre's release row: reading the release there counts
+// as reading it, the same as closing its popup.
+function startAnnouncementTour(version: string): void {
+  closePopover()
+  announcements.markRead(releaseAnnouncementId(version))
+  releaseTour.start(version)
 }
 function endTour(completed: boolean): void {
-  const id = activeTourId.value
-  activeTourId.value = null
-  if (completed && id) settingsSet(tourDoneKey(id), true)
+  releaseTour.end(completed)
 }
 // A step points into Settings or at the window behind it; the tour only opens
 // and closes Settings, it never changes a setting.
@@ -8816,7 +8823,7 @@ registerCommand('workbench.action.openPipelineManager', () => { openPipelineMana
 registerCommand('workbench.action.openDebug', () => { openDebugModal() })
 registerCommand('workbench.action.closeModal', () => {
   // A tour sits above everything, Settings included: Esc leaves the tour only.
-  if (activeTourId.value) endTour(false)
+  if (activeTourVersion.value) endTour(false)
   else if (previewLogOpen.value) previewLogOpen.value = false
   else if (cliInstallRequest.value) closeCliInstall()
   else if (reconnectPickerOpen.value) reconnectPickerOpen.value = false
@@ -9554,7 +9561,7 @@ function mainModalOpen(): boolean {
   return showSettings.value || showCompletionModal.value || showRestoreScopeModal.value ||
     showPipelineManager.value || showDebug.value || showHistory.value || previewLogOpen.value ||
     reconnectPickerOpen.value || !!cliInstallRequest.value || !!whatsNewEntry.value ||
-    showAccount.value || !!activeTourId.value
+    showAccount.value || !!activeTourVersion.value
 }
 watch([showSettings, showAccount, showCompletionModal, showRestoreScopeModal, showPipelineManager, showDebug, showHistory], () => setContext('modalOpen', mainModalOpen()))
 
@@ -13566,7 +13573,7 @@ function onCliInstalled(): void {
 // close them; pane shortcuts stay off behind them). Declared down here because
 // the watch's SOURCES must already exist — the callback itself shares
 // mainModalOpen with the sibling watches above.
-watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourId], () => setContext('modalOpen', mainModalOpen()))
+watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourVersion], () => setContext('modalOpen', mainModalOpen()))
 
 async function promptCliInstall(agentKey: string, agentLabel: string, paneId?: string): Promise<void> {
   if (cliInstallRequest.value) return
@@ -20651,6 +20658,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @download="startUpdateDownload()"
       @install="onUpdateBadgeClick()"
       @quota-action="(action) => void quotaFailover.actOn(action)"
+      @tour="startAnnouncementTour"
     />
 
     <!-- Clock popover -->

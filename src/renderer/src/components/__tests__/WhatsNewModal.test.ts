@@ -143,7 +143,7 @@ describe('WhatsNewModal — feature cards and the tour question', () => {
       where: { 'zh-TW': '設定 → 乙', 'en-US': 'Settings → Beta' },
     },
   ]
-  const TOURED: WhatsNewEntry = { ...BASE, major: true, features: FEATURES, tour: 'v0.2.10' }
+  const TOURED: WhatsNewEntry = { ...BASE, major: true, features: FEATURES, tour: whatsNewFor('0.2.10')!.tour }
 
   function renderWith(props: { entry: WhatsNewEntry; tourDone?: boolean }): HTMLElement {
     mounted = mount(WhatsNewModal, { props, global: { plugins: [i18n] } })

@@ -43,6 +43,7 @@ The root [README](../../README.md) introduces the product and current distributi
 | [Plugin development v2](plugin-development-v2.md) | Use the public contracts, SDK, UI package, and external frontend package workflow |
 | [External MCP control](external-mcp-control.md) | Connect an external MCP client to control a running Navide window, and understand the security model |
 | [Release guide](releases.md) | Version, package, sign, notarize, publish, and recover a release |
+| [Release announcements](release-announcements.md) | Add a version's in-app What's New entry and its guided tour |
 
 ## Reference
 

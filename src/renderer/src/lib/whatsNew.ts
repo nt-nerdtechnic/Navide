@@ -8,9 +8,15 @@
 // top loses the release it belonged to (v0.1.78 was lost that way), which the
 // no-gaps test in whatsNew.test.ts now catches.
 //
+// An entry may also carry a guided tour (`tour`): steps that point at the UI
+// the release added, offered as "Take the tour" wherever the announcement
+// appears. How to write one: docs/en-US/release-announcements.md.
+//
 // Content lives here (not in the i18n JSON) so an announcement is one self
 // contained edit. Each field carries zh-TW and en-US, and may carry ja-JP;
 // pickText falls back to the default locale (zh-TW) for anything missing.
+
+import type { TourStep } from './tours'
 
 export type WhatsNewText = {
   'zh-TW': string
@@ -59,10 +65,12 @@ export interface WhatsNewEntry {
    */
   features?: WhatsNewFeature[]
   /**
-   * Id of a guided tour in lib/tours.ts. When set, the modal asks whether to
-   * take it instead of only offering "Got it".
+   * A guided tour of this release (engine: lib/tours.ts, GuidedTour.vue).
+   * When present, the post-update popup, Help → What's New… and the
+   * announcement centre all offer "Take the tour". Step text is i18n keys under
+   * tourI18nNamespace(version), e.g. `tour.v0_2_10.*`.
    */
-  tour?: string
+  tour?: TourStep[]
 }
 
 /** One headline-feature card in the What's New modal. */
@@ -105,7 +113,51 @@ export const WHATS_NEW: WhatsNewEntry[] = [
   {
     version: '0.2.10',
     major: true,
-    tour: 'v0.2.10',
+    tour: [
+      {
+        id: 'welcome',
+        prepare: { kind: 'close-settings' },
+        titleKey: 'tour.v0_2_10.welcome.title',
+        bodyKey: 'tour.v0_2_10.welcome.body',
+      },
+      {
+        id: 'channels-settings',
+        prepare: { kind: 'settings', tab: 'channels' },
+        anchor: '[data-settings-section="channels"]',
+        titleKey: 'tour.v0_2_10.channelsSettings.title',
+        bodyKey: 'tour.v0_2_10.channelsSettings.body',
+        missingKey: 'tour.v0_2_10.channelsSettings.missing',
+      },
+      {
+        id: 'channels-pane',
+        prepare: { kind: 'close-settings' },
+        anchor: '[data-testid="channel-connect"], [data-testid="channel-chip"]',
+        titleKey: 'tour.v0_2_10.channelsPane.title',
+        bodyKey: 'tour.v0_2_10.channelsPane.body',
+        missingKey: 'tour.v0_2_10.channelsPane.missing',
+      },
+      {
+        id: 'voice-settings',
+        prepare: { kind: 'settings', tab: 'voice' },
+        anchor: '[data-settings-section="voice"]',
+        titleKey: 'tour.v0_2_10.voiceSettings.title',
+        bodyKey: 'tour.v0_2_10.voiceSettings.body',
+        missingKey: 'tour.v0_2_10.voiceSettings.missing',
+      },
+      {
+        id: 'voice-dictate',
+        prepare: { kind: 'close-settings' },
+        anchor: '.xterm-host[data-pane-id]',
+        titleKey: 'tour.v0_2_10.voiceDictate.title',
+        bodyKey: 'tour.v0_2_10.voiceDictate.body',
+        missingKey: 'tour.v0_2_10.voiceDictate.missing',
+      },
+      {
+        id: 'done',
+        titleKey: 'tour.v0_2_10.done.title',
+        bodyKey: 'tour.v0_2_10.done.body',
+      },
+    ],
     title: {
       'zh-TW': '從聊天軟體指揮 CLI，還能直接用說的',
       'en-US': 'Drive Your CLIs from a Chat App — or Just Talk to Them',

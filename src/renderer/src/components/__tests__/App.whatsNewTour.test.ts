@@ -53,15 +53,27 @@ describe('the tour question and the tour', () => {
     expect(appSource).toContain('@tour="startWhatsNewTour"')
   })
 
-  it('closes the modal (recording it seen) before starting the tour it names', () => {
+  it('closes the modal (recording it seen) before starting that version’s tour', () => {
     const body = functionBody('startWhatsNewTour')
-    expect(body.indexOf('whatsNewEntry.value?.tour')).toBeLessThan(body.indexOf('closeWhatsNew()'))
-    expect(body).toContain('if (id && TOURS[id]) activeTourId.value = id')
+    expect(body.indexOf('whatsNewEntry.value?.version')).toBeLessThan(body.indexOf('closeWhatsNew()'))
+    expect(body.indexOf('closeWhatsNew()')).toBeLessThan(body.indexOf('releaseTour.start(version)'))
   })
 
-  it('persists tour-done only when the tour reached its end', () => {
-    const body = functionBody('endTour')
-    expect(body).toContain('if (completed && id) settingsSet(tourDoneKey(id), true)')
+  it('starts the same tour from the announcement centre, marking the release read', () => {
+    const body = functionBody('startAnnouncementTour')
+    expect(body).toContain('closePopover()')
+    expect(body).toContain('announcements.markRead(releaseAnnouncementId(version))')
+    expect(body).toContain('releaseTour.start(version)')
+    expect(appSource).toMatch(/<AnnouncementsPanel[\s\S]*?@tour="startAnnouncementTour"[\s\S]*?\/>/)
+  })
+
+  it('has one tour state and one done record, shared by every entry point', () => {
+    expect(appSource).toContain('const releaseTour = useReleaseTour()')
+    expect(functionBody('endTour')).toContain('releaseTour.end(completed)')
+    expect(appSource).toContain('releaseTour.isDone(entry.version)')
+    // No second, App-local tour registry or done key.
+    expect(appSource).not.toContain('tourDoneKey(')
+    expect(appSource).not.toContain('TOURS[')
   })
 
   it('only opens or closes Settings to prepare a step', () => {
@@ -78,14 +90,14 @@ describe('the tour question and the tour', () => {
   })
 
   it('counts the tour as a modal, and lets Esc leave the tour before anything under it', () => {
-    expect(functionBody('mainModalOpen')).toContain('!!activeTourId.value')
+    expect(functionBody('mainModalOpen')).toContain('!!activeTourVersion.value')
     expect(appSource).toContain(
-      'watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourId], () => setContext(\'modalOpen\', mainModalOpen()))',
+      'watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourVersion], () => setContext(\'modalOpen\', mainModalOpen()))',
     )
     const start = appSource.indexOf("registerCommand('workbench.action.closeModal'")
     const close = appSource.slice(start, appSource.indexOf('\n})', start))
-    expect(close.indexOf('activeTourId.value')).toBeGreaterThan(-1)
-    expect(close.indexOf('activeTourId.value')).toBeLessThan(close.indexOf('showSettings.value'))
+    expect(close.indexOf('activeTourVersion.value')).toBeGreaterThan(-1)
+    expect(close.indexOf('activeTourVersion.value')).toBeLessThan(close.indexOf('showSettings.value'))
   })
 
   it('lets Settings be opened at the Voice Input tab', () => {

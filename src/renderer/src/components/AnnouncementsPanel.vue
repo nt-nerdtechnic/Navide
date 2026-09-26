@@ -7,6 +7,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { Announcement, AnnouncementActionSpec, QuotaAnnouncementAction } from '../composables/useAnnouncements'
+import { WHATS_NEW_CHROME, pickText } from '../lib/whatsNew'
 
 const props = defineProps<{ items: Announcement[] }>()
 const emit = defineEmits<{
@@ -18,6 +19,8 @@ const emit = defineEmits<{
   /** A quota row's button: the typed action, ids and epoch included, for the
    *  backend to re-validate. Nothing is executed here. */
   'quota-action': [action: QuotaAnnouncementAction]
+  /** A release row's "Take the tour": the version whose tour to start. */
+  tour: [version: string]
 }>()
 
 /** Buttons of a row: the typed list, else the single update action. */
@@ -29,6 +32,7 @@ function actionsOf(item: Announcement): AnnouncementActionSpec[] {
 function onAction(action: AnnouncementActionSpec): void {
   if (action.kind === 'download') emit('download')
   else if (action.kind === 'install') emit('install')
+  else if (action.kind === 'tour') emit('tour', action.version)
   else emit('quota-action', action as QuotaAnnouncementAction)
 }
 
@@ -45,6 +49,9 @@ function actionLabel(action: AnnouncementActionSpec): string {
       return i18n.global.t('updater.download')
     case 'install':
       return i18n.global.t('updater.install')
+    case 'tour':
+      // Same words as the popup's button: one announcement, one behaviour.
+      return pickText(WHATS_NEW_CHROME.takeTour, String(i18n.global.locale.value))
     case 'quota-switch':
       return tq('announce.quota.switch-to', 'Switch to {label}', { label: action.label })
     case 'quota-retry-resume':

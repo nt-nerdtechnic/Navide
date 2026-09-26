@@ -37,7 +37,10 @@ export type QuotaAnnouncementAction =
    *  account is really live (`liveSlotId` null = the backend already knows). */
   | { kind: 'quota-reconcile'; incidentId: string; agentKey: string; transactionId: string; liveSlotId: string | null; label: string }
 
-export type AnnouncementActionSpec = { kind: AnnouncementAction } | QuotaAnnouncementAction
+/** A release row's "Take the tour": that version's WhatsNewEntry.tour. */
+export type ReleaseTourAction = { kind: 'tour'; version: string }
+
+export type AnnouncementActionSpec = { kind: AnnouncementAction } | QuotaAnnouncementAction | ReleaseTourAction
 
 export interface Announcement {
   /** Stable across renders: `release:<version>`, `update:<version>`,
@@ -184,6 +187,7 @@ function releaseItems(locale: string, current: string): Announcement[] {
       highlights: entry.highlights.map((text) => pickText(text, locale)),
       note: entry.note ? pickText(entry.note, locale) : undefined,
       read: false,
+      actions: entry.tour?.length ? [{ kind: 'tour' as const, version: entry.version }] : undefined,
     }))
 }
 

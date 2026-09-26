@@ -4,6 +4,10 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Added
+
+- After updating, the What's New popup can carry a guided tour of the release: it asks **Take the tour / Not now**, and the tour dims the window and points at each new piece of UI in turn (→ / Enter, ←, Esc; a step whose target is not on screen says where to find it instead). 0.2.10 introduces Channels and Voice Input as two feature cards with a six-step tour. **Help → What's New…** reopens the current release's announcement, and a release row in the status-bar announcement centre offers the same tour. A tour is part of its version's announcement entry; see `docs/en-US/release-announcements.md`, and `release.sh` warns when the version being released has no entry.
+
 ### Fixed
 
 - Deliver Mini-IDE AI terminal output to its embedded view, and hide a stale Git or Plans sidebar when returning to Explorer.

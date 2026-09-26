@@ -461,3 +461,23 @@ describe('useAnnouncements', () => {
     })
   })
 })
+
+describe('useAnnouncements — release tours', () => {
+  beforeEach(() => {
+    store.clear()
+    ;(window as unknown as { agentTeam?: unknown }).agentTeam = { version: '0.2.10' }
+  })
+  afterEach(() => {
+    delete (window as unknown as { agentTeam?: unknown }).agentTeam
+  })
+
+  it('gives a release row with a tour its Take the tour button, and others none', async () => {
+    store.set(READ_IDS_KEY, [])
+    const { useAnnouncements } = await load()
+    const items = useAnnouncements().items.value
+    const r0210 = items.find((i) => i.id === 'release:0.2.10')
+    const r029 = items.find((i) => i.id === 'release:0.2.9')
+    expect(r0210?.actions).toEqual([{ kind: 'tour', version: '0.2.10' }])
+    expect(r029?.actions).toBeUndefined()
+  })
+})

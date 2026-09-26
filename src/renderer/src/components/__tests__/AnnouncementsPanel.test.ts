@@ -262,3 +262,34 @@ describe('AnnouncementsPanel', () => {
     expect(wrapper.html()).not.toContain('announce.')
   })
 })
+
+describe('AnnouncementsPanel — release tours', () => {
+  let wrapper: VueWrapper | null = null
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('offers Take the tour on a release row that has one, and emits its version', async () => {
+    i18n.global.locale.value = 'en-US'
+    const withTour: Announcement = { ...release('0.2.10'), actions: [{ kind: 'tour', version: '0.2.10' }] }
+    wrapper = mountPanel([withTour, release('0.2.9')])
+    const buttons = wrapper.findAll('[data-act="tour"]')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].text()).toBe('Take the tour')
+    await buttons[0].trigger('click')
+    expect(wrapper.emitted('tour')).toEqual([['0.2.10']])
+    // The button does not also expand (and so mark read) the row by itself.
+    expect(wrapper.emitted('read')).toBeUndefined()
+  })
+
+  it('labels the button in the active locale, as the popup does', () => {
+    i18n.global.locale.value = 'ja-JP'
+    try {
+      wrapper = mountPanel([{ ...release('0.2.10'), actions: [{ kind: 'tour', version: '0.2.10' }] }])
+      expect(wrapper.find('[data-act="tour"]').text()).toBe('ツアーを見る')
+    } finally {
+      i18n.global.locale.value = 'en-US'
+    }
+  })
+})

@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { i18n } from '@navide/plugin-ui/foundation'
 
 import GuidedTour from '../GuidedTour.vue'
-import { TOURS, type TourPrepare, type TourStep } from '../../lib/tours'
+import type { TourPrepare, TourStep } from '../../lib/tours'
+import { whatsNewFor } from '../../lib/whatsNew'
 
 const STEPS: TourStep[] = [
   { id: 'one', titleKey: 'tour.v0_2_10.welcome.title', bodyKey: 'tour.v0_2_10.welcome.body' },
@@ -244,7 +245,7 @@ describe('GuidedTour', () => {
   })
 
   it('walks the real 0.2.10 tour to the end with no anchors present', async () => {
-    const steps = TOURS['v0.2.10']
+    const steps = whatsNewFor('0.2.10')!.tour!
     const prepares: TourPrepare[] = []
     const w = start(steps, (p) => {
       prepares.push(p)

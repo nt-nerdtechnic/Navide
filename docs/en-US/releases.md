@@ -105,7 +105,10 @@ local development and must never be committed.
 
 ## Creating a release
 
-1. Finish and verify the intended changes. Update `CHANGELOG.md`.
+1. Finish and verify the intended changes. Update `CHANGELOG.md`, and add the
+   version's in-app announcement (with an optional guided tour) — see
+   [Release announcements](release-announcements.md). `release.sh` warns when
+   the version has none.
 2. Commit every intended source change and confirm the repository is clean.
 3. Run `./release.sh X.Y.Z` (or `pnpm release:prepare -- X.Y.Z`). The script
    validates that the requested version is newer, synchronizes all version

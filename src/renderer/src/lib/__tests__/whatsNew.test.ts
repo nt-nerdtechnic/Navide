@@ -8,7 +8,6 @@ import {
   cmpSemver,
   type WhatsNewText,
 } from '../whatsNew'
-import { TOURS } from '../tours'
 
 describe('cmpSemver', () => {
   it('orders X.Y.Z versions', () => {
@@ -101,7 +100,14 @@ describe('0.2.10 — Channels and Voice Input', () => {
     expect(entry).toBeDefined()
     expect(entry?.major).toBe(true)
     expect(entry?.features?.map((f) => f.name['en-US'])).toEqual(['Channels', 'Voice Input'])
-    expect(entry?.tour).toBe('v0.2.10')
+    expect(entry?.tour?.map((s) => s.id)).toEqual([
+      'welcome',
+      'channels-settings',
+      'channels-pane',
+      'voice-settings',
+      'voice-dictate',
+      'done',
+    ])
   })
 
   it('carries ja-JP for every line, so a Japanese UI is not shown Chinese', () => {
@@ -128,14 +134,6 @@ describe('0.2.10 — Channels and Voice Input', () => {
   it('is not shown to a build still running 0.2.9', () => {
     expect(pickWhatsNew('0.2.9', '0.2.8')?.version).toBe('0.2.9')
     expect(pickWhatsNew('0.2.9', '0.2.9')).toBeNull()
-  })
-})
-
-describe('every entry tour', () => {
-  it('names a tour that exists', () => {
-    for (const entry of WHATS_NEW) {
-      if (entry.tour) expect(TOURS[entry.tour], entry.version).toBeDefined()
-    }
   })
 })
 

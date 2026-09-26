@@ -15,7 +15,7 @@ const appSource = readFileSync(
 
 // One entry per main-window modal surface: [modalOpen source, closeModal branch marker]
 const MODALS: Array<[string, string]> = [
-  ['!!activeTourId.value', 'endTour(false)'],
+  ['!!activeTourVersion.value', 'endTour(false)'],
   ['previewLogOpen.value', 'previewLogOpen.value'],
   ['!!cliInstallRequest.value', 'closeCliInstall()'],
   ['reconnectPickerOpen.value', 'reconnectPickerOpen.value = false'],
@@ -74,7 +74,7 @@ describe('Main-window modals: ⌘W / Escape closability', () => {
     // they get their own watch — dropping it silently loses ⌘W on them.
     const line = appSource
       .split('\n')
-      .find((l) => l.includes('watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourId]'))
+      .find((l) => l.includes('watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourVersion]'))
     expect(line).toBeTruthy()
     expect(line).toContain("setContext('modalOpen', mainModalOpen())")
   })
