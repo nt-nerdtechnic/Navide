@@ -4,17 +4,63 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.10] — 2026-09-27 — signed release
+
+### Highlights
+
+- **Channels**: bridge chat apps to CLI panes, so you can talk to an agent from your phone. A chat binds to one pane, bind and unbind are announced in the chat, seen chats persist, and a permanent "don't ask again" option is never pressed from chat. Requests approved from a chat are still gated by Navide Guard: anything graded high or critical is refused.
+- **Voice input**: hold a key to dictate into any pane, transcribed locally by whisper — no audio leaves the machine. Live partials while you speak, insert without sending or press Enter during a take to finish it and send (the capsule says so if the pane could not press Enter), hands-free mode, microphone choice with silent-microphone detection, and Chinese converted to Traditional (Taiwan) by default. The shortcut is recorded in place on **Settings → Voice Input**: a chord, a single key such as F13 or a lone Right Option, a lone ⌘ or ⌃ (started after a short solo hold, so ⌘ shortcuts still work), or on macOS the fn (🌐) key through a small listen-only helper that needs Input Monitoring. In toggle mode a ⌘ chord is accepted too; a shortcut that collides with a Navide command or a macOS shortcut is refused by name, with free alternatives suggested, and the recorder explains every press it cannot use. Long takes stay responsive: a stalled decode is cancelled so partials keep coming, and dropped or repeated phrases went to zero in testing. Microphone errors name the device.
+
 ### Added
 
 - After updating, the What's New popup can carry a guided tour of the release: it asks **Take the tour / Not now**, and the tour dims the window and points at each new piece of UI in turn (→ / Enter, ←, Esc; a step whose target is not on screen says where to find it instead). 0.2.10 introduces Channels and Voice Input as two feature cards with a six-step tour. **Help → What's New…** reopens the current release's announcement, and a release row in the status-bar announcement centre offers the same tour. A tour is part of its version's announcement entry; see `docs/en-US/release-announcements.md`, and `release.sh` warns when the version being released has no entry.
+- **Navide Guard**: a deterministic gate (fixed code, never an AI) that grades each risky CLI action as critical, high or normal and handles it by where the request came from — you at this computer, a chat app, another pane or device, or a pane that has taken in outside content. Chat-approved requests are always refused at high and above, and a tainted pane is always asked. The pane header shows a taint badge with a log of what was delivered to it. **Settings → Security → Navide Guard** lists the built-in rules with their default level and lets you raise, lower or turn them off, add custom rules at a chosen level, allow exceptions and edit the protected branches; loosening anything needs a confirmation, and eight floor rules (credentials, Keychain, download-and-run, deleting root or home, raw disk writes and formatting) can go no lower than high.
+- **Terminal command protection**: plain terminal panes refuse destructive commands such as `rm -rf /`, `Remove-Item -Recurse -Force C:\` or `format C:`, reading each line as every shell would. **Settings → Security** shows the categories, custom block patterns, allow exceptions and a test box.
+- MCP can open and drive plain terminal panes (`cli_open_agent` with a shell), with one Enter per line, a check that the shell is at its prompt where the platform supports it, and refusal of multi-line input the shell cannot take as one paste.
+- **Marketplace**: packaged builds use the official registry at `server.navide.dev/registry`, with browse and detail pages, per-platform plugin packages, Windows `.exe` plugin backends and update reminders.
+- An agent must get your approval in the main window before it installs a skill; the MCP tool only files the request.
+- Scheduler jobs record which agent created them; an agent may change only its own jobs, and the number of jobs one agent owns is limited. The Tasker panel shows owners and limits.
+- Cast a prompt skill into a running loop without breaking it.
+- CLI risk: analyze a pane's risk signals with a CLI, attribute network signals to processes, and keep an observation log.
+- Per-pane git snapshot (branch, drift, dirty state) in the roster and the network view.
+- Skills too large for one sync record sync their files separately once the server supports it; until then the Skills switch keeps syncing settings only, as before. Install size limits are now separate from sync limits.
+- One right-click menu for stage tabs and sidebar group headings; the subtree summary sits under the status badge.
+- Onboarding and CLI management run every install, update and doctor in an embedded terminal inside Navide, and Windows installs use each vendor's official command.
+- Stage verified Manifest v2 updates as immutable candidates and expose an explicit Restart Plugin activation flow. Candidate frontend views preflight hidden with no capability context; backend health and current trust are checked before activation, while restart drains and restores only the selected plugin.
+- Build official Manifest v2 plugin artifacts from explicit canonical file lists, with deterministic ZIP metadata, target-specific backend validation, detached archive-signature tooling, and clean versioned factory resources.
+- Add public, Host-validated plugin window requests and typed editor, Git, account, and Issue capability adapters for the ongoing miniIDE migration. Window targets retain caller/receiver authority separation; missing IDE assets no longer silently open files in the OS default editor.
+
+### Changed
+
+- Terminal panes stay RUNNING while Claude background tasks are live, with a 30-minute fuse.
+- Polish the per-turn usage modal layout and the ∞ skill-picker ring.
+- Deflate official plugin artifacts, keeping the archive deterministic for a canonical file list; the mini-IDE package drops from about 29 MB to about 7 MB.
+- Require a Host-observed user gesture for the public `ui.openExternal` capability: the plugin preload marks a trusted pointer or key event from the last five seconds, and agent- or backend-initiated calls are refused with `USER_CANCELLED`.
+- Mount plugin views inside the Mini IDE instead of bundling a copy of them; a mounted view now receives the workspace it was opened for and can call the Host, so it renders instead of showing an empty pane. The activity column continues with one entry per left contribution the Host catalogued for the installed extensions, drawn with the icon the extension declares, and mounts the one you pick; a view that cannot be mounted says so in place rather than leaving an empty pane. The IDE contains no Git or Plans code at all — about twenty duplicated Git UI files are gone — and **file diffs and branch comparisons now open in the Git window**, which owns those surfaces.
+- Compose plugin views end to end: a mounted view receives the workspace it was opened for, can call the Host, opens its own detail views there (including a target such as a branch comparison), and takes part in close preparation — and a close or quit refused during that preparation now says so instead of appearing to hang.
+- Keep a plugin window usable after **Reload Window**: the reloaded receiver registers in the document that replaces the old one, so its composition still works, while offers, acknowledgements and close requests from the replaced document stay refused.
+- Keep file launching, keybinding writes and Git account management (`ui.openPath`, `ui.openTempFile`, `ui.writeKeybindings` and the Git account capabilities) for first-party plugins only: a third-party plugin granted `ui` could otherwise launch any program by opening a temporary `.bat` file. The built-in Mini-IDE, Git and Plans are unaffected.
 
 ### Fixed
 
+- The tab-group icon buttons (add, rebuild all, collapse families) are the same size again; the rebuild icon is no longer squeezed.
+- `cli_send_and_wait` no longer reports a turn that ended right at the deadline, or a reply recorded in the same clock tick on Windows, as `never_started` — for local and cross-device targets — so callers are not led to resend.
+- On Windows, the temporary audio of a cancelled dictation is deleted even when another process briefly holds it open, and leftovers are swept on the next start.
+- Voice dictation stays responsive on long takes: the streaming window no longer grows past its cap after a late boundary, a partial whose decode stalls is cancelled so later partials keep coming, and forced cuts no longer rely on stretched timestamps. Dropped phrases and repeated fragments went to zero in testing, and release-to-final latency dropped (p90 about 1.1 s → 0.3 s).
+- Guard and terminal protection classify Windows paths and command spellings (case, `C:/` vs `C:\`, escape characters) that were previously never gated, and close fail-open paths.
+- Windows fixes for pane git snapshots, recycled process ids, skill executable flags across devices and voice tests.
+- Install, update and doctor runs no longer fail silently: a run that could not start says why, closing Settings mid-start no longer leaves an orphaned run, Cancel can be retried, keystrokes that did not reach the embedded terminal are flagged, and a refused install shows the backend's reason.
+- On Windows, a successful install is no longer reported as failed because an installer's inner command left a non-zero exit code.
+- A previously chosen CLI binary that can no longer be used is reported instead of being dropped silently.
+- An agent's file write no longer shows up twice in the preview feed when the tool runs late (for example after a permission prompt or on a busy machine).
+- Keep the embedded Git left surface usable when no detail receiver is paired: file and conflict requests fall back to the existing Host routes instead of silently doing nothing, and a refused detail request now reports the failure.
+- Keep installing Manifest v1 packages through the legacy mutable path; Manifest v2 installs continue to stage an immutable candidate for the next restart.
 - Deliver Mini-IDE AI terminal output to its embedded view, and hide a stale Git or Plans sidebar when returning to Explorer.
 - Let verified pre-staging Registry plugins upgrade to immutable v2 packages without losing their rollback grant; keep factory installs with no prior grant restartable, and release frontend restart barriers after backend-only rollback or a failed promotion.
 - Restore older Mini-IDE AI terminals recorded with the `editor` origin, including workspaces opened through symlinks, without relaxing profile, workspace, or unrelated-origin checks.
 - Serialize plugin window close, reload, and quit preparation and report refused or failed closes; keep receiver registrations on cancelled navigation and retire them only after a new document commits.
 - Consume a trusted `ui.openExternal` gesture only once, and keep public Issue provider commands within one request deadline so a late repository probe cannot start a mutation after timeout.
+- The fn (🌐) helper reports a failed start, a failed or timed-out permission request and a refused subscription in the Voice Input settings, with Try again, instead of staying on "starting".
 
 ## [0.2.9] — 2026-09-23 — signed release
 
@@ -28,26 +74,9 @@ All notable released changes to Navide will be documented in this file. The form
 - Move the language picker from Appearance to its own **Settings → Language** page. Settings search opens the new page, and the language preference still applies to every workspace.
 - Replace repeated agent lists in **Settings → CLI Agents** with searchable, filterable cards and a single-agent settings drawer. Cards retain enable controls and drag ordering through the grip to the left of each title; Overview, Launch, Permissions, Push, and Install are stacked on one scrolling drawer page, preserving automatic setting persistence and closing before Settings when Escape is pressed.
 - Show the status bar resource pill as live panes over all panes (`▤ 10 / 100`), so idle-reclaimed placeholders no longer read as open windows; help examples updated in all three locales.
-- Deflate official plugin artifacts, keeping the archive deterministic for a canonical file list; the mini-IDE package drops from about 29 MB to about 7 MB.
-- Require a Host-observed user gesture for the public `ui.openExternal` capability: the plugin preload marks a trusted pointer or key event from the last five seconds, and agent- or backend-initiated calls are refused with `USER_CANCELLED`.
-- Mount plugin views inside the Mini IDE instead of bundling a copy of them; a mounted view now receives the workspace it was opened for and can call the Host, so it renders instead of showing an empty pane. The activity column continues with one entry per left contribution the Host catalogued for the installed extensions, drawn with the icon the extension declares, and mounts the one you pick; a view that cannot be mounted says so in place rather than leaving an empty pane. The IDE contains no Git or Plans code at all — about twenty duplicated Git UI files are gone — and **file diffs and branch comparisons now open in the Git window**, which owns those surfaces.
-- Compose plugin views end to end: a mounted view receives the workspace it was opened for, can call the Host, opens its own detail views there (including a target such as a branch comparison), and takes part in close preparation — and a close or quit refused during that preparation now says so instead of appearing to hang.
-- Keep a plugin window usable after **Reload Window**: the reloaded receiver registers in the document that replaces the old one, so its composition still works, while offers, acknowledgements and close requests from the replaced document stay refused.
 
 ### Added
 
-- Stage verified Manifest v2 updates as immutable candidates and expose an
-  explicit Restart Plugin activation flow. Candidate frontend views preflight
-  hidden with no capability context; backend health and current trust are
-  checked before activation, while restart drains and restores only the
-  selected plugin.
-- Build official Manifest v2 plugin artifacts from explicit canonical file
-  lists, with deterministic ZIP metadata, target-specific backend validation,
-  detached archive-signature tooling, and clean versioned factory resources.
-- Add public, Host-validated plugin window requests and typed editor, Git,
-  account, and Issue capability adapters for the ongoing miniIDE migration.
-  Window targets retain caller/receiver authority separation; missing IDE
-  assets no longer silently open files in the OS default editor.
 - Name every CLI account, the built-in Default included, from its card in **Settings → Accounts** or from a row of the quota badge's account list; clearing the field restores the generated name. The name leads in the pane header, the account list, the cards, switch notices and Turn Stats, with the signed-in identity kept beside it. The pane header's quota badge now carries that account in its own section before the percentage — your name, or the part of the email before `@` — falling back to the number alone when an account has no name, no identity and no sibling account to be told apart from. Only the figure takes the warning and out-of-quota colours; the badge stays dashed while a reading is in flight, and a narrow pane shortens the name to its first character. The figure still belongs to the CLI's current account, not necessarily the one an older pane is running on.
 - Add optional `run_group_id` to `cli_open_agent` for selecting an existing tab group or the manual tab when opening a fresh or resumed conversation, while preserving default group inheritance and session restoration.
 - Make account quota history available without open panes, with evidence and local coverage details, stable cycle selection, bounded date ranges and paging, UTC calendar summaries, and full-range CSV exports. Missing token details remain gaps rather than zeros; completed-cycle averages require trusted limit evidence and available detail. Ambiguous weekly CLI clocks no longer invent a dated reset for ledger attribution.
@@ -64,8 +93,6 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Fixed
 
-- Keep the embedded Git left surface usable when no detail receiver is paired: file and conflict requests fall back to the existing Host routes instead of silently doing nothing, and a refused detail request now reports the failure.
-- Keep installing Manifest v1 packages through the legacy mutable path; Manifest v2 installs continue to stage an immutable candidate for the next restart.
 - In **Settings → Accounts**, an empty portable credential slot is now a compact **Paste credential** button in the card's action row instead of a full block, and the note that credential cloud sync is off — which pointed to a setting that does not exist yet — is gone.
 - Switching to a parked account no longer asks you to sign in just because its saved access token has aged; a sign-in is requested only when the saved snapshot has no refresh token to renew with. The CLI health guide no longer lists Grok's bundled `~/.grok/bin/agent` as a second Cursor install, which kept reopening the guide.
 - A long message sent to a focused Claude Code pane, collapsed by Claude Code into `[Pasted text …]`, is no longer reported as delivered when its Enter did not take; it is retried, as it already was in an unfocused pane.
