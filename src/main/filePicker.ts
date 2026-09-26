@@ -2,7 +2,7 @@ import { ipcMain, WebContentsView, type BrowserWindow, type IpcMainEvent, type I
 import { randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { FilePickerRequest } from '../../packages/plugin-contracts/src/filePicker'
 import { splitFilePickerCandidate } from '../../packages/plugin-contracts/src/filePicker'
 import type { HostFilePickerRow } from '../shared/filePicker'
@@ -120,7 +120,7 @@ export class FilePickerHostService implements FilePickerHost {
       const rowId = randomUUID()
       picker.rows.set(rowId, target)
       const rel = relative(invocation.workspacePath, target.canonicalPath)
-      const label = rel && !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') ? rel : target.canonicalPath
+      const label = rel && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`) ? rel : target.canonicalPath
       rows.push({ id: rowId, label, path: target.canonicalPath })
     }
     return rows
@@ -198,7 +198,7 @@ export class FilePickerHostService implements FilePickerHost {
             if (!target) continue
             const root = await realpath(invocation.workspacePath)
             const path = relative(root, target.canonicalPath)
-            if (/\.html?$/i.test(target.canonicalPath) && path && !isAbsolute(path) && path !== '..' && !path.startsWith('../')) {
+            if (/\.html?$/i.test(target.canonicalPath) && path && !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)) {
               if (!this.live(picker)) { close(); return }
               const opened = await this.options.openPreview({
                 workspacePath: invocation.workspacePath,
