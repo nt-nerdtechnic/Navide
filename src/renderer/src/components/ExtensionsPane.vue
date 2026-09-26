@@ -80,6 +80,22 @@ async function remove(id: string): Promise<void> {
   await refreshInstalled()
 }
 
+async function restartPlugin(id: string): Promise<void> {
+  const api = pluginsApi()
+  if (!api) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.restart(id)
+    await refreshInstalled()
+    void pluginUpdates.refresh()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function restoreFactoryPackage(id: string): Promise<void> {
   const api = pluginsApi()
   if (!api) return
@@ -166,19 +182,30 @@ onMounted(() => {
           </span>
           <span class="ext-requires">{{ p.requires.join(', ') }}</span>
           <span v-if="p.warning" class="ext-badge ext-dev-warning">{{ p.warning }}</span>
-          <span v-if="updatesById.get(p.id)" class="ext-badge ext-update-badge">
+          <span v-if="p.pendingCandidateVersion" class="ext-badge ext-candidate">
+            Update {{ p.pendingCandidateVersion }} is ready
+          </span>
+          <span v-else-if="updatesById.get(p.id)" class="ext-badge ext-update-badge">
             {{ $t('settings.extensions.marketplace.updateAvailableVersion', { version: updatesById.get(p.id)?.latestVersion ?? '' }) }}
           </span>
           <!-- Actions sit on the row's first line; the permission details wrap below. -->
           <button
-            v-if="updatesById.get(p.id)"
+            v-if="!p.pendingCandidateVersion && updatesById.get(p.id)"
             class="ext-update nv-btn nv-btn--primary nv-btn--sm"
-            :disabled="updateFlow.busy.value"
+            :disabled="updateFlow.busy.value || busy"
             @click="updateFlow.install(updatesById.get(p.id)!.namespace, updatesById.get(p.id)!.name, updatesById.get(p.id)!.latestVersion)"
           >
             {{ $t('settings.extensions.marketplace.update') }}
           </button>
-          <button class="ext-remove nv-btn nv-btn--sm" @click="remove(p.id)">
+          <button
+            v-if="p.pendingCandidateVersion"
+            class="ext-restart nv-btn nv-btn--sm"
+            :disabled="busy || updateFlow.busy.value"
+            @click="restartPlugin(p.id)"
+          >
+            Restart Plugin
+          </button>
+          <button class="ext-remove nv-btn nv-btn--sm" :disabled="busy || updateFlow.busy.value" @click="remove(p.id)">
             {{ $t('settings.extensions.marketplace.uninstall') }}
           </button>
           <div v-if="p.manifestPermissions || p.packageVersion" class="ext-permission-details">
@@ -274,6 +301,10 @@ onMounted(() => {
   color: #c77400;
   font-size: var(--font-2xs);
 }
+.ext-badge.ext-candidate {
+  color: #2f6f9f;
+  font-size: var(--font-2xs);
+}
 .ext-badge.ext-active {
   color: #1a7f37;
   font-size: 11px;
@@ -293,10 +324,12 @@ onMounted(() => {
 }
 .ext-update,
 .ext-remove,
-.ext-restore {
+.ext-restore,
+.ext-restart {
   margin-left: auto;
 }
-.ext-update + .ext-remove {
+.ext-update + .ext-remove,
+.ext-restart + .ext-remove {
   margin-left: 0;
 }
 </style>

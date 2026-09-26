@@ -14,7 +14,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { planPublicCapabilityCall } from './pluginCapabilityBroker'
 import { readManifestFromEntries, readZipEntries } from './pluginPackage'
 import { manifestV2CapabilityPolicy } from './pluginPermissions'
@@ -46,28 +46,62 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
     ...process.env,
     CI: '1',
     PNPM_CONFIG_PM_ON_FAIL: 'ignore',
+    // A newer pnpm resolved from PATH re-verifies the workspace before running
+    // and, when this checkout's `pnpm` field is not one it reads, replaces
+    // node_modules before failing. This test only ever packs and installs into a
+    // temp directory, so the implicit install is never what it wants.
+    npm_config_verify_deps_before_run: 'false',
     PATH: `${nodeDirectory}${delimiter}${process.env.PATH ?? ''}`,
   }
 }
 
-function runPnpm(args: string[], cwd: string): CommandResult {
-  const invocation = packageManager()
-  const result = spawnSync(invocation.command, [...invocation.prefix, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: subprocessEnvironment(),
-    maxBuffer: 16 * 1024 * 1024,
+const maxOutputBytes = 16 * 1024 * 1024
+
+// Asynchronous on purpose: these subprocesses run for a minute or more, and a
+// synchronous spawn blocks the vitest worker's event loop for that long, so its
+// onTaskUpdate RPC to the main process times out (60 s) and fails the run.
+function run(command: string, args: string[], cwd: string): Promise<CommandResult> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, { cwd, env: subprocessEnvironment() })
+    const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+    const sizes = { stdout: 0, stderr: 0 }
+    let settled = false
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      child.kill()
+      rejectPromise(error)
+    }
+    for (const stream of ['stdout', 'stderr'] as const) {
+      child[stream].on('data', (chunk: Buffer) => {
+        sizes[stream] += chunk.length
+        if (sizes[stream] > maxOutputBytes) {
+          fail(new Error(`${command} ${stream} exceeded maxBuffer (${maxOutputBytes} bytes)`))
+          return
+        }
+        output[stream].push(chunk)
+      })
+    }
+    child.on('error', fail)
+    child.on('close', (status) => {
+      if (settled) return
+      settled = true
+      resolvePromise({
+        status,
+        stdout: Buffer.concat(output.stdout).toString('utf8'),
+        stderr: Buffer.concat(output.stderr).toString('utf8'),
+      })
+    })
   })
-  if (result.error) throw result.error
-  return {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  }
 }
 
-function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
-  const result = runPnpm(args, cwd)
+function runPnpm(args: string[], cwd: string): Promise<CommandResult> {
+  const invocation = packageManager()
+  return run(invocation.command, [...invocation.prefix, ...args], cwd)
+}
+
+async function runPnpmOrThrow(args: string[], cwd: string): Promise<CommandResult> {
+  const result = await runPnpm(args, cwd)
   if (result.status !== 0) {
     throw new Error(
       `pnpm ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`
@@ -76,7 +110,7 @@ function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
   return result
 }
 
-function runExternalCli(args: string[], cwd: string): CommandResult {
+function runExternalCli(args: string[], cwd: string): Promise<CommandResult> {
   // pnpm links the bin as a shell script on POSIX and as `.cmd`/`.ps1` shims
   // on Windows; `pnpm exec` resolves whichever it wrote, as `pnpm run` does.
   return runPnpm(['exec', 'navide-plugin', ...args], cwd)
@@ -122,19 +156,8 @@ function resolveInstalledPackageBin(
   return join(packageDirectory, bin)
 }
 
-function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): CommandResult {
-  const result = spawnSync(process.execPath, [entry, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: subprocessEnvironment(),
-    maxBuffer: 16 * 1024 * 1024,
-  })
-  if (result.error) throw result.error
-  const commandResult = {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  }
+async function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): Promise<CommandResult> {
+  const commandResult = await run(process.execPath, [entry, ...args], cwd)
   if (commandResult.status !== 0) {
     throw new Error(
       `node ${entry} ${args.join(' ')} failed in ${cwd}\n${commandResult.stdout}\n${commandResult.stderr}`
@@ -148,7 +171,9 @@ describe('third-party plugin external workspace', () => {
     'installs public packages, validates/types/builds/packages the example, and enforces Host capability denial',
     async () => {
       const repository = process.cwd()
-      const temporaryRoot = mkdtempSync(join(tmpdir(), 'navide-plugin-external-'))
+      // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
+      // resolves inputs to the long form, so a short root puts index.html outside it.
+      const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-plugin-external-')))
       const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'example')
       try {
@@ -170,12 +195,23 @@ describe('third-party plugin external workspace', () => {
           expect(packageJson).not.toContain('workspace:')
           expect(packageJson).not.toContain('packages/internal')
         }
-        runPnpmOrThrow(['run', 'build:public-packages'], repository)
+        await runPnpmOrThrow(['run', 'build:public-packages'], repository)
+
+        // The editor subpath must carry portable workers for offline/file://
+        // consumers, rather than resolve them against the Host origin.
+        const editorBundle = join(repository, 'packages/plugin-ui/dist/editor/index.js')
+        const editorSource = readFileSync(editorBundle, 'utf8')
+        expect(editorSource).not.toMatch(/["']\/assets\/[^"']*\.worker-/)
+        const workerUrls = [...editorSource.matchAll(/new URL\(\s*["']([^"']+\.worker-[^"']+\.js)["']/g)]
+        expect(workerUrls).toHaveLength(5)
+        for (const [, workerUrl] of workerUrls) {
+          expect(readFileSync(new URL(workerUrl, pathToFileURL(editorBundle))).length).toBeGreaterThan(0)
+        }
 
         const packageTarballs: Record<string, string> = {}
         for (const packageName of ['plugin-contracts', 'plugin-sdk', 'plugin-ui']) {
           const packageDirectory = join(repository, 'packages', packageName)
-          const result = runPnpmOrThrow(
+          const result = await runPnpmOrThrow(
             ['pack', '--pack-destination', artifacts],
             packageDirectory
           )
@@ -199,7 +235,7 @@ describe('third-party plugin external workspace', () => {
         const require = createRequire(import.meta.url)
         const typescriptCli = resolveInstalledPackageBin(repository, 'typescript', 'tsc', require)
         const viteCli = resolveInstalledPackageBin(repository, 'vite', 'vite', require)
-        const pnpmStorePath = runPnpmOrThrow(['store', 'path'], repository).stdout.trim()
+        const pnpmStorePath = (await runPnpmOrThrow(['store', 'path'], repository)).stdout.trim()
 
         cpSync(join(repository, 'examples', 'third-party-files'), externalProject, {
           recursive: true,
@@ -233,7 +269,7 @@ describe('third-party plugin external workspace', () => {
         expect(externalPackageJson.devDependencies.typescript).toBeUndefined()
         expect(externalPackageJson.devDependencies.vite).toBeUndefined()
 
-        runPnpmOrThrow(
+        await runPnpmOrThrow(
           [
             'install',
             '--offline',
@@ -250,23 +286,44 @@ describe('third-party plugin external workspace', () => {
           realpathSync(join(repository, 'node_modules', 'vue-i18n')),
           join(externalProject, 'node_modules', 'vue-i18n')
         )
-        runNodeEntryOrThrow(
+        // Only this generated editor probe needs the optional Monaco peer;
+        // the shipped sample keeps its existing public surface and behavior.
+        symlinkSync(realpathSync(join(repository, 'node_modules', 'monaco-editor')), join(externalProject, 'node_modules', 'monaco-editor'))
+        writeFileSync(join(externalProject, 'src/editor-surface-probe.ts'), `
+import { EditorPane, createPreflightEditorPort, type EditorPort } from '@navide/plugin-ui/editor'
+export { EditorPane }
+export const port: EditorPort = createPreflightEditorPort()
+export function save(editor: InstanceType<typeof EditorPane>): Promise<void> { return editor.save() }
+`)
+        await runNodeEntryOrThrow(
           typescriptCli,
           ['--noEmit', '--project', join(externalProject, 'tsconfig.json')],
           externalProject
         )
-        runNodeEntryOrThrow(
+        await runNodeEntryOrThrow(
           viteCli,
           ['build', '--config', join(externalProject, 'vite.config.ts')],
           externalProject
         )
-        runNodeEntryOrThrow(join(externalProject, 'scripts', 'stage-package.mjs'), [], externalProject)
-        runPnpmOrThrow(['run', 'check'], externalProject)
-        runPnpmOrThrow(['run', 'package'], externalProject)
+        writeFileSync(join(externalProject, 'editor.vite.config.mjs'), `
+export default {
+  base: './',
+  build: {
+    outDir: 'editor-probe',
+    lib: { entry: 'src/editor-surface-probe.ts', formats: ['es'], fileName: () => 'editor.js' },
+    rollupOptions: { external: ['vue', 'vue-i18n', 'monaco-editor'] },
+  },
+}
+`)
+        await runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'editor.vite.config.mjs')], externalProject)
+        expect(readFileSync(join(externalProject, 'editor-probe/editor.js'), 'utf8')).not.toContain('src/renderer')
+        await runNodeEntryOrThrow(join(externalProject, 'scripts', 'stage-package.mjs'), [], externalProject)
+        await runPnpmOrThrow(['run', 'check'], externalProject)
+        await runPnpmOrThrow(['run', 'package'], externalProject)
 
         const archivePath = join(externalProject, 'dist', 'acme-files.vsix')
         const secondArchivePath = join(externalProject, 'dist', 'acme-files-second.vsix')
-        const secondPackageResult = runExternalCli(
+        const secondPackageResult = await runExternalCli(
           ['package', join(externalProject, 'dist', 'package'), '--out', secondArchivePath],
           externalProject
         )
@@ -311,7 +368,7 @@ describe('third-party plugin external workspace', () => {
           join(duplicateDirectory, 'manifest.json'),
           '{"schemaVersion":2,"permissions":{},"permissions":{}}\n'
         )
-        const duplicateResult = runExternalCli(['validate', duplicateDirectory], externalProject)
+        const duplicateResult = await runExternalCli(['validate', duplicateDirectory], externalProject)
         expect(duplicateResult.status).not.toBe(0)
         expect(`${duplicateResult.stdout}\n${duplicateResult.stderr}`).toContain(
           'duplicate JSON object key'
@@ -324,7 +381,7 @@ describe('third-party plugin external workspace', () => {
         ) as Record<string, unknown>
         unknownManifest.unknownField = true
         writeManifest(unknownDirectory, unknownManifest)
-        const unknownResult = runExternalCli(['validate', unknownDirectory], externalProject)
+        const unknownResult = await runExternalCli(['validate', unknownDirectory], externalProject)
         expect(unknownResult.status).not.toBe(0)
         expect(`${unknownResult.stdout}\n${unknownResult.stderr}`).toContain('unknown field')
 
@@ -335,7 +392,7 @@ describe('third-party plugin external workspace', () => {
         ) as Record<string, unknown>
         publisherManifest.publisher = 'other'
         writeManifest(publisherDirectory, publisherManifest)
-        const publisherResult = runExternalCli(['validate', publisherDirectory], externalProject)
+        const publisherResult = await runExternalCli(['validate', publisherDirectory], externalProject)
         expect(publisherResult.status).not.toBe(0)
         expect(`${publisherResult.stdout}\n${publisherResult.stderr}`).toContain(
           'publisher must match id namespace'
@@ -344,9 +401,18 @@ describe('third-party plugin external workspace', () => {
         const collisionDirectory = join(validationRoot, 'portable-collision')
         cpSync(join(externalProject, 'dist', 'package'), collisionDirectory, { recursive: true })
         writeFileSync(join(collisionDirectory, 'frontend', 'MAIN.JS'), 'case collision\n')
+        // validate reads only the canonical file list, so the colliding entry
+        // must be listed to be checked at all.
+        const collisionList = JSON.parse(
+          readFileSync(join(collisionDirectory, 'artifact-files.json'), 'utf8')
+        ) as { files: string[] }
+        writeFileSync(
+          join(collisionDirectory, 'artifact-files.json'),
+          JSON.stringify({ files: [...collisionList.files, 'frontend/MAIN.JS'] })
+        )
         const collisionNames = readdirSync(join(collisionDirectory, 'frontend'))
         if (collisionNames.includes('main.js') && collisionNames.includes('MAIN.JS')) {
-          const collisionResult = runExternalCli(['validate', collisionDirectory], externalProject)
+          const collisionResult = await runExternalCli(['validate', collisionDirectory], externalProject)
           expect(collisionResult.status).not.toBe(0)
           expect(`${collisionResult.stdout}\n${collisionResult.stderr}`).toContain(
             'portable archive collision'
@@ -357,7 +423,11 @@ describe('third-party plugin external workspace', () => {
         cpSync(join(externalProject, 'dist', 'package'), aliasDirectory, { recursive: true })
         writeFileSync(join(aliasDirectory, 'frontend', 'alias'), 'alias\n')
         writeFileSync(join(aliasDirectory, 'frontend', 'alias.'), 'portable alias\n')
-        const aliasResult = runExternalCli(['validate', aliasDirectory], externalProject)
+        writeFileSync(
+          join(aliasDirectory, 'artifact-files.json'),
+          JSON.stringify({ files: ['manifest.json', 'frontend/index.html', 'frontend/main.js', 'frontend/alias', 'frontend/alias.'] })
+        )
+        const aliasResult = await runExternalCli(['validate', aliasDirectory], externalProject)
         expect(aliasResult.status).not.toBe(0)
         expect(`${aliasResult.stdout}\n${aliasResult.stderr}`).toContain('portable archive collision')
 
@@ -368,14 +438,14 @@ describe('third-party plugin external workspace', () => {
         ) as { contributes: { views: Array<Record<string, unknown>> } }
         unsafeManifest.contributes.views[0].entry = '../outside.html'
         writeManifest(unsafeDirectory, unsafeManifest)
-        const unsafeResult = runExternalCli(['validate', unsafeDirectory], externalProject)
+        const unsafeResult = await runExternalCli(['validate', unsafeDirectory], externalProject)
         expect(unsafeResult.status).not.toBe(0)
         expect(`${unsafeResult.stdout}\n${unsafeResult.stderr}`).toContain('safe package-relative')
 
         const missingDirectory = join(validationRoot, 'missing')
         cpSync(join(externalProject, 'dist', 'package'), missingDirectory, { recursive: true })
         rmSync(join(missingDirectory, 'frontend', 'index.html'))
-        const missingResult = runExternalCli(['validate', missingDirectory], externalProject)
+        const missingResult = await runExternalCli(['validate', missingDirectory], externalProject)
         expect(missingResult.status).not.toBe(0)
         expect(`${missingResult.stdout}\n${missingResult.stderr}`).toContain('does not exist')
 

@@ -1,5 +1,5 @@
-import { app, clipboard, Menu, webContents, type BrowserWindow, type MenuItemConstructorOptions } from 'electron'
-import { LEGAL_ROUTES, type LegalRoute } from '../shared/legalLinks'
+import { app, clipboard, Menu, webContents, type BrowserWindow, type MenuItemConstructorOptions, type WebContents } from 'electron'
+import { LEGAL_LABELS, LEGAL_ROUTES, type LegalRoute } from '../shared/legalLinks'
 import { MENU_STRINGS } from './menuStrings'
 import type { SupportedLocale } from './hostLocale'
 import { isMac } from '../shared/osplat'
@@ -90,6 +90,8 @@ export interface AppMenuHooks {
   onShowShortcuts?: () => void
   /** Help menu: open one of the legal pages on navide.dev (see shared/legalLinks). */
   onOpenLegal?: (route: LegalRoute) => void
+  /** View menu: route Reload Window through the native close preparation. */
+  onReloadWindow?: (target: WebContents) => boolean | void
   // When provided, a dev-only "Developer" submenu with an entry that opens the
   // no-op plugin view is appended. Omit it (the default) and the menu is
   // byte-for-byte the shipping menu. Gated by the caller behind a dev flag.
@@ -317,7 +319,11 @@ export function installApplicationMenu(
           click: (_item, win) => {
             const target =
               webContents.getFocusedWebContents() ?? (win as BrowserWindow | undefined)?.webContents
-            if (target && !target.isDestroyed()) target.reload()
+            if (!target || target.isDestroyed()) return
+            // A guarded receiver window reloads only after its own file/provider
+            // preparation settled; the hook owns committing and reloading then.
+            if (hooks.onReloadWindow?.(target) === true) return
+            target.reload()
           }
         },
         { role: 'toggleDevTools' },

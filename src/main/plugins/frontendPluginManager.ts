@@ -7,9 +7,10 @@
 // in-process, and routes everything else to the backend plugin host over the
 // shared WebSocket transport below.
 
-import { BrowserWindow, WebContentsView, ipcMain, type WebContents } from 'electron'
+import { BrowserWindow, WebContentsView, ipcMain, webFrameMain, type WebContents, type WebFrameMain } from 'electron'
 import { warnMain } from '../main-log'
 import { validateSupportedLocale } from '../hostLocale'
+import { composePluginFrameQuery } from './pluginContributionQuery'
 import { systemFrameUnlessMac } from '../window-controls'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
@@ -48,7 +49,14 @@ import {
   type StorageExecutionAddress,
 } from './pluginStorage'
 import { CAP_EVENTS } from './capabilityMap'
-import { PUBLIC_CAPABILITY_EVENT_ADDRESSES } from './pluginCapabilityCatalog'
+import {
+  HOST_SHELL_EXECUTABLE_ALLOWLIST,
+  PUBLIC_CAPABILITY_EVENT_ADDRESSES,
+  publicCapabilityEntry,
+} from './pluginCapabilityCatalog'
+import { PUBLIC_GIT_METHODS, publicGitRequest } from './gitPublicCapability'
+import { GIT_ACCOUNT_PUBLIC_METHODS } from './gitAccountCapability'
+import { PUBLIC_ISSUE_METHODS, issueRequest } from './issueCapability'
 import {
   MINI_IDE_PLUGIN_REQUIRES,
   PLANS_PLUGIN_REQUIRES,
@@ -73,7 +81,13 @@ import {
   type WsClientStatus,
   type WsConstructor,
 } from '../../shared/wsClient'
-import { AI_CLI_PROFILES } from '../../shared/aiCliProfiles'
+import {
+  AI_CLI_PROFILES,
+  AI_CLI_SHIFT_ENTER_SEQUENCES,
+  BRACKETED_PASTE_AI_CLI_PROFILES,
+  FULL_SCREEN_AI_CLI_PROFILES,
+  TERMINAL_AI_CLI_PROFILES,
+} from '../../shared/aiCliProfiles'
 import { resolveWsType } from './capabilityMap'
 import {
   HOST_GIT_READ_ONLY_KEYS as GIT_HOST_READ_ONLY_KEYS,
@@ -88,6 +102,7 @@ import {
   canonicalBackendPackageDir,
   PluginBackendHost,
 } from './pluginBackendHost'
+import { currentPluginHostTarget, UNIVERSAL_PLUGIN_TARGET } from './pluginTarget'
 import {
   isAllowedBackendTimeout,
   MAX_BACKEND_CALLS_PER_INSTANCE,
@@ -110,10 +125,40 @@ import {
 import {
   isWorkspaceContainedPath,
   resolvePathForContainment,
+  resolveWorkspaceRelativePath,
   workspaceMutationPathError,
 } from './workspacePathPolicy'
 import { resolvePlansRootPath } from './plansRoot'
 import { isAllowedPlanDocumentPath } from './plansDirectories'
+import {
+  editorFilesystemRequest,
+  editorPreviewResourceUrl,
+} from './editorFilesystemCapability'
+import { EDITOR_AI_METHODS, EditorAiCapability } from './editorAiCapability'
+import { EditorNativeCapability, EDITOR_NATIVE_METHODS, type EditorNativeHost } from './editorNativeCapability'
+import { EditorSelectionGrants } from './editorSelectionGrants'
+import { EDITOR_PREFERENCE_METHODS, projectEditorPreferences } from './editorPreferenceCapability'
+import { aiTerminalStorageIdentity, type AiTerminalStorageIdentity } from './aiTerminalStorage'
+import type { TerminalOwnerOrigin } from '../terminalStorageOwner'
+import type { TerminalStorageOwnerRequest, TerminalStorageOwnerState } from '../../shared/terminalStorageOwner'
+import { aiTerminalCommand } from './aiTerminalCommand'
+import { executeAiTerminalResource } from './aiTerminalResources'
+import { AiTerminalOutputDecoder } from './aiTerminalOutput'
+import { MINI_IDE_STORAGE_KEYS } from '../../shared/miniIdePreferences'
+import type { MiniIdeLegacyPreferences } from './miniIdeLegacyPreferences'
+import type { FilePickerHost, FilePickerInvocation } from '../filePicker'
+import { PluginActivationSelector } from './pluginActivationSelector'
+import {
+  PluginFrameBindingRegistry,
+  type PluginFrameBinding,
+  type PluginFrameBindingIdentity,
+} from './pluginFrameBinding'
+import {
+  PLUGIN_FRAME_SCHEME,
+  PluginFrameAssetProtocol,
+} from './pluginFrameAssetProtocol'
+import { validatePluginDetailTarget } from './pluginDetailTargetSchema'
+import { canonicalTrustJson } from './pluginRegistryTrust'
 
 /** Everything the manager needs to launch one plugin view. */
 export interface PluginLaunchDescriptor {
@@ -147,11 +192,22 @@ export interface PluginViewLaunchDescriptor {
   id: string
   contributionKey: string
   kind: 'custom'
-  location: 'top' | 'bottom' | 'right' | 'left' | 'main' | 'window'
+  location: 'top' | 'bottom' | 'right' | 'left' | 'main' | 'window' | 'detail'
   title: string
   /** Host-verified on-disk icon identity. It never crosses to the renderer. */
   iconFile?: string
   entryFile: string
+  /** Canonical detail contribution owned by a left contribution. */
+  detailView?: string
+  /** Host-verified schema asset for a detail target. */
+  targetSchema?: string
+  /** Declares which Host frame locations may receive this window contribution. */
+  receives?: {
+    protocolVersion: 1
+    locations: Array<'left' | 'detail'>
+    editorTargets?: { protocolVersion: 1 }
+    closeGuard?: { protocolVersion: 1 }
+  }
 }
 
 export interface PluginBounds {
@@ -170,6 +226,170 @@ export type PluginViewBounds = PluginBounds | 'fill' | 'hidden'
 /** Host-owned handle for one live contribution view. The instance id is
  * opaque: plugins never choose it and lifecycle calls must use the handle
  * returned by {@link FrontendPluginManager.openView}. */
+interface ReceiverRegistration {
+  readonly id: string
+  readonly receiverInstanceId: string
+  readonly documentGeneration: number
+  readonly declaration: NonNullable<PluginViewLaunchDescriptor['receives']>
+  readonly offers: Map<string, ReceiverOffer>
+}
+
+interface DetailTargetState {
+  readonly targetId: string
+  readonly revision: number
+  readonly resourceKey: string
+  readonly target: JsonValue
+}
+
+interface ReceiverOffer {
+  readonly id: string
+  /** Host-only origin correlation; never projected into an offer. */
+  readonly openId?: string
+  readonly location: 'left' | 'detail'
+  readonly descriptor: PluginLaunchDescriptor
+  readonly view: PluginViewLaunchDescriptor
+  readonly workspacePath: string
+  /** Host-private detail state; never projected into the receiver offer. */
+  readonly detailSourceInstanceId?: string
+  readonly detailTarget?: DetailTargetState
+}
+
+interface ReceiverItem {
+  readonly id: string
+  readonly receiverId: string
+  readonly bindingId: string
+  readonly offer: ReceiverOffer
+  /** The current desired target, retained Host-side only. */
+  detailTarget?: DetailTargetState
+  /** Only a provider acknowledgement advances this applied target. */
+  appliedDetailTarget?: DetailTargetState
+  /** Allocated revisions are never reused after refusal, busy, or timeout. */
+  nextDetailTargetRevision: number
+}
+
+interface PendingDetailOpen {
+  readonly id: string
+  readonly reqId: string
+  readonly sourceInstanceId: string
+  readonly sourceDocumentGeneration: number
+  readonly receiverId: string
+  readonly receiverInstanceId: string
+  readonly receiverDocumentGeneration: number
+  readonly offerId: string
+  itemId: string | null
+  readonly resolve: (response: CapabilityResponse) => void
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+interface PendingDetailTarget {
+  readonly target: DetailTargetState
+  readonly openId: string | undefined
+  readonly itemId: string
+  readonly receiverId: string
+  readonly receiverInstanceId: string
+  readonly receiverDocumentGeneration: number
+  readonly providerInstanceId: string
+  readonly providerDocumentGeneration: number
+  readonly bindingId: string
+  readonly previousTarget: DetailTargetState | undefined
+  readonly resolve: (decision: { applied: true } | { applied: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' }) => void
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+interface DetailPair {
+  readonly sourceInstanceId: string
+  readonly receiverId: string
+  readonly detailView: PluginViewLaunchDescriptor
+  readonly workspacePath: string
+}
+
+type DetailCloseResult =
+  | { closed: true }
+  | { closed: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' }
+
+type ReceiverCloseReason = 'receiver-item-batch' | 'native-window-close' | 'reload' | 'quit'
+type NativeReceiverCloseReason = Exclude<ReceiverCloseReason, 'receiver-item-batch'>
+
+interface DetailCloseTransaction {
+  readonly id: string
+  readonly receiverId: string
+  readonly receiverInstanceId: string
+  readonly receiverDocumentGeneration: number
+  readonly itemIds: readonly string[]
+  readonly reason: ReceiverCloseReason
+  /** Main-driven native closes hold every participant until commit/cancel. */
+  readonly holdCommit: boolean
+  readonly result: Promise<DetailCloseResult>
+  /** Settles as soon as every participant is prepared (or the attempt fails). */
+  readonly prepared: Promise<DetailCloseResult>
+  readonly resolve: (result: DetailCloseResult) => void
+  readonly resolvePrepared: (result: DetailCloseResult) => void
+  phase: 'preparing' | 'prepared' | 'committing' | 'settled'
+}
+
+interface PendingWindowClose {
+  readonly hostWindowId: number
+  readonly transactionIds: readonly string[]
+}
+
+interface PendingReceiverClose {
+  readonly closeId: string
+  readonly transactionId: string
+  readonly receiverId: string
+  readonly receiverInstanceId: string
+  readonly receiverDocumentGeneration: number
+  dispatched: boolean
+  accepted: boolean
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+interface PendingDetailClose {
+  readonly closeId: string
+  readonly transactionId: string
+  readonly itemId: string
+  readonly bindingId: string
+  readonly providerInstanceId: string
+  readonly providerDocumentGeneration: number
+  readonly receiverId: string
+  readonly receiverInstanceId: string
+  readonly receiverDocumentGeneration: number
+  dispatched: boolean
+  accepted: boolean
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+interface PendingEditorTarget {
+  readonly correlation: string
+  readonly sourceInstanceId: string
+  readonly sourceDocumentGeneration: number
+  readonly sourceItemId: string
+  readonly receiverId: string
+  readonly receiverInstanceId: string
+  readonly receiverDocumentGeneration: number
+  readonly workspacePath: string
+  readonly targetPath: string
+  readonly targetRelativePath: string
+  readonly resolve: (opened: boolean) => void
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+interface PendingPluginFrame {
+  readonly bindingId: string
+  readonly instanceId: string
+  readonly contributionKey: string
+  readonly hostWindow: BrowserWindow
+  readonly receiverWebContents: WebContents
+  readonly receiverInstanceId: string | null
+  readonly receiverDocumentGeneration: number
+  readonly assetOrigin: string
+  readonly artifactId: string
+  readonly entryUrl: string
+  readonly receiverGeneration: string
+  documentNonce: string | null
+  frame: WebFrameMain | null
+  detachNavigation: (() => void) | null
+}
+
 interface PendingGuest {
   readonly token: string
   readonly instanceId: string
@@ -206,6 +426,59 @@ export interface PluginViewOpenOptions {
   capabilityContext?: HostCapabilityContext | null
   /** Keep a freshly mounted view deactivated until the Host activates it. */
   initiallyVisible?: boolean
+  /** Host-authenticated file target for an editor-style open. The target is
+   *  converted into a receiver-owned opaque grant before it reaches the view. */
+  trustedEditorFileTarget?: {
+    path: string
+    expectedCanonicalPath?: string
+    /** Host-validated workspace preview: use a relative path without a grant. */
+    workspaceOnly?: boolean
+  }
+  /** Host liveness gate for async opens; checked before mounting and after
+   *  backend binding before a trusted target is delivered. */
+  canDispatch?: () => boolean
+}
+
+/** A Host-private restart record. It deliberately retains placement inputs,
+ * but never a package entry path, capability binding, file grant, or caller
+ * liveness closure: all of those must be resolved again after selection
+ * changes. */
+export interface PluginInstanceRestartSnapshot {
+  readonly pluginId: string
+  readonly packageVersion: string
+  readonly contributionKey: string
+  readonly hostWindow: BrowserWindow
+  readonly bounds: PluginViewBounds
+  readonly query: string
+  readonly workspacePath: string | null
+  readonly closeHostOnHide: boolean
+  readonly mirrorTitle: boolean
+  readonly initiallyVisible: boolean
+  /** Whether this contribution was registered in Host region composition. */
+  readonly contributionRegistered: boolean
+  /** Renderer-owned guests need an explicit renderer re-prepare; the Host
+   * cannot replace their carrier with a native view during restart. */
+  readonly carrier: 'native' | 'guest'
+}
+
+export interface PluginPackageRestartRestoreReport {
+  readonly restoredInstances: number
+  readonly skippedDestroyedHostWindows: number
+}
+
+declare const pluginPackageRestartTransactionBrand: unique symbol
+
+/** Opaque Host-only handle for one package-version restart. It is backed by a
+ * private WeakMap, so renderer data cannot manufacture a usable transaction. */
+export interface PluginPackageRestartTransaction {
+  readonly [pluginPackageRestartTransactionBrand]: void
+}
+
+interface PendingPackageRestart {
+  readonly pluginId: string
+  readonly packageVersion: string
+  readonly snapshots: readonly PluginInstanceRestartSnapshot[]
+  restored: boolean
 }
 
 /** What the manager needs from a mounted plugin surface.
@@ -244,6 +517,12 @@ export function guestSurface(webContents: WebContents): PluginSurface {
 
 interface RunningPlugin {
   instanceId: string
+  /** Native and GuestAttach surfaces retain their existing WebContents transport;
+   * frame receivers use the private MessagePort owned by frameBindings. */
+  carrier: 'surface' | 'frame'
+  frameBindingId: string | null
+  /** Increments for each receiver main-document load. */
+  documentGeneration: number
   id: string
   /** True when this instance was created through the plugin-id keyed {@link open} adapter. */
   openedViaLegacyAdapter: boolean
@@ -271,20 +550,32 @@ interface RunningPlugin {
   senderId: number
   /** Whether the view overlays the host's full content area (see {@link PluginViewBounds}). */
   fill: boolean
+  /** Placement that the Host can restore after a package-version restart. */
+  restartBounds: PluginViewBounds
   /** Removes the host `resize` listener; null when none is attached. */
   detachHostResize: (() => void) | null
   /** Removes the listeners this instance put on its host window — `closed`,
    *  and the `did-start-navigation` watch that reads a host reload as a
    *  deliberate teardown; null after instance teardown. */
   detachHostClosed: (() => void) | null
+  /** Removes the receiver-document navigation observer for managed child frames. */
+  detachReceiverFrames: (() => void) | null
   /** True when the host window exists solely for this view (dedicated plugin
    *  window): `hideSelf` then closes the window (legacy editor Esc semantics)
    *  instead of hiding the view under a still-visible host. */
   closeHostOnHide: boolean
+  /** Whether this native view mirrors its document title to a dedicated Host window. */
+  mirrorTitle: boolean
+  /** Host-tracked visibility; WebContents does not expose a reliable readback. */
+  visible: boolean
   /** True once the entry finished loading — open targets sent before that are
    *  queued in {@link pendingTargets} (mirrors the legacy editor window's
    *  pendingEditorOpenFiles flush on did-finish-load). */
   ready: boolean
+  /** Last target actually delivered to this receiver. It is replayed after a
+   *  Host-triggered readiness retry without retaining the request's liveness
+   *  guard or any caller-owned provenance. */
+  lastDeliveredTarget?: Record<string, string>
   /** True once the renderer sent the authenticated readiness handshake. */
   pluginReady: boolean
   /** True once the Host knows this instance is on its way out for a reason
@@ -295,6 +586,17 @@ interface RunningPlugin {
    *  which destroys every guest it carries without running any Host code. */
   releasing: boolean
   pendingTargets: Record<string, string>[]
+  /** A legacy adapter target withheld until the entry is ready; unlike
+   *  pendingTargets this retains provenance and is never sent raw. */
+  pendingTrustedTarget?: {
+    query: string
+    target: {
+      path: string
+      expectedCanonicalPath?: string
+      workspaceOnly?: boolean
+    }
+    canDispatch?: () => boolean
+  }
 }
 
 type PlansBackendHealth = 'unknown' | 'ready' | 'unavailable'
@@ -390,6 +692,8 @@ interface AiSessionLedgerEntry {
   attachedInstanceId: string | null
   client: WsClient
   createdAt: number
+  persistView?: boolean
+  storageIdentity?: AiTerminalStorageIdentity
 }
 
 interface EarlyAiEventBuffer {
@@ -417,6 +721,26 @@ const IPC_BACKEND_CANCEL = 'plugin:backend:cancel'
 const IPC_BACKEND_SUBSCRIBE = 'plugin:backend:subscribe'
 const IPC_BACKEND_EVENT = 'plugin:backend:event'
 const IPC_BACKEND_STATUS = 'plugin:backend:status'
+const IPC_FRAME_DOCUMENT_READY = 'plugin:frame:document-ready'
+const IPC_RECEIVER_REGISTER = 'plugin:receiver:register'
+const IPC_RECEIVER_LIST_LEFT = 'plugin:receiver:list-left-contributions'
+const IPC_RECEIVER_OPEN_LEFT = 'plugin:receiver:open-left'
+const IPC_RECEIVER_MOUNT = 'plugin:receiver:mount'
+const IPC_RECEIVER_ACCEPT_EXISTING = 'plugin:receiver:accept-existing'
+const DETAIL_OPEN_TIMEOUT_MS = 10_000
+const IPC_RECEIVER_DISPOSE = 'plugin:receiver:dispose'
+const IPC_RECEIVER_ABORT = 'plugin:receiver:abort'
+const IPC_RECEIVER_BLANK_READY = 'plugin:receiver:blank-ready'
+const IPC_RECEIVER_ITEM_CLOSED = 'plugin:receiver:item-closed'
+const IPC_RECEIVER_REQUEST_CLOSE = 'plugin:receiver:request-close'
+const IPC_RECEIVER_REQUEST_CLOSE_TRANSACTION = 'plugin:receiver:request-close-transaction'
+const IPC_RECEIVER_CLOSE_REQUEST = 'plugin:receiver:close-request'
+const IPC_RECEIVER_CLOSE_CANCELLED = 'plugin:receiver:close-cancelled'
+const IPC_RECEIVER_RESOLVE_CLOSE = 'plugin:receiver:resolve-close'
+const IPC_RECEIVER_EDITOR_TARGET = 'plugin:receiver:editor-target'
+const IPC_RECEIVER_RESOLVE_EDITOR_TARGET = 'plugin:receiver:resolve-editor-target'
+const IPC_VIEW_CLOSE_REQUEST = 'plugin:view:close-request'
+const MAX_DETAIL_CLOSE_TRANSACTION_ITEMS = 24
 const PLUGIN_BACKEND_TEMP_ENV_KEYS = ['TMPDIR', 'TEMP', 'TMP'] as const
 const BACKEND_IDENTITY_KEYS = new Set([
   'pluginId',
@@ -453,7 +777,7 @@ const TERMINAL_OWNED_WS_TYPES = new Set([
 /** These first-party packages consume the public aiCli event vocabulary. Other
  * v2 packages may declare aiCli for capability admission without opting into
  * the event translation, so their internal terminal ownership remains intact. */
-const PUBLIC_AI_CLI_EVENT_PLUGIN_IDS = new Set(['navide.git', 'navide.plans'])
+const PUBLIC_AI_CLI_EVENT_PLUGIN_IDS = new Set(['navide.git', 'navide.plans', 'navide.mini-ide'])
 
 function usesPublicAiCliEvents(plugin: RunningPlugin | undefined): plugin is RunningPlugin {
   return Boolean(
@@ -639,6 +963,29 @@ function hasOfficialRegistryAuthority(trust: InstalledRegistryTrustContext): boo
  *  empty payload rather than corrupting the backend request. */
 function toPayload(args: unknown): Record<string, unknown> {
   return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {}
+}
+
+/** Project the Host directory listing into the stable public shape. The
+ * backend includes Explorer metadata and uses `is_dir`; retain that metadata
+ * while deriving the older public `kind` field for SDK consumers. */
+function normalizePublicDirectoryResult(value: unknown): Record<string, unknown> {
+  const result = toPayload(value)
+  const entries = Array.isArray(result.entries)
+    ? result.entries.flatMap((value): Record<string, unknown>[] => {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) return []
+        const entry = value as Record<string, unknown>
+        if (typeof entry.name !== 'string') return []
+        const kind = typeof entry.is_dir === 'boolean'
+          ? (entry.is_dir ? 'directory' : 'file')
+          : entry.kind === 'directory' ? 'directory' : 'file'
+        const projected: Record<string, unknown> = { name: entry.name, kind }
+        for (const key of ['rel_path', 'is_dir', 'is_hidden', 'is_noise']) {
+          if (entry[key] !== undefined) projected[key] = entry[key]
+        }
+        return [projected]
+      })
+    : []
+  return { ...result, entries }
 }
 
 function isJsonValue(value: unknown, seen = new Set<object>()): value is JsonValue {
@@ -942,6 +1289,9 @@ export class FrontendPluginManager {
   >()
   /** Host-generated instance id → running view. */
   private readonly running = new Map<string, RunningPlugin>()
+  private readonly editorSelectionGrants = new EditorSelectionGrants()
+  private editorNativeCapability: EditorNativeCapability | null = null
+  private filePickerHost: FilePickerHost | null = null
   /** Plugin id → instances opened through the legacy adapter; a v2 descriptor may still be here. */
   private readonly legacyInstances = new Map<string, string>()
   /** Host-private package backend instances used by MCP when no Plans window
@@ -959,6 +1309,9 @@ export class FrontendPluginManager {
   /** Validated packages installed under userData/plugins, including packages
    *  with no frontend descriptor. */
   private readonly installedPackages = new Map<string, InstalledPluginPackageSummary>()
+  /** Canonical roots for installed packages. Backend-only packages have no
+   *  descriptor, so their Host-approved backend activation is matched here. */
+  private readonly installedPackageDirectories = new Map<string, string>()
   /** Host-bundled builtin descriptors kept as fallbacks: removing a marketplace
    *  override of a bundled plugin reverts to the bundled copy instead of
    *  leaving the surface unavailable (see {@link removeInstalledPlugin}). */
@@ -972,6 +1325,27 @@ export class FrontendPluginManager {
   private hostRegistrationTask: Promise<void> | null = null
   /** Lazily-created shared transport to the backend plugin host. */
   private wsClient: WsClient | null = null
+  private readonly editorAiCapability = new EditorAiCapability({
+    request: (type, payload, beforeDispatch) => this.sendPublicBackend(type, payload, beforeDispatch),
+    createReviewClient: (onDisconnected) => {
+      const client = createWsClient({
+        WebSocketImpl: NodeWebSocket as unknown as WsConstructor,
+        onStatus: (status) => {
+          if (status === 'disconnected' || status === 'error') onDisconnected()
+        },
+      })
+      if (!this.backendWsUrl) throw new Error('backend not connected')
+      client.connect(this.backendWsUrl)
+      return client
+    },
+    publish: (instanceId, event, payload) => {
+      const plugin = this.running.get(instanceId)
+      const binding = plugin?.capabilityContext?.runtimeBinding
+      if (plugin && binding && this.isPublicEventAllowedForInstance(plugin, event, payload, binding)) {
+        this.emitToInstance(instanceId, event, payload)
+      }
+    },
+  })
   /** Last transport status, replayed to late-loading plugin views so their
    *  useBackend shims start from real liveness instead of assuming it. */
   private wsStatus: WsClientStatus = 'disconnected'
@@ -985,6 +1359,20 @@ export class FrontendPluginManager {
   private publicStorageHandler:
     | ((execution: StorageExecution) => unknown | Promise<unknown>)
     | null = null
+  /** Host-owned terminal presentation storage adapter. The adapter receives
+   * only an identity derived from the live contribution binding. */
+  private terminalStorageHandler:
+    | ((
+        origin: TerminalOwnerOrigin,
+        request: TerminalStorageOwnerRequest,
+        canDispatch: () => boolean,
+      ) => Promise<TerminalStorageOwnerState | null>)
+    | null = null
+  /** Legacy v1 mini-IDE preference overlay selected by the Host. */
+  private miniIdeLegacyPreferences: MiniIdeLegacyPreferences | null = null
+  /** Shell selected by the Host backend for terminal children. Persisted AI
+   *  views use this same shell; the legacy launch path remains unchanged. */
+  private terminalShell = process.env.SHELL ?? 'bash'
   /** Host-owned source of effective agent Execution Policy snapshots. */
   private executionPolicyResolver:
     | ((workspacePath?: string) => ExecutionPolicySnapshot)
@@ -992,6 +1380,19 @@ export class FrontendPluginManager {
   /** Exact package-version tuples whose complete runtime is being revoked. */
   private readonly stoppingPlugins = new Set<string>()
   private readonly packageRevocationTasks = new Map<string, Promise<void>>()
+  /** Old-version admission barriers retained between a restart drain and the
+   * Host coordinator's selector/registry cutover. */
+  private readonly pendingPackageRestarts = new WeakMap<PluginPackageRestartTransaction, PendingPackageRestart>()
+  private readonly packageRestartBarriers = new Set<string>()
+  /** Reject all new work for a plugin while its selectors are between old and
+   * current versions. Internal restoration mounts directly after re-resolution. */
+  private readonly restartingPluginIds = new Set<string>()
+  /** Generic package storage selection from the Host activation coordinator.
+   * Plans and Mini-IDE keep their existing specialized selection paths. */
+  private readonly pluginStorageSnapshotSelections = new Map<
+    string,
+    { activeVersion: string; previousVersion?: string }
+  >()
   /** Package versions displaced by the temporary legacy recovery descriptor. */
   private readonly recoveryPackageVersions = new Map<string, string>()
   /** Host-renderer state for the left Git contribution, keyed by its host
@@ -999,6 +1400,7 @@ export class FrontendPluginManager {
   private readonly gitContributionStates = new Map<number, GitContributionState>()
   /** Main-owned safeStorage adapter for the first-party Git account surface. */
   private gitAccountHandlers: GitAccountHandlers | null = null
+  private contributionIconResolver: ((iconFile: string) => { url: string; monochrome?: boolean } | null) | null = null
   private capabilityGrantResolver:
     | ((pluginId: string, packageVersion: string) => HostCapabilityGrant | null)
     | null = null
@@ -1007,6 +1409,12 @@ export class FrontendPluginManager {
    *  package; current candidate/active identities are never reused as a fake
    *  previous snapshot. */
   private plansStorageSnapshotContext: {
+    packageVersion: string
+    previousPackageVersion: string | null
+  } | null = null
+  /** Host-selected Mini-IDE storage identities. The previous package is
+   *  supplied by the lifecycle migration, never by a renderer contribution. */
+  private miniIdeStorageSnapshotContext: {
     packageVersion: string
     previousPackageVersion: string | null
   } | null = null
@@ -1060,6 +1468,12 @@ export class FrontendPluginManager {
     string,
     ReturnType<typeof setTimeout> | null
   >()
+  /** Preflight waits are Host-private and deliberately independent of the
+   * production activation-failure observer. */
+  private readonly pluginReadyWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >()
   /** Instances whose readiness budget already bought them one reload. A missed
    *  budget is usually a loaded machine rather than a broken package, so the
    *  guest is reloaded once before the failure is allowed to cost the session
@@ -1086,6 +1500,28 @@ export class FrontendPluginManager {
    *  key. The renderer only sees catalog metadata and never receives the
    *  opaque instance id. */
   private readonly contributionInstances = new Map<string, PluginViewHandle>()
+  /** Frame documents have their own exact-frame identity and a private port;
+   * they must never enter the sender-id map used by native/GuestAttach views. */
+  private readonly pluginFrameBindings = new PluginFrameBindingRegistry()
+  private readonly pluginFrameAssets = new PluginFrameAssetProtocol()
+  private readonly pendingPluginFrames = new Map<string, PendingPluginFrame>()
+  /** Receiver instance → opaque frame bindings owned by its current document. */
+  private readonly receiverFrameBindings = new Map<string, Set<string>>()
+  private readonly receiverRegistrations = new Map<string, ReceiverRegistration>()
+  private readonly receiverItems = new Map<string, ReceiverItem>()
+  private readonly detailPairs = new Map<string, DetailPair>()
+  private readonly pendingDetailCloses = new Map<string, PendingDetailClose>()
+  private readonly pendingReceiverCloses = new Map<string, PendingReceiverClose>()
+  private readonly detailCloseTransactions = new Map<string, DetailCloseTransaction>()
+  private readonly detailCloseLocks = new Map<string, string>()
+  private readonly receiverCloseLocks = new Map<string, string>()
+  private readonly pendingWindowCloses = new Map<string, PendingWindowClose>()
+  private readonly pendingDetailOpens = new Map<string, PendingDetailOpen>()
+  private readonly pendingDetailTargets = new Map<string, PendingDetailTarget>()
+  private readonly pendingEditorTargets = new Map<string, PendingEditorTarget>()
+  private capabilityCallHandler: ((plugin: RunningPlugin | undefined, payload: unknown) => Promise<CapabilityResponse>) | null = null
+  private backendCallHandler: ((plugin: RunningPlugin | undefined, payload: unknown) => Promise<CapabilityResponse>) | null = null
+  private backendSubscribeHandler: ((plugin: RunningPlugin | undefined, payload: unknown) => Promise<CapabilityResponse>) | null = null
   /** In-window contributions whose `<webview>` guest has not attached yet,
    *  keyed by the one-time token carried in the entry URL. The token — never
    *  the instance id — is what reaches the renderer, so a guest can neither
@@ -1103,6 +1539,8 @@ export class FrontendPluginManager {
   /** PTY output can beat terminal.create's response. Buffer a small, short-
    *  lived ordered prefix until the pending start establishes its route. */
   private readonly earlyAiEvents = new Map<string, EarlyAiEventBuffer>()
+  /** Decode raw PTY bytes only after the authenticated public event gate. */
+  private readonly aiTerminalOutputDecoder = new AiTerminalOutputDecoder()
   /** Per-session micro-batcher for terminal.output (see the broker module):
    *  coalesces the dense PTY stream into one IPC send per ~12 ms per session. */
   private readonly terminalOutputBatcher: TerminalOutputBatcher = createTerminalOutputBatcher(
@@ -1112,14 +1550,8 @@ export class FrontendPluginManager {
       const route = this.terminalRoutes.get(sessionId)
       const plugin = route ? this.runningPluginForTerminalRoute(route) : undefined
       if (usesPublicAiCliEvents(plugin)) {
-        const binding = plugin.capabilityContext?.runtimeBinding
         const data = toPayload(payload).data
-        if (
-          binding &&
-          this.isPublicEventAllowedForInstance(plugin, 'aiCli.output', { sessionId, data }, binding)
-        ) {
-          this.emitToInstance(plugin.instanceId, 'aiCli.output', { sessionId, data })
-        }
+        this.emitPublicAiOutput(plugin, sessionId, data)
         return
       }
       this.deliverTerminalEvent('terminal.output', sessionId, payload, owner)
@@ -1144,14 +1576,17 @@ export class FrontendPluginManager {
 
   private isPluginStopping(plugin: RunningPlugin): boolean {
     const packageVersion = this.packageVersionOfPlugin(plugin)
-    return packageVersion !== null && this.stoppingPlugins.has(packageVersionKey(plugin.id, packageVersion))
+    return this.restartingPluginIds.has(plugin.id) || (
+      packageVersion !== null && this.stoppingPlugins.has(packageVersionKey(plugin.id, packageVersion))
+    )
   }
 
   private isPackageVersionStopping(pluginId: string, packageVersion: unknown): boolean {
     return (
       typeof packageVersion === 'string' &&
       packageVersion.length > 0 &&
-      this.stoppingPlugins.has(packageVersionKey(pluginId, packageVersion))
+      (this.restartingPluginIds.has(pluginId) ||
+        this.stoppingPlugins.has(packageVersionKey(pluginId, packageVersion)))
     )
   }
 
@@ -1286,6 +1721,27 @@ export class FrontendPluginManager {
     )
   }
 
+  /** Project the Host-owned askpass exchange into the public shell event
+   * contract. The backend nonce, workspace path, and any credential material
+   * remain inside the private bridge. */
+  private emitGitCredentialPublicEvent(
+    plugin: RunningPlugin | undefined,
+    event: 'shell.gitCredentialRequested' | 'shell.gitCredentialCancelled',
+    requestId: string,
+    host?: string,
+    prompt?: string,
+  ): void {
+    if (!plugin) return
+    const binding = plugin.capabilityContext?.runtimeBinding
+    if (!binding) return
+    const payload = event === 'shell.gitCredentialCancelled'
+      ? { requestId }
+      : { requestId, host: host ?? '', prompt: prompt ?? '' }
+    if (this.isPublicEventAllowedForInstance(plugin, event, payload, binding)) {
+      this.emitToInstance(plugin.instanceId, event, payload)
+    }
+  }
+
   private releaseGitCredentialOwner(owner: GitCredentialOwner): void {
     if (this.gitCredentialOwners.get(owner.nonce) !== owner) return
     const plugin = this.running.get(owner.instanceId)
@@ -1297,6 +1753,11 @@ export class FrontendPluginManager {
       }
       if (plugin && canNotify) {
         this.emitToInstance(plugin.instanceId, 'git.credential_cancelled', { request_id: requestId })
+        this.emitGitCredentialPublicEvent(
+          plugin,
+          'shell.gitCredentialCancelled',
+          requestId,
+        )
       }
     }
     owner.requestIds.clear()
@@ -1344,21 +1805,7 @@ export class FrontendPluginManager {
       // These are Host-owned profile ids. The package supplies no command or
       // executable; the public aiCli adapter resolves the profile here before
       // the backend creates a PTY.
-      aiCliProfiles: [
-        'claude',
-        'codex',
-        'antigravity',
-        'grok',
-        'kimi',
-        'opencode',
-        'qwen',
-        'kilo',
-        'pi',
-        'copilot',
-        'cursor',
-        'aider',
-        'muse',
-      ],
+      aiCliProfiles: Object.keys(TERMINAL_AI_CLI_PROFILES),
       storageSnapshots: new Map([
         ['candidate', packageVersion],
         ['active', packageVersion],
@@ -1415,7 +1862,7 @@ export class FrontendPluginManager {
         instanceId: null,
         audience,
       },
-      aiCliProfiles: Object.keys(AI_CLI_PROFILES),
+      aiCliProfiles: Object.keys(TERMINAL_AI_CLI_PROFILES),
       storageSnapshots: new Map([
         ['candidate', packageVersion],
         ['active', packageVersion],
@@ -1435,6 +1882,17 @@ export class FrontendPluginManager {
     previousPackageVersion: string | null,
   ): void {
     this.plansStorageSnapshotContext = {
+      packageVersion,
+      previousPackageVersion,
+    }
+  }
+
+  /** Supply the Host-selected Mini-IDE storage identities. */
+  setMiniIdeStorageSnapshotContext(
+    packageVersion: string,
+    previousPackageVersion: string | null,
+  ): void {
+    this.miniIdeStorageSnapshotContext = {
       packageVersion,
       previousPackageVersion,
     }
@@ -1597,10 +2055,52 @@ export class FrontendPluginManager {
     this.refreshHostSessionRegistration()
   }
 
+  /** Set the durable Host-selected storage snapshot for a generic package. */
+  setPluginStorageSnapshotSelection(
+    pluginId: string,
+    selection: { activeVersion: string; previousVersion?: string },
+  ): void {
+    if (!nonEmptyString(pluginId) || !nonEmptyString(selection.activeVersion)) {
+      throw new Error('plugin storage snapshot selection requires a package id and active version')
+    }
+    if (selection.previousVersion !== undefined && !nonEmptyString(selection.previousVersion)) {
+      throw new Error('plugin storage snapshot previous version must be non-empty')
+    }
+    this.pluginStorageSnapshotSelections.set(pluginId, {
+      activeVersion: selection.activeVersion,
+      ...(selection.previousVersion ? { previousVersion: selection.previousVersion } : {}),
+    })
+  }
+
+  /** Project valid durable package selections before any plugin instance can
+   * mount. Invalid or incomplete records are deliberately not turned into a
+   * guessed storage selection. */
+  projectPluginStorageSnapshotSelections(root: string): void {
+    const lifecycleSelector = new PluginActivationSelector(root)
+    for (const record of lifecycleSelector.list()) {
+      if (!record.active) continue
+      this.setPluginStorageSnapshotSelection(record.pluginId, {
+        activeVersion: record.active.packageVersion,
+        ...(record.previous ? { previousVersion: record.previous.packageVersion } : {}),
+      })
+    }
+  }
+
+  /** Delegate immediate pre-spawn trust revalidation to the backend child Host. */
+  setBackendSpawnTrustVerifier(
+    verifier: ((activation: Readonly<BackendPluginLaunchSpec>) => void | Promise<void>) | null,
+  ): void {
+    this.pluginBackendHost.setBeforeSpawnVerifier(verifier ?? undefined)
+  }
+
   setExecutionPolicyResolver(
     resolver: ((workspacePath?: string) => ExecutionPolicySnapshot) | null
   ): void {
     this.executionPolicyResolver = resolver
+  }
+
+  setTerminalShell(shell: string | null): void {
+    this.terminalShell = nonEmptyString(shell) ? shell : 'bash'
   }
 
   /** Set the main-process-only token for the current backend instance. The
@@ -1645,6 +2145,84 @@ export class FrontendPluginManager {
     if (plugin.backendBindingTask) await plugin.backendBindingTask
   }
 
+  /** Wait for the actual entry load before delivering a deferred Host target.
+   * This keeps a queued target from outliving the liveness/canonical checks
+   * that protect its eventual IPC flush. */
+  private waitForEntryReady(instanceId: string): Promise<void> {
+    const plugin = this.running.get(instanceId)
+    if (!plugin) return Promise.reject(new BackendPluginError('INVALID_RUNTIME'))
+    if (plugin.ready) return Promise.resolve()
+    const contents = plugin.view.webContents
+    return new Promise<void>((resolveReady, rejectReady) => {
+      const cleanup = (): void => {
+        contents.removeListener('did-finish-load', onReady)
+        contents.removeListener('destroyed', onDestroyed)
+        contents.removeListener('did-fail-load', onFailed)
+      }
+      const onReady = (): void => {
+        cleanup()
+        resolveReady()
+      }
+      const onDestroyed = (): void => {
+        cleanup()
+        rejectReady(new BackendPluginError('INVALID_RUNTIME'))
+      }
+      const onFailed = (
+        _event: unknown,
+        errorCode: unknown,
+        errorDescription: unknown,
+        _validatedURL: unknown,
+        isMainFrame: unknown,
+      ): void => {
+        if (isMainFrame !== true) return
+        cleanup()
+        rejectReady(new BackendPluginError(
+          'INVALID_RUNTIME',
+          `entry load failed: ${String(errorDescription)} (${String(errorCode)})`,
+        ))
+      }
+      contents.once('did-finish-load', onReady)
+      contents.once('destroyed', onDestroyed)
+      contents.on('did-fail-load', onFailed)
+    })
+  }
+
+  /** Wait for the sender-authenticated readiness handshake without involving
+   * production activation recovery. Used only by candidate frontend preflight. */
+  private waitForPluginReady(instanceId: string): Promise<void> {
+    const plugin = this.running.get(instanceId)
+    if (!plugin) return Promise.reject(new BackendPluginError('INVALID_RUNTIME'))
+    if (plugin.pluginReady) return Promise.resolve()
+    return new Promise<void>((resolveReady, rejectReady) => {
+      const timer = setTimeout(() => {
+        if (this.pluginReadyWaiters.get(instanceId)?.timer !== timer) return
+        this.pluginReadyWaiters.delete(instanceId)
+        rejectReady(new BackendPluginError('INVALID_RUNTIME', 'plugin readiness handshake timed out'))
+      }, 10_000)
+      timer.unref?.()
+      this.pluginReadyWaiters.set(instanceId, {
+        resolve: resolveReady,
+        reject: rejectReady,
+        timer,
+      })
+    })
+  }
+
+  private settlePluginReadyWaiter(instanceId: string, error?: Error): void {
+    const waiter = this.pluginReadyWaiters.get(instanceId)
+    if (!waiter) return
+    this.pluginReadyWaiters.delete(instanceId)
+    clearTimeout(waiter.timer)
+    if (error) waiter.reject(error)
+    else waiter.resolve()
+  }
+
+  /** Host-only readiness seam for the legacy plugin-id opener. */
+  async waitForLegacyEntryReady(pluginId: string): Promise<void> {
+    const instanceId = this.legacyInstances.get(pluginId)
+    if (instanceId) await this.waitForEntryReady(instanceId)
+  }
+
   private settleActivation(instanceId: string): void {
     const timer = this.pendingActivations.get(instanceId)
     if (timer) clearTimeout(timer)
@@ -1655,6 +2233,7 @@ export class FrontendPluginManager {
     const plugin = this.running.get(instanceId)
     if (!plugin || !this.pendingActivations.has(instanceId)) return
     this.settleActivation(instanceId)
+    this.settlePluginReadyWaiter(instanceId, new BackendPluginError('INVALID_RUNTIME'))
     const packageVersion = plugin.capabilityContext?.runtimeBinding?.packageVersion
     if (!packageVersion) return
     if (plugin.id === PLANS_PLUGIN_ID && plugin.workspacePath) {
@@ -1691,6 +2270,9 @@ export class FrontendPluginManager {
       (policy.shell === 'full' && grant.highRiskShellConfirmed !== true)
     ) return null
     const installed = this.installedPackages.get(descriptor.id)
+    const selectedStorage = this.pluginStorageSnapshotSelections.get(descriptor.id)
+    if (selectedStorage && selectedStorage.activeVersion !== packageVersion) return null
+    const previousVersion = selectedStorage?.previousVersion ?? packageVersion
     return {
       publisherEligible:
         isReservedPluginId(descriptor.id) &&
@@ -1709,11 +2291,17 @@ export class FrontendPluginManager {
               ? 'git-window'
               : view.contributionKey,
       },
-      aiCliProfiles: Object.keys(AI_CLI_PROFILES),
+      aiCliProfiles: Object.keys(TERMINAL_AI_CLI_PROFILES),
       storageSnapshots: new Map([
         ['candidate', packageVersion],
         ['active', packageVersion],
-        ['previous', packageVersion],
+        ...(descriptor.id === MINI_IDE_PLUGIN_ID &&
+        this.miniIdeStorageSnapshotContext?.packageVersion === packageVersion &&
+        this.miniIdeStorageSnapshotContext.previousPackageVersion
+          ? [['previous', this.miniIdeStorageSnapshotContext.previousPackageVersion] as const]
+          : descriptor.id === MINI_IDE_PLUGIN_ID
+            ? []
+            : [['previous', previousVersion] as const]),
       ]),
       storageSnapshotTier: 'active',
     }
@@ -1813,6 +2401,1120 @@ export class FrontendPluginManager {
   private instanceForSender(senderId: number): RunningPlugin | undefined {
     const instanceId = this.bySender.get(senderId)
     return instanceId ? this.running.get(instanceId) : undefined
+  }
+
+  /** Sender-id attribution belongs only to a plugin WebContents' main frame.
+   * A subframe never inherits its parent receiver: frame-provider traffic is
+   * admitted only on its bound MessagePort after exact tuple validation. */
+  private instanceForIpc(senderId: number, senderFrame: WebFrameMain | null): RunningPlugin | undefined {
+    const surface = this.instanceForSender(senderId)
+    if (
+      surface?.carrier === 'surface' &&
+      senderFrame !== null &&
+      senderFrame === surface.view.webContents.mainFrame
+    ) return surface
+    return undefined
+  }
+
+  private currentReceiverRegistration(id: string, plugin: RunningPlugin): ReceiverRegistration | undefined {
+    const registration = this.receiverRegistrations.get(id)
+    return registration &&
+      registration.receiverInstanceId === plugin.instanceId &&
+      registration.documentGeneration === plugin.documentGeneration
+      ? registration
+      : undefined
+  }
+
+  private declaredReceiver(plugin: RunningPlugin, registration: unknown): NonNullable<PluginViewLaunchDescriptor['receives']> | null {
+    if (typeof registration !== 'object' || registration === null || Array.isArray(registration)) return null
+    const candidate = registration as Record<string, unknown>
+    if (candidate.protocolVersion !== 1 || !Array.isArray(candidate.locations)) return null
+    const editorTargets = candidate.editorTargets
+    if (editorTargets !== undefined && (
+      typeof editorTargets !== 'object' || editorTargets === null || Array.isArray(editorTargets) ||
+      Object.keys(editorTargets as Record<string, unknown>).length !== 1 ||
+      (editorTargets as Record<string, unknown>).protocolVersion !== 1
+    )) return null
+    const closeGuard = candidate.closeGuard
+    if (closeGuard !== undefined && (
+      typeof closeGuard !== 'object' || closeGuard === null || Array.isArray(closeGuard) ||
+      Object.keys(closeGuard as Record<string, unknown>).length !== 1 ||
+      (closeGuard as Record<string, unknown>).protocolVersion !== 1
+    )) return null
+    const locations: Array<'left' | 'detail'> = []
+    for (const location of candidate.locations) {
+      if (location !== 'left' && location !== 'detail') return null
+      locations.push(location)
+    }
+    const descriptor = this.descriptors.get(plugin.id)
+    const views = descriptor?.views?.filter((view) =>
+      view.receives?.protocolVersion === 1 &&
+      (plugin.contributionKey === null || view.contributionKey === plugin.contributionKey)
+    ) ?? []
+    const declared = views.find((view) =>
+      view.receives!.locations.length === locations.length &&
+      view.receives!.locations.every((role) => locations.includes(role)) &&
+      Boolean(view.receives!.editorTargets) === Boolean(candidate.editorTargets) &&
+      Boolean(view.receives!.closeGuard) === Boolean(candidate.closeGuard)
+    )?.receives
+    if (!declared || !plugin.hasV2DescriptorIdentity || !plugin.capabilityContext) return null
+    return declared
+  }
+
+  private revokeReceiverRegistration(receiverId: string): void {
+    const registration = this.receiverRegistrations.get(receiverId)
+    if (!registration) return
+    this.cancelPendingEditorTargets((pending) => pending.receiverId === receiverId)
+    this.cancelDetailCloseTransactions((transaction) => transaction.receiverId === receiverId)
+    this.cancelPendingDetailTargets((pending) => pending.receiverId === receiverId)
+    this.cancelPendingDetailOpens((pending) => pending.receiverId === receiverId, 'receiver-unavailable')
+    this.receiverRegistrations.delete(receiverId)
+    for (const item of this.receiverItems.values()) {
+      if (item.receiverId === receiverId) this.closePluginFrame(item.bindingId)
+    }
+  }
+
+  /** Revalidate an already-admitted port on every ingress and egress. The port
+   * is necessary but never sufficient authority for a receiver document. */
+  private activePluginFrame(binding: PluginFrameBinding): RunningPlugin | undefined {
+    const pending = this.pendingPluginFrames.get(binding.id)
+    const active = this.pluginFrameBindings.activeForInstance(binding.instanceId)
+    const plugin = this.running.get(binding.instanceId)
+    if (
+      !pending ||
+      !active ||
+      !plugin ||
+      plugin.carrier !== 'frame' ||
+      plugin.frameBindingId !== binding.id ||
+      pending.frame === null ||
+      pending.documentNonce === null ||
+      pending.frame.isDestroyed() ||
+      active.id !== binding.id ||
+      active.documentGeneration !== binding.documentGeneration ||
+      active.frameTreeNodeId !== binding.frameTreeNodeId ||
+      active.receiverGeneration !== pending.receiverGeneration ||
+      active.artifactId !== pending.artifactId ||
+      active.packageId !== plugin.id ||
+      active.contributionKey !== plugin.contributionKey ||
+      active.packageVersion !== plugin.capabilityContext?.runtimeBinding?.packageVersion ||
+      plugin.workspacePath === null ||
+      resolve(plugin.workspacePath) !== active.workspacePath ||
+      pending.frame.frameTreeNodeId !== active.frameTreeNodeId ||
+      (pending.receiverInstanceId !== null &&
+        this.running.get(pending.receiverInstanceId)?.documentGeneration !== pending.receiverDocumentGeneration) ||
+      pending.frame.parent !== pending.receiverWebContents.mainFrame ||
+      // A detached frame keeps its port and would keep answering over it: the
+      // receiver can remove the element (or re-parent it) while the frame lives
+      // on. Detached frames have no place in a composed surface, so they lose
+      // their authority the moment they leave the tree.
+      pending.frame.detached ||
+      pending.frame.url !== active.entryUrl ||
+      // Non-special scheme: the frame's origin is `scheme://host`, while
+      // `new URL(...).origin` is opaque ("null") for such schemes.
+      pending.frame.origin !== pending.assetOrigin.replace(/\/$/, '')
+    ) return undefined
+    return plugin
+  }
+
+  /** Why a recorded pair is no longer usable, or '' when it is current. Kept
+   *  beside {@link currentDetailPair} so a refused detail open can name the
+   *  condition that failed instead of answering a bare `receiver-unavailable`. */
+  private detailPairRefusal(pair: DetailPair): string {
+    const source = this.running.get(pair.sourceInstanceId)
+    const registration = this.receiverRegistrations.get(pair.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    const descriptor = source ? this.descriptors.get(source.id) : undefined
+    const sourceView = descriptor?.views?.find((view) => view.contributionKey === source?.contributionKey)
+    const receiverDescriptor = receiver ? this.descriptors.get(receiver.id) : undefined
+    const receiverView = receiverDescriptor?.views?.find((view) => view.contributionKey === receiver?.contributionKey)
+    const sourceBinding = source?.carrier === 'frame'
+      ? this.pluginFrameBindings.activeForInstance(source.instanceId)
+      : null
+    if (!source) return 'source instance is not running'
+    if (!receiver || !registration) return 'receiver is not registered'
+    if (!descriptor || !sourceView) return 'source view is unavailable'
+    if (!receiverDescriptor || !receiverView) return 'receiver view is unavailable'
+    if (!source.hasV2DescriptorIdentity || !receiver.hasV2DescriptorIdentity) return 'instances are not Manifest v2'
+    if (source.workspacePath === null || receiver.workspacePath === null) return 'a workspace path is missing'
+    if (resolve(source.workspacePath) !== pair.workspacePath || resolve(receiver.workspacePath) !== pair.workspacePath) {
+      return 'source and receiver workspaces differ'
+    }
+    if (source.hostWindow !== receiver.hostWindow) return 'source and receiver live in different windows'
+    if (sourceView.location !== 'left') return 'source view is not a left contribution'
+    if (sourceView.detailView !== pair.detailView.id) return 'source no longer declares this detail view'
+    if (!descriptor.views?.includes(pair.detailView)) return 'detail view is not part of the source descriptor'
+    if (pair.detailView.location !== 'detail') return 'detail view is not a detail contribution'
+    if (!pair.detailView.targetSchema) return 'detail view declares no target schema'
+    if (this.descriptors.get(descriptor.id) !== descriptor) return 'source descriptor changed'
+    if (this.descriptors.get(receiverDescriptor.id) !== receiverDescriptor) return 'receiver descriptor changed'
+    if (this.isPackageVersionStopping(descriptor.id, descriptor.packageVersion)) return 'source package is stopping'
+    if (this.isPackageVersionStopping(receiverDescriptor.id, receiverDescriptor.packageVersion)) {
+      return 'receiver package is stopping'
+    }
+    if (this.currentReceiverRegistration(pair.receiverId, receiver) !== registration) return 'receiver registration is stale'
+    if (!registration.declaration.locations.includes('detail')) return 'receiver does not declare the detail location'
+    if (!sourceBinding || this.activePluginFrame(sourceBinding) !== source) return 'source frame is not active'
+    if (!source.capabilityContext?.runtimeBinding) return 'source has no runtime binding'
+    if (source.capabilityContext.runtimeBinding.instanceId !== source.instanceId) {
+      return 'source runtime binding is not this instance'
+    }
+    if (!receiver.capabilityContext?.runtimeBinding) return 'receiver has no runtime binding'
+    if (receiver.capabilityContext.runtimeBinding.instanceId !== receiver.instanceId) {
+      return 'receiver runtime binding is not this instance'
+    }
+    const sourceContext = this.contributionCapabilityContext(descriptor, sourceView, pair.workspacePath)
+    const detailContext = this.contributionCapabilityContext(descriptor, pair.detailView, pair.workspacePath)
+    const receiverContext = this.contributionCapabilityContext(receiverDescriptor, receiverView, pair.workspacePath)
+    if (!sourceContext?.userGrant?.system.includes('ui')) return 'source has no ui grant'
+    if (descriptor.capabilityPolicy?.kind !== 'manifest-v2' || !descriptor.capabilityPolicy.system.includes('ui')) {
+      return 'source policy does not allow ui'
+    }
+    if (!detailContext) return 'detail capability context is unavailable'
+    if (!receiverContext) return 'receiver capability context is unavailable'
+    return ''
+  }
+
+  private markPluginReady(plugin: RunningPlugin): void {
+    plugin.pluginReady = true
+    this.deliverPendingDetailTarget(plugin)
+    this.settleActivation(plugin.instanceId)
+    this.settlePluginReadyWaiter(plugin.instanceId)
+    console.log(`[plugin] ${plugin.id} ready`)
+  }
+
+  /** Revalidates the original caller through its private offer or chosen item. */
+  private currentPendingDetailOpen(pending: PendingDetailOpen): boolean {
+    const source = this.running.get(pending.sourceInstanceId)
+    const sourceBinding = source ? this.pluginFrameBindings.activeForInstance(source.instanceId) : null
+    const pair = this.detailPairs.get(pending.sourceInstanceId)
+    const registration = this.receiverRegistrations.get(pending.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    const item = pending.itemId === null ? undefined : this.receiverItems.get(pending.itemId)
+    const itemPair = item?.offer.detailSourceInstanceId
+      ? this.detailPairs.get(item.offer.detailSourceInstanceId)
+      : undefined
+    return Boolean(
+      source && source.documentGeneration === pending.sourceDocumentGeneration && sourceBinding &&
+      this.activePluginFrame(sourceBinding) === source && pair && pair.receiverId === pending.receiverId &&
+      this.currentDetailPair(pair) && registration && receiver &&
+      registration.receiverInstanceId === pending.receiverInstanceId &&
+      registration.documentGeneration === pending.receiverDocumentGeneration &&
+      this.currentReceiverRegistration(pending.receiverId, receiver) === registration &&
+      !receiver.view.webContents.isDestroyed() &&
+      (pending.itemId === null
+        ? registration.offers.get(pending.offerId)?.openId === pending.id
+        : item && item.receiverId === pending.receiverId && item.offer.location === 'detail' &&
+          itemPair && itemPair.receiverId === pending.receiverId && this.currentDetailPair(itemPair))
+    )
+  }
+
+  private settlePendingDetailOpen(
+    openId: string,
+    response: CapabilityResponse,
+    closeItem = false,
+  ): void {
+    const pending = this.pendingDetailOpens.get(openId)
+    if (!pending) return
+    this.pendingDetailOpens.delete(openId)
+    if (pending.timer !== null) clearTimeout(pending.timer)
+    const registration = this.receiverRegistrations.get(pending.receiverId)
+    if (registration?.offers.get(pending.offerId)?.openId === openId) {
+      registration.offers.delete(pending.offerId)
+    }
+    const item = pending.itemId === null ? undefined : this.receiverItems.get(pending.itemId)
+    if (closeItem && item?.offer.openId === openId) this.closePluginFrame(item.bindingId)
+    pending.resolve(response)
+  }
+
+  private cancelPendingDetailOpens(
+    predicate: (pending: PendingDetailOpen) => boolean,
+    reason: 'provider-unavailable' | 'receiver-unavailable',
+    closeItems = false,
+  ): void {
+    for (const pending of this.pendingDetailOpens.values()) {
+      if (predicate(pending)) {
+        this.settlePendingDetailOpen(
+          pending.id,
+          buildSuccess(pending.reqId, { opened: false, reason }),
+          closeItems,
+        )
+      }
+    }
+  }
+
+  private settlePendingDetailTarget(
+    targetId: string,
+    decision: { applied: true } | { applied: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' },
+  ): void {
+    const pending = this.pendingDetailTargets.get(targetId)
+    if (!pending) return
+    this.pendingDetailTargets.delete(targetId)
+    if (pending.timer !== null) clearTimeout(pending.timer)
+    pending.resolve(decision)
+    if (!decision.applied && pending.openId !== undefined) {
+      const open = this.pendingDetailOpens.get(pending.openId)
+      if (open) {
+        this.settlePendingDetailOpen(
+          pending.openId,
+          buildSuccess(open.reqId, { opened: false, reason: 'provider-unavailable' }),
+          true,
+        )
+      }
+    }
+  }
+
+  private cancelPendingDetailTargets(predicate: (pending: PendingDetailTarget) => boolean): void {
+    for (const pending of this.pendingDetailTargets.values()) {
+      if (predicate(pending)) this.settlePendingDetailTarget(pending.target.targetId, { applied: false, reason: 'unavailable' })
+    }
+  }
+
+  /** Revalidates an unacknowledged target against its exact admitted detail provider. */
+  private currentPendingDetailTarget(pending: PendingDetailTarget): boolean {
+    const item = this.receiverItems.get(pending.itemId)
+    const provider = this.running.get(pending.providerInstanceId)
+    const binding = provider ? this.pluginFrameBindings.activeForInstance(provider.instanceId) : null
+    const pair = item?.offer.detailSourceInstanceId
+      ? this.detailPairs.get(item.offer.detailSourceInstanceId)
+      : undefined
+    const registration = this.receiverRegistrations.get(pending.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    return Boolean(
+      item && item.receiverId === pending.receiverId && item.bindingId === pending.bindingId &&
+      item.offer.location === 'detail' && item.offer.detailSourceInstanceId &&
+      (pending.previousTarget === undefined
+        ? item.detailTarget === pending.target && item.appliedDetailTarget === undefined
+        : item.detailTarget === pending.previousTarget && item.appliedDetailTarget === pending.previousTarget) &&
+      provider && provider.documentGeneration === pending.providerDocumentGeneration && provider.pluginReady && binding &&
+      this.activePluginFrame(binding) === provider &&
+      this.pendingPluginFrames.get(pending.bindingId)?.instanceId === provider.instanceId &&
+      pair && pair.receiverId === pending.receiverId && this.currentDetailPair(pair) &&
+      registration && receiver && registration.receiverInstanceId === pending.receiverInstanceId &&
+      registration.documentGeneration === pending.receiverDocumentGeneration &&
+      this.currentReceiverRegistration(pending.receiverId, receiver) === registration &&
+      !receiver.view.webContents.isDestroyed() &&
+      (pending.previousTarget === undefined || pending.target.resourceKey === pending.previousTarget.resourceKey)
+    )
+  }
+
+  /** Send one revision only to its exact admitted ready detail provider. */
+  private dispatchDetailTarget(
+    item: ReceiverItem,
+    target: DetailTargetState,
+    previousTarget: DetailTargetState | undefined,
+    openId?: string,
+  ): Promise<{ applied: true } | { applied: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' }> {
+    if (this.detailCloseLocks.has(item.id)) return Promise.resolve({ applied: false, reason: 'busy' })
+    const providerInstanceId = this.pendingPluginFrames.get(item.bindingId)?.instanceId
+    const provider = providerInstanceId ? this.running.get(providerInstanceId) : undefined
+    const registration = this.receiverRegistrations.get(item.receiverId)
+    if (!provider || !registration) return Promise.resolve({ applied: false, reason: 'unavailable' })
+    return new Promise((resolveDecision) => {
+      const pending: PendingDetailTarget = {
+        target,
+        openId,
+        itemId: item.id,
+        receiverId: item.receiverId,
+        receiverInstanceId: registration.receiverInstanceId,
+        receiverDocumentGeneration: registration.documentGeneration,
+        providerInstanceId: provider.instanceId,
+        providerDocumentGeneration: provider.documentGeneration,
+        bindingId: item.bindingId,
+        previousTarget,
+        resolve: resolveDecision,
+        timer: null,
+      }
+      const origin = openId === undefined ? undefined : this.pendingDetailOpens.get(openId)
+      if (!this.currentPendingDetailTarget(pending) ||
+        (openId !== undefined && (!origin || !this.currentPendingDetailOpen(origin)))) {
+        resolveDecision({ applied: false, reason: 'unavailable' })
+        return
+      }
+      pending.timer = setTimeout(
+        () => {
+          console.warn(
+            `[plugins] detail target timed out: '${provider.contributionKey}' never applied ` +
+            `revision ${target.revision} of resource '${target.resourceKey}'`,
+          )
+          this.settlePendingDetailTarget(target.targetId, { applied: false, reason: 'timeout' })
+        },
+        10_000,
+      )
+      this.pendingDetailTargets.set(target.targetId, pending)
+      console.warn(
+        `[plugins] detail target dispatched to '${provider.contributionKey}' ` +
+        `(revision ${target.revision}, resource '${target.resourceKey}')`,
+      )
+      if (!this.sendToPlugin(provider, IPC_EVENT, {
+        type: 'plugin:view:detail-target',
+        data: { targetId: target.targetId, revision: target.revision, target: target.target },
+      })) {
+        this.settlePendingDetailTarget(target.targetId, { applied: false, reason: 'unavailable' })
+      }
+    })
+  }
+
+  /** Deliver the initial revision only to its exact admitted ready provider. */
+  private deliverPendingDetailTarget(provider: RunningPlugin): void {
+    if (!provider.pluginReady) return
+    const item = [...this.receiverItems.values()].find((candidate) =>
+      candidate.detailTarget !== undefined && candidate.offer.detailSourceInstanceId !== undefined &&
+      this.pendingPluginFrames.get(candidate.bindingId)?.instanceId === provider.instanceId
+    )
+    if (!item?.detailTarget || item.appliedDetailTarget === item.detailTarget ||
+      this.pendingDetailTargets.has(item.detailTarget.targetId)) return
+    const openId = item.offer.openId
+    if (openId !== undefined) {
+      const pendingOpen = this.pendingDetailOpens.get(openId)
+      if (!pendingOpen || !this.currentPendingDetailOpen(pendingOpen)) return
+    }
+    void this.dispatchDetailTarget(item, item.detailTarget, undefined, openId)
+  }
+
+  private hidePlugin(plugin: RunningPlugin): void {
+    if (plugin.carrier === 'frame') {
+      this.destroyInstance(plugin.instanceId)
+      return
+    }
+    if (plugin.closeHostOnHide && !plugin.hostWindow.isDestroyed()) {
+      plugin.hostWindow.close()
+    } else {
+      this.deactivate(plugin.instanceId)
+    }
+  }
+
+  private currentDetailCloseCandidate(
+    item: ReceiverItem,
+    receiver: RunningPlugin,
+    registration: ReceiverRegistration,
+  ): boolean {
+    const providerInstanceId = this.pendingPluginFrames.get(item.bindingId)?.instanceId
+    const provider = providerInstanceId ? this.running.get(providerInstanceId) : undefined
+    const binding = provider ? this.pluginFrameBindings.activeForInstance(provider.instanceId) : null
+    const descriptor = provider ? this.descriptors.get(provider.id) : undefined
+    const pair = item.offer.detailSourceInstanceId
+      ? this.detailPairs.get(item.offer.detailSourceInstanceId)
+      : undefined
+    return Boolean(
+      item.receiverId === registration.id && receiver.instanceId === registration.receiverInstanceId &&
+      receiver.documentGeneration === registration.documentGeneration &&
+      this.currentReceiverRegistration(registration.id, receiver) === registration &&
+      !receiver.view.webContents.isDestroyed() && provider && provider.pluginReady && binding &&
+      this.activePluginFrame(binding) === provider && provider.id === item.offer.descriptor.id &&
+      provider.contributionKey === item.offer.view.contributionKey && descriptor === item.offer.descriptor &&
+      descriptor.views?.includes(item.offer.view) &&
+      this.contributionCapabilityContext(descriptor, item.offer.view, item.offer.workspacePath) &&
+      (pair === undefined || (pair.receiverId === item.receiverId && this.currentDetailPair(pair)))
+    )
+  }
+
+  private currentPendingReceiverClose(close: PendingReceiverClose): boolean {
+    const transaction = this.detailCloseTransactions.get(close.transactionId)
+    const registration = this.receiverRegistrations.get(close.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    return Boolean(
+      transaction && (transaction.phase === 'preparing' || transaction.phase === 'prepared') &&
+      transaction.receiverId === close.receiverId && transaction.receiverInstanceId === close.receiverInstanceId &&
+      transaction.receiverDocumentGeneration === close.receiverDocumentGeneration &&
+      this.receiverCloseLocks.get(close.receiverId) === transaction.id && registration && receiver &&
+      registration.declaration.closeGuard?.protocolVersion === 1 &&
+      receiver.documentGeneration === close.receiverDocumentGeneration &&
+      this.currentReceiverRegistration(close.receiverId, receiver) === registration &&
+      !receiver.view.webContents.isDestroyed()
+    )
+  }
+
+  private dispatchDetailCloseProviderPrepares(transaction: DetailCloseTransaction): void {
+    const routes = [...this.pendingDetailCloses.values()].filter((route) => route.transactionId === transaction.id)
+    if (routes.length === 0 && transaction.itemIds.length === 0) {
+      this.finishDetailClosePreparation(transaction)
+      return
+    }
+    for (const route of routes) {
+      if (transaction.phase !== 'preparing') break
+      const provider = this.running.get(route.providerInstanceId)
+      if (!provider || !this.currentPendingDetailClose(route)) {
+        this.failDetailCloseTransaction(transaction.id, 'unavailable')
+        break
+      }
+      route.timer = setTimeout(
+        () => this.failDetailCloseTransaction(transaction.id, 'timeout'),
+        DETAIL_OPEN_TIMEOUT_MS,
+      )
+      route.dispatched = this.sendToPlugin(provider, IPC_VIEW_CLOSE_REQUEST, {
+        closeId: route.closeId,
+        itemId: route.itemId,
+        reason: 'user',
+        documentGeneration: route.providerDocumentGeneration,
+      })
+      if (!route.dispatched) this.failDetailCloseTransaction(transaction.id, 'unavailable')
+    }
+  }
+
+  private currentPendingDetailClose(close: PendingDetailClose): boolean {
+    const transaction = this.detailCloseTransactions.get(close.transactionId)
+    const registration = this.receiverRegistrations.get(close.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    const item = this.receiverItems.get(close.itemId)
+    const provider = this.running.get(close.providerInstanceId)
+    return Boolean(
+      transaction && (transaction.phase === 'preparing' || transaction.phase === 'prepared') &&
+      transaction.receiverId === close.receiverId && transaction.receiverInstanceId === close.receiverInstanceId &&
+      transaction.receiverDocumentGeneration === close.receiverDocumentGeneration &&
+      this.detailCloseLocks.get(close.itemId) === transaction.id && registration && receiver && item && provider &&
+      close.bindingId === item.bindingId && close.providerDocumentGeneration === provider.documentGeneration &&
+      this.currentDetailCloseCandidate(item, receiver, registration)
+    )
+  }
+
+  private failDetailCloseTransaction(
+    transactionId: string,
+    reason: Exclude<DetailCloseResult, { closed: true }>['reason'],
+  ): void {
+    const transaction = this.detailCloseTransactions.get(transactionId)
+    if (!transaction || (transaction.phase !== 'preparing' && transaction.phase !== 'prepared')) return
+    transaction.phase = 'settled'
+    this.detailCloseTransactions.delete(transactionId)
+    const receiverClose = [...this.pendingReceiverCloses.values()].find((route) => route.transactionId === transactionId)
+    if (receiverClose) {
+      this.pendingReceiverCloses.delete(receiverClose.closeId)
+      if (receiverClose.timer !== null) clearTimeout(receiverClose.timer)
+      if (this.receiverCloseLocks.get(receiverClose.receiverId) === transactionId) {
+        this.receiverCloseLocks.delete(receiverClose.receiverId)
+      }
+      const registration = this.receiverRegistrations.get(receiverClose.receiverId)
+      const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+      if (receiverClose.dispatched && receiver && this.currentReceiverRegistration(receiverClose.receiverId, receiver) === registration &&
+        receiver.documentGeneration === receiverClose.receiverDocumentGeneration && !receiver.view.webContents.isDestroyed()) {
+        receiver.view.webContents.send(IPC_RECEIVER_CLOSE_CANCELLED, {
+          receiverId: receiverClose.receiverId,
+          closeId: receiverClose.closeId,
+        })
+      }
+    }
+    const routes = [...this.pendingDetailCloses.values()].filter((route) => route.transactionId === transactionId)
+    for (const route of routes) {
+      this.pendingDetailCloses.delete(route.closeId)
+      if (route.timer !== null) clearTimeout(route.timer)
+      if (this.detailCloseLocks.get(route.itemId) === transactionId) this.detailCloseLocks.delete(route.itemId)
+      if (!route.dispatched) continue
+      const provider = this.running.get(route.providerInstanceId)
+      if (provider) {
+        this.sendToPlugin(provider, IPC_EVENT, {
+          type: 'plugin:view:close-cancelled',
+          data: { closeId: route.closeId },
+        })
+      }
+    }
+    transaction.resolve({ closed: false, reason })
+    transaction.resolvePrepared({ closed: false, reason })
+  }
+
+  private cancelDetailCloseTransactions(predicate: (transaction: DetailCloseTransaction) => boolean): void {
+    for (const transaction of [...this.detailCloseTransactions.values()]) {
+      if (predicate(transaction)) this.failDetailCloseTransaction(transaction.id, 'unavailable')
+    }
+  }
+
+  private commitDetailCloseTransaction(transactionId: string): void {
+    const transaction = this.detailCloseTransactions.get(transactionId)
+    if (!transaction || (transaction.phase !== 'preparing' && transaction.phase !== 'prepared')) return
+    const routes = [...this.pendingDetailCloses.values()].filter((route) => route.transactionId === transactionId)
+    const receiverClose = [...this.pendingReceiverCloses.values()].find((route) => route.transactionId === transactionId)
+    if (routes.length !== transaction.itemIds.length ||
+      (receiverClose !== undefined && (!receiverClose.accepted || !this.currentPendingReceiverClose(receiverClose))) ||
+      !routes.every((route) => route.accepted && this.currentPendingDetailClose(route))) {
+      this.failDetailCloseTransaction(transactionId, 'unavailable')
+      return
+    }
+    transaction.phase = 'committing'
+    this.detailCloseTransactions.delete(transactionId)
+    if (receiverClose) {
+      this.pendingReceiverCloses.delete(receiverClose.closeId)
+      if (receiverClose.timer !== null) clearTimeout(receiverClose.timer)
+      if (this.receiverCloseLocks.get(receiverClose.receiverId) === transactionId) {
+        this.receiverCloseLocks.delete(receiverClose.receiverId)
+      }
+    }
+    for (const route of routes) {
+      this.pendingDetailCloses.delete(route.closeId)
+      if (route.timer !== null) clearTimeout(route.timer)
+      if (this.detailCloseLocks.get(route.itemId) === transactionId) this.detailCloseLocks.delete(route.itemId)
+    }
+    for (const route of routes) this.closePluginFrame(route.bindingId)
+    transaction.resolve({ closed: true })
+    transaction.resolvePrepared({ closed: true })
+  }
+
+  /** A held transaction stops at `prepared` so a native close can commit every
+   *  window only after all of them accepted. */
+  private finishDetailClosePreparation(transaction: DetailCloseTransaction): void {
+    if (transaction.phase !== 'preparing') return
+    if (!transaction.holdCommit) {
+      this.commitDetailCloseTransaction(transaction.id)
+      return
+    }
+    transaction.phase = 'prepared'
+    transaction.resolvePrepared({ closed: true })
+  }
+
+  private requestDetailCloseTransaction(
+    receiver: RunningPlugin,
+    receiverId: string,
+    itemIds: readonly string[],
+  ): Promise<DetailCloseResult> {
+    const started = this.beginDetailCloseTransaction(receiver, receiverId, itemIds, 'receiver-item-batch', false)
+    return started.ok ? started.transaction.result : Promise.resolve(started.result)
+  }
+
+  private beginDetailCloseTransaction(
+    receiver: RunningPlugin,
+    receiverId: string,
+    itemIds: readonly string[],
+    reason: ReceiverCloseReason,
+    holdCommit: boolean,
+  ): { ok: true; transaction: DetailCloseTransaction } | { ok: false; result: DetailCloseResult } {
+    const registration = this.currentReceiverRegistration(receiverId, receiver)
+    const nativeClose = reason !== 'receiver-item-batch'
+    if (!registration || (!nativeClose && itemIds.length === 0) ||
+      itemIds.length > MAX_DETAIL_CLOSE_TRANSACTION_ITEMS ||
+      new Set(itemIds).size !== itemIds.length || itemIds.some((itemId) => !nonEmptyString(itemId))) {
+      return { ok: false, result: { closed: false, reason: 'unavailable' } }
+    }
+    const requiresReceiverGuard = registration.declaration.closeGuard?.protocolVersion === 1
+    if (requiresReceiverGuard && itemIds.length === 0 && !nativeClose) {
+      return { ok: false, result: { closed: false, reason: 'unavailable' } }
+    }
+    if (!requiresReceiverGuard && itemIds.length === 0) return { ok: false, result: { closed: true } }
+    if (itemIds.some((itemId) => this.detailCloseLocks.has(itemId)) ||
+      (requiresReceiverGuard && this.receiverCloseLocks.has(receiverId))) {
+      return { ok: false, result: { closed: false, reason: 'busy' } }
+    }
+    if ([...this.pendingDetailTargets.values()].some((pending) => itemIds.includes(pending.itemId))) {
+      return { ok: false, result: { closed: false, reason: 'busy' } }
+    }
+    const items = itemIds.map((itemId) => this.receiverItems.get(itemId))
+    if (items.some((item) => !item || item.receiverId !== receiverId ||
+      !this.currentDetailCloseCandidate(item, receiver, registration))) {
+      return { ok: false, result: { closed: false, reason: 'unavailable' } }
+    }
+
+    let resolveResult!: (result: DetailCloseResult) => void
+    let resolvePrepared!: (result: DetailCloseResult) => void
+    const transaction: DetailCloseTransaction = {
+      id: randomUUID(),
+      receiverId,
+      receiverInstanceId: receiver.instanceId,
+      receiverDocumentGeneration: receiver.documentGeneration,
+      itemIds: [...itemIds],
+      reason,
+      holdCommit,
+      result: new Promise<DetailCloseResult>((resolve) => { resolveResult = resolve }),
+      prepared: new Promise<DetailCloseResult>((resolve) => { resolvePrepared = resolve }),
+      resolve: (result) => resolveResult(result),
+      resolvePrepared: (result) => resolvePrepared(result),
+      phase: 'preparing',
+    }
+    this.detailCloseTransactions.set(transaction.id, transaction)
+    for (const itemId of itemIds) this.detailCloseLocks.set(itemId, transaction.id)
+    if (requiresReceiverGuard) this.receiverCloseLocks.set(receiverId, transaction.id)
+    const routes = items.map((item) => {
+      const candidate = item as ReceiverItem
+      const providerInstanceId = this.pendingPluginFrames.get(candidate.bindingId)?.instanceId
+      const provider = providerInstanceId ? this.running.get(providerInstanceId) : undefined
+      const route: PendingDetailClose = {
+        closeId: randomUUID(),
+        transactionId: transaction.id,
+        itemId: candidate.id,
+        bindingId: candidate.bindingId,
+        providerInstanceId: provider?.instanceId ?? '',
+        providerDocumentGeneration: provider?.documentGeneration ?? -1,
+        receiverId,
+        receiverInstanceId: receiver.instanceId,
+        receiverDocumentGeneration: receiver.documentGeneration,
+        dispatched: false,
+        accepted: false,
+        timer: null,
+      }
+      this.pendingDetailCloses.set(route.closeId, route)
+      return route
+    })
+    if (!requiresReceiverGuard) {
+      this.dispatchDetailCloseProviderPrepares(transaction)
+      return { ok: true, transaction }
+    }
+    const receiverClose: PendingReceiverClose = {
+      closeId: randomUUID(),
+      transactionId: transaction.id,
+      receiverId,
+      receiverInstanceId: receiver.instanceId,
+      receiverDocumentGeneration: receiver.documentGeneration,
+      dispatched: false,
+      accepted: false,
+      timer: null,
+    }
+    this.pendingReceiverCloses.set(receiverClose.closeId, receiverClose)
+    if (!this.currentPendingReceiverClose(receiverClose)) {
+      this.failDetailCloseTransaction(transaction.id, 'unavailable')
+      return { ok: true, transaction }
+    }
+    receiverClose.timer = setTimeout(
+      () => this.failDetailCloseTransaction(transaction.id, 'timeout'),
+      DETAIL_OPEN_TIMEOUT_MS,
+    )
+    try {
+      if (!receiver.view.webContents.isDestroyed()) {
+        receiver.view.webContents.send(IPC_RECEIVER_CLOSE_REQUEST, {
+          receiverId,
+          closeId: receiverClose.closeId,
+          reason: transaction.reason,
+          documentGeneration: receiver.documentGeneration,
+        })
+        receiverClose.dispatched = true
+      }
+    } catch {
+      receiverClose.dispatched = false
+    }
+    if (!receiverClose.dispatched) this.failDetailCloseTransaction(transaction.id, 'unavailable')
+    return { ok: true, transaction }
+  }
+
+  private resolveDetailClose(plugin: RunningPlugin, reqId: string, args: unknown): CapabilityResponse {
+    const record = typeof args === 'object' && args !== null && !Array.isArray(args)
+      ? args as Record<string, unknown>
+      : null
+    const closeId = typeof record?.closeId === 'string' ? record.closeId : ''
+    const itemId = typeof record?.itemId === 'string' ? record.itemId : ''
+    const decision = typeof record?.decision === 'object' && record.decision !== null && !Array.isArray(record.decision)
+      ? record.decision as Record<string, unknown>
+      : null
+    const accepted = decision?.accepted
+    const reason = decision?.reason
+    const acceptedDecision = accepted === true && reason === 'accepted'
+    const refusalReason = accepted === false && (reason === 'refused' || reason === 'busy') ? reason : undefined
+    const close = this.pendingDetailCloses.get(closeId)
+    if (!close || Object.keys(record ?? {}).some((key) => key !== 'closeId' && key !== 'itemId' && key !== 'decision') ||
+      !decision || Object.keys(decision).some((key) => key !== 'accepted' && key !== 'reason') ||
+      close.providerInstanceId !== plugin.instanceId || close.itemId !== itemId || close.accepted ||
+      (!acceptedDecision && refusalReason === undefined) || !this.currentPendingDetailClose(close)) {
+      return buildError(reqId, 'CAPABILITY_DENIED', 'detail close is not current')
+    }
+    if (!acceptedDecision) {
+      if (refusalReason === undefined) return buildError(reqId, 'CAPABILITY_DENIED', 'detail close is not current')
+      this.failDetailCloseTransaction(close.transactionId, refusalReason)
+      return buildSuccess(reqId, null)
+    }
+    close.accepted = true
+    if (close.timer !== null) {
+      clearTimeout(close.timer)
+      close.timer = null
+    }
+    const transaction = this.detailCloseTransactions.get(close.transactionId)
+    if (transaction && transaction.itemIds.every((item) =>
+      [...this.pendingDetailCloses.values()].some((route) => route.transactionId === transaction.id && route.itemId === item && route.accepted)
+    )) this.finishDetailClosePreparation(transaction)
+    return buildSuccess(reqId, null)
+  }
+
+  private resolveReceiverClose(receiver: RunningPlugin, payload: unknown): void {
+    const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : null
+    const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+    const closeId = typeof record?.closeId === 'string' ? record.closeId : ''
+    const decision = typeof record?.decision === 'object' && record.decision !== null && !Array.isArray(record.decision)
+      ? record.decision as Record<string, unknown>
+      : null
+    const accepted = decision?.accepted
+    const reason = decision?.reason
+    const acceptedDecision = accepted === true && reason === 'accepted'
+    const refusalReason = accepted === false && (reason === 'refused' || reason === 'busy') ? reason : undefined
+    const close = this.pendingReceiverCloses.get(closeId)
+    if (!close || !record || Object.keys(record).some((key) =>
+      key !== 'receiverId' && key !== 'closeId' && key !== 'decision'
+    ) || !decision || Object.keys(decision).some((key) => key !== 'accepted' && key !== 'reason') ||
+      close.receiverId !== receiverId || close.receiverInstanceId !== receiver.instanceId || close.accepted ||
+      (!acceptedDecision && refusalReason === undefined) || !this.currentPendingReceiverClose(close)) {
+      throw new Error('receiver close acknowledgement is unavailable')
+    }
+    if (!acceptedDecision) {
+      if (refusalReason === undefined) throw new Error('receiver close acknowledgement is unavailable')
+      this.failDetailCloseTransaction(close.transactionId, refusalReason)
+      return
+    }
+    close.accepted = true
+    if (close.timer !== null) {
+      clearTimeout(close.timer)
+      close.timer = null
+    }
+    const transaction = this.detailCloseTransactions.get(close.transactionId)
+    if (!transaction || !this.currentPendingReceiverClose(close)) {
+      this.failDetailCloseTransaction(close.transactionId, 'unavailable')
+      return
+    }
+    this.dispatchDetailCloseProviderPrepares(transaction)
+  }
+
+  private resolveDetailTarget(plugin: RunningPlugin, reqId: string, args: unknown): CapabilityResponse {
+    const record = typeof args === 'object' && args !== null && !Array.isArray(args)
+      ? args as Record<string, unknown>
+      : null
+    const targetId = typeof record?.targetId === 'string' ? record.targetId : ''
+    const revision = record?.revision
+    const decision = typeof record?.decision === 'object' && record.decision !== null && !Array.isArray(record.decision)
+      ? record.decision as Record<string, unknown>
+      : null
+    const applied = decision?.applied
+    const reason = decision?.reason
+    const accepted = applied === true && Object.keys(decision ?? {}).length === 1
+    const refused = applied === false && (reason === 'refused' || reason === 'busy') &&
+      Object.keys(decision ?? {}).length === 2
+    const pending = this.pendingDetailTargets.get(targetId)
+    const origin = pending?.openId === undefined ? undefined : this.pendingDetailOpens.get(pending.openId)
+    const originCurrent = pending?.openId === undefined || Boolean(origin && this.currentPendingDetailOpen(origin))
+    if (!record || Object.keys(record).some((key) => key !== 'targetId' && key !== 'revision' && key !== 'decision') ||
+      typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision <= 0 || !decision || (!accepted && !refused) ||
+      !pending || pending.target.revision !== revision || pending.providerInstanceId !== plugin.instanceId ||
+      !this.currentPendingDetailTarget(pending) || !originCurrent) {
+      if (pending && pending.target.revision === revision && pending.providerInstanceId === plugin.instanceId &&
+        pending.openId !== undefined && !originCurrent) {
+        this.settlePendingDetailTarget(targetId, { applied: false, reason: 'unavailable' })
+      }
+      return buildError(reqId, 'CAPABILITY_DENIED', 'detail target acknowledgement is not current')
+    }
+    this.pendingDetailTargets.delete(targetId)
+    if (pending.timer !== null) clearTimeout(pending.timer)
+    if (accepted) {
+      const item = this.receiverItems.get(pending.itemId)
+      if (!item || (pending.previousTarget === undefined
+        ? item.detailTarget !== pending.target || item.appliedDetailTarget !== undefined
+        : item.detailTarget !== pending.previousTarget || item.appliedDetailTarget !== pending.previousTarget)) {
+        pending.resolve({ applied: false, reason: 'unavailable' })
+        return buildError(reqId, 'CAPABILITY_DENIED', 'detail target acknowledgement is not current')
+      }
+      item.detailTarget = pending.target
+      item.appliedDetailTarget = pending.target
+      console.warn(
+        `[plugins] detail target applied by ` +
+        `'${this.running.get(pending.providerInstanceId)?.contributionKey ?? pending.providerInstanceId}' ` +
+        `(revision ${pending.target.revision})`,
+      )
+      pending.resolve({ applied: true })
+      if (pending.openId !== undefined) {
+        const open = this.pendingDetailOpens.get(pending.openId)
+        if (open && this.currentPendingDetailOpen(open)) {
+          this.settlePendingDetailOpen(pending.openId, buildSuccess(open.reqId, { opened: true }))
+        }
+      }
+    } else {
+      pending.resolve({ applied: false, reason: reason as 'refused' | 'busy' })
+      if (pending.openId !== undefined) {
+        const open = this.pendingDetailOpens.get(pending.openId)
+        if (open) {
+          this.settlePendingDetailOpen(
+            pending.openId,
+            buildSuccess(open.reqId, { opened: false, reason: 'provider-unavailable' }),
+            true,
+          )
+        }
+      }
+    }
+    return buildSuccess(reqId, null)
+  }
+
+  private settlePendingEditorTarget(correlation: string, opened: boolean): void {
+    const pending = this.pendingEditorTargets.get(correlation)
+    if (!pending) return
+    this.pendingEditorTargets.delete(correlation)
+    if (pending.timer !== null) clearTimeout(pending.timer)
+    pending.resolve(opened)
+  }
+
+  private cancelPendingEditorTargets(predicate: (pending: PendingEditorTarget) => boolean): void {
+    for (const pending of this.pendingEditorTargets.values()) {
+      if (predicate(pending)) this.settlePendingEditorTarget(pending.correlation, false)
+    }
+  }
+
+  /** Revalidates a callback against the exact detail item and registered receiver document. */
+  private currentPendingEditorTarget(pending: PendingEditorTarget): boolean {
+    const source = this.running.get(pending.sourceInstanceId)
+    const sourceBinding = source ? this.pluginFrameBindings.activeForInstance(source.instanceId) : null
+    const item = this.receiverItems.get(pending.sourceItemId)
+    const itemPending = item ? this.pendingPluginFrames.get(item.bindingId) : undefined
+    const pair = item?.offer.detailSourceInstanceId
+      ? this.detailPairs.get(item.offer.detailSourceInstanceId)
+      : undefined
+    const registration = this.receiverRegistrations.get(pending.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    return Boolean(
+      source && source.documentGeneration === pending.sourceDocumentGeneration && sourceBinding &&
+      this.activePluginFrame(sourceBinding) === source &&
+      item && item.receiverId === pending.receiverId && item.offer.location === 'detail' &&
+      itemPending?.instanceId === source.instanceId && pair && pair.receiverId === pending.receiverId &&
+      this.currentDetailPair(pair) && registration && receiver &&
+      registration.receiverInstanceId === pending.receiverInstanceId &&
+      registration.documentGeneration === pending.receiverDocumentGeneration &&
+      registration.declaration.editorTargets?.protocolVersion === 1 &&
+      this.currentReceiverRegistration(pending.receiverId, receiver) === registration &&
+      source.workspacePath !== null && receiver.workspacePath !== null &&
+      resolvePathForContainment(source.workspacePath) === pending.workspacePath &&
+      resolvePathForContainment(receiver.workspacePath) === pending.workspacePath &&
+      resolveWorkspaceRelativePath(pending.workspacePath, pending.targetRelativePath, false) === pending.targetPath &&
+      !receiver.view.webContents.isDestroyed()
+    )
+  }
+
+  /** Delivers one editor target to the exact receiver paired with this detail provider. */
+  private async openPairedEditorTarget(
+    source: RunningPlugin,
+    workspacePath: string,
+    filepath: string,
+    line: unknown,
+    column: unknown,
+  ): Promise<boolean | null> {
+    const item = [...this.receiverItems.values()].find((candidate) =>
+      candidate.offer.location === 'detail' && candidate.offer.detailSourceInstanceId !== undefined &&
+      this.pendingPluginFrames.get(candidate.bindingId)?.instanceId === source.instanceId
+    )
+    if (!item) return null
+    const root = source.workspacePath === null ? null : resolvePathForContainment(source.workspacePath)
+    const requestedRoot = resolvePathForContainment(workspacePath)
+    if (!root || requestedRoot !== root || !filepath || isAbsolute(filepath) ||
+      (line !== undefined && (typeof line !== 'number' || !Number.isInteger(line) || line <= 0)) ||
+      (column !== undefined && (typeof column !== 'number' || !Number.isInteger(column) || column <= 0))) {
+      return false
+    }
+    const targetPath = resolveWorkspaceRelativePath(root, filepath, false)
+    if (!targetPath) return false
+    const path = relative(root, targetPath)
+    if (!path || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) return false
+    const registration = this.receiverRegistrations.get(item.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    const pending: PendingEditorTarget = {
+      correlation: randomUUID(),
+      sourceInstanceId: source.instanceId,
+      sourceDocumentGeneration: source.documentGeneration,
+      sourceItemId: item.id,
+      receiverId: item.receiverId,
+      receiverInstanceId: registration?.receiverInstanceId ?? '',
+      receiverDocumentGeneration: registration?.documentGeneration ?? -1,
+      workspacePath: root,
+      targetPath,
+      targetRelativePath: path,
+      resolve: () => undefined,
+      timer: null,
+    }
+    if (!registration || !receiver || !this.currentPendingEditorTarget(pending)) return false
+    return new Promise<boolean>((resolveResult) => {
+      const request: PendingEditorTarget = {
+        ...pending,
+        resolve: resolveResult,
+        timer: setTimeout(() => this.settlePendingEditorTarget(pending.correlation, false), 10_000),
+      }
+      this.pendingEditorTargets.set(request.correlation, request)
+      try {
+        receiver.view.webContents.send(IPC_RECEIVER_EDITOR_TARGET, {
+          receiverId: request.receiverId,
+          correlation: request.correlation,
+          target: {
+            path,
+            ...(line === undefined ? {} : { line }),
+            ...(column === undefined ? {} : { column }),
+            sourceItem: request.sourceItemId,
+          },
+        })
+      } catch {
+        this.settlePendingEditorTarget(request.correlation, false)
+      }
+    })
+  }
+
+  /** Revalidates every live identity and Grant participating in a paired detail. */
+  private currentDetailPair(pair: DetailPair): boolean {
+    return this.detailPairRefusal(pair) === ''
+  }
+
+  /** Build an opaque, canonical resource identity without exposing target data. */
+  private detailResourceKey(
+    pair: DetailPair,
+    descriptor: PluginLaunchDescriptor,
+    target: JsonValue,
+  ): string | null {
+    if (typeof target !== 'object' || target === null || Array.isArray(target) ||
+      !Object.prototype.hasOwnProperty.call(target, 'resource')) return null
+    const resource = (target as Record<string, unknown>).resource
+    const workspacePath = resolvePathForContainment(pair.workspacePath)
+    if (!isJsonValue(resource) || !workspacePath || !nonEmptyString(descriptor.packageVersion)) return null
+    return `detail-resource-v1:${createHash('sha256').update(canonicalTrustJson({
+      contributionKey: pair.detailView.contributionKey,
+      packageVersion: descriptor.packageVersion,
+      workspacePath,
+      resource,
+    }), 'utf8').digest('hex')}`
+  }
+
+  /** Sends one Host-private detail offer after all current pair checks pass. */
+  private offerPairedDetail(
+    pair: DetailPair,
+    descriptor: PluginLaunchDescriptor,
+    target: JsonValue,
+    resourceKey: string,
+    openId: string,
+    offerId: string,
+  ): boolean {
+    const registration = this.receiverRegistrations.get(pair.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    if (!registration || !receiver || !this.currentDetailPair(pair)) return false
+    const offer: ReceiverOffer = {
+      id: offerId,
+      openId,
+      location: 'detail',
+      descriptor,
+      view: pair.detailView,
+      workspacePath: pair.workspacePath,
+      detailSourceInstanceId: pair.sourceInstanceId,
+      detailTarget: { targetId: randomUUID(), revision: 1, resourceKey, target },
+    }
+    registration.offers.set(offer.id, offer)
+    try {
+      receiver.view.webContents.send('plugin:receiver:offer', {
+        receiverId: registration.id,
+        offer: {
+          offerId: offer.id,
+          contributionKey: offer.view.contributionKey,
+          title: offer.view.title,
+          location: offer.location,
+          resourceKey,
+        },
+      })
+      return true
+    } catch {
+      registration.offers.delete(offer.id)
+      return false
+    }
+  }
+
+  private openDetail(plugin: RunningPlugin, reqId: string, args: unknown): CapabilityResponse | Promise<CapabilityResponse> {
+    const record = typeof args === 'object' && args !== null && !Array.isArray(args)
+      ? args as Record<string, unknown>
+      : null
+    if (!record || Object.keys(record).some((key) => key !== 'contributionKey' && key !== 'target') ||
+      typeof record.contributionKey !== 'string' || !Object.prototype.hasOwnProperty.call(record, 'target')) {
+      return buildError(reqId, 'INVALID_ARGUMENT', 'detail request is invalid')
+    }
+    const pair = this.detailPairs.get(plugin.instanceId)
+    if (!pair) {
+      console.warn(`[plugins] detail open refused: '${plugin.id}' has no paired receiver`)
+      return buildSuccess(reqId, { opened: false, reason: 'receiver-unpaired' })
+    }
+    const pairRefusal = this.detailPairRefusal(pair)
+    if (pairRefusal) {
+      console.warn(`[plugins] detail open refused: ${pairRefusal}`)
+      return buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' })
+    }
+    const descriptor = this.descriptors.get(plugin.id)
+    if (!descriptor || record.contributionKey !== pair.detailView.contributionKey) {
+      console.warn(
+        `[plugins] detail open refused: '${plugin.id}' asked for '${record.contributionKey}' ` +
+        `but its declared detail view is '${pair.detailView.contributionKey}'`,
+      )
+      return buildError(reqId, 'INVALID_ARGUMENT', 'detail contribution is not declared by this source')
+    }
+    const validation = validatePluginDetailTarget({
+      packageDir: descriptor.packageDir ?? '',
+      targetSchema: pair.detailView.targetSchema,
+      target: record.target,
+    })
+    if (!validation.ok) {
+      console.warn(`[plugins] detail open refused: ${validation.reason}`)
+      return validation.reason === 'invalid-target'
+        ? buildError(reqId, 'INVALID_ARGUMENT', 'detail target is invalid')
+        : buildSuccess(reqId, { opened: false, reason: 'provider-unavailable' })
+    }
+    const resourceKey = this.detailResourceKey(pair, descriptor, validation.target)
+    const registration = this.receiverRegistrations.get(pair.receiverId)
+    if (!resourceKey) return buildError(reqId, 'INVALID_ARGUMENT', 'detail target resource is invalid')
+    if (!registration) return buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' })
+    const openId = randomUUID()
+    const offerId = randomUUID()
+    return new Promise<CapabilityResponse>((resolveOpen) => {
+      const pending: PendingDetailOpen = {
+        id: openId,
+        reqId,
+        sourceInstanceId: plugin.instanceId,
+        sourceDocumentGeneration: plugin.documentGeneration,
+        receiverId: pair.receiverId,
+        receiverInstanceId: registration.receiverInstanceId,
+        receiverDocumentGeneration: registration.documentGeneration,
+        offerId,
+        itemId: null,
+        resolve: resolveOpen,
+        timer: null,
+      }
+      this.pendingDetailOpens.set(openId, pending)
+      pending.timer = setTimeout(() => {
+        console.warn(
+          `[plugins] detail open timed out: '${plugin.id}' → '${pair.detailView.contributionKey}' ` +
+          `(the receiver mounted the item but the provider never applied the target)`,
+        )
+        this.settlePendingDetailOpen(
+          openId,
+          buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' }),
+          true,
+        )
+      }, DETAIL_OPEN_TIMEOUT_MS)
+      if (!this.offerPairedDetail(pair, descriptor, validation.target, resourceKey, openId, offerId)) {
+        console.warn('[plugins] detail open refused: the receiver could not be offered the target')
+        this.settlePendingDetailOpen(
+          openId,
+          buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' }),
+        )
+      }
+    })
+  }
+
+  private handlePluginFramePortMessage(binding: PluginFrameBinding, message: unknown): void {
+    const plugin = this.activePluginFrame(binding)
+    if (!plugin || typeof message !== 'object' || message === null || Array.isArray(message)) return
+    const envelope = message as Record<string, unknown>
+    const kind = envelope.kind
+    const channel = envelope.channel
+    const payload = envelope.payload
+    const requestId = typeof envelope.requestId === 'string' ? envelope.requestId : ''
+    const respond = (response: CapabilityResponse): void => {
+      if (requestId && this.activePluginFrame(binding)) {
+        this.pluginFrameBindings.post(plugin.instanceId, 'plugin:response', { requestId, response })
+      }
+    }
+    if (kind === 'cast') {
+      if (channel === IPC_CAST) this.handleCast(0, payload, null, plugin)
+      else if (channel === IPC_BACKEND_CANCEL) {
+        const record = this.exactBackendPayload(payload, new Set(['reqId', 'subscriptionId']))
+        const keys = record ? Object.keys(record) : []
+        const id = keys.length === 1 ? record?.[keys[0] as 'reqId' | 'subscriptionId'] : undefined
+        if (nonEmptyString(id)) this.cancelBackendRecord(plugin.instanceId, id)
+      } else if (channel === IPC_READY) this.markPluginReady(plugin)
+      else if (channel === IPC_HIDE_SELF) this.hidePlugin(plugin)
+      return
+    }
+    if (kind !== 'invoke' || !requestId || typeof channel !== 'string') return
+    const invoke = async (): Promise<CapabilityResponse> => {
+      if (channel === IPC_CALL) return this.capabilityCallHandler?.(plugin, payload) ?? buildError(requestId, 'BACKEND_UNAVAILABLE', 'capability broker is not connected')
+      if (channel === IPC_HOST_CALL) return this.handleHostCall(0, payload, null, plugin)
+      if (channel === IPC_BACKEND_CALL) return this.backendCallHandler?.(plugin, payload) ?? buildError(requestId, 'BACKEND_UNAVAILABLE', 'backend broker is not connected')
+      if (channel === IPC_BACKEND_SUBSCRIBE) return this.backendSubscribeHandler?.(plugin, payload) ?? buildError(requestId, 'BACKEND_UNAVAILABLE', 'backend broker is not connected')
+      if (channel === IPC_READY) {
+        this.markPluginReady(plugin)
+        return buildSuccess(requestId, null)
+      }
+      if (channel === IPC_HIDE_SELF) {
+        this.hidePlugin(plugin)
+        return buildSuccess(requestId, null)
+      }
+      return buildError(requestId, 'BAD_REQUEST', 'unsupported frame channel')
+    }
+    void invoke().then(respond, () => respond(buildError(requestId, 'INTERNAL_ERROR', 'frame request failed')))
   }
 
   private discardGitPathGrants(instanceId: string): void {
@@ -2204,24 +3906,16 @@ export class FrontendPluginManager {
     return buildSuccess(reqId, { accepted: true })
   }
 
-  private async runGitAccountAction(
+  private async runGitAccountOperation(
     reqId: string,
-    args: Record<string, unknown>,
+    operation: string,
+    payload: Record<string, unknown>,
     plugin: RunningPlugin,
   ): Promise<CapabilityResponse> {
-    const operation = typeof args.operation === 'string' ? args.operation : ''
-    const audience = plugin.capabilityContext?.runtimeBinding?.audience
-    if (audience !== 'git-left' && audience !== 'git-window') {
-      return buildError(reqId, 'CAPABILITY_DENIED', 'Git account actions are unavailable to this view')
-    }
     const handlers = this.gitAccountHandlers
     if (!handlers || !GIT_ACCOUNT_OPERATIONS.has(operation)) {
       return buildError(reqId, 'CAPABILITY_DENIED', 'Git account service is unavailable')
     }
-    const rawPayload = args.payload
-    const payload = typeof rawPayload === 'object' && rawPayload !== null && !Array.isArray(rawPayload)
-      ? rawPayload as Record<string, unknown>
-      : {}
     try {
       if (operation === 'list') {
         if (Object.keys(payload).length > 0) {
@@ -2274,6 +3968,198 @@ export class FrontendPluginManager {
       return buildSuccess(reqId, { accountId: null })
     } catch (error) {
       return buildError(reqId, 'BACKEND_ERROR', error instanceof Error ? error.message : 'Git account operation failed')
+    }
+  }
+
+  private async runGitAccountAction(
+    reqId: string,
+    args: Record<string, unknown>,
+    plugin: RunningPlugin,
+  ): Promise<CapabilityResponse> {
+    const audience = plugin.capabilityContext?.runtimeBinding?.audience
+    if (audience !== 'git-left' && audience !== 'git-window') {
+      return buildError(reqId, 'CAPABILITY_DENIED', 'Git account actions are unavailable to this view')
+    }
+    const rawPayload = args.payload
+    const payload = typeof rawPayload === 'object' && rawPayload !== null && !Array.isArray(rawPayload)
+      ? rawPayload as Record<string, unknown>
+      : {}
+    return this.runGitAccountOperation(
+      reqId,
+      typeof args.operation === 'string' ? args.operation : '',
+      payload,
+      plugin,
+    )
+  }
+
+  private async executeBoundGitRequest(
+    plugin: RunningPlugin,
+    reqId: string,
+    action: string,
+    type: string,
+    wsPayload: Record<string, unknown>,
+    timeoutMs = 10_000,
+    beforeDispatch = (): boolean => true,
+  ): Promise<CapabilityResponse> {
+    let cloneTarget: string | null = null
+    let credentialOwner: GitCredentialOwner | null = null
+    let credentialReplyOwner: GitCredentialOwner | null = null
+    if (action === 'fs.request' && GIT_HOST_FS_MUTATION_TYPES.has(type)) {
+      const mutationPaths = type === 'fs.rename'
+        ? [wsPayload.src_rel, wsPayload.dst_rel]
+        : [wsPayload.rel_path]
+      for (const candidate of mutationPaths) {
+        const violation = workspaceMutationPathError(plugin.workspacePath ?? '', candidate)
+        if (violation) return buildError(reqId, 'WORKSPACE_SCOPE_VIOLATION', violation)
+      }
+    }
+    if (action === 'fs.request' && type === 'fs.stat_path') {
+      const candidate = typeof wsPayload.path === 'string' ? wsPayload.path : ''
+      if (!plugin.workspacePath || !isWorkspaceContainedPath(plugin.workspacePath, candidate)) {
+        return buildError(reqId, 'WORKSPACE_SCOPE_VIOLATION', 'path is outside the Host workspace binding')
+      }
+      wsPayload.path = resolvePathForContainment(resolve(plugin.workspacePath, candidate))
+    }
+    if (!beforeDispatch()) {
+      return buildError(reqId, 'CAPABILITY_DENIED', 'Git Host action is not available')
+    }
+    if (action === 'git.request' && GIT_REMOTE_REQUEST_TYPES.has(type)) {
+      const workspacePath = plugin.workspacePath
+      if (!workspacePath) {
+        return buildError(reqId, 'WORKSPACE_SCOPE_VIOLATION', 'Git view is not bound to a workspace')
+      }
+      let credential: { username: string; token: string; expectedHost: string } | null = null
+      if (this.gitAccountHandlers) {
+        try {
+          credential = this.gitAccountHandlers.getCredential(resolve(workspacePath))
+        } catch (error) {
+          return buildError(
+            reqId,
+            'BACKEND_ERROR',
+            error instanceof Error ? error.message : 'Git credential lookup failed'
+          )
+        }
+      }
+      if (credential && type === 'git.clone') {
+        let isHttps = false
+        try {
+          isHttps = typeof wsPayload.url === 'string' && new URL(wsPayload.url).protocol === 'https:'
+        } catch {
+          // Invalid and non-URL Git forms stay credential-free; the backend
+          // owns clone URL validation and normal SSH authentication.
+        }
+        if (isHttps && !isExpectedHttpsRemote(wsPayload.url, credential.expectedHost)) {
+          return buildError(reqId, 'CREDENTIAL_REQUIRED', 'No workspace-bound Git credential is available for this HTTPS remote')
+        }
+        if (!isHttps) credential = null
+      }
+      if (credential) {
+        wsPayload.credential = credential
+      } else {
+        credentialOwner = this.issueGitCredentialOwner(plugin)
+        if (!credentialOwner) {
+          return buildError(reqId, 'CAPABILITY_DENIED', 'interactive Git credential owner is unavailable')
+        }
+        wsPayload.credential_owner_nonce = credentialOwner.nonce
+      }
+    }
+    if (
+      action === 'git.request' &&
+      (type === 'git.credential_submit' || type === 'git.credential_cancel')
+    ) {
+      credentialReplyOwner = this.gitCredentialRequestOwner(plugin, wsPayload.request_id)
+      if (!credentialReplyOwner) {
+        return buildError(reqId, 'CAPABILITY_DENIED', 'Git credential request is not owned by this view')
+      }
+      wsPayload.credential_owner_nonce = credentialReplyOwner.nonce
+    }
+    if (action === 'git.request' && type === 'git.clone') {
+      cloneTarget = this.consumeGitCloneTargetGrant(plugin, wsPayload.target_grant, wsPayload.target_dir)
+      if (!cloneTarget) {
+        return buildError(reqId, 'CAPABILITY_DENIED', 'clone target lacks a valid Host picker grant')
+      }
+      wsPayload.target_dir = cloneTarget
+      delete wsPayload.target_grant
+    }
+    const client = this.ensureBackend()
+    if (!client) {
+      if (credentialOwner) this.releaseGitCredentialOwner(credentialOwner)
+      return buildError(reqId, 'BACKEND_ERROR', 'backend not connected')
+    }
+    try {
+      const response = backendResponseToCapability(reqId, await client.send(type, wsPayload, timeoutMs, { beforeDispatch }))
+      if (
+        type === 'git.clone' &&
+        cloneTarget &&
+        response.ok &&
+        typeof response.result === 'object' &&
+        response.result !== null &&
+        typeof (response.result as { path?: unknown }).path === 'string' &&
+        resolvePathForContainment((response.result as { path: string }).path) === cloneTarget
+      ) {
+        const grant = this.issueGitPathGrant(plugin, cloneTarget, ['open_workspace'])
+        if (!grant) return buildError(reqId, 'CAPABILITY_DENIED', 'cloned workspace is unavailable')
+        return buildSuccess(reqId, { ...response.result as Record<string, unknown>, openWorkspaceGrant: grant })
+      }
+      return response
+    } catch (error) {
+      return buildError(
+        reqId,
+        'BACKEND_ERROR',
+        error instanceof Error ? error.message : 'backend request failed'
+      )
+    } finally {
+      if (credentialOwner) this.releaseGitCredentialOwner(credentialOwner)
+      if (credentialReplyOwner && nonEmptyString(wsPayload.request_id)) {
+        credentialReplyOwner.requestIds.delete(wsPayload.request_id)
+        if (this.gitCredentialRequests.get(wsPayload.request_id) === credentialReplyOwner) {
+          this.gitCredentialRequests.delete(wsPayload.request_id)
+        }
+      }
+    }
+  }
+
+  private isLegacyMiniIdeSettings(plugin: RunningPlugin, wsType: string): boolean {
+    return Boolean(
+      this.miniIdeLegacyPreferences &&
+      plugin.id === MINI_IDE_PLUGIN_ID &&
+      !plugin.hasV2DescriptorIdentity &&
+      (wsType === 'ui.settings.get' || wsType === 'ui.settings.set')
+    )
+  }
+
+  private async executeLegacyMiniIdeSettings(
+    call: CapabilityCall,
+    plugin: RunningPlugin,
+    wsType: 'ui.settings.get' | 'ui.settings.set',
+  ): Promise<CapabilityResponse> {
+    const adapter = this.miniIdeLegacyPreferences
+    if (!adapter) return buildError(call.reqId, 'BACKEND_UNAVAILABLE', 'mini-IDE preferences are unavailable')
+    const client = this.ensureBackend()
+    if (!client) return buildError(call.reqId, 'BACKEND_ERROR', 'backend not connected')
+    try {
+      if (wsType === 'ui.settings.get') {
+        const response = await client.send(wsType, toPayload(call.args))
+        if (!response.ok) return backendResponseToCapability(call.reqId, response)
+        const payload = toPayload(response.payload)
+        const settings = await adapter.read(toPayload(payload.settings))
+        return backendResponseToCapability(call.reqId, {
+          ...response,
+          payload: { ...payload, settings },
+        })
+      }
+      const args = toPayload(call.args)
+      const updates = toPayload(args.updates)
+      const remaining = await adapter.write(updates)
+      if (Object.keys(remaining).length === 0) return buildSuccess(call.reqId, { ok: true })
+      const response = await client.send(wsType, { ...args, updates: remaining })
+      return backendResponseToCapability(call.reqId, response)
+    } catch (error) {
+      return buildError(
+        call.reqId,
+        'BACKEND_ERROR',
+        error instanceof Error ? error.message : 'mini-IDE preferences failed',
+      )
     }
   }
 
@@ -2367,119 +4253,7 @@ export class FrontendPluginManager {
         return { ...payload, reqId } as CapabilityResponse
       }
       const wsPayload = payload as Record<string, unknown>
-      let cloneTarget: string | null = null
-      let credentialOwner: GitCredentialOwner | null = null
-      let credentialReplyOwner: GitCredentialOwner | null = null
-      if (action === 'fs.request' && GIT_HOST_FS_MUTATION_TYPES.has(type)) {
-        const mutationPaths = type === 'fs.rename'
-          ? [wsPayload.src_rel, wsPayload.dst_rel]
-          : [wsPayload.rel_path]
-        for (const candidate of mutationPaths) {
-          const violation = workspaceMutationPathError(plugin.workspacePath ?? '', candidate)
-          if (violation) return buildError(reqId, 'WORKSPACE_SCOPE_VIOLATION', violation)
-        }
-      }
-      if (action === 'fs.request' && type === 'fs.stat_path') {
-        const candidate = typeof wsPayload.path === 'string' ? wsPayload.path : ''
-        if (!plugin.workspacePath || !isWorkspaceContainedPath(plugin.workspacePath, candidate)) {
-          return buildError(reqId, 'WORKSPACE_SCOPE_VIOLATION', 'path is outside the Host workspace binding')
-        }
-        wsPayload.path = resolvePathForContainment(resolve(plugin.workspacePath, candidate))
-      }
-      if (action === 'git.request' && GIT_REMOTE_REQUEST_TYPES.has(type)) {
-        const workspacePath = plugin.workspacePath
-        if (!workspacePath) {
-          return buildError(reqId, 'WORKSPACE_SCOPE_VIOLATION', 'Git view is not bound to a workspace')
-        }
-        let credential: { username: string; token: string; expectedHost: string } | null = null
-        if (this.gitAccountHandlers) {
-          try {
-            credential = this.gitAccountHandlers.getCredential(resolve(workspacePath))
-          } catch (error) {
-            return buildError(
-              reqId,
-              'BACKEND_ERROR',
-              error instanceof Error ? error.message : 'Git credential lookup failed'
-            )
-          }
-        }
-        if (credential && type === 'git.clone') {
-          let isHttps = false
-          try {
-            isHttps = typeof wsPayload.url === 'string' && new URL(wsPayload.url).protocol === 'https:'
-          } catch {
-            // Invalid and non-URL Git forms stay credential-free; the backend
-            // owns clone URL validation and normal SSH authentication.
-          }
-          if (isHttps && !isExpectedHttpsRemote(wsPayload.url, credential.expectedHost)) {
-            return buildError(reqId, 'CREDENTIAL_REQUIRED', 'No workspace-bound Git credential is available for this HTTPS remote')
-          }
-          if (!isHttps) credential = null
-        }
-        if (credential) {
-          wsPayload.credential = credential
-        } else {
-          credentialOwner = this.issueGitCredentialOwner(plugin)
-          if (!credentialOwner) {
-            return buildError(reqId, 'CAPABILITY_DENIED', 'interactive Git credential owner is unavailable')
-          }
-          wsPayload.credential_owner_nonce = credentialOwner.nonce
-        }
-      }
-      if (
-        action === 'git.request' &&
-        (type === 'git.credential_submit' || type === 'git.credential_cancel')
-      ) {
-        credentialReplyOwner = this.gitCredentialRequestOwner(plugin, wsPayload.request_id)
-        if (!credentialReplyOwner) {
-          return buildError(reqId, 'CAPABILITY_DENIED', 'Git credential request is not owned by this view')
-        }
-        wsPayload.credential_owner_nonce = credentialReplyOwner.nonce
-      }
-      if (action === 'git.request' && type === 'git.clone') {
-        cloneTarget = this.consumeGitCloneTargetGrant(plugin, wsPayload.target_grant, wsPayload.target_dir)
-        if (!cloneTarget) {
-          return buildError(reqId, 'CAPABILITY_DENIED', 'clone target lacks a valid Host picker grant')
-        }
-        wsPayload.target_dir = cloneTarget
-        delete wsPayload.target_grant
-      }
-      const client = this.ensureBackend()
-      if (!client) {
-        if (credentialOwner) this.releaseGitCredentialOwner(credentialOwner)
-        return buildError(reqId, 'BACKEND_ERROR', 'backend not connected')
-      }
-      try {
-        const response = backendResponseToCapability(reqId, await client.send(type, wsPayload))
-        if (
-          type === 'git.clone' &&
-          cloneTarget &&
-          response.ok &&
-          typeof response.result === 'object' &&
-          response.result !== null &&
-          typeof (response.result as { path?: unknown }).path === 'string' &&
-          resolvePathForContainment((response.result as { path: string }).path) === cloneTarget
-        ) {
-          const grant = this.issueGitPathGrant(plugin, cloneTarget, ['open_workspace'])
-          if (!grant) return buildError(reqId, 'CAPABILITY_DENIED', 'cloned workspace is unavailable')
-          return buildSuccess(reqId, { ...response.result as Record<string, unknown>, openWorkspaceGrant: grant })
-        }
-        return response
-      } catch (error) {
-        return buildError(
-          reqId,
-          'BACKEND_ERROR',
-          error instanceof Error ? error.message : 'backend request failed'
-        )
-      } finally {
-        if (credentialOwner) this.releaseGitCredentialOwner(credentialOwner)
-        if (credentialReplyOwner && nonEmptyString(wsPayload.request_id)) {
-          credentialReplyOwner.requestIds.delete(wsPayload.request_id)
-          if (this.gitCredentialRequests.get(wsPayload.request_id) === credentialReplyOwner) {
-            this.gitCredentialRequests.delete(wsPayload.request_id)
-          }
-        }
-      }
+      return this.executeBoundGitRequest(plugin, reqId, action, type, wsPayload)
     }
 
     if (action === 'ui.request') {
@@ -2519,8 +4293,13 @@ export class FrontendPluginManager {
     return buildError(reqId, 'METHOD_NOT_FOUND', 'Git Host action is not mapped')
   }
 
-  private async handleHostCall(senderId: number, payload: unknown): Promise<CapabilityResponse> {
-    const plugin = this.instanceForSender(senderId)
+  private async handleHostCall(
+    senderId: number,
+    payload: unknown,
+    senderFrame: WebFrameMain | null = null,
+    admittedPlugin?: RunningPlugin,
+  ): Promise<CapabilityResponse> {
+    const plugin = admittedPlugin ?? this.instanceForIpc(senderId, senderFrame)
     if (!plugin) return buildError('', 'BAD_REQUEST', 'unknown plugin sender')
     if (this.isPluginStopping(plugin)) {
       return buildError('', 'PLUGIN_STOPPING', 'plugin runtime is stopping')
@@ -2688,8 +4467,10 @@ export class FrontendPluginManager {
     if (this.ipcReady) return
     this.ipcReady = true
 
-    ipcMain.handle(IPC_CALL, async (event, payload: unknown): Promise<CapabilityResponse> => {
-      const plugin = this.instanceForSender(event.sender.id)
+    this.capabilityCallHandler = async (
+      plugin: RunningPlugin | undefined,
+      payload: unknown,
+    ): Promise<CapabilityResponse> => {
       if (!plugin) {
         // Not a known plugin view — refuse without leaking anything.
         return buildError('', 'BAD_REQUEST', 'unknown plugin sender')
@@ -2711,6 +4492,15 @@ export class FrontendPluginManager {
       const call = parseCapabilityCall(payload, pluginId)
       if (!call) {
         return buildError(reqId, 'BAD_REQUEST', 'malformed capability call')
+      }
+      if (call.ns === 'ui' && call.method === 'resolveDetailClose') {
+        return this.resolveDetailClose(plugin, call.reqId, call.args)
+      }
+      if (call.ns === 'ui' && call.method === 'resolveDetailTarget') {
+        return this.resolveDetailTarget(plugin, call.reqId, call.args)
+      }
+      if (call.ns === 'ui' && call.method === 'openDetail') {
+        return this.openDetail(plugin, call.reqId, call.args)
       }
       if (this.plansStorageReadinessHandler) {
         const storageAdmission = await this.plansInstanceStorageAdmission(plugin, reqId)
@@ -2769,6 +4559,24 @@ export class FrontendPluginManager {
               ...(plan.initiator ? { initiator: plan.initiator } : {}),
             })
             if (
+              (plan.address === 'storage.set' || plan.address === 'storage.delete') &&
+              (storageScope === 'plugin' || storageScope === 'workspace') &&
+              typeof storageKey === 'string'
+            ) {
+              const value = plan.address === 'storage.delete'
+                ? null
+                : (call.args as Record<string, unknown>).value
+              if (isJsonValue(value)) {
+                this.dispatchPluginStorageChanged(
+                  plan,
+                  storageScope,
+                  storageKey,
+                  value,
+                  plan.address === 'storage.delete',
+                )
+              }
+            }
+            if (
               plugin.hasV2DescriptorIdentity &&
               plugin.id === GIT_PLUGIN_ID &&
               (storageScope === 'plugin' || storageScope === 'workspace') &&
@@ -2813,7 +4621,10 @@ export class FrontendPluginManager {
         }
         try {
           return buildSuccess(call.reqId, await handler(plan))
-        } catch {
+        } catch (error) {
+          // The Plugin keeps the fixed opaque message (it must not learn Host
+          // paths or internals); the Host console keeps the cause.
+          console.error(`[plugins] public capability '${plan.address}' failed:`, error)
           return buildError(call.reqId, 'INTERNAL_ERROR', 'public capability failed')
         }
       }
@@ -2822,6 +4633,13 @@ export class FrontendPluginManager {
       // directly — no backend round-trip.
       if (plan.kind === 'host') {
         return this.runHostAction(call, plugin)
+      }
+
+      if (
+        (plan.wsType === 'ui.settings.get' || plan.wsType === 'ui.settings.set') &&
+        this.isLegacyMiniIdeSettings(plugin, plan.wsType)
+      ) {
+        return this.executeLegacyMiniIdeSettings(call, plugin, plan.wsType)
       }
 
       let wsPayload =
@@ -2874,17 +4692,437 @@ export class FrontendPluginManager {
       } finally {
         if (pendingOperation) this.pendingTerminalOperations.delete(pendingOperation.operationId)
       }
-    })
+    }
+    ipcMain.handle(IPC_CALL, (event, payload: unknown): Promise<CapabilityResponse> =>
+      this.capabilityCallHandler!(this.instanceForIpc(event.sender.id, event.senderFrame), payload)
+    )
 
     // Fixed first-party Git bridge. This does not expose a public `git` or
     // `issues` permission; sender and workspace binding are resolved by the
     // Host before the request reaches the backend.
     ipcMain.handle(IPC_HOST_CALL, async (event, payload: unknown): Promise<CapabilityResponse> =>
-      this.handleHostCall(event.sender.id, payload)
+      this.handleHostCall(event.sender.id, payload, event.senderFrame)
     )
 
-    ipcMain.handle(IPC_BACKEND_CALL, async (event, payload: unknown): Promise<CapabilityResponse> => {
-      const plugin = this.instanceForSender(event.sender.id)
+    // The provider child owns its nonce and is the only party that can invoke
+    // this handler. It never supplies a binding id or Host receiver identity.
+    ipcMain.handle(IPC_RECEIVER_REGISTER, (event, payload: unknown): { receiverId: string } => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const declaration = receiver ? this.declaredReceiver(receiver, payload) : null
+      if (!receiver || !declaration) throw new Error('receiver declaration is unavailable')
+      this.revokeReceiverFrames(receiver.instanceId)
+      const receiverId = randomUUID()
+      this.receiverRegistrations.set(receiverId, {
+        id: receiverId,
+        receiverInstanceId: receiver.instanceId,
+        documentGeneration: receiver.documentGeneration,
+        declaration,
+        offers: new Map(),
+      })
+      return { receiverId }
+    })
+
+    ipcMain.handle(IPC_RECEIVER_RESOLVE_CLOSE, (event, payload: unknown): void => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      if (!receiver) throw new Error('receiver close acknowledgement is unavailable')
+      this.resolveReceiverClose(receiver, payload)
+    })
+
+    ipcMain.handle(IPC_RECEIVER_RESOLVE_EDITOR_TARGET, (event, payload: unknown): void => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const correlation = typeof record?.correlation === 'string' ? record.correlation : ''
+      const result = typeof record?.result === 'object' && record.result !== null && !Array.isArray(record.result)
+        ? record.result as Record<string, unknown>
+        : null
+      const opened = result?.opened
+      const pending = this.pendingEditorTargets.get(correlation)
+      if (!receiver || !pending || !result || Object.keys(record ?? {}).some((key) =>
+        key !== 'receiverId' && key !== 'correlation' && key !== 'result'
+      ) || Object.keys(result).some((key) => key !== 'opened') || typeof opened !== 'boolean' ||
+        receiverId !== pending.receiverId || this.currentReceiverRegistration(receiverId, receiver) === undefined ||
+        !this.currentPendingEditorTarget(pending)) {
+        throw new Error('receiver editor target acknowledgement is unavailable')
+      }
+      this.settlePendingEditorTarget(correlation, opened)
+    })
+
+    ipcMain.handle(IPC_RECEIVER_LIST_LEFT, (event, payload: unknown): Array<{ contributionKey: string; title: string }> => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const receiverId = typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&
+        Object.keys(payload as Record<string, unknown>).length === 1 &&
+        typeof (payload as Record<string, unknown>).receiverId === 'string'
+        ? (payload as Record<string, unknown>).receiverId as string
+        : ''
+      const registration = receiver ? this.currentReceiverRegistration(receiverId, receiver) : undefined
+      const workspacePath = receiver?.workspacePath
+      const descriptor = receiver ? this.descriptors.get(receiver.id) : undefined
+      const receiverView = descriptor?.views?.find((view) => view.contributionKey === receiver?.contributionKey)
+      if (!receiver || !registration || !workspacePath || !descriptor || !receiverView ||
+        !registration.declaration.locations.includes('left') ||
+        !this.contributionCapabilityContext(descriptor, receiverView, workspacePath)) {
+        console.warn('[plugins] receiver left catalog refused: the receiver registration or its capability context is not current')
+        throw new Error('receiver left catalog is unavailable')
+      }
+      const catalogued = this.listContributionCatalog().flatMap((entry) => {
+        if (entry.location !== 'left') return []
+        const provider = this.descriptors.get(entry.pluginId)
+        const view = provider?.views?.find((candidate) => candidate.contributionKey === entry.contributionKey)
+        if (!provider || !view || this.descriptors.get(provider.id) !== provider ||
+          !provider.views?.includes(view) || this.isPackageVersionStopping(provider.id, provider.packageVersion) ||
+          !this.contributionCapabilityContext(provider, view, workspacePath)) {
+          console.warn(
+            `[plugins] receiver left catalog skips '${entry.contributionKey}': ` +
+            `${!provider ? 'no descriptor' :
+              !view ? 'no view' :
+                this.descriptors.get(provider.id) !== provider ? 'descriptor changed' :
+                  !provider.views?.includes(view) ? 'view not current' :
+                    this.isPackageVersionStopping(provider.id, provider.packageVersion) ? 'package stopping' :
+                      'capability context unavailable'}`,
+          )
+          return []
+        }
+        // Display metadata only: the receiver learns what to paint, never which
+        // plugin provides the view.
+        const icon = entry.iconFile && this.contributionIconResolver
+          ? this.contributionIconResolver(entry.iconFile)
+          : null
+        return [{
+          contributionKey: entry.contributionKey,
+          title: entry.title,
+          icon: icon?.url ?? null,
+          iconMonochrome: icon?.monochrome ?? false,
+        }]
+      })
+      console.warn(`[plugins] receiver left catalog: ${catalogued.length} contribution(s) offered`)
+      return catalogued
+    })
+
+    ipcMain.handle(IPC_RECEIVER_OPEN_LEFT, (event, payload: unknown): { offered: true } => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const contributionKey = typeof record?.contributionKey === 'string' ? record.contributionKey : ''
+      const registration = receiver ? this.currentReceiverRegistration(receiverId, receiver) : undefined
+      const workspacePath = receiver?.workspacePath
+      if (!receiver || !registration || !workspacePath ||
+        Object.keys(record ?? {}).some((key) => key !== 'receiverId' && key !== 'contributionKey')) {
+        throw new Error('receiver left contribution is unavailable')
+      }
+      const entry = this.listContributionCatalog().find((candidate) =>
+        candidate.location === 'left' && candidate.contributionKey === contributionKey
+      )
+      const descriptor = entry ? this.descriptors.get(entry.pluginId) : undefined
+      const view = descriptor?.views?.find((candidate) => candidate.contributionKey === contributionKey)
+      if (!descriptor || !view) {
+        console.warn(`[plugins] receiver left contribution '${contributionKey}' is not in the catalog`)
+        throw new Error('receiver left contribution is unavailable')
+      }
+      const offer = this.offerReceiverProvider(receiverId, descriptor, view, workspacePath)
+      if (!offer.ok) {
+        console.warn(
+          `[plugins] receiver left contribution '${contributionKey}' was refused (${offer.reason})`,
+        )
+        throw new Error(`receiver left contribution is unavailable: ${offer.reason}`)
+      }
+      return { offered: true }
+    })
+
+    ipcMain.handle(IPC_RECEIVER_MOUNT, async (event, payload: unknown): Promise<{ itemId: string }> => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const offerId = typeof record?.offerId === 'string' ? record.offerId : ''
+      const placement = record?.placement
+      const mountHostId =
+        typeof placement === 'object' && placement !== null && !Array.isArray(placement) &&
+        Object.keys(placement as Record<string, unknown>).length === 1 &&
+        nonEmptyString((placement as Record<string, unknown>).mountHostId)
+          ? (placement as Record<string, unknown>).mountHostId as string
+          : ''
+      const registration = receiver ? this.currentReceiverRegistration(receiverId, receiver) : undefined
+      if (!receiver || !registration || !mountHostId) {
+        throw new Error('receiver mount is unavailable')
+      }
+      const offer = registration.offers.get(offerId)
+      if (!offer ||
+        this.isPackageVersionStopping(offer.descriptor.id, offer.descriptor.packageVersion) ||
+        this.descriptors.get(offer.descriptor.id) !== offer.descriptor ||
+        !offer.descriptor.views?.includes(offer.view) ||
+        !registration.declaration.locations.includes(offer.location) ||
+        !this.contributionCapabilityContext(offer.descriptor, offer.view, offer.workspacePath)) {
+        throw new Error('receiver offer is unavailable')
+      }
+      const opening = offer.openId === undefined ? undefined : this.pendingDetailOpens.get(offer.openId)
+      if (offer.openId !== undefined && (!opening || !this.currentPendingDetailOpen(opening))) {
+        registration.offers.delete(offerId)
+        throw new Error('receiver offer is unavailable')
+      }
+      registration.offers.delete(offerId)
+      const reserved = await this.reservePluginFrameContribution(
+        receiver.hostWindow,
+        offer.view.contributionKey,
+        offer.workspacePath,
+        receiver,
+      )
+      if (!reserved.ok) {
+        console.warn(`[plugins] receiver mount refused: ${reserved.error}`)
+        if (opening) this.settlePendingDetailOpen(
+          opening.id,
+          buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
+        )
+        throw new Error(reserved.error)
+      }
+      if (!this.currentReceiverRegistration(receiverId, receiver)) {
+        if (opening) this.settlePendingDetailOpen(
+          opening.id,
+          buildSuccess(opening.reqId, { opened: false, reason: 'receiver-unavailable' }),
+        )
+        this.closePluginFrame(reserved.bindingId)
+        throw new Error('receiver mount is unavailable')
+      }
+      const pending = this.pendingPluginFrames.get(reserved.bindingId)
+      if (!pending) {
+        if (opening) this.settlePendingDetailOpen(
+          opening.id,
+          buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
+        )
+        this.closePluginFrame(reserved.bindingId)
+        throw new Error('receiver mount is unavailable')
+      }
+      const itemId = randomUUID()
+      this.receiverItems.set(itemId, {
+        id: itemId,
+        receiverId,
+        bindingId: reserved.bindingId,
+        offer,
+        nextDetailTargetRevision: offer.detailTarget === undefined ? 1 : offer.detailTarget.revision + 1,
+        ...(offer.detailTarget === undefined ? {} : { detailTarget: offer.detailTarget }),
+      })
+      if (opening) {
+        opening.itemId = itemId
+        if (!this.currentPendingDetailOpen(opening)) {
+          this.settlePendingDetailOpen(
+            opening.id,
+            buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
+            true,
+          )
+          throw new Error('receiver detail offer is unavailable')
+        }
+      }
+      if (offer.location === 'left' && offer.view.detailView) {
+        const pairing = this.pairDetailSource(pending.instanceId, receiverId)
+        if (!pairing.ok) {
+          this.closePluginFrame(reserved.bindingId)
+          console.warn(
+            `[plugins] receiver mount refused: provider detail pairing failed for ` +
+            `'${offer.view.contributionKey}' (${pairing.reason})`,
+          )
+          throw new Error(`receiver detail pairing is unavailable: ${pairing.reason}`)
+        }
+      }
+      if (offer.detailSourceInstanceId) {
+        const pair = this.detailPairs.get(offer.detailSourceInstanceId)
+        if (!pair || pair.receiverId !== receiverId || offer.detailTarget === undefined || !this.currentDetailPair(pair)) {
+          if (opening) this.settlePendingDetailOpen(
+            opening.id,
+            buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
+            true,
+          )
+          this.closePluginFrame(reserved.bindingId)
+          throw new Error('receiver detail offer is unavailable')
+        }
+      }
+      return { itemId }
+    })
+
+    ipcMain.handle(IPC_RECEIVER_ACCEPT_EXISTING, async (
+      event,
+      payload: unknown,
+    ): Promise<{ accepted: true; itemId: string } | { accepted: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' }> => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const offerId = typeof record?.offerId === 'string' ? record.offerId : ''
+      const itemId = typeof record?.itemId === 'string' ? record.itemId : ''
+      const registration = receiver ? this.currentReceiverRegistration(receiverId, receiver) : undefined
+      if (!receiver || !registration || !record ||
+        Object.keys(record).some((key) => key !== 'receiverId' && key !== 'offerId' && key !== 'itemId')) {
+        throw new Error('receiver existing detail acceptance is unavailable')
+      }
+      const offer = registration.offers.get(offerId)
+      if (!offer || offer.location !== 'detail' || !offer.detailTarget ||
+        !registration.declaration.locations.includes('detail')) {
+        return { accepted: false, reason: 'unavailable' }
+      }
+      const opening = offer.openId === undefined ? undefined : this.pendingDetailOpens.get(offer.openId)
+      if (offer.openId !== undefined && (!opening || !this.currentPendingDetailOpen(opening))) {
+        registration.offers.delete(offerId)
+        return { accepted: false, reason: 'unavailable' }
+      }
+      // A current receiver can make exactly one authorized decision per offer.
+      // Refusal, busy, timeout, or teardown never creates a fallback mount.
+      registration.offers.delete(offerId)
+      const item = this.receiverItems.get(itemId)
+      const previousTarget = item?.appliedDetailTarget
+      if (!item || item.receiverId !== receiverId || !previousTarget ||
+        previousTarget.resourceKey !== offer.detailTarget.resourceKey) {
+        if (opening) this.settlePendingDetailOpen(
+          opening.id,
+          buildSuccess(opening.reqId, { opened: false, reason: 'receiver-unavailable' }),
+        )
+        return { accepted: false, reason: 'unavailable' }
+      }
+      if (this.detailCloseLocks.has(item.id)) {
+        if (opening) this.settlePendingDetailOpen(
+          opening.id,
+          buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
+        )
+        return { accepted: false, reason: 'busy' }
+      }
+      if (opening) {
+        opening.itemId = itemId
+        if (!this.currentPendingDetailOpen(opening)) {
+          this.settlePendingDetailOpen(
+            opening.id,
+            buildSuccess(opening.reqId, { opened: false, reason: 'receiver-unavailable' }),
+          )
+          return { accepted: false, reason: 'unavailable' }
+        }
+      }
+      const target: DetailTargetState = {
+        targetId: randomUUID(),
+        revision: item.nextDetailTargetRevision,
+        resourceKey: offer.detailTarget.resourceKey,
+        target: offer.detailTarget.target,
+      }
+      item.nextDetailTargetRevision += 1
+      const decision = await this.dispatchDetailTarget(item, target, previousTarget, offer.openId)
+      if (!decision.applied && opening && this.pendingDetailOpens.has(opening.id)) {
+        this.settlePendingDetailOpen(
+          opening.id,
+          buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
+        )
+      }
+      return decision.applied
+        ? { accepted: true, itemId }
+        : { accepted: false, reason: decision.reason }
+    })
+
+    ipcMain.handle(IPC_RECEIVER_DISPOSE, (event, payload: unknown): void => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const receiverId = typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&
+        typeof (payload as Record<string, unknown>).receiverId === 'string'
+        ? (payload as Record<string, unknown>).receiverId as string
+        : ''
+      if (!receiver || !this.currentReceiverRegistration(receiverId, receiver)) return
+      this.revokeReceiverRegistration(receiverId)
+    })
+
+    ipcMain.handle(IPC_RECEIVER_ABORT, (event, payload: unknown): void => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const itemId = typeof record?.itemId === 'string' ? record.itemId : ''
+      const registration = receiver ? this.currentReceiverRegistration(receiverId, receiver) : undefined
+      const item = this.receiverItems.get(itemId)
+      // Abort is intentionally idempotent. A stale/replaced receiver cannot
+      // close an item, and a second abort observes the already-removed item.
+      if (!registration || !item || item.receiverId !== receiverId) return
+      const transactionId = this.detailCloseLocks.get(itemId)
+      if (transactionId) this.failDetailCloseTransaction(transactionId, 'unavailable')
+      this.closePluginFrame(item.bindingId)
+    })
+
+    ipcMain.handle(IPC_RECEIVER_REQUEST_CLOSE_TRANSACTION, (
+      event,
+      payload: unknown,
+    ): Promise<DetailCloseResult> => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const itemIds = Array.isArray(record?.itemIds) ? record.itemIds : null
+      if (!receiver || !record || Object.keys(record).some((key) => key !== 'receiverId' && key !== 'itemIds') ||
+        !itemIds || itemIds.some((itemId) => typeof itemId !== 'string')) {
+        return Promise.resolve({ closed: false, reason: 'unavailable' })
+      }
+      return this.requestDetailCloseTransaction(receiver, receiverId, itemIds)
+    })
+
+    // Preserve the existing one-item result shape through the transaction path.
+    ipcMain.handle(IPC_RECEIVER_REQUEST_CLOSE, (event, payload: unknown): Promise<DetailCloseResult> => {
+      const receiver = this.instanceForIpc(event.sender.id, event.senderFrame)
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const receiverId = typeof record?.receiverId === 'string' ? record.receiverId : ''
+      const itemId = typeof record?.itemId === 'string' ? record.itemId : ''
+      if (!receiver || !record || Object.keys(record).some((key) => key !== 'receiverId' && key !== 'itemId')) {
+        return Promise.resolve({ closed: false, reason: 'unavailable' })
+      }
+      return this.requestDetailCloseTransaction(receiver, receiverId, [itemId])
+    })
+
+    ipcMain.handle(IPC_RECEIVER_BLANK_READY, (event, payload: unknown): { locator: string } => {
+      const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : null
+      const itemId = typeof record?.itemId === 'string' ? record.itemId : ''
+      const frameToken = typeof record?.frameToken === 'string' ? record.frameToken : ''
+      const item = this.receiverItems.get(itemId)
+      const registration = item ? this.receiverRegistrations.get(item.receiverId) : undefined
+      const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+      const receiverFrame = event.senderFrame
+      const frame = receiverFrame
+        ? webFrameMain.fromFrameToken(receiverFrame.processId, frameToken)
+        : null
+      if (!item || !registration || !receiver || !receiverFrame || !frame ||
+        receiver.documentGeneration !== registration.documentGeneration ||
+        event.sender.id !== receiver.view.webContents.id ||
+        receiverFrame !== receiver.view.webContents.mainFrame ||
+        frame.parent !== receiver.view.webContents.mainFrame ||
+        frame.frameToken !== frameToken || frame.url !== 'about:blank') {
+        throw new Error('receiver blank is unavailable')
+      }
+      if (!this.bindPluginFrameBlank(item.bindingId, frame)) {
+        this.closePluginFrame(item.bindingId)
+        throw new Error('receiver blank is unavailable')
+      }
+      const pending = this.pendingPluginFrames.get(item.bindingId)
+      if (!pending) throw new Error('receiver blank is unavailable')
+      // The trusted receiver preload assigns this locator only after this
+      // exact frame-token recheck. Main must never navigate the frame itself.
+      return { locator: pending.entryUrl }
+    })
+
+    ipcMain.handle(IPC_FRAME_DOCUMENT_READY, (event, payload: unknown): boolean => {
+      const nonce =
+        typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&
+        Object.keys(payload as Record<string, unknown>).length === 1 &&
+        nonEmptyString((payload as Record<string, unknown>).nonce)
+          ? (payload as Record<string, unknown>).nonce as string
+          : null
+      if (!nonce || !event.senderFrame) return false
+      return this.admitPluginFrameDocument(event.senderFrame, event.sender.id, nonce)
+    })
+
+    this.backendCallHandler = async (
+      plugin: RunningPlugin | undefined,
+      payload: unknown,
+    ): Promise<CapabilityResponse> => {
       const record = this.exactBackendPayload(
         payload,
         new Set(['reqId', 'name', 'args', 'timeoutMs']),
@@ -2993,10 +5231,13 @@ export class FrontendPluginManager {
           this.pendingBackendCalls.delete(plugin.instanceId)
         }
       }
-    })
+    }
+    ipcMain.handle(IPC_BACKEND_CALL, (event, payload: unknown): Promise<CapabilityResponse> =>
+      this.backendCallHandler!(this.instanceForIpc(event.sender.id, event.senderFrame), payload)
+    )
 
     ipcMain.on(IPC_BACKEND_CANCEL, (event, payload: unknown) => {
-      const plugin = this.instanceForSender(event.sender.id)
+      const plugin = this.instanceForIpc(event.sender.id, event.senderFrame)
       if (!plugin) return
       const record = this.exactBackendPayload(payload, new Set(['reqId', 'subscriptionId']))
       if (!record) return
@@ -3007,8 +5248,10 @@ export class FrontendPluginManager {
       this.cancelBackendRecord(plugin.instanceId, id)
     })
 
-    ipcMain.handle(IPC_BACKEND_SUBSCRIBE, async (event, payload: unknown): Promise<CapabilityResponse> => {
-      const plugin = this.instanceForSender(event.sender.id)
+    this.backendSubscribeHandler = async (
+      plugin: RunningPlugin | undefined,
+      payload: unknown,
+    ): Promise<CapabilityResponse> => {
       const record = this.exactBackendPayload(payload, new Set(['subscriptionId', 'event']))
       const subscriptionId =
         typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&
@@ -3062,14 +5305,17 @@ export class FrontendPluginManager {
             if (
               pending.cancelled ||
               current !== plugin ||
-              current.senderId !== event.sender.id ||
               current.view.webContents.isDestroyed()
             ) return
-            current.view.webContents.send(IPC_BACKEND_EVENT, {
+            if (!this.sendToPlugin(current, IPC_BACKEND_EVENT, {
               subscriptionId,
               event: eventName,
               payload: eventPayload,
-            })
+            }) && current.carrier === 'frame') {
+              // A revoked/stale generation cannot retain backend work after its
+              // private receiver is gone; finish the normal instance cleanup.
+              this.destroyInstance(current.instanceId)
+            }
           },
           { signal: pending.controller.signal },
         )
@@ -3090,14 +5336,15 @@ export class FrontendPluginManager {
             const current = this.running.get(plugin.instanceId)
             if (
               current === plugin &&
-              current.senderId === event.sender.id &&
               !current.view.webContents.isDestroyed()
             ) {
-              current.view.webContents.send(IPC_BACKEND_STATUS, {
+              if (!this.sendToPlugin(current, IPC_BACKEND_STATUS, {
                 subscriptionId,
                 ok: false,
                 error: response.error,
-              })
+              }) && current.carrier === 'frame') {
+                this.destroyInstance(current.instanceId)
+              }
             }
           }
           pending.unregister?.()
@@ -3111,21 +5358,20 @@ export class FrontendPluginManager {
         pending.unregister?.()
         return this.backendError(subscriptionId, error)
       }
-    })
+    }
+    ipcMain.handle(IPC_BACKEND_SUBSCRIBE, (event, payload: unknown): Promise<CapabilityResponse> =>
+      this.backendSubscribeHandler!(this.instanceForIpc(event.sender.id, event.senderFrame), payload)
+    )
 
     // Fire-and-forget capability channel (nav.castCapability) — see handleCast.
     ipcMain.on(IPC_CAST, (event, payload: unknown) => {
-      this.handleCast(event.sender.id, payload)
+      this.handleCast(event.sender.id, payload, event.senderFrame)
     })
 
     // Plugins announce readiness; it is only logged (activation is not gated on it).
     ipcMain.on(IPC_READY, (event) => {
-      const plugin = this.instanceForSender(event.sender.id)
-      if (plugin) {
-        plugin.pluginReady = true
-        this.settleActivation(plugin.instanceId)
-        console.log(`[plugin] ${plugin.id} ready`)
-      }
+      const plugin = this.instanceForIpc(event.sender.id, event.senderFrame)
+      if (plugin) this.markPluginReady(plugin)
     })
 
     // A plugin dismisses its own view (e.g. the mini-IDE's Esc-close). Scoped
@@ -3134,13 +5380,9 @@ export class FrontendPluginManager {
     // (legacy editor Esc behavior; the `closed` hook runs the normal teardown);
     // main-window-hosted views keep the plain view-hide.
     ipcMain.on(IPC_HIDE_SELF, (event) => {
-      const plugin = this.instanceForSender(event.sender.id)
+      const plugin = this.instanceForIpc(event.sender.id, event.senderFrame)
       if (!plugin) return
-      if (plugin?.closeHostOnHide && !plugin.hostWindow.isDestroyed()) {
-        plugin.hostWindow.close()
-      } else {
-        this.deactivate(plugin.instanceId)
-      }
+      this.hidePlugin(plugin)
     })
   }
 
@@ -3151,6 +5393,7 @@ export class FrontendPluginManager {
    * so brokered calls reject instead of queueing forever.
    */
   setBackendWsUrl(url: string | null): void {
+    if (this.backendWsUrl !== url) this.editorAiCapability.closeAll()
     this.backendWsUrl = url
     const client = this.wsClient
     if (url) {
@@ -3188,6 +5431,7 @@ export class FrontendPluginManager {
    *  died during sleep. No-op when no plugin has needed the backend yet;
    *  ensureBackend() still connects lazily on the first call. */
   reconnectAfterResume(): void {
+    this.editorAiCapability.closeAll()
     this.wsClient?.reconnectNow('system resumed')
   }
 
@@ -3220,6 +5464,25 @@ export class FrontendPluginManager {
     fn: ((plan: PublicCapabilityExecutionPlan) => unknown | Promise<unknown>) | null
   ): void {
     this.publicCapabilityHandler = fn
+  }
+
+  setEditorNativeHandlers(host: EditorNativeHost | null): void {
+    this.editorNativeCapability = host
+      ? new EditorNativeCapability(this.editorSelectionGrants, host)
+      : null
+  }
+
+  setFilePickerHost(host: FilePickerHost | null): void {
+    this.filePickerHost = host
+  }
+
+  notifyEditorKeybindingsChanged(content: string): void {
+    for (const plugin of this.running.values()) {
+      const binding = plugin.capabilityContext?.runtimeBinding
+      if (binding && this.isPublicEventAllowedForInstance(plugin, 'ui.keybindingsChanged', { content }, binding)) {
+        this.emitToInstance(plugin.instanceId, 'ui.keybindingsChanged', { content })
+      }
+    }
   }
 
   /** Connect the production Plans child to the existing Host filesystem
@@ -3281,18 +5544,257 @@ export class FrontendPluginManager {
       throw new Error('agent execution policy denied the operation')
     }
 
+    const accountOperation = Object.hasOwn(GIT_ACCOUNT_PUBLIC_METHODS, plan.address)
+      ? GIT_ACCOUNT_PUBLIC_METHODS[plan.address as keyof typeof GIT_ACCOUNT_PUBLIC_METHODS]
+      : undefined
+    if (accountOperation) {
+      if (!workspacePath) throw new Error('Git account capability workspace binding is missing')
+      if (!this.publicPlanCanDispatch(plan, plugin)) {
+        throw new Error('agent execution policy denied the operation')
+      }
+      const response = await this.runGitAccountOperation(
+        randomUUID(),
+        accountOperation,
+        plan.args,
+        plugin,
+      )
+      if (!response.ok) throw new Error(response.error?.message ?? 'Git account request failed')
+      return response.result
+    }
+
+    if ((PUBLIC_ISSUE_METHODS as readonly string[]).includes(plan.address)) {
+      if (!workspacePath) throw new Error('Issue capability workspace binding is missing')
+      if (!this.publicPlanCanDispatch(plan, plugin)) {
+        throw new Error('agent execution policy denied the operation')
+      }
+      const request = issueRequest(plan.address, plan.args, workspacePath)
+      const currentPolicy = this.currentAgentExecutionPolicy(plugin, plan.initiator)
+      if (plan.initiator?.kind === 'agent' && !currentPolicy) {
+        throw new Error('agent execution policy is unavailable')
+      }
+      const allowedCommands = plan.initiator?.kind === 'agent'
+        ? HOST_SHELL_EXECUTABLE_ALLOWLIST.filter((command) =>
+            executionPolicyAllows(plan.initiator, currentPolicy!, 'shell', command))
+        : [...HOST_SHELL_EXECUTABLE_ALLOWLIST]
+      const beforeDispatch = (): boolean => {
+        if (!this.publicPlanCanDispatch(plan, plugin)) return false
+        if (plan.initiator?.kind !== 'agent') return true
+        const latestPolicy = this.currentAgentExecutionPolicy(plugin, plan.initiator)
+        return latestPolicy?.revision === currentPolicy!.revision
+      }
+      return await this.sendPublicBackend(
+        'issues.public',
+        {
+          ...request,
+          execution_policy: { mode: 'allowlist', shell: allowedCommands },
+        },
+        beforeDispatch,
+        35_000,
+      )
+    }
+
+    if ((EDITOR_PREFERENCE_METHODS as readonly string[]).includes(plan.address)) {
+      if (!workspacePath) throw new Error('Editor preference capability workspace binding is missing')
+      if (!this.publicPlanCanDispatch(plan, plugin)) {
+        throw new Error('agent execution policy denied the operation')
+      }
+      const beforeDispatch = (): boolean => this.publicPlanCanDispatch(plan, plugin)
+      if (plan.address === 'ui.readEditorPreferences') {
+        const response = await this.sendPublicBackend(
+          'ui.settings.get',
+          {},
+          beforeDispatch,
+        )
+        const settings =
+          typeof response === 'object' && response !== null && !Array.isArray(response)
+            ? (response as Record<string, unknown>).settings
+            : undefined
+        return { preferences: projectEditorPreferences(settings) }
+      }
+
+      const key = typeof plan.args.key === 'string' ? plan.args.key : ''
+      await this.sendPublicBackend(
+        'ui.settings.set',
+        { updates: { [key]: plan.args.value } },
+        beforeDispatch,
+      )
+      return { ok: true }
+    }
+
+    if ((PUBLIC_GIT_METHODS as readonly string[]).includes(plan.address)) {
+      if (!workspacePath) throw new Error('Git capability workspace binding is missing')
+      if (!this.publicPlanCanDispatch(plan, plugin)) {
+        throw new Error('agent execution policy denied the operation')
+      }
+      const request = publicGitRequest(plan.address, plan.args, workspacePath)
+      if (request.operation === 'clone') {
+        const binding = plugin.capabilityContext?.runtimeBinding
+        if (!binding || !binding.instanceId || !binding.workspaceId || !binding.packageVersion) {
+          throw new Error('public capability runtime binding is missing')
+        }
+        const owner = {
+          instanceId: binding.instanceId,
+          workspaceId: binding.workspaceId,
+          packageVersion: binding.packageVersion,
+        }
+        const target = this.editorSelectionGrants.resolve(owner, plan.args.selectionGrant, 'directory')
+        const canonicalTarget = resolvePathForContainment(resolve(String(request.payload.target_dir)))
+        if (!canonicalTarget || canonicalTarget !== target) {
+          throw new Error('clone target does not match the selected directory')
+        }
+        const targetGrant = this.issueGitPathGrant(plugin, target, ['clone_target'])
+        if (!targetGrant) throw new Error('clone target grant is unavailable')
+        request.payload.target_grant = targetGrant
+      }
+      const response = await this.executeBoundGitRequest(
+        plugin,
+        randomUUID(),
+        'git.request',
+        request.type,
+        request.payload,
+        request.timeoutMs,
+        () => this.publicPlanCanDispatch(plan, plugin),
+      )
+      if (!response.ok) throw new Error(response.error?.message ?? 'Git request failed')
+      return response.result
+    }
+
+    if (plan.address === 'ui.openFilePicker') {
+      const host = this.filePickerHost
+      const binding = plugin.capabilityContext?.runtimeBinding
+      if (!host || !binding || !workspacePath) {
+        throw new Error('file picker capability is not connected')
+      }
+      const sessionId = typeof plan.args.sessionId === 'string' ? plan.args.sessionId : undefined
+      if (sessionId) {
+        const sessionBinding = plugin.capabilityContext?.sessionBindings?.get(sessionId)
+        if (!sessionBinding || !sameRuntimeBinding(sessionBinding, binding)) {
+          throw new Error('file picker session is no longer owned by this view')
+        }
+      }
+      const canDispatch = (): boolean => {
+        if (!this.publicPlanCanDispatch(plan, plugin)) return false
+        if (!sessionId) return true
+        const sessionBinding = plugin.capabilityContext?.sessionBindings?.get(sessionId)
+        return Boolean(sessionBinding && sameRuntimeBinding(sessionBinding, binding))
+      }
+      if (!canDispatch()) throw new Error('file picker capability is denied')
+      const sourceBounds = (): PluginBounds => {
+        if (plugin.view.nativeView) return plugin.view.nativeView.getBounds()
+        if (!plugin.hostWindow.isDestroyed()) return plugin.hostWindow.getContentBounds()
+        return { x: 0, y: 0, width: 0, height: 0 }
+      }
+      return host.open({
+        instanceId: plugin.instanceId,
+        ...(sessionId ? { sessionId } : {}),
+        sender: plugin.view.webContents,
+        hostWindow: plugin.hostWindow,
+        workspacePath,
+        sourceBounds,
+        request: plan.args as unknown as FilePickerInvocation['request'],
+        canDispatch,
+        search: async (query: string): Promise<string[]> => {
+          if (!canDispatch()) throw new Error('file picker capability is denied')
+          const response = await this.sendPublicBackend(
+            'fs.list_files_flat',
+            { workspace_path: workspacePath, query, max_results: 20 },
+            canDispatch,
+          )
+          if (!canDispatch()) throw new Error('file picker capability is denied')
+          const files = toPayload(response).files
+          return Array.isArray(files)
+            ? files.filter((file): file is string => typeof file === 'string')
+            : []
+        },
+      })
+    }
+
+    if ((EDITOR_NATIVE_METHODS as readonly string[]).includes(plan.address)) {
+      if (!this.editorNativeCapability) throw new Error('editor native capability is not connected')
+      const binding = plugin.capabilityContext?.runtimeBinding
+      if (!binding || !binding.instanceId || !binding.workspaceId || !binding.packageVersion) {
+        throw new Error('public capability runtime binding is missing')
+      }
+      return this.editorNativeCapability.execute(plan.address, plan.args, {
+        instanceId: plugin.instanceId,
+        workspaceId: binding.workspaceId,
+        packageVersion: binding.packageVersion,
+        workspacePath: workspacePath ?? '',
+        canDispatch: () => this.publicPlanCanDispatch(plan, plugin),
+      })
+    }
+
+    if ((EDITOR_AI_METHODS as readonly string[]).includes(plan.address)) {
+      return this.editorAiCapability.execute(plan.address, plan.args, {
+        instanceId: plugin.instanceId,
+        workspacePath: workspacePath ?? '',
+        canDispatch: () => this.publicPlanCanDispatch(plan, plugin),
+      })
+    }
+
     if (plan.address.startsWith('aiCli.')) {
       return this.executeAiCliCapability(plan, plugin, workspacePath ?? '')
     }
 
     if (plan.address.startsWith('fs.')) {
+      if (!workspacePath) throw new Error('filesystem capability workspace binding is missing')
+      const selectionAddresses = new Set([
+        'fs.readFile', 'fs.writeFile', 'fs.readImage', 'fs.stat', 'fs.statPath',
+        'fs.listArchive', 'fs.convertOffice', 'fs.previewResource',
+      ])
+      const binding = plugin.capabilityContext?.runtimeBinding
+      let fsWorkspacePath = workspacePath
+      let fsArgs = plan.args
+      if (selectionAddresses.has(plan.address) && plan.args.selectionGrant !== undefined) {
+        if (!binding || !binding.instanceId || !binding.workspaceId || !binding.packageVersion) {
+          throw new Error('public capability runtime binding is missing')
+        }
+        const owner = {
+          instanceId: binding.instanceId,
+          workspaceId: binding.workspaceId,
+          packageVersion: binding.packageVersion,
+        }
+        const target = this.editorSelectionGrants.fileTarget(
+          owner,
+          plan.args.selectionGrant,
+          plan.args.path as string,
+        )
+        fsWorkspacePath = target.workspacePath
+        fsArgs = { ...plan.args, path: target.relPath }
+        delete fsArgs.selectionGrant
+      }
+      const editorRequest = editorFilesystemRequest(plan.address, fsArgs, fsWorkspacePath)
+      if (editorRequest) {
+        const timeoutMs = plan.address === 'fs.findInFiles' || plan.address === 'fs.replaceInFiles'
+          ? 30_000
+          : 10_000
+        const result = await this.sendPublicBackend(
+          editorRequest.type,
+          editorRequest.payload,
+          () => this.publicPlanCanDispatch(plan, plugin),
+          timeoutMs,
+        )
+        if (plan.address === 'fs.previewResource') {
+          if (!this.backendWsUrl) throw new Error('backend not connected')
+          return {
+            url: editorPreviewResourceUrl(
+              this.backendWsUrl,
+              result,
+              String(fsArgs.path),
+            ),
+          }
+        }
+        return result
+      }
       const wsType = PUBLIC_FS_WS_TYPES[plan.address]
       if (!wsType) throw new Error(`unsupported public filesystem capability '${plan.address}'`)
-      if (!workspacePath) throw new Error('filesystem capability workspace binding is missing')
-      const args = plan.args
+      const args = fsArgs
       const path = typeof args.path === 'string' ? args.path : ''
-      const payload: Record<string, unknown> = { workspace_path: workspacePath }
-      if (wsType === 'fs.list_dir') payload.rel_path = path
+      const payload: Record<string, unknown> = { workspace_path: fsWorkspacePath }
+      if (wsType === 'fs.list_dir') {
+        payload.rel_path = path
+        if (args.showHidden !== undefined) payload.show_hidden = args.showHidden
+      }
       else if (wsType === 'fs.list_files_flat') {
         payload.query = typeof args.query === 'string' ? args.query : ''
         payload.max_results = typeof args.maxResults === 'number' ? args.maxResults : 100
@@ -3300,24 +5802,43 @@ export class FrontendPluginManager {
       else if (wsType === 'fs.stat_path') payload.path = path
       else payload.rel_path = path
       if (wsType === 'fs.stat_path') {
-        if (!isWorkspaceContainedPath(workspacePath, path)) {
+        if (!isWorkspaceContainedPath(fsWorkspacePath, path)) {
           throw new Error('filesystem path escapes the workspace')
         }
-        payload.path = resolvePathForContainment(resolve(workspacePath, path))
+        payload.path = resolvePathForContainment(resolve(fsWorkspacePath, path))
       }
       if (wsType === 'fs.write_file') {
-        const violation = workspaceMutationPathError(workspacePath, path)
+        const violation = workspaceMutationPathError(fsWorkspacePath, path)
         if (violation === 'Git metadata paths are protected') {
           throw new Error(violation)
         }
         if (violation) throw new Error(`filesystem ${violation}`)
       }
       if (wsType === 'fs.write_file') payload.content = args.content
+      if (wsType === 'fs.read_file' && typeof args.encoding === 'string') {
+        payload.encoding_override = args.encoding
+      }
+      if (wsType === 'fs.write_file') {
+        if (typeof args.encoding === 'string') payload.encoding = args.encoding
+        if (args.expectedMtime !== undefined) payload.expected_mtime = args.expectedMtime
+      }
       const response = await this.sendPublicBackend(
         wsType,
         payload,
         () => this.publicPlanCanDispatch(plan, plugin),
       )
+      if (plan.address === 'fs.readFile') {
+        // Keep the required public `content` field stable for existing SDK
+        // consumers while retaining all backend metadata on binary/errors.
+        const readResult = toPayload(response)
+        return {
+          ...readResult,
+          content: typeof readResult.content === 'string' ? readResult.content : '',
+        }
+      }
+      if (plan.address === 'fs.listDirectory') {
+        return normalizePublicDirectoryResult(response)
+      }
       return response
     }
 
@@ -3365,6 +5886,10 @@ export class FrontendPluginManager {
       if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
         throw new Error('editor path escapes the workspace')
       }
+      const pairedOpened = await this.openPairedEditorTarget(
+        plugin, root, relativePath, plan.args.line, plan.args.column,
+      )
+      if (pairedOpened !== null) return { opened: pairedOpened }
       if (!this.openInEditorHandler) throw new Error('editor open handler not registered')
       const opened = await this.openInEditorHandler({
         workspace_path: root,
@@ -3453,13 +5978,26 @@ export class FrontendPluginManager {
           if (!this.publicStorageHandler || !isStorageExecutionAddress(plan.address)) {
             return buildError(call.reqId, 'BACKEND_UNAVAILABLE', 'storage capability broker is not connected')
           }
-          return buildSuccess(call.reqId, await this.publicStorageHandler({
+          const result = await this.publicStorageHandler({
             address: plan.address,
             args: plan.args,
             partition: plan.storage.partition,
             snapshot: plan.storage.snapshot,
             ...(plan.initiator ? { initiator: plan.initiator } : {}),
-          }))
+          })
+          if (plan.address === 'storage.set' || plan.address === 'storage.delete') {
+            const scope = plan.args.scope
+            const key = plan.args.key
+            const value = plan.address === 'storage.delete' ? null : plan.args.value
+            if (
+              (scope === 'plugin' || scope === 'workspace') &&
+              typeof key === 'string' &&
+              isJsonValue(value)
+            ) {
+              this.dispatchPluginStorageChanged(plan, scope, key, value, plan.address === 'storage.delete')
+            }
+          }
+          return buildSuccess(call.reqId, result)
         }
         if (!this.publicCapabilityHandler) {
           return buildError(call.reqId, 'BACKEND_UNAVAILABLE', 'public capability broker is not connected')
@@ -3830,12 +6368,13 @@ export class FrontendPluginManager {
     if (!snapshot) return false
     if (snapshot.state === 'corrupt') return false
     if (plan.policyRevision !== undefined && snapshot.revision === plan.policyRevision) return true
+    const entry = publicCapabilityEntry(plan.address)
     return executionPolicyAllows(
       initiator,
       snapshot,
       namespace,
-      namespace === 'shell' && typeof plan.args.command === 'string'
-        ? plan.args.command
+      namespace === 'shell'
+        ? (entry && entry.storage !== true ? entry.shellCommand : undefined) ?? String(plan.args.command)
         : undefined,
     )
   }
@@ -3852,14 +6391,29 @@ export class FrontendPluginManager {
     )
   }
 
+  private currentAgentExecutionPolicy(
+    plugin: RunningPlugin,
+    initiator: AuthenticatedInitiator | undefined,
+  ): ExecutionPolicySnapshot | null {
+    if (!initiator || initiator.kind !== 'agent') return null
+    let snapshot: ExecutionPolicySnapshot | undefined
+    try {
+      snapshot = this.executionPolicyResolver?.(plugin.workspacePath ?? undefined)
+    } catch {
+      return null
+    }
+    return snapshot && snapshot.state !== 'corrupt' ? snapshot : null
+  }
+
   private async sendPublicBackend(
     wsType: string,
     payload: Record<string, unknown>,
     beforeDispatch?: () => boolean,
+    timeoutMs = 10_000,
   ): Promise<unknown> {
     const client = this.ensureBackend()
     if (!client) throw new Error('backend not connected')
-    const response = await client.send(wsType, payload, 10_000, {
+    const response = await client.send(wsType, payload, timeoutMs, {
       ...(beforeDispatch ? { beforeDispatch } : {}),
     })
     if (!response.ok) throw new Error(response.error?.message ?? 'backend request failed')
@@ -3960,6 +6514,44 @@ export class FrontendPluginManager {
     )
   }
 
+  private terminalStorageIdentity(plugin: RunningPlugin): AiTerminalStorageIdentity | null {
+    const binding = plugin.capabilityContext?.runtimeBinding
+    const workspacePath = plugin.workspacePath
+    const contributionKey = plugin.contributionKey
+    if (
+      !binding ||
+      !workspacePath ||
+      !nonEmptyString(contributionKey) ||
+      binding.pluginId !== plugin.id ||
+      binding.instanceId !== plugin.instanceId ||
+      binding.workspaceId !== this.workspaceIdForPath(workspacePath)
+    ) return null
+    return aiTerminalStorageIdentity({
+      pluginId: binding.pluginId,
+      contributionKey,
+      workspacePath: resolve(workspacePath),
+    })
+  }
+
+  private aiTerminalMetadataOrigin(plugin: RunningPlugin): string {
+    return plugin.id === MINI_IDE_PLUGIN_ID ? 'mini-ide' : plugin.id
+  }
+
+  private terminalStorageCanDispatch(plugin: RunningPlugin): boolean {
+    return this.running.get(plugin.instanceId) === plugin || plugin.releasing
+  }
+
+  private async terminalStorageRequest(
+    plugin: RunningPlugin,
+    request: TerminalStorageOwnerRequest,
+    canDispatch: () => boolean,
+  ): Promise<TerminalStorageOwnerState | null> {
+    const handler = this.terminalStorageHandler
+    const identity = this.terminalStorageIdentity(plugin)
+    if (!handler || !identity) throw new Error('terminal storage is unavailable')
+    return handler(identity.origin, request, canDispatch)
+  }
+
   private bufferEarlyAiEvent(
     type: 'terminal.output' | 'terminal.exit',
     payload: unknown,
@@ -4006,11 +6598,65 @@ export class FrontendPluginManager {
     }
   }
 
-  private removeAiSession(plugin: RunningPlugin, sessionId: string): void {
+  private clearAiTerminalPersistence(
+    plugin: RunningPlugin,
+    entry: AiSessionLedgerEntry,
+  ): void {
+    if (!entry.persistView || !entry.storageIdentity || !this.terminalStorageHandler) return
+    void (async () => {
+      const canDispatch = (): boolean => this.terminalStorageCanDispatch(plugin)
+      await this.terminalStorageRequest(plugin, {
+        operation: 'session',
+        resumeKey: entry.storageIdentity!.resumeKey,
+        ptyId: null,
+      }, canDispatch)
+      await this.terminalStorageRequest(plugin, {
+        operation: 'snapshot',
+        resumeKey: entry.storageIdentity!.resumeKey,
+        snapshots: [],
+      }, canDispatch)
+      await this.terminalStorageRequest(plugin, {
+        operation: 'release',
+        resumeKey: entry.storageIdentity!.resumeKey,
+      }, canDispatch)
+    })().catch(() => undefined)
+  }
+
+  private clearDeadAiTerminalSession(
+    plugin: RunningPlugin,
+    identity: AiTerminalStorageIdentity,
+  ): void {
+    if (!this.terminalStorageHandler) return
+    void this.terminalStorageRequest(plugin, {
+      operation: 'session',
+      resumeKey: identity.resumeKey,
+      ptyId: null,
+    }, () => this.publicPlanCanDispatchForPlugin(plugin)).catch(() => undefined)
+  }
+
+  private publicPlanCanDispatchForPlugin(plugin: RunningPlugin): boolean {
+    return this.running.get(plugin.instanceId) === plugin && !this.isPluginStopping(plugin)
+  }
+
+  private releaseAiTerminalOwner(plugin: RunningPlugin, identity: AiTerminalStorageIdentity): void {
+    if (!this.terminalStorageHandler) return
+    const hasSibling = [...this.running.values()].some((candidate) =>
+      candidate !== plugin && this.terminalStorageIdentity(candidate)?.resumeKey === identity.resumeKey)
+    if (hasSibling) return
+    void this.terminalStorageRequest(plugin, {
+      operation: 'release',
+      resumeKey: identity.resumeKey,
+    }, () => this.terminalStorageCanDispatch(plugin)).catch(() => undefined)
+  }
+
+  private removeAiSession(plugin: RunningPlugin, sessionId: string, clean = false): void {
+    this.filePickerHost?.cancelSession(plugin.instanceId, sessionId)
     const sessions = new Map(plugin.capabilityContext?.sessionBindings ?? [])
     sessions.delete(sessionId)
+    const entry = this.aiSessions.get(sessionId)
     this.aiSessions.delete(sessionId)
     this.setAiBindings(plugin, sessions, plugin.capabilityContext?.pendingStartBindings ?? new Map())
+    if (clean && entry) this.clearAiTerminalPersistence(plugin, entry)
   }
 
   private async executeAiCliCapability(
@@ -4020,52 +6666,227 @@ export class FrontendPluginManager {
   ): Promise<unknown> {
     if (plan.address === 'aiCli.listProfiles') {
       const allowedProfileIds = new Set(plugin.capabilityContext?.aiCliProfiles ?? [])
+      const terminalView = toPayload(plan.args).terminalView === true
+      const profiles = terminalView ? TERMINAL_AI_CLI_PROFILES : AI_CLI_PROFILES
       return {
-        profiles: Object.entries(AI_CLI_PROFILES)
+        profiles: Object.entries(profiles)
           .filter(([id]) => allowedProfileIds.has(id))
-          .map(([id, profile]) => ({
+        .map(([id, profile]) => ({
             id,
             label: 'label' in profile && typeof profile.label === 'string' ? profile.label : id,
+            ...(terminalView && FULL_SCREEN_AI_CLI_PROFILES.includes(id) ? { fullScreenTui: true } : {}),
+            ...(terminalView && BRACKETED_PASTE_AI_CLI_PROFILES.includes(id) ? { bracketedPaste: true } : {}),
+            ...(terminalView && AI_CLI_SHIFT_ENTER_SEQUENCES[id]
+              ? { shiftEnterSequence: AI_CLI_SHIFT_ENTER_SEQUENCES[id] }
+              : {}),
           })),
       }
     }
-    const client = this.ensureBackend()
-    if (!client) throw new Error('backend not connected')
     const args = plan.args
     const beforeDispatch = (): boolean => this.publicPlanCanDispatch(plan, plugin)
+    if (
+      plan.address === 'aiCli.readTerminalView' ||
+      plan.address === 'aiCli.saveTerminalView' ||
+      plan.address === 'aiCli.setTerminalFontSize'
+    ) {
+      const identity = this.terminalStorageIdentity(plugin)
+      if (!identity || !this.terminalStorageHandler) {
+        throw new Error('terminal storage is unavailable')
+      }
+      if (plan.address === 'aiCli.readTerminalView') {
+        const state = await this.terminalStorageRequest(plugin, {
+          operation: 'read',
+          resumeKey: identity.resumeKey,
+        }, beforeDispatch)
+        return {
+          fontSize: state?.fontSize ?? 12,
+          lastSize: state?.lastSize ?? null,
+          snapshot: state?.snapshot ?? null,
+        }
+      }
+      if (plan.address === 'aiCli.saveTerminalView') {
+        const sessionId = typeof args.sessionId === 'string' ? args.sessionId : ''
+        const binding = plugin.capabilityContext?.runtimeBinding
+        const sessionBinding = sessionId && plugin.capabilityContext?.sessionBindings?.get(sessionId)
+        if (!binding || !sessionBinding || !sameRuntimeBinding(sessionBinding, binding)) {
+          throw new Error('AI CLI session is no longer owned by this view')
+        }
+        await this.terminalStorageRequest(plugin, {
+          operation: 'snapshot',
+          resumeKey: identity.resumeKey,
+          snapshots: Array.isArray(args.snapshots)
+            ? args.snapshots.filter((snapshot): snapshot is string => typeof snapshot === 'string')
+            : [],
+        }, beforeDispatch)
+        return {}
+      }
+      await this.terminalStorageRequest(plugin, {
+        operation: 'font',
+        fontSize: Number(args.fontSize),
+      }, beforeDispatch)
+      return {}
+    }
+    const runtimeBinding = plugin.capabilityContext?.runtimeBinding
+    if (
+      plan.address === 'aiCli.showTerminalContextMenu' ||
+      plan.address === 'aiCli.reportTerminalSelection'
+    ) {
+      const sessionId = typeof args.sessionId === 'string' ? args.sessionId : ''
+      if (sessionId) {
+        const sessionBinding = plugin.capabilityContext?.sessionBindings?.get(sessionId)
+        if (!sessionBinding || !runtimeBinding || !sameRuntimeBinding(sessionBinding, runtimeBinding)) {
+          throw new Error('AI CLI session is no longer owned by this view')
+        }
+      }
+      return executeAiTerminalResource(
+        plan.address,
+        args,
+        plugin.view.webContents,
+        beforeDispatch,
+      )
+    }
+    if (plan.address === 'aiCli.saveClipboardImage') {
+      const sessionId = typeof args.sessionId === 'string' ? args.sessionId : ''
+      const sessionBinding = sessionId
+        ? plugin.capabilityContext?.sessionBindings?.get(sessionId)
+        : undefined
+      if (!sessionId || !sessionBinding || !runtimeBinding || !sameRuntimeBinding(sessionBinding, runtimeBinding)) {
+        throw new Error('AI CLI session is no longer owned by this view')
+      }
+      return executeAiTerminalResource(
+        plan.address,
+        args,
+        plugin.view.webContents,
+        beforeDispatch,
+      )
+    }
+    const requestedStartProfileId = plan.address === 'aiCli.startSession'
+      ? String(args.profileId)
+      : null
+    if (
+      requestedStartProfileId !== null &&
+      !(plugin.capabilityContext?.aiCliProfiles ?? []).includes(requestedStartProfileId)
+    ) {
+      throw new Error(`AI CLI profile '${requestedStartProfileId}' is not available`)
+    }
+    const client = this.ensureBackend()
+    if (!client) throw new Error('backend not connected')
     if (plan.address === 'aiCli.resumeSession') {
+      const persistView = args.persistView === true
+      const storageIdentity = persistView ? this.terminalStorageIdentity(plugin) : null
+      if (persistView && (!storageIdentity || !this.terminalStorageHandler)) {
+        throw new Error('terminal storage is unavailable')
+      }
       const candidate = [...this.aiSessions.values()]
         .filter((entry) => entry.attachedInstanceId === null && this.aiSessionMatchesPlugin(entry, plugin))
         .sort((a, b) => b.createdAt - a.createdAt)[0]
-      if (!candidate) return null
+      if (
+        candidate &&
+        !(plugin.capabilityContext?.aiCliProfiles ?? []).includes(candidate.profileId)
+      ) return null
+      let ownerState: TerminalStorageOwnerState | null = null
+      let ownerSessionId: string | null = null
+      if (!candidate && persistView && storageIdentity) {
+        ownerState = await this.terminalStorageRequest(plugin, {
+          operation: 'read',
+          resumeKey: storageIdentity.resumeKey,
+        }, beforeDispatch)
+        ownerSessionId = ownerState?.ptyId ?? null
+        if (!ownerSessionId) return null
+        const attached = [...this.aiSessions.values()].find((entry) =>
+          entry.sessionId === ownerSessionId && entry.attachedInstanceId !== null)
+        if (attached) return null
+      }
+      if (!candidate && !ownerSessionId) return null
+      const sessionId = candidate?.sessionId ?? ownerSessionId!
       const response = await client.send(
         'terminal.reattach',
         {
-          terminal_session_ids: [candidate.sessionId],
+          terminal_session_ids: [sessionId],
           cols: Number(args.cols),
           rows: Number(args.rows),
+          ...(persistView && storageIdentity
+            ? {
+                expected_workspace_path: resolve(workspacePath),
+                expected_origin: this.aiTerminalMetadataOrigin(plugin),
+                expected_profile_ids: [...(plugin.capabilityContext?.aiCliProfiles ?? [])],
+              }
+            : {}),
         },
         10_000,
         { beforeDispatch },
       )
       if (!response.ok) throw new Error(response.error?.message ?? 'AI CLI resume failed')
       const alive = toPayload(response.payload).alive
-      if (!Array.isArray(alive) || !alive.includes(candidate.sessionId)) {
-        this.aiSessions.delete(candidate.sessionId)
-        this.terminalRoutes.delete(candidate.sessionId)
+      if (!Array.isArray(alive) || !alive.includes(sessionId)) {
+        if (ownerState && storageIdentity) this.clearDeadAiTerminalSession(plugin, storageIdentity)
+        if (candidate) {
+          this.aiSessions.delete(candidate.sessionId)
+          this.terminalRoutes.delete(candidate.sessionId)
+        }
+        return null
+      }
+      const responseRecord = toPayload(response.payload)
+      const recovered = !candidate && ownerState && storageIdentity
+        ? toPayload(toPayload(responseRecord.sessions)[sessionId])
+        : {}
+      const profileId = candidate?.profileId ??
+        (typeof recovered.agent_key === 'string' ? recovered.agent_key :
+          typeof recovered.profile_id === 'string' ? recovered.profile_id :
+            typeof recovered.profileId === 'string' ? recovered.profileId : '')
+      if (!candidate && ownerState && storageIdentity) {
+        const allowedProfiles = plugin.capabilityContext?.aiCliProfiles ?? []
+        const recoveredWorkspace = typeof recovered.workspace_path === 'string'
+          ? resolvePathForContainment(recovered.workspace_path)
+          : null
+        const expectedWorkspace = resolvePathForContainment(workspacePath)
+        const recoveredOrigin = typeof recovered.origin === 'string' ? recovered.origin : ''
+        if (
+          !profileId ||
+          !allowedProfiles.includes(profileId) ||
+          !expectedWorkspace ||
+          recoveredWorkspace !== expectedWorkspace ||
+          (recoveredOrigin !== 'editor' && recoveredOrigin !== this.aiTerminalMetadataOrigin(plugin))
+        ) {
+          this.clearDeadAiTerminalSession(plugin, storageIdentity)
+          return null
+        }
+      }
+      if (!profileId) {
+        if (ownerState && storageIdentity) this.clearDeadAiTerminalSession(plugin, storageIdentity)
         return null
       }
       this.noteTerminalRoutes(plugin.instanceId, 'terminal.reattach', response.payload)
-      candidate.attachedInstanceId = plugin.instanceId
+      if (candidate) candidate.attachedInstanceId = plugin.instanceId
       const binding = plugin.capabilityContext?.runtimeBinding
       if (!binding) throw new Error('AI CLI runtime binding is missing')
       const sessions = new Map(plugin.capabilityContext?.sessionBindings ?? [])
-      sessions.set(candidate.sessionId, binding)
+      sessions.set(sessionId, binding)
       this.setAiBindings(plugin, sessions, plugin.capabilityContext?.pendingStartBindings ?? new Map())
-      return { sessionId: candidate.sessionId, profileId: candidate.profileId }
+      if (!candidate) {
+        this.aiSessions.set(sessionId, {
+          sessionId,
+          profileId,
+          pluginId: binding.pluginId,
+          packageVersion: binding.packageVersion,
+          workspaceId: binding.workspaceId,
+          audience: binding.audience,
+          attachedInstanceId: plugin.instanceId,
+          client,
+          createdAt: Date.now(),
+          persistView: true,
+          storageIdentity: storageIdentity ?? undefined,
+        })
+      }
+      return { sessionId, profileId }
     }
     if (plan.address === 'aiCli.startSession') {
-      const profileId = String(args.profileId)
+      const profileId = requestedStartProfileId!
+      const persistView = args.persistView === true
+      const storageIdentity = persistView ? this.terminalStorageIdentity(plugin) : null
+      if (persistView && (!storageIdentity || !this.terminalStorageHandler)) {
+        throw new Error('terminal storage is unavailable')
+      }
       const requestId = nonEmptyString(args.requestId) ? args.requestId : randomUUID()
       const paneId = `navide-${plugin.id}-${plugin.instanceId}-${requestId}`
       const pending = new Map(plugin.capabilityContext?.pendingStartBindings ?? [])
@@ -4080,10 +6901,37 @@ export class FrontendPluginManager {
         requestId,
         client,
       })
-      const command = this.aiCliCommand(profileId, args, workspacePath)
-      if (!command) throw new Error(`AI CLI profile '${profileId}' is not available`)
       let committed = false
       try {
+        let command: string[] | null
+        let persistedYolo = false
+        if (persistView && storageIdentity) {
+        // Persisted views inherit the Host's current shell and the same
+        // per-profile settings as the built-in AI dock. Neither setting is
+        // accepted from the package request.
+          const settingsPayload = await this.sendPublicBackend(
+            'ui.settings.get',
+            {},
+            beforeDispatch,
+          )
+          const settings = toPayload(settingsPayload).settings
+          const stored = toPayload(settings)
+          const permissionStored = stored[`agentTeam.cliPermission.${profileId}`]
+          const yoloStored = stored['agentTeam.yolo']
+          persistedYolo = permissionStored === 'force-on' ||
+            (permissionStored !== 'force-off' && (yoloStored == null || yoloStored === '1'))
+          command = aiTerminalCommand({
+            profileId,
+            workspacePath,
+            resumeKey: storageIdentity.resumeKey,
+            shell: this.terminalShell,
+            yoloStored,
+            permissionStored,
+          })
+        } else {
+          command = this.aiCliCommand(profileId, args, workspacePath)
+        }
+        if (!command) throw new Error(`AI CLI profile '${profileId}' is not available`)
         const response = await client.send(
           'terminal.create',
           {
@@ -4096,7 +6944,11 @@ export class FrontendPluginManager {
             cwd: workspacePath,
             cols: args.cols,
             rows: args.rows,
-            metadata: { workspace_path: workspacePath, origin: plugin.id },
+            metadata: {
+              workspace_path: workspacePath,
+              origin: persistView ? this.aiTerminalMetadataOrigin(plugin) : plugin.id,
+              ...(persistView ? { yolo: persistedYolo } : {}),
+            },
           },
           10_000,
           { beforeDispatch },
@@ -4119,7 +6971,16 @@ export class FrontendPluginManager {
           attachedInstanceId: plugin.instanceId,
           client,
           createdAt: Date.now(),
+          persistView,
+          storageIdentity: storageIdentity ?? undefined,
         })
+        if (persistView && storageIdentity) {
+          await this.terminalStorageRequest(plugin, {
+            operation: 'session',
+            resumeKey: storageIdentity.resumeKey,
+            ptyId: sessionId,
+          }, beforeDispatch).catch(() => undefined)
+        }
         committed = true
         this.flushEarlyAiEvents(pendingKey)
         return { sessionId }
@@ -4154,6 +7015,26 @@ export class FrontendPluginManager {
     }
     const sessionId = typeof args.sessionId === 'string' ? args.sessionId : ''
     if (!sessionId) throw new Error('AI CLI session id is required')
+    const sessionBinding = plugin.capabilityContext?.sessionBindings?.get(sessionId)
+    if (!sessionBinding || !runtimeBinding || !sameRuntimeBinding(sessionBinding, runtimeBinding)) {
+      throw new Error('AI CLI session is no longer owned by this view')
+    }
+    if (plan.address === 'aiCli.listMentionTargets') {
+      const response = await this.sendPublicBackend('agent_msg.list', {}, beforeDispatch)
+      const panes = toPayload(response).panes
+      const targets = Array.isArray(panes)
+        ? panes.flatMap((pane): Array<{ address: string; group?: string }> => {
+            if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) return []
+            const record = pane as Record<string, unknown>
+            if (typeof record.qualified_name !== 'string' || record.qualified_name.length === 0) return []
+            const group = typeof record.workspace_label === 'string' && record.workspace_label.length > 0
+              ? record.workspace_label
+              : undefined
+            return [{ address: record.qualified_name, ...(group ? { group } : {}) }]
+          })
+        : []
+      return { targets }
+    }
     if (plan.address === 'aiCli.reattachSession') {
       const response = await client.send(
         'terminal.reattach',
@@ -4191,8 +7072,18 @@ export class FrontendPluginManager {
     if (type === 'terminal.kill') payload.force = args.force === true
     const response = await client.send(type, payload, 10_000, { beforeDispatch })
     if (!response.ok) throw new Error(response.error?.message ?? 'AI CLI request failed')
+    if (type === 'terminal.resize') {
+      const entry = this.aiSessions.get(sessionId)
+      if (entry?.persistView && entry.storageIdentity) {
+        await this.terminalStorageRequest(plugin, {
+          operation: 'size',
+          cols: Number(args.cols),
+          rows: Number(args.rows),
+        }, beforeDispatch).catch(() => undefined)
+      }
+    }
     if (type === 'terminal.kill') {
-      this.removeAiSession(plugin, sessionId)
+      this.removeAiSession(plugin, sessionId, true)
       this.terminalRoutes.delete(sessionId)
     }
     return {}
@@ -4228,10 +7119,64 @@ export class FrontendPluginManager {
   /** Install the Host-owned durable storage adapter for an already-authorized
    * storage plan. The adapter receives only the derived partition and snapshot
    * identity; it never receives the raw renderer request as an authority. */
+  /** Host-owned projection from a manifest icon file to a paintable URL, shared
+   *  by the main window's contribution list and receiver catalogues. */
+  setContributionIconResolver(
+    fn: ((iconFile: string) => { url: string; monochrome?: boolean } | null) | null
+  ): void {
+    this.contributionIconResolver = fn
+  }
+
   setPublicStorageHandler(
     fn: ((execution: StorageExecution) => unknown | Promise<unknown>) | null
   ): void {
     this.publicStorageHandler = fn
+  }
+
+  setTerminalStorageHandler(
+    fn: ((
+      origin: TerminalOwnerOrigin,
+      request: TerminalStorageOwnerRequest,
+      canDispatch: () => boolean,
+    ) => Promise<TerminalStorageOwnerState | null>) | null,
+  ): void {
+    this.terminalStorageHandler = fn
+  }
+
+  setMiniIdeLegacyPreferences(adapter: MiniIdeLegacyPreferences | null): void {
+    this.miniIdeLegacyPreferences = adapter
+  }
+
+  /** Notify matching instances after a successful public storage mutation.
+   * The event source is each receiver's current Host binding, while the
+   * snapshot identity and partition scope come from the authenticated plan. */
+  private dispatchPluginStorageChanged(
+    plan: PublicCapabilityExecutionPlan,
+    scope: 'plugin' | 'workspace',
+    key: string,
+    value: JsonValue,
+    deleted: boolean,
+  ): void {
+    if (!plan.storage || !isStorageExecutionAddress(plan.address)) return
+    const snapshot = plan.storage.snapshot
+    const workspaceId = plan.storage.partition.workspaceId
+    const payload = { scope, key, value, deleted }
+    for (const receiver of this.running.values()) {
+      const context = receiver.capabilityContext
+      const binding = context?.runtimeBinding
+      if (
+        !context ||
+        !binding ||
+        binding.pluginId !== plan.runtime.pluginId ||
+        binding.packageVersion !== snapshot.packageVersion ||
+        context.storageSnapshotTier !== snapshot.tier ||
+        context.storageSnapshots?.get(snapshot.tier) !== snapshot.packageVersion ||
+        (scope === 'workspace' && binding.workspaceId !== workspaceId)
+      ) continue
+      if (this.isPublicEventAllowedForInstance(receiver, 'ui.pluginStorageChanged', payload, binding)) {
+        this.emitToInstance(receiver.instanceId, 'ui.pluginStorageChanged', payload)
+      }
+    }
   }
 
   /** Host-only event ingress for cataloged public events. The target package id
@@ -4264,6 +7209,20 @@ export class FrontendPluginManager {
         ? (payload as Record<string, unknown>).settings
         : null
     if (typeof rawSettings !== 'object' || rawSettings === null || Array.isArray(rawSettings)) return
+    const preferences = projectEditorPreferences(rawSettings)
+    if (Object.keys(preferences).length > 0) {
+      for (const plugin of this.running.values()) {
+        const binding = plugin.capabilityContext?.runtimeBinding
+        if (binding && this.isPublicEventAllowedForInstance(
+          plugin,
+          'ui.editorPreferencesChanged',
+          { preferences },
+          binding,
+        )) {
+          this.emitToInstance(plugin.instanceId, 'ui.editorPreferencesChanged', { preferences })
+        }
+      }
+    }
     const allowedKeys: readonly string[] = [...GIT_HOST_READ_ONLY_KEYS, 'agent-team:language']
     const settings = Object.fromEntries(
       Object.entries(rawSettings as Record<string, unknown>)
@@ -4322,6 +7281,10 @@ export class FrontendPluginManager {
       if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
         return buildError(call.reqId, 'BAD_REQUEST', 'filepath escapes the root')
       }
+      const pairedOpened = await this.openPairedEditorTarget(
+        plugin, root, rel, args.line, args.column,
+      )
+      if (pairedOpened !== null) return buildSuccess(call.reqId, { ok: true, opened: pairedOpened })
       const handler = this.openInEditorHandler
       if (!handler) {
         return buildError(call.reqId, 'BACKEND_ERROR', 'editor open handler not registered')
@@ -4759,6 +7722,15 @@ export class FrontendPluginManager {
             this.gitCredentialRequests.delete(requestId)
           }
         }
+        this.emitGitCredentialPublicEvent(
+          plugin,
+          event === 'git.credential_request'
+            ? 'shell.gitCredentialRequested'
+            : 'shell.gitCredentialCancelled',
+          requestId,
+          typeof record.host === 'string' ? record.host : '',
+          typeof record.prompt === 'string' ? record.prompt : '',
+        )
         const { credential_owner_nonce: _nonce, ...safePayload } = record
         this.emitToInstance(plugin.instanceId, event, safePayload)
         return
@@ -4797,11 +7769,26 @@ export class FrontendPluginManager {
             plugin.id === PLANS_PLUGIN_ID &&
             isEventAllowed(plugin.capabilityPolicy, event)
 
-          if (!isV2Ui && !isLegacyGit && !isLegacyPlans) {
+          const isLegacyMiniIde =
+            this.miniIdeLegacyPreferences !== null &&
+            !plugin.hasV2DescriptorIdentity &&
+            plugin.id === MINI_IDE_PLUGIN_ID &&
+            isEventAllowed(plugin.capabilityPolicy, event)
+
+          if (!isV2Ui && !isLegacyGit && !isLegacyPlans && !isLegacyMiniIde) {
             continue
           }
 
-          if (plugin.id === GIT_PLUGIN_ID) {
+          if (isLegacyMiniIde) {
+            const settings = Object.fromEntries(
+              Object.entries(rawSettings as Record<string, unknown>)
+                .filter(([key]) => !MINI_IDE_STORAGE_KEYS.includes(key as typeof MINI_IDE_STORAGE_KEYS[number]))
+            )
+            if (Object.keys(settings).length > 0) {
+              this.emitToInstance(plugin.instanceId, event, { source, settings })
+            }
+            deliveredInstanceIds.add(plugin.instanceId)
+          } else if (plugin.id === GIT_PLUGIN_ID) {
             if (source === 'host') {
               const gitSettings = Object.fromEntries(
                 Object.entries(rawSettings as Record<string, unknown>)
@@ -4904,6 +7891,7 @@ export class FrontendPluginManager {
       const pendingOwner = this.pendingTerminalOwners.get(sessionId)
       if (pendingOwner && pendingOwner !== owner) {
         this.terminalOutputBatcher.dropSession(sessionId)
+        this.aiTerminalOutputDecoder.dropSession(sessionId)
         this.pendingTerminalOwners.delete(sessionId)
       }
       this.pendingTerminalOwners.set(sessionId, owner)
@@ -4917,6 +7905,7 @@ export class FrontendPluginManager {
       const ownerPlugin = route ? this.runningPluginForTerminalRoute(route) : undefined
       if (usesPublicAiCliEvents(ownerPlugin)) {
         this.terminalOutputBatcher.flushSession(sessionId)
+        this.finishPublicAiOutput(ownerPlugin, sessionId)
         const binding = ownerPlugin.capabilityContext?.runtimeBinding
         const exitCode = toPayload(payload).exit_code
         const normalizedExitCode = typeof exitCode === 'number' ? exitCode : null
@@ -4934,11 +7923,12 @@ export class FrontendPluginManager {
             exitCode: normalizedExitCode,
           })
         }
-        this.removeAiSession(ownerPlugin, sessionId)
+        this.removeAiSession(ownerPlugin, sessionId, true)
         this.terminalRoutes.delete(sessionId)
         return
       }
       this.terminalOutputBatcher.flushSession(sessionId)
+      this.aiTerminalOutputDecoder.dropSession(sessionId)
       this.deliverTerminalEvent(event, sessionId, payload)
       this.terminalRoutes.delete(sessionId)
       this.pendingTerminalOwners.delete(sessionId)
@@ -4985,6 +7975,47 @@ export class FrontendPluginManager {
     )
   }
 
+  private emitPublicAiOutput(
+    plugin: RunningPlugin,
+    sessionId: string,
+    data: unknown,
+  ): void {
+    const binding = plugin.capabilityContext?.runtimeBinding
+    if (!binding || !this.isPublicEventAllowedForInstance(
+      plugin,
+      'aiCli.output',
+      { sessionId, data: '' },
+      binding,
+    )) return
+    const text = this.aiTerminalOutputDecoder.decode(plugin.instanceId, sessionId, data)
+    if (
+      text &&
+      this.isPublicEventAllowedForInstance(plugin, 'aiCli.output', { sessionId, data: text }, binding)
+    ) {
+      this.emitToInstance(plugin.instanceId, 'aiCli.output', { sessionId, data: text })
+    }
+  }
+
+  private finishPublicAiOutput(plugin: RunningPlugin, sessionId: string): void {
+    const binding = plugin.capabilityContext?.runtimeBinding
+    if (!binding || !this.isPublicEventAllowedForInstance(
+      plugin,
+      'aiCli.output',
+      { sessionId, data: '' },
+      binding,
+    )) {
+      this.aiTerminalOutputDecoder.dropSession(sessionId)
+      return
+    }
+    const text = this.aiTerminalOutputDecoder.finish(plugin.instanceId, sessionId)
+    if (
+      text &&
+      this.isPublicEventAllowedForInstance(plugin, 'aiCli.output', { sessionId, data: text }, binding)
+    ) {
+      this.emitToInstance(plugin.instanceId, 'aiCli.output', { sessionId, data: text })
+    }
+  }
+
   /** Deliver a terminal.output/exit event to the session's registered owner —
    *  and ONLY the owner. Unrouted sessions, detached tombstones, and stale
    *  batches are dropped; PTY content must not leak to a sibling or a later
@@ -5022,6 +8053,7 @@ export class FrontendPluginManager {
       const nextOwner = this.activeTerminalOwnerKey(route)
       if (previousOwner && previousOwner !== nextOwner) {
         this.terminalOutputBatcher.dropSession(sessionId)
+        this.aiTerminalOutputDecoder.dropSession(sessionId)
         this.pendingTerminalOwners.delete(sessionId)
       }
       this.terminalRoutes.set(sessionId, route)
@@ -5067,9 +8099,11 @@ export class FrontendPluginManager {
    */
   handleCast(
     senderId: number,
-    payload: unknown
+    payload: unknown,
+    senderFrame: WebFrameMain | null = null,
+    admittedPlugin?: RunningPlugin,
   ): 'dispatched' | 'no-backend' | 'unknown-sender' | 'malformed' | 'denied' | 'unmapped' | 'not-castable' {
-    const plugin = this.instanceForSender(senderId)
+    const plugin = admittedPlugin ?? this.instanceForIpc(senderId, senderFrame)
     if (!plugin) {
       console.debug('[plugin] cast dropped: unknown sender')
       return 'unknown-sender'
@@ -5248,6 +8282,7 @@ export class FrontendPluginManager {
         : route.instanceId === plugin.instanceId && this.routeMatchesPlugin(route, plugin)
       if (!ownsRoute) continue
       this.terminalOutputBatcher.dropSession(sessionId)
+      this.aiTerminalOutputDecoder.dropSession(sessionId)
       this.pendingTerminalOwners.delete(sessionId)
       if (!route.legacy) {
         const aiSession = this.aiSessions.get(sessionId)
@@ -5290,12 +8325,46 @@ export class FrontendPluginManager {
   ): RunningPlugin | undefined {
     const plugin = this.running.get(instanceId)
     if (!plugin) return undefined
+    // Teardown may arrive directly from a destroyed WebContents rather than
+    // destroyInstance(); keep the owner gate live while the release request
+    // drains so its marker is not stranded.
+    plugin.releasing = true
+    if (plugin.carrier === 'frame') this.revokePluginFrameInstance(instanceId)
+    this.filePickerHost?.cancelInstance(instanceId)
+    this.aiTerminalOutputDecoder.dropInstance(instanceId)
+    this.editorSelectionGrants.close(instanceId)
+    this.editorAiCapability.close(instanceId)
     this.settleActivation(instanceId)
+    this.settlePluginReadyWaiter(instanceId, new BackendPluginError('INVALID_RUNTIME'))
     this.readinessReloaded.delete(instanceId)
     plugin.detachHostResize?.()
     plugin.detachHostResize = null
     plugin.detachHostClosed?.()
     plugin.detachHostClosed = null
+    plugin.detachReceiverFrames?.()
+    plugin.detachReceiverFrames = null
+    this.revokeReceiverFrames(instanceId)
+    this.cancelPendingEditorTargets((pending) =>
+      pending.sourceInstanceId === instanceId || pending.receiverInstanceId === instanceId ||
+      this.receiverItems.get(pending.sourceItemId)?.offer.detailSourceInstanceId === instanceId
+    )
+    this.cancelPendingDetailTargets((pending) =>
+      pending.providerInstanceId === instanceId || pending.receiverInstanceId === instanceId ||
+      this.receiverItems.get(pending.itemId)?.offer.detailSourceInstanceId === instanceId
+    )
+    this.cancelDetailCloseTransactions((transaction) =>
+      transaction.receiverInstanceId === instanceId || transaction.itemIds.some((itemId) => {
+        const item = this.receiverItems.get(itemId)
+        const providerInstanceId = item ? this.pendingPluginFrames.get(item.bindingId)?.instanceId : undefined
+        return providerInstanceId === instanceId || item?.offer.detailSourceInstanceId === instanceId
+      })
+    )
+    this.cancelPendingDetailOpens((pending) => pending.sourceInstanceId === instanceId ||
+      this.receiverItems.get(pending.itemId ?? '')?.offer.detailSourceInstanceId === instanceId,
+    'provider-unavailable', true)
+    this.cancelPendingDetailOpens((pending) => pending.receiverInstanceId === instanceId,
+      'receiver-unavailable')
+    this.detailPairs.delete(instanceId)
     this.cancelPendingAiStarts(plugin)
     this.releaseTerminalOwnership(plugin)
     const backendCalls = this.pendingBackendCalls.get(instanceId)
@@ -5327,8 +8396,10 @@ export class FrontendPluginManager {
     this.releaseInstanceSubscriptions(instanceId)
     this.discardGitPathGrants(instanceId)
     this.releaseGitCredentialOwnersForInstance(instanceId)
+    const terminalIdentity = this.terminalStorageIdentity(plugin)
+    if (terminalIdentity) this.releaseAiTerminalOwner(plugin, terminalIdentity)
     this.running.delete(instanceId)
-    this.bySender.delete(plugin.senderId)
+    if (plugin.carrier === 'surface') this.bySender.delete(plugin.senderId)
     for (const [key, handle] of this.contributionInstances) {
       if (handle.instanceId === instanceId) this.contributionInstances.delete(key)
     }
@@ -5351,6 +8422,7 @@ export class FrontendPluginManager {
     for (const [sessionId, route] of this.terminalRoutes) {
       if (route.pluginId !== pluginId) continue
       this.terminalOutputBatcher.dropSession(sessionId)
+      this.aiTerminalOutputDecoder.dropSession(sessionId)
       this.pendingTerminalOwners.delete(sessionId)
       this.terminalRoutes.delete(sessionId)
     }
@@ -5360,6 +8432,7 @@ export class FrontendPluginManager {
     for (const [sessionId, route] of this.terminalRoutes) {
       if (route.pluginId !== pluginId || route.packageVersion !== packageVersion) continue
       this.terminalOutputBatcher.dropSession(sessionId)
+      this.aiTerminalOutputDecoder.dropSession(sessionId)
       this.pendingTerminalOwners.delete(sessionId)
       this.terminalRoutes.delete(sessionId)
     }
@@ -5379,6 +8452,7 @@ export class FrontendPluginManager {
     for (const [sessionId, session] of this.aiSessions) {
       if (!predicate(session)) continue
       this.aiSessions.delete(sessionId)
+      this.aiTerminalOutputDecoder.dropSession(sessionId)
       void session.client.send('terminal.kill', {
         terminal_session_id: sessionId,
         force: true,
@@ -5398,6 +8472,78 @@ export class FrontendPluginManager {
     })
   }
 
+  private mintTrustedEditorFileGrant(
+    capabilityContext: HostCapabilityContext | null | undefined,
+    target: { path: string; expectedCanonicalPath?: string; workspaceOnly?: boolean } | undefined,
+  ): string | undefined {
+    if (!target) return undefined
+    const binding = capabilityContext?.runtimeBinding
+    if (!binding || !binding.instanceId || !binding.workspaceId || !binding.packageVersion) {
+      throw new Error('trusted editor target requires a runtime binding')
+    }
+    return this.editorSelectionGrants.mint({
+      instanceId: binding.instanceId,
+      workspaceId: binding.workspaceId,
+      packageVersion: binding.packageVersion,
+    }, target.path, 'file', target.expectedCanonicalPath).grant
+  }
+
+  private canonicalTrustedEditorTarget(target: {
+    path: string
+    expectedCanonicalPath?: string
+  }): string {
+    const canonicalPath = resolvePathForContainment(resolve(target.path))
+    if (!canonicalPath) throw new Error('selected resource cannot be safely resolved')
+    if (target.expectedCanonicalPath !== undefined && canonicalPath !== target.expectedCanonicalPath) {
+      throw new Error('selected resource changed before opening')
+    }
+    return canonicalPath
+  }
+
+  private applyTrustedEditorFileTarget(
+    params: URLSearchParams | Record<string, string>,
+    target: {
+      path: string
+      expectedCanonicalPath?: string
+      workspaceOnly?: boolean
+    } | undefined,
+    workspacePath: string | null | undefined,
+    capabilityContext: HostCapabilityContext | null | undefined,
+  ): void {
+    const remove = (key: string): void => {
+      if (params instanceof URLSearchParams) params.delete(key)
+      else delete params[key]
+    }
+    const set = (key: string, value: string): void => {
+      if (params instanceof URLSearchParams) params.set(key, value)
+      else params[key] = value
+    }
+    remove('file_grant')
+    if (!target) return
+    if (target.workspaceOnly) {
+      const canonicalPath = this.canonicalTrustedEditorTarget(target)
+      const workspaceRoot = workspacePath
+        ? resolvePathForContainment(resolve(workspacePath))
+        : null
+      if (!workspaceRoot) throw new Error('workspace preview requires a valid workspace binding')
+      const relPath = relative(workspaceRoot, canonicalPath)
+      if (
+        !relPath ||
+        relPath === '..' ||
+        relPath.startsWith(`..${sep}`) ||
+        isAbsolute(relPath)
+      ) throw new Error('preview resource escapes the Host workspace binding')
+      // PlansApp receives the Host canonical absolute path and performs its
+      // own workspace-relative normalization for the preview tab.
+      set('filepath', canonicalPath)
+      remove('file_ws')
+      remove('rel_path')
+      return
+    }
+    const fileGrant = this.mintTrustedEditorFileGrant(capabilityContext, target)
+    if (fileGrant) set('file_grant', fileGrant)
+  }
+
   /**
    * create → attach → activate. If the plugin is already running it is brought
    * back to visible and re-bounded (idempotent open); a new open target for the
@@ -5413,8 +8559,15 @@ export class FrontendPluginManager {
       mirrorTitle?: boolean
       workspacePath?: string
       capabilityContext?: HostCapabilityContext | null
+      trustedEditorFileTarget?: {
+        path: string
+        expectedCanonicalPath?: string
+        workspaceOnly?: boolean
+      }
+      canDispatch?: () => boolean
     } = {}
   ): string | null {
+    if (opts.canDispatch && !opts.canDispatch()) return null
     if (this.isPackageVersionStopping(descriptor.id, descriptor.packageVersion)) return null
     this.registerIpc()
 
@@ -5447,16 +8600,18 @@ export class FrontendPluginManager {
           // Recreate it so all existing routes are released under the old identity.
           this.destroyInstance(existing.instanceId)
         } else {
+          if (opts.canDispatch && !opts.canDispatch()) return null
           this.updateInstanceCapabilityContext(existing, nextDescriptorContext)
           const query = descriptor.query ?? ''
           const prevQuery = existing.query
-          existing.query = query
+          if (!opts.trustedEditorFileTarget) existing.pendingTrustedTarget = undefined
           if (workspaceOf(query) !== workspaceOf(prevQuery)) {
             // Different workspace → reload the entry with the new params (matches
             // legacy routeEditorWindowOpen's `reload` branch). In-flight queued
             // targets belong to the old workspace and are dropped with it.
             existing.ready = false
             existing.pendingTargets = []
+            existing.lastDeliveredTarget = undefined
             this.loadEntry(existing.view, descriptor)
           } else if (query) {
             // Same workspace → deliver the open target in-page (legacy
@@ -5464,15 +8619,37 @@ export class FrontendPluginManager {
             // without reloading, so open tabs and unsaved buffers survive). This
             // is also the path an out-of-workspace open takes: it carries
             // `file_ws` in the params, which is not part of the identity above.
-            this.sendOpenTarget(existing, queryToParams(query))
+            if (opts.trustedEditorFileTarget && !existing.ready) {
+              existing.pendingTrustedTarget = {
+                query,
+                target: opts.trustedEditorFileTarget,
+                canDispatch: opts.canDispatch,
+              }
+            } else {
+              const params = queryToParams(query)
+              try {
+                this.applyTrustedEditorFileTarget(
+                  params,
+                  opts.trustedEditorFileTarget,
+                  existing.workspacePath ?? opts.workspacePath,
+                  existing.capabilityContext,
+                )
+                this.sendOpenTarget(existing, params)
+              } catch (error) {
+                return null
+              }
+            }
           }
+          existing.query = query
           if (bounds === 'hidden') {
             this.deactivate(existing.instanceId)
           } else {
             existing.fill = bounds === 'fill'
+            existing.restartBounds = bounds
             this.applyBounds(existing, bounds)
             this.trackHostResize(existing)
             existing.view.setVisible(true)
+            existing.visible = true
           }
           // Surface the window that actually hosts the view. Cross-window opens
           // keep the view on its original host, so focus that one — the open
@@ -5498,6 +8675,9 @@ export class FrontendPluginManager {
     view: PluginViewLaunchDescriptor,
     options: PluginViewOpenOptions
   ): Promise<PluginViewHandle> {
+    if (options.canDispatch && !options.canDispatch()) {
+      throw new Error('request is no longer active')
+    }
     const registered = this.descriptors.get(packageDescriptor.id)
     if (!registered) {
       throw new Error(`package descriptor '${packageDescriptor.id}' is not registered by the Host`)
@@ -5520,12 +8700,18 @@ export class FrontendPluginManager {
     validateV2CapabilityContext(registered, capabilityContext)
     this.registerIpc()
 
+    const trustedEditorFileTarget = options.trustedEditorFileTarget
     const handle = this.mountView(
       options.hostWindow,
       registered,
       options.bounds,
       options.query ?? '',
-      { ...options, capabilityContext },
+      {
+        ...options,
+        capabilityContext,
+        trustedEditorFileTarget: undefined,
+        deferTrustedEditorFileTarget: trustedEditorFileTarget !== undefined,
+      },
       canonicalView,
       false
     )
@@ -5536,11 +8722,60 @@ export class FrontendPluginManager {
     }
     try {
       await this.waitForBackendBinding(handle.instanceId)
+      if (trustedEditorFileTarget) await this.waitForEntryReady(handle.instanceId)
     } catch (error) {
       this.destroyInstance(handle.instanceId)
       throw error
     }
+    try {
+      if (options.canDispatch && !options.canDispatch()) {
+        throw new Error('request is no longer active')
+      }
+      if (trustedEditorFileTarget) {
+        this.updateViewQuery(handle.instanceId, options.query ?? '', trustedEditorFileTarget)
+      }
+    } catch (error) {
+      // A target can become invalid while the initial backend bind is pending.
+      // The newly mounted view has no useful caller-visible state in that case;
+      // tear it down without touching an existing contribution instance.
+      this.destroyInstance(handle.instanceId)
+      throw error
+    }
     return handle
+  }
+
+  /** Restricted Host-only candidate preflight. Each declared frontend view is
+   * mounted hidden with no capability binding and must complete its
+   * sender-authenticated readiness handshake. The candidate never enters the
+   * descriptor/catalog or contribution registries, and every temporary view is
+   * destroyed even when a later view fails. */
+  async preflightPackageFrontend(
+    descriptor: PluginLaunchDescriptor,
+    hostWindow: BrowserWindow,
+  ): Promise<void> {
+    if (hostWindow.isDestroyed()) throw new Error('frontend preflight host window is unavailable')
+    const views = descriptor.views ?? []
+    if (views.length === 0) throw new Error('frontend preflight requires at least one contributed view')
+    this.registerIpc()
+    const mounted: PluginViewHandle[] = []
+    try {
+      for (const view of views) {
+        if (hostWindow.isDestroyed()) throw new Error('frontend preflight host window was destroyed')
+        const handle = this.mountView(
+          hostWindow,
+          descriptor,
+          'hidden',
+          '',
+          { capabilityContext: null, initiallyVisible: false, preflight: true },
+          view,
+          false,
+        )
+        mounted.push(handle)
+        await this.waitForPluginReady(handle.instanceId)
+      }
+    } finally {
+      for (const handle of mounted.reverse()) this.destroyInstance(handle.instanceId)
+    }
   }
 
   /** Ensure a contribution has a live, deactivated instance without creating
@@ -5567,6 +8802,8 @@ export class FrontendPluginManager {
    *  native view can never drift apart on identity or capability binding. */
   private buildRecord(input: {
     instanceId: string
+    carrier?: 'surface' | 'frame'
+    frameBindingId?: string | null
     descriptor: PluginLaunchDescriptor
     surface: PluginSurface
     hostWindow: BrowserWindow
@@ -5577,11 +8814,17 @@ export class FrontendPluginManager {
     isV2Identity: boolean
     openedViaLegacyAdapter: boolean
     fill: boolean
+    restartBounds: PluginViewBounds
     closeHostOnHide: boolean
+    mirrorTitle: boolean
+    visible: boolean
   }): RunningPlugin {
     const { instanceId, descriptor, isV2Identity, openedViaLegacyAdapter } = input
     return {
       instanceId,
+      carrier: input.carrier ?? 'surface',
+      frameBindingId: input.frameBindingId ?? null,
+      documentGeneration: 0,
       id: descriptor.id,
       openedViaLegacyAdapter,
       contributionKey: input.contributionKey,
@@ -5600,10 +8843,15 @@ export class FrontendPluginManager {
       query: input.query,
       senderId: input.surface.webContents.id,
       fill: input.fill,
+      restartBounds: input.restartBounds,
       detachHostResize: null,
       detachHostClosed: null,
+      detachReceiverFrames: null,
       closeHostOnHide: input.closeHostOnHide,
+      mirrorTitle: input.mirrorTitle,
+      visible: input.visible,
       ready: false,
+      lastDeliveredTarget: undefined,
       pluginReady: false,
       releasing: false,
       pendingTargets: [],
@@ -5616,18 +8864,30 @@ export class FrontendPluginManager {
     hostWindow: BrowserWindow,
     descriptor: PluginLaunchDescriptor,
     isV2Identity: boolean,
-    openedViaLegacyAdapter: boolean
+    openedViaLegacyAdapter: boolean,
+    preflight = false,
   ): void {
     const contents = record.view.webContents
     this.running.set(instanceId, record)
-    if (isV2Identity && this.activationFailureHandler) {
+    const onReceiverNavigation = (): void => {
+      // did-navigate fires only after a new main-frame document commits. A
+      // cancelled navigation must leave the still-live receiver authoritative.
+      this.revokeReceiverFrames(instanceId)
+      const current = this.running.get(instanceId)
+      if (current?.view.webContents === contents) current.documentGeneration += 1
+    }
+    contents.on('did-navigate', onReceiverNavigation)
+    record.detachReceiverFrames = () => {
+      if (!contents.isDestroyed()) contents.removeListener('did-navigate', onReceiverNavigation)
+    }
+    if (isV2Identity && this.activationFailureHandler && !preflight) {
       // Register the activation immediately so load failure / renderer death
       // remain observable, but do not spend the readiness budget while the
       // entry document itself is still loading.
       this.pendingActivations.set(instanceId, null)
     }
     if (openedViaLegacyAdapter) this.legacyInstances.set(descriptor.id, instanceId)
-    this.bySender.set(record.senderId, instanceId)
+    if (record.carrier === 'surface') this.bySender.set(record.senderId, instanceId)
 
     const activation = nonEmptyString(descriptor.packageVersion) && nonEmptyString(descriptor.packageDir)
       ? this.pluginBackendHost.activationFor(
@@ -5710,6 +8970,18 @@ export class FrontendPluginManager {
     // the backend url is already known) so server-push events reach it without
     // waiting for its first capability call.
     if (descriptor.requires.length > 0) this.ensureBackend()
+
+    // A frame is carried by the Host document, not a plugin WebContents. Its
+    // exact-frame observer owns document readiness and revocation; only the
+    // host-window close hook belongs to the shared lifecycle.
+    if (record.carrier === 'frame') {
+      const onHostClosed = (): void => {
+        if (this.running.get(instanceId) === record) this.destroyInstance(instanceId)
+      }
+      hostWindow.on('closed', onHostClosed)
+      record.detachHostClosed = () => hostWindow.removeListener('closed', onHostClosed)
+      return
+    }
 
     // If the host window goes away, tear the view down with it. Guarded so a
     // later record (view recreated on another window) is never torn down by a
@@ -5810,6 +9082,10 @@ export class FrontendPluginManager {
             // "entry still loading" sentinel, then reload the guest only.
             this.pendingActivations.set(instanceId, null)
             try {
+              // A reload starts a new receiver document. Do this before the
+              // Electron call so a racing target is queued for that document
+              // instead of being sent to the stale one.
+              live.ready = false
               contents.reload()
               return
             } catch {
@@ -5821,8 +9097,39 @@ export class FrontendPluginManager {
         timer.unref?.()
         this.pendingActivations.set(instanceId, timer)
       }
+      const pendingTrustedTarget = current.pendingTrustedTarget
+      current.pendingTrustedTarget = undefined
+      if (pendingTrustedTarget) {
+        const canDispatch = pendingTrustedTarget.canDispatch ?? (() => true)
+        if (canDispatch()) {
+          try {
+            this.updateViewQuery(
+              instanceId,
+              pendingTrustedTarget.query,
+              pendingTrustedTarget.target,
+            )
+          } catch {
+            // The Host target may have changed while the legacy entry loaded;
+            // leave the existing view alive without disclosing a grant/target.
+          }
+        }
+      }
+      // A previously delivered receiver-owned target is safe to restore after
+      // a readiness retry. A trusted target waiting on this load is delivered
+      // after the readiness promise, so it supersedes this replay if valid;
+      // replaying first also preserves the old view when that request is
+      // revoked or fails its final canonical check.
+      if (
+        !pendingTrustedTarget &&
+        current.pendingTargets.length === 0 &&
+        current.lastDeliveredTarget
+      ) {
+        const replay = { ...current.lastDeliveredTarget }
+        contents.send(IPC_OPEN_TARGET, replay)
+      }
       for (const params of current.pendingTargets.splice(0)) {
         contents.send(IPC_OPEN_TARGET, params)
+        current.lastDeliveredTarget = { ...params }
       }
       // Replay the current transport status: transitions before this load (or
       // while a queued view was still booting) would otherwise be missed and
@@ -5849,6 +9156,14 @@ export class FrontendPluginManager {
       workspacePath?: string
       capabilityContext?: HostCapabilityContext | null
       initiallyVisible?: boolean
+      trustedEditorFileTarget?: {
+        path: string
+        expectedCanonicalPath?: string
+        workspaceOnly?: boolean
+      }
+      deferTrustedEditorFileTarget?: boolean
+      /** Candidate preflight never registers production failure recovery. */
+      preflight?: boolean
     },
     viewDescriptor: PluginViewLaunchDescriptor | undefined,
     openedViaLegacyAdapter: boolean
@@ -5858,18 +9173,45 @@ export class FrontendPluginManager {
     validateV2CapabilityContext(descriptor, capabilityContext ?? null)
     const isV2Identity = hasV2DescriptorIdentity(descriptor)
     const instanceId = this.nextInstanceId()
+    const params = new URLSearchParams(query.startsWith('?') ? query.slice(1) : query)
+    params.delete('file_grant')
+    const grantContext = isV2Identity
+      ? this.bindCapabilityContext(capabilityContext, instanceId)
+      : capabilityContext
+    if (opts.deferTrustedEditorFileTarget) {
+      params.delete('filepath')
+      params.delete('file_ws')
+      params.delete('line')
+    } else {
+      this.applyTrustedEditorFileTarget(
+        params,
+        opts.trustedEditorFileTarget,
+        opts.workspacePath,
+        grantContext,
+      )
+    }
+    const loadQuery = params.toString() ? `?${params.toString()}` : ''
     const loadDescriptor: PluginLaunchDescriptor = {
       ...descriptor,
       entryFile: viewDescriptor?.entryFile ?? descriptor.entryFile,
-      query,
+      query: loadQuery,
     }
 
     const preload = join(__dirname, '../preload/plugin-preload.js')
+    // A receiver window hosts provider frames as iframes, and each of those
+    // frames is a plugin view in its own right: the same Host-owned, node-free
+    // preload has to run inside it to announce the document and carry the
+    // frame's capability port. Electron only runs preloads in sub-frames when
+    // this is on, and only a window that declares `receives` can be a receiver.
+    const hostsProviderFrames =
+      viewDescriptor?.receives !== undefined ||
+      descriptor.views?.some((candidate) => candidate.receives !== undefined) === true
     const view = new WebContentsView({
       webPreferences: {
         preload,
         contextIsolation: true,
         nodeIntegration: false,
+        ...(hostsProviderFrames ? { nodeIntegrationInSubFrames: true } : {}),
         // The plugin preload is node-free (webcrypto only), so views run fully
         // sandboxed.
         sandbox: true,
@@ -5913,15 +9255,26 @@ export class FrontendPluginManager {
       surface: nativeSurface(view),
       hostWindow,
       workspacePath: opts.workspacePath ?? null,
-      query,
+      query: loadQuery,
       capabilityContext: capabilityContext ?? null,
       contributionKey: viewDescriptor?.contributionKey ?? null,
       isV2Identity,
       openedViaLegacyAdapter,
       fill: bounds === 'fill',
+      restartBounds: bounds,
       closeHostOnHide: opts.closeHostOnHide ?? false,
+      mirrorTitle: opts.mirrorTitle ?? false,
+      visible: opts.initiallyVisible !== false && bounds !== 'hidden',
     })
-    this.wireSurface(instanceId, record, hostWindow, descriptor, isV2Identity, openedViaLegacyAdapter)
+    this.wireSurface(
+      instanceId,
+      record,
+      hostWindow,
+      descriptor,
+      isV2Identity,
+      openedViaLegacyAdapter,
+      opts.preflight === true,
+    )
     this.applyBounds(record, bounds)
     this.trackHostResize(record)
 
@@ -5939,12 +9292,30 @@ export class FrontendPluginManager {
     return this.running.get(instanceId)?.workspacePath ?? null
   }
 
+  /** Deliver only through the receiver that owns this instance. Frame traffic
+   * never transits the Host document's webContents. */
+  private sendToPlugin(record: RunningPlugin, channel: string, payload: unknown): boolean {
+    if (record.carrier === 'frame') {
+      const binding = this.pluginFrameBindings.activeForInstance(record.instanceId)
+      if (!binding || this.activePluginFrame(binding) !== record) return false
+      return this.pluginFrameBindings.post(record.instanceId, channel, payload)
+    }
+    if (record.view.webContents.isDestroyed()) return false
+    record.view.webContents.send(channel, payload)
+    return true
+  }
+
   /** Deliver a new open target to a running view, queueing until its entry has
    *  finished loading (so a target racing the first load is never lost). */
   private sendOpenTarget(record: RunningPlugin, params: Record<string, string>): void {
     if (this.isPluginStopping(record)) return
-    if (record.ready) record.view.webContents.send(IPC_OPEN_TARGET, params)
-    else record.pendingTargets.push(params)
+    if (record.ready || record.carrier === 'frame') {
+      if (this.sendToPlugin(record, IPC_OPEN_TARGET, params)) {
+        record.lastDeliveredTarget = { ...params }
+      } else if (record.carrier === 'frame') {
+        record.pendingTargets.push(params)
+      }
+    } else record.pendingTargets.push(params)
   }
 
   /** Apply a bounds spec: `'fill'` overlays the host's full content area. */
@@ -5994,11 +9365,16 @@ export class FrontendPluginManager {
     const plugin = this.resolveInstance(instanceId)
     if (!plugin) return
     if (this.isPluginStopping(plugin)) return
+    if (plugin.carrier === 'frame') {
+      plugin.visible = true
+      return
+    }
     if (plugin.fill && !plugin.hostWindow.isDestroyed()) {
       this.applyBounds(plugin, 'fill')
       this.trackHostResize(plugin)
     }
     plugin.view.setVisible(true)
+    plugin.visible = true
   }
 
   /** Focus one exact live Host-owned instance without changing its visibility
@@ -6006,6 +9382,7 @@ export class FrontendPluginManager {
   focusInstance(instanceId: string): void {
     const plugin = this.running.get(instanceId)
     if (!plugin || this.isPluginStopping(plugin) || plugin.view.webContents.isDestroyed()) return
+    if (plugin.carrier === 'frame') return
     revealHostWindow(plugin.hostWindow)
     plugin.view.webContents.focus()
   }
@@ -6015,25 +9392,50 @@ export class FrontendPluginManager {
   deactivate(instanceId: string): void {
     const plugin = this.resolveInstance(instanceId)
     if (!plugin) return
+    if (plugin.carrier === 'frame') {
+      plugin.visible = false
+      return
+    }
     plugin.detachHostResize?.()
     plugin.detachHostResize = null
     plugin.view.setVisible(false)
+    plugin.visible = false
   }
 
   /** Update the plugin view's rect (host-driven layout). */
   setBounds(instanceId: string, bounds: PluginBounds): void {
     const plugin = this.resolveInstance(instanceId)
-    if (plugin) plugin.view.setBounds(bounds)
+    if (!plugin || plugin.carrier === 'frame') return
+    plugin.fill = false
+    plugin.restartBounds = { ...bounds }
+    plugin.view.setBounds(bounds)
   }
 
   /** Host-driven incremental entry target update for one exact v2 instance.
    *  The package keeps its in-page state while the Host changes a diff target;
    *  the workspace identity itself is changed only by recreating the view. */
-  updateViewQuery(instanceId: string, query: string): void {
+  updateViewQuery(
+    instanceId: string,
+    query: string,
+    trustedEditorFileTarget?: {
+      path: string
+      expectedCanonicalPath?: string
+      workspaceOnly?: boolean
+    },
+  ): void {
     const plugin = this.running.get(instanceId)
     if (!plugin || this.isPluginStopping(plugin)) return
+    if (query) {
+      const params = queryToParams(query)
+      this.applyTrustedEditorFileTarget(
+        params,
+        trustedEditorFileTarget,
+        plugin.workspacePath,
+        plugin.capabilityContext,
+      )
+      this.sendOpenTarget(plugin, params)
+    }
     plugin.query = query
-    if (query) this.sendOpenTarget(plugin, queryToParams(query))
   }
 
   /** Host-only integration seam: register an event/backend subscription under
@@ -6081,8 +9483,10 @@ export class FrontendPluginManager {
   /** Detach and destroy one exact Host-owned instance. Stale/unknown ids are
    *  ignored and never fall back to a plugin id. */
   destroyInstance(instanceId: string): void {
+    const current = this.running.get(instanceId)
+    if (current) current.releasing = true
     const plugin = this.forgetInstance(instanceId)
-    if (!plugin) return
+    if (!plugin || plugin.carrier === 'frame') return
     this.detachView(plugin)
     try {
       if (!plugin.view.webContents.isDestroyed()) {
@@ -6121,27 +9525,44 @@ export class FrontendPluginManager {
   /** Register one Host-approved package-local backend activation. */
   registerBackendActivation(activation: BackendPluginLaunchSpec): void {
     const descriptor = this.descriptors.get(activation.pluginId)
-    if (!descriptor) {
-      throw new BackendPluginError(
-        'INVALID_ACTIVATION',
-        'Backend activation has no selected package descriptor.',
-      )
-    }
-    const descriptorPackageDir = canonicalBackendPackageDir(descriptor.packageDir)
     const activationPackageDir = canonicalBackendPackageDir(activation.packageDir)
-    if (
-      descriptor.id !== activation.pluginId ||
-      descriptor.packageVersion !== activation.packageVersion ||
-      !descriptorPackageDir ||
-      !activationPackageDir ||
-      descriptorPackageDir !== activationPackageDir
-    ) {
+    const descriptorPackageDir = descriptor
+      ? canonicalBackendPackageDir(descriptor.packageDir)
+      : null
+    const installed = !descriptor ? this.installedPackages.get(activation.pluginId) : undefined
+    const installedPackageDir = !descriptor
+      ? this.installedPackageDirectories.get(activation.pluginId)
+      : undefined
+    const matchesDescriptor = Boolean(
+      descriptor &&
+      descriptor.id === activation.pluginId &&
+      descriptor.packageVersion === activation.packageVersion &&
+      descriptorPackageDir &&
+      activationPackageDir &&
+      descriptorPackageDir === activationPackageDir,
+    )
+    // A verified Manifest v2 package can legitimately contribute only a
+    // backend. It has no selected frontend descriptor, but it must still
+    // match the exact installed package identity recorded by the Host loader.
+    const matchesBackendOnlyPackage = Boolean(
+      !descriptor &&
+      installed &&
+      installed.packageVersion === activation.packageVersion &&
+      installedPackageDir &&
+      activationPackageDir &&
+      installedPackageDir === activationPackageDir,
+    )
+    if (!matchesDescriptor && !matchesBackendOnlyPackage) {
       throw new BackendPluginError(
         'INVALID_ACTIVATION',
-        'Backend activation does not match the selected package descriptor.',
+        descriptor
+          ? 'Backend activation does not match the selected package descriptor.'
+          : installed
+            ? 'Backend activation does not match the installed package identity.'
+            : 'Backend activation has no selected package descriptor.',
       )
     }
-    activation = { ...activation, packageDir: descriptorPackageDir }
+    activation = { ...activation, packageDir: descriptorPackageDir ?? installedPackageDir! }
     const existing = this.pluginBackendHost.activationForPlugin(activation.pluginId)
     if (existing) {
       throw new BackendPluginError(
@@ -6194,6 +9615,7 @@ export class FrontendPluginManager {
   /** Host-only rollback snapshot of an already approved backend registration. */
   getBackendActivation(pluginId: string, packageVersion: string): BackendPluginLaunchSpec | undefined {
     const packageDir = this.descriptors.get(pluginId)?.packageDir
+      ?? this.installedPackageDirectories.get(pluginId)
     return packageDir ? this.pluginBackendHost.activationFor(pluginId, packageVersion, packageDir) : undefined
   }
 
@@ -6417,7 +9839,7 @@ export class FrontendPluginManager {
       warning: 'Unsigned local unpacked plugin — Developer Mode only',
     }
     try {
-      this.registerInstalledPackage(summary, descriptor)
+      this.registerInstalledPackage(summary, descriptor, {}, packageDir)
     } catch (error) {
       return { loaded: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -6459,7 +9881,7 @@ export class FrontendPluginManager {
     }
     summary.provenance = 'factory-bundled'
     activation.provenance = 'factory-bundled'
-    this.registerInstalledPackage(summary, scanned.descriptor, { official: true })
+    this.registerInstalledPackage(summary, scanned.descriptor, { official: true }, packageDir)
     this.descriptorSources.set(expectedPluginId, 'factory-bundle')
     return {
       loaded: true,
@@ -6474,7 +9896,8 @@ export class FrontendPluginManager {
   registerInstalledPackage(
     summary: InstalledPluginPackageSummary,
     descriptor?: PluginLaunchDescriptor,
-    opts: { official?: boolean } = {}
+    opts: { official?: boolean } = {},
+    packageDir?: string,
   ): void {
     if (summary.id === HOST_EVENT_SOURCE_PLUGIN_ID) {
       throw new Error(`internal Host event identity '${HOST_EVENT_SOURCE_PLUGIN_ID}' is not a plugin id`)
@@ -6501,6 +9924,9 @@ export class FrontendPluginManager {
     this.clearTerminalRoutes(summary.id)
     this.descriptors.delete(summary.id)
     if (descriptor) this.registerDescriptor(descriptor, opts)
+    const canonicalPackageDir = canonicalBackendPackageDir(packageDir ?? descriptor?.packageDir)
+    if (canonicalPackageDir) this.installedPackageDirectories.set(summary.id, canonicalPackageDir)
+    else this.installedPackageDirectories.delete(summary.id)
     this.installedPackages.set(summary.id, {
       id: summary.id,
       requires: [...summary.requires],
@@ -6536,6 +9962,454 @@ export class FrontendPluginManager {
     return buildPluginContributionCatalog(this.listDescriptors())
   }
 
+  /** Host-only left/detail pairing. The Host supplies opaque live identities;
+   * neither receiver nor provider selects its counterpart. */
+  pairDetailSource(sourceInstanceId: string, receiverId: string): { ok: true } | { ok: false; reason: string } {
+    const source = this.running.get(sourceInstanceId)
+    const receiver = this.receiverRegistrations.get(receiverId)
+    const sourceDescriptor = source ? this.descriptors.get(source.id) : undefined
+    const sourceView = sourceDescriptor?.views?.find((view) => view.contributionKey === source?.contributionKey)
+    const detailView = sourceView?.detailView
+      ? sourceDescriptor?.views?.find((view) => view.id === sourceView.detailView && view.location === 'detail')
+      : undefined
+    const receiverPlugin = receiver ? this.running.get(receiver.receiverInstanceId) : undefined
+    const receiverDescriptor = receiverPlugin ? this.descriptors.get(receiverPlugin.id) : undefined
+    const receiverView = receiverDescriptor?.views?.find((view) => view.contributionKey === receiverPlugin?.contributionKey)
+    const workspacePath = source?.workspacePath ? resolve(source.workspacePath) : null
+    if (!source) return { ok: false, reason: 'source instance is not running' }
+    if (!receiver) return { ok: false, reason: 'receiver is not registered' }
+    if (!receiverPlugin) return { ok: false, reason: 'receiver instance is not running' }
+    if (!sourceDescriptor || !sourceView) return { ok: false, reason: 'source view is unavailable' }
+    if (!detailView) return { ok: false, reason: 'source declares no detail view' }
+    if (!receiverDescriptor || !receiverView) return { ok: false, reason: 'receiver view is unavailable' }
+    if (sourceView.location !== 'left') return { ok: false, reason: 'source view is not a left contribution' }
+    if (!detailView.targetSchema) return { ok: false, reason: 'detail view declares no target schema' }
+    if (!source.hasV2DescriptorIdentity || !receiverPlugin.hasV2DescriptorIdentity) {
+      return { ok: false, reason: 'source and receiver must both be Manifest v2 instances' }
+    }
+    if (!source.capabilityContext || !receiverPlugin.capabilityContext) {
+      return { ok: false, reason: 'capability context is missing' }
+    }
+    if (!workspacePath || receiverPlugin.workspacePath === null) {
+      return { ok: false, reason: 'workspace path is missing' }
+    }
+    if (resolve(receiverPlugin.workspacePath) !== workspacePath) {
+      return { ok: false, reason: 'source and receiver workspaces differ' }
+    }
+    if (source.hostWindow !== receiverPlugin.hostWindow) {
+      return { ok: false, reason: 'source and receiver live in different windows' }
+    }
+    if (this.currentReceiverRegistration(receiverId, receiverPlugin) !== receiver) {
+      return { ok: false, reason: 'receiver registration is stale' }
+    }
+    if (!receiver.declaration.locations.includes('detail')) {
+      return { ok: false, reason: 'receiver does not declare the detail location' }
+    }
+    if (!this.contributionCapabilityContext(sourceDescriptor, sourceView, workspacePath) ||
+      !this.contributionCapabilityContext(sourceDescriptor, detailView, workspacePath) ||
+      !this.contributionCapabilityContext(receiverDescriptor, receiverView, workspacePath)) {
+      return { ok: false, reason: 'a capability context is unavailable' }
+    }
+    this.detailPairs.set(sourceInstanceId, {
+      sourceInstanceId,
+      receiverId,
+      detailView,
+      workspacePath,
+    })
+    return { ok: true }
+  }
+
+  /** Host-only provider pairing. The receiver never selects provider identity;
+   * it receives only opaque offer metadata for an already validated view. */
+  offerReceiverProvider(
+    receiverId: string,
+    descriptor: PluginLaunchDescriptor,
+    view: PluginViewLaunchDescriptor,
+    workspacePath: string,
+  ): { ok: true } | { ok: false; reason: string } {
+    const registration = this.receiverRegistrations.get(receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    const location = view.location === 'left' || view.location === 'detail' ? view.location : null
+    if (!registration) return { ok: false, reason: 'receiver is not registered' }
+    if (!receiver) return { ok: false, reason: 'receiver instance is not running' }
+    if (receiver.documentGeneration !== registration.documentGeneration) {
+      return { ok: false, reason: 'receiver document changed' }
+    }
+    if (!location) return { ok: false, reason: 'contribution is not a receiver location' }
+    if (!registration.declaration.locations.includes(location)) {
+      return { ok: false, reason: 'receiver does not declare this location' }
+    }
+    if (this.descriptors.get(descriptor.id) !== descriptor) {
+      return { ok: false, reason: 'provider descriptor changed' }
+    }
+    if (!descriptor.views?.includes(view)) return { ok: false, reason: 'provider view is not current' }
+    if (!this.contributionCapabilityContext(descriptor, view, workspacePath)) {
+      return { ok: false, reason: 'provider capability context is unavailable' }
+    }
+    const offer: ReceiverOffer = {
+      id: randomUUID(),
+      location,
+      descriptor,
+      view,
+      workspacePath: resolve(workspacePath),
+    }
+    console.warn(`[plugins] receiver offer sent: '${view.contributionKey}' (${location})`)
+    registration.offers.set(offer.id, offer)
+    receiver.view.webContents.send('plugin:receiver:offer', {
+      receiverId,
+      offer: { offerId: offer.id, contributionKey: view.contributionKey, title: view.title, location: offer.location },
+    })
+    return { ok: true }
+  }
+
+  /** Reserve a generic iframe receiver. The caller must locate its initial
+   * blank iframe and bind that exact WebFrameMain before assigning entryUrl to
+   * the child; no renderer-selected identity is accepted here. */
+  async reservePluginFrameContribution(
+    hostWindow: BrowserWindow,
+    contributionKey: string,
+    workspacePath: string,
+    receiver?: RunningPlugin,
+  ): Promise<
+    | { ok: true; bindingId: string; entryUrl: string }
+    | { ok: false; error: string }
+  > {
+    const descriptor = this.listDescriptors().find((candidate) =>
+      candidate.views?.some((view) => view.contributionKey === contributionKey)
+    )
+    const view = descriptor?.views?.find((candidate) => candidate.contributionKey === contributionKey)
+    if (!descriptor || !view) return { ok: false, error: 'contribution is not installed' }
+    const receiverWebContents = receiver?.view.webContents ?? hostWindow.webContents
+    const receiverInstanceId = receiver?.instanceId ?? null
+    const receiverDocumentGeneration = receiver?.documentGeneration ?? 0
+    if (receiver && (receiver.carrier !== 'surface' || receiverWebContents.isDestroyed())) {
+      return { ok: false, error: 'receiver document is unavailable' }
+    }
+    if (!descriptor.packageVersion || !descriptor.packageDir || this.isPackageVersionStopping(descriptor.id, descriptor.packageVersion)) {
+      return { ok: false, error: 'frame contribution is unavailable' }
+    }
+    const capabilityContext = this.contributionCapabilityContext(descriptor, view, workspacePath)
+    if (!capabilityContext) return { ok: false, error: 'package-version capability grant is missing' }
+    this.registerIpc()
+    const entryPath = relative(descriptor.packageDir, view.entryFile)
+    if (!entryPath || entryPath === '..' || entryPath.startsWith(`..${sep}`) || isAbsolute(entryPath)) {
+      return { ok: false, error: 'frame entry is outside its package artifact' }
+    }
+    const artifactId = createHash('sha256')
+      .update(`${descriptor.id}\u0000${descriptor.packageVersion}\u0000${descriptor.packageDir}`)
+      .digest('hex')
+    let assetOrigin: string
+    try {
+      assetOrigin = await this.pluginFrameAssets.mount({
+        artifactId,
+        packageId: descriptor.id,
+        packageVersion: descriptor.packageVersion,
+        root: descriptor.packageDir,
+      })
+    } catch {
+      return { ok: false, error: 'frame assets are unavailable' }
+    }
+    // A provider frame is the plugin's own UI for one workspace, so it needs the
+    // same load-time context a contribution window gets. Without it the app
+    // starts with an empty workspace and renders a blank pane — the query is
+    // what tells it which workspace it belongs to and that it runs on the
+    // manifest-v2 capability runtime.
+    // A detail frame that gets no view id mounts the wrong surface: the shipped
+    // Git package then boots its window app, never registers the detail-target
+    // listener, and the Host's target is dropped.
+    const frameQuery = composePluginFrameQuery(contributionKey, resolve(workspacePath))
+    const entryUrl = new URL(
+      `${entryPath.split(sep).map(encodeURIComponent).join('/')}${frameQuery}`,
+      assetOrigin,
+    ).toString()
+    const instanceId = this.nextInstanceId()
+    // A composed frame is a view instance like any other: its context carries
+    // this instance's Host-created id, which is what later pairs the frame with
+    // the detail it opens (`currentDetailPair` compares it).
+    const boundCapabilityContext = this.bindCapabilityContext(capabilityContext, instanceId)
+    if (!boundCapabilityContext) return { ok: false, error: 'package-version capability grant is missing' }
+    const receiverGeneration = randomUUID()
+    const identity: PluginFrameBindingIdentity = {
+      artifactId,
+      contributionKey,
+      entryUrl,
+      instanceId,
+      packageId: descriptor.id,
+      packageVersion: descriptor.packageVersion,
+      receiverGeneration,
+      receiverWebContentsId: receiverWebContents.id,
+      workspacePath: resolve(workspacePath),
+    }
+    const binding = this.pluginFrameBindings.reserve(identity)
+    const record = this.buildRecord({
+      instanceId,
+      carrier: 'frame',
+      frameBindingId: binding.id,
+      descriptor,
+      surface: {
+        webContents: receiverWebContents,
+        setBounds: () => undefined,
+        setVisible: () => undefined,
+      },
+      hostWindow,
+      workspacePath: resolve(workspacePath),
+      query: frameQuery,
+      capabilityContext: boundCapabilityContext,
+      contributionKey,
+      isV2Identity: true,
+      openedViaLegacyAdapter: false,
+      fill: false,
+      restartBounds: 'hidden',
+      closeHostOnHide: false,
+      mirrorTitle: false,
+      visible: false,
+    })
+    this.wireSurface(instanceId, record, hostWindow, descriptor, true, false)
+    this.pendingPluginFrames.set(binding.id, {
+      bindingId: binding.id,
+      instanceId,
+      contributionKey,
+      hostWindow,
+      receiverWebContents,
+      receiverInstanceId,
+      receiverDocumentGeneration,
+      assetOrigin,
+      artifactId,
+      entryUrl,
+      receiverGeneration,
+      documentNonce: null,
+      frame: null,
+      detachNavigation: null,
+    })
+    if (receiverInstanceId !== null) {
+      const bindings = this.receiverFrameBindings.get(receiverInstanceId) ?? new Set<string>()
+      bindings.add(binding.id)
+      this.receiverFrameBindings.set(receiverInstanceId, bindings)
+    }
+    return { ok: true, bindingId: binding.id, entryUrl }
+  }
+
+  /** Bind only a Host-managed blank iframe. No page selector or frame handle
+   * is accepted from renderer input. */
+  bindPluginFrameBlank(bindingId: string, frame: WebFrameMain): boolean {
+    const pending = this.pendingPluginFrames.get(bindingId)
+    if (!pending) {
+      console.warn(`[plugins] receiver frame blank refused: binding ${bindingId} is not pending`)
+      return false
+    }
+    if (pending.hostWindow.isDestroyed() || frame.isDestroyed()) {
+      console.warn('[plugins] receiver frame blank refused: window or frame is gone')
+      return false
+    }
+    if (frame.parent !== pending.receiverWebContents.mainFrame) {
+      console.warn('[plugins] receiver frame blank refused: frame is not a child of the receiver document')
+      return false
+    }
+    if (frame.url !== 'about:blank') {
+      console.warn(`[plugins] receiver frame blank refused: frame is not blank (${frame.url})`)
+      return false
+    }
+    const binding = this.pluginFrameBindings.bindBlank(bindingId, frame)
+    if (!binding) {
+      console.warn(`[plugins] receiver frame blank refused: binding ${bindingId} could not be reserved`)
+      return false
+    }
+    pending.frame = frame
+    const onNavigation = (details: {
+      frame: WebFrameMain | null
+      isSameDocument: boolean
+      url: string
+    }): void => {
+      const receiver = details.frame
+      if (
+        !receiver ||
+        receiver.isDestroyed() ||
+        receiver.frameTreeNodeId !== binding.frameTreeNodeId ||
+        receiver.parent !== pending.receiverWebContents.mainFrame
+      ) return
+      if (this.pluginFrameBindings.activeForInstance(pending.instanceId)) {
+        this.destroyInstance(pending.instanceId)
+        return
+      }
+      if (
+        details.isSameDocument ||
+        !this.pluginFrameBindings.beginNavigation(bindingId, receiver, details.url)
+      ) {
+        this.destroyInstance(pending.instanceId)
+      }
+    }
+    const onWillFrameNavigate = (details: { frame: WebFrameMain | null }): void => {
+      const receiver = details.frame
+      if (
+        receiver &&
+        receiver.frameTreeNodeId === binding.frameTreeNodeId &&
+        receiver.parent === pending.receiverWebContents.mainFrame &&
+        this.pluginFrameBindings.activeForInstance(pending.instanceId)
+      ) this.destroyInstance(pending.instanceId)
+    }
+    pending.receiverWebContents.on('did-start-navigation', onNavigation)
+    pending.receiverWebContents.on('will-frame-navigate', onWillFrameNavigate)
+    pending.detachNavigation = () => {
+      if (!pending.receiverWebContents.isDestroyed()) {
+        pending.receiverWebContents.removeListener('did-start-navigation', onNavigation)
+        pending.receiverWebContents.removeListener('will-frame-navigate', onWillFrameNavigate)
+      }
+    }
+    return true
+  }
+
+  /** Admit only the document that proved possession of its child-private nonce.
+   * The child never names a binding or Host receiver; both come from Electron. */
+  private admitPluginFrameDocument(
+    frame: WebFrameMain,
+    receiverWebContentsId: number,
+    documentNonce: string,
+  ): boolean {
+    const pending = [...this.pendingPluginFrames.values()].find((candidate) =>
+      candidate.frame === frame &&
+      candidate.receiverWebContents.id === receiverWebContentsId
+    )
+    if (!pending) {
+      console.warn('[plugins] receiver frame document refused: no pending frame for this sender')
+      return false
+    }
+    const refusal = pending.documentNonce !== null
+      ? 'the frame already reported a document'
+      : pending.hostWindow.isDestroyed() || frame.isDestroyed()
+        ? 'window or frame is gone'
+        : frame.parent !== pending.receiverWebContents.mainFrame
+          ? 'frame is not a child of the receiver document'
+          : frame.url !== pending.entryUrl
+            ? `frame url is not the reserved entry (${frame.url})`
+            : frame.origin !== pending.assetOrigin.replace(/\/$/, '')
+              // A non-special scheme (`navide-plugin-frame:`) has an opaque
+              // `origin` in WHATWG URL terms, so the expected value is the
+              // Host-generated asset origin, never `new URL(...).origin`.
+              ? `frame origin is not the reserved origin (${frame.origin} != ${pending.assetOrigin})`
+              : ''
+    if (refusal) {
+      console.warn(`[plugins] receiver frame document refused: ${refusal}`)
+      this.destroyInstance(pending.instanceId)
+      return false
+    }
+    pending.documentNonce = documentNonce
+    const admission = this.pluginFrameBindings.admit(
+      frame,
+      receiverWebContentsId,
+      documentNonce,
+      (binding, message) => this.handlePluginFramePortMessage(binding, message),
+    )
+    if (
+      !admission ||
+      admission.binding.id !== pending.bindingId ||
+      admission.binding.receiverGeneration !== pending.receiverGeneration ||
+      !this.activePluginFrame(admission.binding)
+    ) {
+      console.warn('[plugins] receiver frame document refused: the frame could not be admitted')
+      this.destroyInstance(pending.instanceId)
+      return false
+    }
+    console.warn(`[plugins] receiver frame live: '${pending.contributionKey}'`)
+    try {
+      frame.postMessage('plugin:frame:port', {
+        documentGeneration: admission.binding.documentGeneration,
+        nonce: documentNonce,
+      }, [admission.port])
+      const plugin = this.activePluginFrame(admission.binding)
+      if (plugin) {
+        for (const target of plugin.pendingTargets.splice(0)) {
+          if (this.sendToPlugin(plugin, IPC_OPEN_TARGET, target)) {
+            plugin.lastDeliveredTarget = { ...target }
+          }
+        }
+      }
+      return true
+    } catch {
+      this.destroyInstance(pending.instanceId)
+      return false
+    }
+  }
+
+  /** Close one opaque item receiver without affecting a sibling contribution. */
+  closePluginFrame(bindingId: string): boolean {
+    const pending = this.pendingPluginFrames.get(bindingId)
+    if (!pending) return false
+    this.destroyInstance(pending.instanceId)
+    return true
+  }
+
+  /** Main protocol registration delegates only to this Host-owned asset map. */
+  handlePluginFrameAssetRequest(request: Request): Promise<Response> {
+    return this.pluginFrameAssets.handle(request)
+  }
+
+  /** A receiver document is an authority boundary: replacing it withdraws all
+   * child registrations before its next document can observe old targets. */
+  private revokeReceiverFrames(receiverInstanceId: string): void {
+    for (const [receiverId, registration] of this.receiverRegistrations) {
+      if (registration.receiverInstanceId === receiverInstanceId) this.revokeReceiverRegistration(receiverId)
+    }
+    const bindings = this.receiverFrameBindings.get(receiverInstanceId)
+    if (!bindings) return
+    this.receiverFrameBindings.delete(receiverInstanceId)
+    for (const bindingId of bindings) {
+      const pending = this.pendingPluginFrames.get(bindingId)
+      if (pending) this.destroyInstance(pending.instanceId)
+    }
+  }
+
+  private revokePluginFrameInstance(instanceId: string): void {
+    this.cancelDetailCloseTransactions((transaction) => transaction.itemIds.some((itemId) =>
+      this.pendingPluginFrames.get(this.receiverItems.get(itemId)?.bindingId ?? '')?.instanceId === instanceId
+    ))
+    const plugin = this.running.get(instanceId)
+    if (plugin?.carrier === 'frame') {
+      // A revoked document must never replay buffered ready/target state.
+      plugin.ready = false
+      plugin.pluginReady = false
+      plugin.pendingTargets = []
+      plugin.lastDeliveredTarget = undefined
+      // sendToPlugin revalidates the active binding/generation; only that exact
+      // receiver is told to settle its pending port work before revocation.
+      this.sendToPlugin(plugin, 'plugin:frame:revoked', null)
+    }
+    this.pluginFrameBindings.revokeInstance(instanceId)
+    for (const [bindingId, pending] of this.pendingPluginFrames) {
+      if (pending.instanceId !== instanceId) continue
+      pending.detachNavigation?.()
+      this.pluginFrameAssets.revoke(pending.assetOrigin)
+      if (pending.receiverInstanceId !== null) {
+        const bindings = this.receiverFrameBindings.get(pending.receiverInstanceId)
+        bindings?.delete(bindingId)
+        if (bindings?.size === 0) this.receiverFrameBindings.delete(pending.receiverInstanceId)
+      }
+      this.pendingPluginFrames.delete(bindingId)
+      for (const [itemId, item] of this.receiverItems) {
+        if (item.bindingId !== bindingId) continue
+        const registration = this.receiverRegistrations.get(item.receiverId)
+        const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+        // Replacement/reload/dispose removes the registration first, so an old
+        // item can never report closure into a newer receiver document.
+        if (
+          registration && receiver &&
+          registration.documentGeneration === receiver.documentGeneration &&
+          this.currentReceiverRegistration(item.receiverId, receiver) === registration &&
+          !receiver.view.webContents.isDestroyed()
+        ) {
+          receiver.view.webContents.send(IPC_RECEIVER_ITEM_CLOSED, {
+            receiverId: item.receiverId,
+            itemId,
+            documentGeneration: registration.documentGeneration,
+          })
+        }
+        this.cancelPendingEditorTargets((pending) => pending.sourceItemId === itemId)
+        this.cancelDetailCloseTransactions((transaction) => transaction.itemIds.includes(itemId))
+        this.cancelPendingDetailTargets((pending) => pending.itemId === itemId)
+        this.cancelPendingDetailOpens((pending) => pending.itemId === itemId, 'provider-unavailable')
+        this.receiverItems.delete(itemId)
+      }
+    }
+  }
 
   /** Compose the entry URL for an in-window contribution and reserve the Host
    *  identity it will attach with. Everything authoritative — instance id,
@@ -6730,7 +10604,10 @@ export class FrontendPluginManager {
       isV2Identity: pending.isV2Identity,
       openedViaLegacyAdapter: false,
       fill: false,
+      restartBounds: 'hidden',
       closeHostOnHide: false,
+      mirrorTitle: false,
+      visible: false,
     })
     this.wireSurface(
       pending.instanceId,
@@ -6827,6 +10704,8 @@ export class FrontendPluginManager {
     contributionKey: string,
     options: Omit<PluginViewOpenOptions, 'hostWindow' | 'bounds'>,
   ): Promise<{ ok: boolean; error?: string }> {
+    const canDispatch = options.canDispatch ?? (() => true)
+    if (!canDispatch()) return { ok: false, error: 'request is no longer active' }
     const descriptor = this.listDescriptors().find((candidate) =>
       candidate.views?.some((view) => view.contributionKey === contributionKey)
     )
@@ -6860,7 +10739,24 @@ export class FrontendPluginManager {
       const workspace = options.workspacePath ?? null
       const currentWorkspace = this.workspacePathOfInstance(existing.instanceId)
       if (!workspace || !currentWorkspace || resolve(workspace) === resolve(currentWorkspace)) {
-        this.updateViewQuery(existing.instanceId, options.query ?? '')
+        const current = this.running.get(existing.instanceId)
+        if (options.trustedEditorFileTarget && current && !current.ready) {
+          try {
+            await this.waitForEntryReady(existing.instanceId)
+          } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : String(error) }
+          }
+        }
+        if (!canDispatch()) return { ok: false, error: 'request is no longer active' }
+        try {
+          this.updateViewQuery(
+            existing.instanceId,
+            options.query ?? '',
+            options.trustedEditorFileTarget,
+          )
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        }
         this.activate(existing.instanceId)
         this.focusInstance(existing.instanceId)
         return { ok: true }
@@ -6920,6 +10816,94 @@ export class FrontendPluginManager {
     return { ok: true }
   }
 
+  private activeReceiverRegistrationsForWindow(hostWindow: BrowserWindow): Array<{
+    registration: ReceiverRegistration
+    receiver: RunningPlugin
+  }> {
+    const active: Array<{ registration: ReceiverRegistration; receiver: RunningPlugin }> = []
+    for (const registration of this.receiverRegistrations.values()) {
+      const receiver = this.running.get(registration.receiverInstanceId)
+      if (!receiver || receiver.hostWindow !== hostWindow) continue
+      if (this.currentReceiverRegistration(registration.id, receiver) !== registration) continue
+      if (receiver.view.webContents.isDestroyed()) continue
+      active.push({ registration, receiver })
+    }
+    return active
+  }
+
+  /** Main asks before preventing a native window close. True when this window
+   *  hosts a guarded receiver or any mounted provider item. */
+  hasWindowCloseParticipants(hostWindow: BrowserWindow): boolean {
+    if (hostWindow.isDestroyed()) return false
+    return this.activeReceiverRegistrationsForWindow(hostWindow).some(({ registration }) =>
+      registration.declaration.closeGuard?.protocolVersion === 1 ||
+      [...this.receiverItems.values()].some((item) => item.receiverId === registration.id),
+    )
+  }
+
+  /** One two-phase close preparation for every participant in one window.
+   *  Reaches `prepared` only after receiver consent and every provider
+   *  prepare; the caller must commit or cancel before the window is destroyed. */
+  async prepareWindowClose(
+    hostWindow: BrowserWindow,
+    reason: NativeReceiverCloseReason,
+  ): Promise<{ ok: true; id: string } | { ok: false; reason: Exclude<DetailCloseResult, { closed: true }>['reason'] }> {
+    if (hostWindow.isDestroyed()) return { ok: false, reason: 'unavailable' }
+    const plans: Array<{ receiver: RunningPlugin; receiverId: string; itemIds: string[] }> = []
+    for (const { registration, receiver } of this.activeReceiverRegistrationsForWindow(hostWindow)) {
+      const itemIds = [...this.receiverItems.values()]
+        .filter((item) => item.receiverId === registration.id && this.currentDetailCloseCandidate(item, receiver, registration))
+        .map((item) => item.id)
+      const guarded = registration.declaration.closeGuard?.protocolVersion === 1
+      if (!guarded && itemIds.length === 0) continue
+      plans.push({ receiver, receiverId: registration.id, itemIds })
+    }
+    if (plans.length === 0) return { ok: true, id: '' }
+    const transactions: DetailCloseTransaction[] = []
+    const cancelAll = (reason: Exclude<DetailCloseResult, { closed: true }>['reason']): void => {
+      for (const transaction of transactions) this.failDetailCloseTransaction(transaction.id, reason)
+    }
+    for (const plan of plans) {
+      const started = this.beginDetailCloseTransaction(plan.receiver, plan.receiverId, plan.itemIds, reason, true)
+      if (!started.ok) {
+        const failureReason = started.result.closed ? 'unavailable' : started.result.reason
+        cancelAll(failureReason)
+        return { ok: false, reason: failureReason }
+      }
+      transactions.push(started.transaction)
+    }
+    for (const transaction of transactions) {
+      const prepared = await transaction.prepared
+      if (prepared.closed) continue
+      cancelAll(prepared.reason)
+      return { ok: false, reason: prepared.reason }
+    }
+    if (hostWindow.isDestroyed()) {
+      cancelAll('unavailable')
+      return { ok: false, reason: 'unavailable' }
+    }
+    const id = randomUUID()
+    this.pendingWindowCloses.set(id, {
+      hostWindowId: hostWindow.id,
+      transactionIds: transactions.map((transaction) => transaction.id),
+    })
+    return { ok: true, id }
+  }
+
+  commitWindowClose(id: string): void {
+    const pending = this.pendingWindowCloses.get(id)
+    if (!pending) return
+    this.pendingWindowCloses.delete(id)
+    for (const transactionId of pending.transactionIds) this.commitDetailCloseTransaction(transactionId)
+  }
+
+  cancelWindowClose(id: string): void {
+    const pending = this.pendingWindowCloses.get(id)
+    if (!pending) return
+    this.pendingWindowCloses.delete(id)
+    for (const transactionId of pending.transactionIds) this.failDetailCloseTransaction(transactionId, 'unavailable')
+  }
+
   /**
    * Scan an installed-plugins root and register a descriptor for every valid
    * plugin found. A directory with an invalid manifest is skipped and returned
@@ -6940,6 +10924,53 @@ export class FrontendPluginManager {
   } {
     const loaded: string[] = []
     const errors: string[] = []
+    const lifecycleSelector = new PluginActivationSelector(root)
+    const blockedRecoveryPluginIds = new Set<string>()
+    // A selector transition is not recovery authority on its own. For an
+    // official package, authenticate precisely the package that a cold
+    // recovery would select before changing the durable pointer or scanning
+    // any contribution. This keeps a post-drain crash from reviving a
+    // revoked/mutated prior package merely because it is retained on disk.
+    if (source?.provenance === 'official-registry') {
+      for (const record of lifecycleSelector.list()) {
+        if (!record.activation) continue
+        const recoveredSelection = record.activation.phase === 'prepared'
+          ? record.active
+          : record.activation.kind === 'candidate'
+            ? record.previous
+            : record.active
+        // A virgin first-install candidate has no prior selected package and
+        // can only recover to no active package. It has nothing to admit.
+        if (!recoveredSelection) {
+          lifecycleSelector.recoverInterruptedActivation(record.pluginId)
+          continue
+        }
+        const decision = verifyInstalledRegistryPackage(
+          lifecycleSelector.packageDir(record.pluginId, recoveredSelection),
+          record.pluginId,
+          source.trust,
+        )
+        if (
+          decision.action === 'quarantine' ||
+          decision.artifactDigest !== recoveredSelection.artifactDigest
+        ) {
+          blockedRecoveryPluginIds.add(record.pluginId)
+          errors.push(
+            `${record.pluginId}: interrupted lifecycle recovery blocked: ${
+              decision.action === 'quarantine'
+                ? decision.reason
+                : 'retained artifact digest does not match the lifecycle selector'
+            }`,
+          )
+          continue
+        }
+        lifecycleSelector.recoverInterruptedActivation(record.pluginId)
+      }
+    }
+    const scannedPlugins = scanInstalledPlugins(root)
+    const durableSelections = new Map(
+      lifecycleSelector.list().map((record) => [record.pluginId, record] as const),
+    )
     const approved: Array<{
       scanned: ReturnType<typeof scanInstalledPlugins>[number]
       pluginId: string
@@ -6947,7 +10978,7 @@ export class FrontendPluginManager {
       opts: { official?: boolean }
     }> = []
 
-    for (const scanned of scanInstalledPlugins(root)) {
+    for (const scanned of scannedPlugins) {
       if (scanned.error) {
         errors.push(`${scanned.dir}: ${scanned.error}`)
         continue
@@ -6955,6 +10986,7 @@ export class FrontendPluginManager {
       const pluginId = scanned.activation?.pluginId ?? scanned.descriptor?.id
       if (pluginId === undefined || scanned.packageSummary === undefined) continue
       if (includePluginIds && !includePluginIds.has(pluginId)) continue
+      if (blockedRecoveryPluginIds.has(pluginId)) continue
 
       const isV2 = scanned.activation !== undefined
       if (source?.provenance === 'official-registry') {
@@ -6967,6 +10999,14 @@ export class FrontendPluginManager {
         const decision = verifyInstalledRegistryPackage(scanned.dir, pluginId, source.trust)
         if (decision.action === 'quarantine') {
           errors.push(`${scanned.dir}: quarantined: ${decision.reason ?? 'trust verification failed'}`)
+          continue
+        }
+        const durableSelection = durableSelections.get(pluginId)
+        if (
+          durableSelection?.active &&
+          decision.artifactDigest !== durableSelection.active.artifactDigest
+        ) {
+          errors.push(`${scanned.dir}: active artifact digest does not match the durable lifecycle selector`)
           continue
         }
         scanned.packageSummary.provenance = 'official-registry'
@@ -7040,7 +11080,7 @@ export class FrontendPluginManager {
 
     for (const { scanned, packageSummary, opts } of uniqueApproved) {
       try {
-        this.registerInstalledPackage(packageSummary, scanned.descriptor, opts)
+        this.registerInstalledPackage(packageSummary, scanned.descriptor, opts, scanned.dir)
         if (scanned.descriptor) loaded.push(scanned.descriptor.id)
       } catch (err) {
         errors.push(`${scanned.dir}: ${err instanceof Error ? err.message : String(err)}`)
@@ -7060,11 +11100,12 @@ export class FrontendPluginManager {
     root: string,
     trust: InstalledRegistryTrustContext,
     includePluginIds?: ReadonlySet<string>
-  ): Array<{ pluginId: string; action: 'allow' | 'quarantine'; reason?: string }> {
+  ): Array<{ pluginId: string; action: 'allow' | 'quarantine'; reason?: string; artifactDigest?: string }> {
     const decisions: Array<{
       pluginId: string
       action: 'allow' | 'quarantine'
       reason?: string
+      artifactDigest?: string
     }> = []
     for (const scanned of scanInstalledPlugins(root)) {
       const pluginId = scanned.activation?.pluginId ?? scanned.descriptor?.id
@@ -7086,18 +11127,22 @@ export class FrontendPluginManager {
         this.destroyPluginInstances(pluginId)
         this.clearTerminalRoutes(pluginId)
         this.installedPackages.delete(pluginId)
+        this.installedPackageDirectories.delete(pluginId)
         this.descriptors.delete(pluginId)
         const fallback = this.builtinFallbacks.get(pluginId)
         if (fallback) this.registerDescriptor(fallback, { builtin: true })
         continue
       }
-      decisions.push({ pluginId, ...decision })
+      decisions.push(decision.action === 'allow'
+        ? { pluginId, action: 'allow', artifactDigest: decision.artifactDigest }
+        : { pluginId, action: 'quarantine', reason: decision.reason })
       if (decision.action === 'quarantine') {
         const packageVersion = scanned.activation?.packageVersion ?? scanned.descriptor?.packageVersion
         if (packageVersion) this.revokePackageVersionInBackground(pluginId, packageVersion)
         this.destroyPluginInstances(pluginId)
         this.clearTerminalRoutes(pluginId)
         this.installedPackages.delete(pluginId)
+        this.installedPackageDirectories.delete(pluginId)
         this.descriptors.delete(pluginId)
         const fallback = this.builtinFallbacks.get(pluginId)
         if (fallback) this.registerDescriptor(fallback, { builtin: true })
@@ -7184,8 +11229,230 @@ export class FrontendPluginManager {
       // the life of the process; keeping this one as well would not add to that
       // guarantee and would strand UI-only packages that have no backend child
       // (Git) with a dead contribution until the App restarts.
-      this.stoppingPlugins.delete(key)
+      if (!this.packageRestartBarriers.has(key)) this.stoppingPlugins.delete(key)
     }
+  }
+
+  /** Capture one exact v2 package's Host-owned placements. Query strings are
+   * data only; receiver grants and renderer guest tokens never survive a
+   * restart. */
+  private snapshotPackageRestart(
+    pluginId: string,
+    packageVersion: string,
+  ): readonly PluginInstanceRestartSnapshot[] {
+    const snapshots: PluginInstanceRestartSnapshot[] = []
+    const seen = new Set<string>()
+    const snapshotKey = (hostWindow: BrowserWindow, contributionKey: string): string =>
+      `${hostWindow.id}\u0000${contributionKey}`
+    const cleanQuery = (query: string): string => {
+      const params = new URLSearchParams(query.startsWith('?') ? query.slice(1) : query)
+      params.delete('file_grant')
+      params.delete('nv_guest')
+      const value = params.toString()
+      return value ? `?${value}` : ''
+    }
+    for (const plugin of this.instancesForPackageVersion(pluginId, packageVersion)) {
+      if (!plugin.hasV2DescriptorIdentity || !plugin.contributionKey) {
+        throw new Error('package restart requires canonical contribution instances')
+      }
+      const key = snapshotKey(plugin.hostWindow, plugin.contributionKey)
+      seen.add(key)
+      const contributionRegistered =
+        this.contributionInstances.get(key)?.instanceId === plugin.instanceId
+      snapshots.push(Object.freeze({
+        pluginId,
+        packageVersion,
+        contributionKey: plugin.contributionKey,
+        hostWindow: plugin.hostWindow,
+        bounds:
+          typeof plugin.restartBounds === 'string'
+            ? plugin.restartBounds
+            : Object.freeze({ ...plugin.restartBounds }),
+        query: cleanQuery(plugin.query),
+        workspacePath: plugin.workspacePath,
+        closeHostOnHide: plugin.closeHostOnHide,
+        mirrorTitle: plugin.mirrorTitle,
+        initiallyVisible: plugin.visible,
+        contributionRegistered,
+        carrier: plugin.view.nativeView ? 'native' : 'guest',
+      }))
+    }
+    // A renderer may have received a guest URL but not attached before the
+    // restart begins. Preserve it as an explicit guest-reprepare requirement;
+    // silently dropping it leaves a blank region after the old token is swept.
+    for (const pending of this.pendingGuests.values()) {
+      if (pending.descriptor.id !== pluginId || pending.descriptor.packageVersion !== packageVersion) continue
+      const key = snapshotKey(pending.hostWindow, pending.contributionKey)
+      if (seen.has(key)) continue
+      seen.add(key)
+      snapshots.push(Object.freeze({
+        pluginId,
+        packageVersion,
+        contributionKey: pending.contributionKey,
+        hostWindow: pending.hostWindow,
+        bounds: 'hidden',
+        query: cleanQuery(pending.query),
+        workspacePath: pending.workspacePath,
+        closeHostOnHide: false,
+        mirrorTitle: false,
+        initiallyVisible: false,
+        contributionRegistered: true,
+        carrier: 'guest',
+      }))
+    }
+    return Object.freeze(snapshots)
+  }
+
+  /** Begin a Host-only restart transaction. The admission barrier covers the
+   * whole plugin through selector cutover, while the existing revoke method
+   * performs the actual in-flight backend drain. */
+  async beginPackageRestart(
+    pluginId: string,
+    expectedActiveVersion: string,
+  ): Promise<PluginPackageRestartTransaction> {
+    const descriptor = this.descriptors.get(pluginId)
+    if (
+      !descriptor ||
+      !hasV2DescriptorIdentity(descriptor) ||
+      descriptor.packageVersion !== expectedActiveVersion
+    ) {
+      throw new Error('package restart does not match the current Host descriptor')
+    }
+    if (this.restartingPluginIds.has(pluginId)) throw new Error('package restart is already in progress')
+    const key = packageVersionKey(pluginId, expectedActiveVersion)
+    const snapshots = this.snapshotPackageRestart(pluginId, expectedActiveVersion)
+    const transaction = Object.freeze({}) as PluginPackageRestartTransaction
+    this.pendingPackageRestarts.set(transaction, {
+      pluginId,
+      packageVersion: expectedActiveVersion,
+      snapshots,
+      restored: false,
+    })
+    this.restartingPluginIds.add(pluginId)
+    this.packageRestartBarriers.add(key)
+    try {
+      await this.revokePackageVersion(pluginId, expectedActiveVersion)
+      return transaction
+    } catch (error) {
+      this.pendingPackageRestarts.delete(transaction)
+      this.restartingPluginIds.delete(pluginId)
+      this.packageRestartBarriers.delete(key)
+      this.stoppingPlugins.delete(key)
+      throw error
+    }
+  }
+
+  /** Restore native placements through the current descriptor only. Guest
+   * placements are deliberately reported as incomplete rather than mounted as
+   * a different carrier; their renderer must request a fresh guest URL. */
+  async restorePackageRestart(
+    transaction: PluginPackageRestartTransaction,
+    expectedSelectedVersion: string,
+  ): Promise<PluginPackageRestartRestoreReport> {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (!pending || pending.restored) throw new Error('package restart transaction is not active')
+    const descriptor = this.descriptors.get(pending.pluginId)
+    if (!descriptor || !hasV2DescriptorIdentity(descriptor) || descriptor.packageVersion !== expectedSelectedVersion) {
+      throw new Error('package restart selected descriptor is not current')
+    }
+    const guests = pending.snapshots.filter((snapshot) => snapshot.carrier === 'guest')
+    if (guests.length > 0) {
+      throw new Error('package restart requires renderer guest re-prepare before completion')
+    }
+    for (const snapshot of pending.snapshots) {
+      if (snapshot.pluginId !== pending.pluginId || snapshot.packageVersion !== pending.packageVersion) {
+        throw new Error('package restart transaction snapshot is invalid')
+      }
+      if (!descriptor.views?.some((view) => view.contributionKey === snapshot.contributionKey)) {
+        throw new Error(`package restart contribution '${snapshot.contributionKey}' is not registered`) 
+      }
+    }
+    let restoredInstances = 0
+    let skippedDestroyedHostWindows = 0
+    for (const snapshot of pending.snapshots) {
+      if (snapshot.hostWindow.isDestroyed()) {
+        skippedDestroyedHostWindows++
+        continue
+      }
+      const view = descriptor.views!.find((candidate) => candidate.contributionKey === snapshot.contributionKey)!
+      const capabilityContext = this.contributionCapabilityContext(
+        descriptor,
+        view,
+        snapshot.workspacePath ?? '',
+      )
+      if (descriptor.capabilityPolicy?.kind === 'manifest-v2' && !capabilityContext) {
+        throw new Error('package restart capability grant is missing')
+      }
+      const handle = this.mountView(
+        snapshot.hostWindow,
+        descriptor,
+        snapshot.bounds,
+        snapshot.query,
+        {
+          closeHostOnHide: snapshot.closeHostOnHide,
+          mirrorTitle: snapshot.mirrorTitle,
+          ...(snapshot.workspacePath ? { workspacePath: snapshot.workspacePath } : {}),
+          capabilityContext,
+          initiallyVisible: snapshot.initiallyVisible,
+        },
+        view,
+        false,
+      )
+      if (snapshot.contributionRegistered) {
+        this.contributionInstances.set(
+          this.contributionInstanceKey(snapshot.hostWindow, snapshot.contributionKey),
+          handle,
+        )
+      }
+      await this.waitForBackendBinding(handle.instanceId)
+      await this.waitForPluginReady(handle.instanceId)
+      restoredInstances++
+    }
+    pending.restored = true
+    return Object.freeze({ restoredInstances, skippedDestroyedHostWindows })
+  }
+
+  /** Complete only a successful (or explicitly host-destroyed) restore. */
+  completePackageRestart(transaction: PluginPackageRestartTransaction): void {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (!pending) throw new Error('package restart transaction is not active')
+    if (!pending.restored && pending.snapshots.length > 0) {
+      throw new Error('package restart cannot complete before required placements restore')
+    }
+    this.finishPackageRestart(transaction, pending)
+  }
+
+  /** Complete a restart whose selected package contributes no frontend. Its
+   * drained placements have nothing to restore into, so a Host window that
+   * existed only to carry one closes, as hiding that view would. */
+  completePackageRestartWithoutFrontend(transaction: PluginPackageRestartTransaction): void {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (!pending || pending.restored) throw new Error('package restart transaction is not active')
+    if (this.descriptors.has(pending.pluginId)) {
+      throw new Error('package restart selected package still has a frontend')
+    }
+    for (const snapshot of pending.snapshots) {
+      if (snapshot.closeHostOnHide && !snapshot.hostWindow.isDestroyed()) snapshot.hostWindow.close()
+    }
+    this.finishPackageRestart(transaction, pending)
+  }
+
+  /** Release a failed Host-side selector/re-registration transaction. This
+   * does not attempt rollback or claim to undo completed external effects. */
+  cancelPackageRestart(transaction: PluginPackageRestartTransaction): void {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (pending) this.finishPackageRestart(transaction, pending)
+  }
+
+  private finishPackageRestart(
+    transaction: PluginPackageRestartTransaction,
+    pending: PendingPackageRestart,
+  ): void {
+    this.pendingPackageRestarts.delete(transaction)
+    this.restartingPluginIds.delete(pending.pluginId)
+    const key = packageVersionKey(pending.pluginId, pending.packageVersion)
+    this.packageRestartBarriers.delete(key)
+    this.stoppingPlugins.delete(key)
   }
 
   /** Unregister a descriptor and tear down its view if it is open. Used by the
@@ -7195,6 +11462,7 @@ export class FrontendPluginManager {
   removeInstalledPlugin(id: string, opts: { restoreBuiltin?: boolean } = {}): void {
     this.preparePluginRemoval(id)
     this.installedPackages.delete(id)
+    this.installedPackageDirectories.delete(id)
     this.descriptors.delete(id)
     if (opts.restoreBuiltin !== false) {
       const fallback = this.builtinFallbacks.get(id)
@@ -7207,7 +11475,7 @@ export class FrontendPluginManager {
   private emitToInstance(instanceId: string, type: string, data: unknown): void {
     const plugin = this.running.get(instanceId)
     if (plugin && !this.isPluginStopping(plugin) && !plugin.view.webContents.isDestroyed()) {
-      plugin.view.webContents.send(IPC_EVENT, { type, data })
+      this.sendToPlugin(plugin, IPC_EVENT, { type, data })
     }
   }
 
@@ -7224,6 +11492,13 @@ export class FrontendPluginManager {
 
 /** Process-wide singleton. */
 export const frontendPluginManager = new FrontendPluginManager()
+
+/** Main protocol handler exported for registration by the main entrypoint. */
+export function handlePluginFrameAssetRequest(request: Request): Promise<Response> {
+  return frontendPluginManager.handlePluginFrameAssetRequest(request)
+}
+
+export { PLUGIN_FRAME_SCHEME }
 
 /**
  * The M1 no-op plugin descriptor. Its entry is built as a second renderer input
@@ -7290,16 +11565,49 @@ export interface BundledMiniIdeSource {
   isPackaged: boolean
   /** `process.resourcesPath` (packaged builds only). */
   resourcesPath: string
+  /** Version selected by the running App for every bundled artifact lookup. */
+  artifactVersion: string
   /** Repo root holding `dist-plugins/` when unpackaged. Defaults to the
    *  built main bundle's `../..` (`out/main` → repo root). */
   devRoot?: string
 }
 
+/** Explicit coordinates for an App-bundled Manifest v2 artifact. The version
+ * comes from the running App, never from a directory scan or package manifest.
+ * Legacy recovery helpers accept the same coordinates but continue selecting
+ * their retained, unversioned paths. */
+export interface OfficialPluginArtifactSource extends BundledMiniIdeSource {}
+
 /** Optional selected activation supplied by the startup installer scan. The
  * installed package must win over the bundled copy, but its already-verified
  * activation must still be registered with the package-local Host broker. */
-export interface BundledPlansSource extends BundledMiniIdeSource {
+export interface BundledPlansSource extends OfficialPluginArtifactSource {
   installedActivation?: PluginActivationCatalogEntry
+}
+
+/** Resolve one versioned App artifact without discovering sibling versions.
+ * Frontend-only packages use {@link UNIVERSAL_PLUGIN_TARGET}; packages with a
+ * self-contained backend use {@link currentPluginHostTarget}. */
+export function officialPluginArtifactPackageDir(
+  source: OfficialPluginArtifactSource,
+  pluginId: string,
+  target: string,
+): string {
+  const artifactRoot = source.isPackaged
+    ? join(source.resourcesPath, 'official-artifacts')
+    : join(
+        source.devRoot ?? join(__dirname, '../..'),
+        'dist-plugins',
+        'official-artifacts',
+        'factory-resources',
+      )
+  return join(
+    artifactRoot,
+    pluginId,
+    source.artifactVersion,
+    target,
+    'package',
+  )
 }
 
 /** Directory of the bundled mini-IDE copy: `resources/plugins/mini-ide` inside
@@ -7447,26 +11755,72 @@ export function devMiniIdePluginDescriptor(): PluginLaunchDescriptor {
  * Looks the descriptor up in the loader registry; returns false when the
  * mini-IDE extension is not installed (the caller surfaces the install hint).
  */
-export function openMiniIdePluginView(
+export async function openMiniIdePluginView(
   workspacePath: string,
   httpUrl = '',
   extraParams: Record<string, string> = {},
   theme = '',
-  // Resolved by the caller (openMiniIdeEditor) so this stays synchronous.
-  workspaceDisplayName = ''
-): boolean {
+  options: {
+    canDispatch?: () => boolean
+    trustedEditorFileTarget?: {
+      path: string
+      expectedCanonicalPath?: string
+      workspaceOnly?: boolean
+    }
+    // Resolved by the caller (openMiniIdeEditor) so this stays synchronous.
+    workspaceDisplayName?: string
+  } = {},
+): Promise<boolean> {
   const base = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID)
   if (!base) return false
-  frontendPluginManager.open(
-    ensureMiniIdeWindow(),
-    { ...base, query: miniIdeQuery(workspacePath, httpUrl, extraParams, theme, workspaceDisplayName) },
-    // Fill the dedicated window's content bounds and track its resizes.
-    'fill',
-    // Esc (nav.hideSelf) closes the dedicated window, like the legacy editor.
-    // The window is this plugin's alone, so it wears the plugin's page title.
-    { closeHostOnHide: true, mirrorTitle: true }
+  const canDispatch = options.canDispatch ?? (() => true)
+  if (!canDispatch()) return false
+  if (options.trustedEditorFileTarget) {
+    try {
+      await frontendPluginManager.waitForLegacyEntryReady(MINI_IDE_PLUGIN_ID)
+    } catch {
+      return false
+    }
+    if (!canDispatch()) return false
+  }
+  const filepath = extraParams.filepath
+  const fileWorkspace = extraParams.file_ws
+  const derivedTrustedEditorFileTarget = filepath && fileWorkspace
+    ? { path: resolve(fileWorkspace, filepath) }
+    : undefined
+  const trustedEditorFileTarget = options.trustedEditorFileTarget ?? (
+    derivedTrustedEditorFileTarget &&
+    !isWorkspaceContainedPath(workspacePath, derivedTrustedEditorFileTarget.path)
+      ? derivedTrustedEditorFileTarget
+      : undefined
   )
-  return true
+  const previousWindow = miniIdeWindow
+  const hostWindow = ensureMiniIdeWindow()
+  try {
+    const instanceId = frontendPluginManager.open(
+      hostWindow,
+      { ...base, query: miniIdeQuery(workspacePath, httpUrl, extraParams, theme, options.workspaceDisplayName ?? '') },
+      // Fill the dedicated window's content bounds and track its resizes.
+      'fill',
+      // Esc (nav.hideSelf) closes the dedicated window, like the legacy editor.
+      // The window is this plugin's alone, so it wears the plugin's page title.
+      {
+        closeHostOnHide: true,
+        mirrorTitle: true,
+        workspacePath,
+        trustedEditorFileTarget,
+        canDispatch,
+      }
+    )
+    if (instanceId !== null) return true
+    if (previousWindow !== hostWindow && !hostWindow.isDestroyed()) hostWindow.close()
+    return false
+  } catch {
+    // A Host-selected target may change between the caller's async check and
+    // this synchronous recovery mount. No guest or grant is usable then.
+    if (previousWindow !== hostWindow && !hostWindow.isDestroyed()) hostWindow.close()
+    return false
+  }
 }
 
 /** Id of the Plans extension (the plan review surface). */
@@ -7539,12 +11893,11 @@ export function bundledPlansDir(source: BundledMiniIdeSource): string {
     : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins', 'plans')
 }
 
-/** Directory of the production combined Plans package. The old
- *  `dist-plugins/plans` bundle remains a separate rollback adapter. */
-export function bundledPlansV2Dir(source: BundledMiniIdeSource): string {
-  return source.isPackaged
-    ? join(source.resourcesPath, 'plugins', 'navide-plans')
-    : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins', 'navide-plans')
+/** Directory of the production combined Plans package selected by explicit App
+ *  version and host target. The old `dist-plugins/plans` bundle remains a
+ *  separate rollback adapter. */
+export function bundledPlansV2Dir(source: OfficialPluginArtifactSource): string {
+  return officialPluginArtifactPackageDir(source, PLANS_PLUGIN_ID, currentPluginHostTarget())
 }
 
 export function plansBackendActivation(
@@ -7721,13 +12074,22 @@ export function devPlansPluginDescriptor(): PluginLaunchDescriptor {
   }
 }
 
-/** Dev descriptor for the combined package. The legacy descriptor above is
- *  intentionally preserved for rollback tests and manual fallback checks. */
-export function devPlansV2PluginBundle(): {
+/** Dev descriptor for the combined package selected by an explicit App
+ * version. The legacy descriptor above is intentionally preserved for
+ * rollback tests and manual fallback checks. */
+export function devPlansV2PluginBundle(
+  artifactVersion: string,
+  devRoot?: string,
+): {
   descriptor: PluginLaunchDescriptor
   activation: BackendPluginLaunchSpec
 } | null {
-  const dir = join(__dirname, '../../dist-plugins/navide-plans')
+  const dir = bundledPlansV2Dir({
+    isPackaged: false,
+    resourcesPath: '',
+    artifactVersion,
+    devRoot,
+  })
   const scanned = loadPluginDir(dir)
   if (
     !scanned.descriptor ||
@@ -7739,8 +12101,11 @@ export function devPlansV2PluginBundle(): {
   return activation ? { descriptor: scanned.descriptor, activation } : null
 }
 
-export function devPlansV2PluginDescriptor(): PluginLaunchDescriptor | null {
-  return devPlansV2PluginBundle()?.descriptor ?? null
+export function devPlansV2PluginDescriptor(
+  artifactVersion: string,
+  devRoot?: string,
+): PluginLaunchDescriptor | null {
+  return devPlansV2PluginBundle(artifactVersion, devRoot)?.descriptor ?? null
 }
 
 let plansWindow: BrowserWindow | null = null
@@ -7884,8 +12249,11 @@ function gitQuery(
 
 /**
  * Dev-only Git descriptor pointing at the LOCAL Manifest v2 build output
- * (`dist-plugins/navide-git/`, produced by `pnpm run build:git:v2`). Registered at
- * startup only under `AGENT_TEAM_PLUGIN_DEV=1`, mirroring
+ * (the explicit `official-artifacts/navide.git/<version>/universal/package/`
+ * directory in packaged apps, or
+ * `official-artifacts/factory-resources/navide.git/<version>/universal/package/`
+ * during unpackaged dev lookup).
+ * Registered at startup only under `AGENT_TEAM_PLUGIN_DEV=1`, mirroring
  * {@link devPlansPluginDescriptor}. The bundle is built separately
  * (plugins/navide-git/vite.config.ts) with the package-local capability
  * backend, so it
@@ -7894,8 +12262,15 @@ function gitQuery(
  * system grant; the Host adds the official package's authenticated workspace
  * binding at open time.
  */
-export function devGitPluginDescriptor(): PluginLaunchDescriptor {
-  const dir = join(__dirname, '../../dist-plugins/navide-git')
+export function devGitPluginDescriptor(
+  artifactVersion: string,
+  devRoot?: string,
+): PluginLaunchDescriptor {
+  const dir = officialPluginArtifactPackageDir(
+    { isPackaged: false, resourcesPath: '', artifactVersion, devRoot },
+    GIT_PLUGIN_ID,
+    UNIVERSAL_PLUGIN_TARGET,
+  )
   const scanned = loadPluginDir(dir)
   if (scanned.descriptor) return scanned.descriptor
   return {

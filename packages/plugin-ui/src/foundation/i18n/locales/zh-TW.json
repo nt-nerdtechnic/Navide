@@ -15,6 +15,7 @@
     "close-left-dirty": "{count} 個檔案有未儲存的變更。仍要關閉左側分頁嗎？",
     "close-all-dirty": "{count} 個檔案有未儲存的變更。仍要全部關閉嗎？",
     "reload-dirty": "{count} 個檔案有未儲存的變更。要重新載入並捨棄嗎？",
+    "quit-dirty": "{count} 個檔案有未儲存的變更。要結束並捨棄嗎？",
     "select-theme": "選擇色彩主題…",
     "search-shortcuts": "搜尋鍵盤快捷鍵…",
     "select-language": "選擇語言模式…",
@@ -271,6 +272,7 @@
       "open-accounts": "開啟 Git 帳號"
     },
     "left-view-unavailable": "嵌入式 Git View 暫時無法使用。",
+    "detail-open-failed": "無法開啟詳細檢視，Git 面板會保留目前的目標。",
     "open-workspace": "請先開啟工作區以使用 Git。",
     "settings-unavailable": "Git 偏好設定載入失敗。",
     "settings-retry": "重試",
@@ -293,6 +295,9 @@
     "problems": {
       "title": "問題",
       "tab-shortcut": "問題 (⌘⇧M)"
+    },
+    "pluginViews": {
+      "unavailable": "此檢視由外掛提供，目前無法開啟。"
     },
     "plans": {
       "stage-in-review": "審查中",

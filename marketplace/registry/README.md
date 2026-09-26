@@ -236,7 +236,8 @@ Console entry point (see `registry/cli.py`):
 
 ```bash
 navide-plugin keygen  --out-dir . --name acme        # Ed25519 keypair -> acme.key/acme.pub
-navide-plugin pack    ./plugin-src --out my.vsix      # build + validate a .vsix
+navide-plugin pack    ./plugin-src --out my.vsix      # frontend-only, universal
+navide-plugin pack    ./backend-src --out mac.vsix --target darwin-arm64
 navide-plugin sign    my.vsix --key acme.key --out my.sig
 navide-plugin publish my.vsix --registry http://localhost:8787 \
   --token <bearer> --signature my.sig [--target darwin-arm64]
@@ -248,8 +249,12 @@ from `NAVIDE_PLUGIN_TOKEN` when `--token` is omitted, and `--target` (default
 package with a native backend must be published for its exact
 `<platform>-<arch>` target.
 
-`pack` reuses the format builder in `registry/package.py`; `sign` reuses the
-Ed25519 primitives in `registry/signing.py`.
+`pack` requires `plugin-src/artifact-files.json` with a canonical `files` array
+that names the manifest and every file to include. For a native backend, pass
+the same `--target` when packing as when publishing so the executable path and
+architecture are validated. `pack` reuses the format builder in
+`registry/package.py`; `sign` reuses the Ed25519 primitives in
+`registry/signing.py`.
 
 ## Deployment (Official Registry at server.navide.dev/registry)
 

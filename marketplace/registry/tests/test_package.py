@@ -4,16 +4,23 @@ import io
 import json
 import stat
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from registry.package import PackageError, _validate_archive_entries, read_package
+from registry.package import (
+    PackageError,
+    _validate_archive_entries,
+    build_package as build_registry_package,
+    read_package,
+)
 from tests.fixtures import (
     CONTRACT_FIXTURES,
     build_package,
     build_v2_package,
     contract_manifest,
     valid_manifest,
+    windows_backend_bytes,
 )
 
 
@@ -86,6 +93,38 @@ def test_read_valid_package() -> None:
 def test_digest_is_stable() -> None:
     data = build_package()
     assert read_package(data).digest == read_package(data).digest
+
+
+def test_registry_builder_deflates_entries_and_rebuilds_identical_bytes(tmp_path: Path) -> None:
+    """The registry builder deflates every entry and is deterministic.
+
+    The digest is signed and recorded, so one canonical file list must produce
+    the same archive bytes; the SDK's `makeZip` applies the same method and
+    level, and a silent switch away from deflate would fork the two builders
+    into different variants of the same package.
+    """
+    source = tmp_path / "acme.hello"
+    source.mkdir()
+    manifest = valid_manifest()
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    (source / "README.md").write_text("# Hello\n")
+    (source / "dist").mkdir()
+    (source / "dist" / "hello.js").write_text("console.log('hello')\n")
+    (source / "dist" / "bundle.js").write_text("export const value = 1\n" * 400)
+    (source / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\n-fake-icon-bytes")
+    files = ["README.md", "dist/bundle.js", "dist/hello.js", "icon.png", "manifest.json"]
+
+    data = build_registry_package(source, files)
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        infos = archive.infolist()
+    assert [info.filename for info in infos] == files
+    assert {info.compress_type for info in infos} == {zipfile.ZIP_DEFLATED}
+    # The compressible body must actually shrink; tiny entries may not.
+    bundle = next(info for info in infos if info.filename == "dist/bundle.js")
+    assert bundle.compress_size < bundle.file_size
+    assert read_package(data).manifest.id == manifest["id"]
+    assert build_registry_package(source, files) == data
 
 
 def test_not_a_zip_rejected() -> None:
@@ -178,6 +217,12 @@ def test_manifest_v2_backend_entry_rejects_empty_file() -> None:
         read_package(build_v2_package(manifest, backend_data=b""))
 
 
+def test_backend_only_package_rejects_smuggled_frontend_entry() -> None:
+    manifest = contract_manifest("backend-only-skills.json")
+    with pytest.raises(PackageError, match="backend-only package"):
+        read_package(build_v2_package(manifest, extra_files={"frontend/main/index.html": b"<!doctype html>"}))
+
+
 def _windows_backend_package(files: dict[str, bytes]) -> bytes:
     manifest = contract_manifest("backend-only-skills.json")
     return _zip_with_entries(
@@ -186,16 +231,22 @@ def _windows_backend_package(files: dict[str, bytes]) -> bytes:
     )
 
 
-@pytest.mark.parametrize("target", ["win32-x64", "win32-arm64"])
-def test_windows_target_reads_bare_backend_entry_as_exe(target: str) -> None:
+@pytest.mark.parametrize("target, architecture", [("win32-x64", "x64"), ("win32-arm64", "arm64")])
+def test_windows_target_reads_bare_backend_entry_as_exe(target: str, architecture: str) -> None:
     # Packed on Windows: no POSIX mode at all, as the Host accepts it there.
-    data = _windows_backend_package({"backend/navide-skills.exe": b"MZ\x90\x00"})
+    data = _windows_backend_package({"backend/navide-skills.exe": windows_backend_bytes(architecture)})
     loaded = read_package(data, target=target)
     assert "backend/navide-skills.exe" in {asset.path for asset in loaded.assets}
 
 
+def test_windows_target_rejects_wrong_architecture() -> None:
+    data = _windows_backend_package({"backend/navide-skills.exe": windows_backend_bytes("x64")})
+    with pytest.raises(PackageError, match="backend entry does not match declared target"):
+        read_package(data, target="win32-arm64")
+
+
 def test_windows_target_rejects_a_missing_exe_backend() -> None:
-    data = _windows_backend_package({"backend/navide-skills": b"MZ\x90\x00"})
+    data = _windows_backend_package({"backend/navide-skills": windows_backend_bytes("x64")})
     with pytest.raises(PackageError, match="'backend/navide-skills.exe' is not present"):
         read_package(data, target="win32-x64")
     with pytest.raises(PackageError, match="'backend/navide-skills.exe' is not present"):
@@ -208,9 +259,9 @@ def test_windows_target_rejects_an_empty_exe_backend() -> None:
         read_package(data, target="win32-x64")
 
 
-@pytest.mark.parametrize("target", [None, "universal", "linux-x64", "darwin-arm64"])
+@pytest.mark.parametrize("target", [None, "linux-x64", "darwin-arm64"])
 def test_non_windows_target_still_needs_the_bare_executable(target: str | None) -> None:
-    exe_only = _windows_backend_package({"backend/navide-skills.exe": b"MZ\x90\x00"})
+    exe_only = _windows_backend_package({"backend/navide-skills.exe": windows_backend_bytes("x64")})
     with pytest.raises(PackageError, match="'backend/navide-skills' is not present"):
         read_package(exe_only, target=target)
     manifest = contract_manifest("backend-only-skills.json")
@@ -218,7 +269,13 @@ def test_non_windows_target_still_needs_the_bare_executable(target: str | None) 
         read_package(
             build_v2_package(manifest, backend_mode=stat.S_IFREG | 0o644), target=target
         )
-    assert read_package(build_v2_package(manifest), target=target)
+    linux_header = bytearray(20)
+    linux_header[:4] = b"\x7fELF"
+    linux_header[4:6] = b"\x02\x01"
+    linux_header[18:20] = (62).to_bytes(2, "little")
+    darwin_header = (0xFEEDFACF).to_bytes(4, "little") + (0x0100000C).to_bytes(4, "little")
+    backend_data = {"linux-x64": bytes(linux_header), "darwin-arm64": darwin_header}.get(target, b"backend")
+    assert read_package(build_v2_package(manifest, backend_data=backend_data), target=target)
 
 
 def test_manifest_v2_referenced_file_is_required() -> None:
@@ -226,6 +283,40 @@ def test_manifest_v2_referenced_file_is_required() -> None:
     first_entry = manifest["contributes"]["views"][0]["entry"]
     with pytest.raises(PackageError, match="referenced file"):
         read_package(build_v2_package(manifest, omit_paths={first_entry}))
+
+
+def test_frontend_only_packages_must_target_universal() -> None:
+    """A frontend-only artifact is one universal package: the published target
+    is the universal one, and any platform-specific target is refused."""
+    assert read_package(build_package(), target="universal").manifest.id
+    with pytest.raises(PackageError, match="frontend-only package target must be universal"):
+        read_package(build_package(), target="darwin-arm64")
+
+
+def test_backend_packages_require_one_exact_platform_architecture() -> None:
+    """A package with a native backend must name the platform-architecture it
+    was built for; 'universal' and a bare platform are both refused."""
+    manifest = contract_manifest("backend-only-skills.json")
+    for target in ("universal", "darwin"):
+        with pytest.raises(PackageError, match="backend package target must be one exact"):
+            read_package(build_v2_package(manifest), target=target)
+    # The manager delegates the runner platform to osplat (see the L6 agreement).
+
+
+def test_manifest_v2_target_schema_file_is_required() -> None:
+    manifest = contract_manifest()
+    manifest["contributes"]["views"] = [
+        {
+            "id": "detail",
+            "kind": "custom",
+            "location": "detail",
+            "title": "Detail",
+            "entry": "frontend/detail/index.html",
+            "targetSchema": "schemas/item.json",
+        }
+    ]
+    with pytest.raises(PackageError, match="referenced file"):
+        read_package(build_v2_package(manifest, omit_paths={"schemas/item.json"}))
 
 
 def test_duplicate_manifest_key_is_rejected_in_package_reader() -> None:
@@ -333,6 +424,17 @@ def test_noncanonical_manifest_alias_is_rejected_before_manifest_read() -> None:
 def test_unsafe_unreferenced_archive_entry_is_rejected() -> None:
     with pytest.raises(PackageError, match="unsafe archive entry path"):
         read_package(build_package(extra_files={"../escape.js": b"blocked"}))
+
+
+@pytest.mark.parametrize("path", ["frontend/main.ts", "assets/publisher.key", ".env"])
+def test_source_only_or_secret_archive_entry_is_rejected(path: str) -> None:
+    with pytest.raises(PackageError, match="source-only or secret"):
+        read_package(build_v2_package(extra_files={path: b"blocked"}))
+
+
+def test_legacy_v1_backend_source_remains_readable() -> None:
+    loaded = read_package(build_package(extra_files={"backend.py": b"legacy source"}))
+    assert "backend.py" in {asset.path for asset in loaded.assets}
 
 
 @pytest.mark.parametrize(

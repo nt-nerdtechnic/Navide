@@ -23,6 +23,7 @@ import {
   InstalledPluginError,
   backendEntryOnDisk,
 } from './installedPlugins'
+import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 import { isWindows } from '../../shared/osplat'
 
 const VALID = { id: 'acme.demo', version: '1.2.3', entry: 'dist/main.js', requires: ['fs', 'git'] }
@@ -366,6 +367,59 @@ describe('loadPluginDir', () => {
     expect(loaded.descriptor?.packageVersion).toBe('1.0.0')
   })
 
+  it('loads composition metadata and rejects a missing target schema asset', () => {
+    const manifest = {
+      schemaVersion: 2,
+      apiVersion: '^1.0.0',
+      id: 'acme.composed',
+      name: 'Composed',
+      version: '1.0.0',
+      publisher: 'acme',
+      permissions: {},
+      marketplace: { description: 'A composed plugin.', license: 'MIT' },
+      contributes: {
+        views: [
+          {
+            id: 'left', kind: 'custom', location: 'left', title: 'Left',
+            entry: 'frontend/left/index.html', detailView: 'detail',
+          },
+          {
+            id: 'detail', kind: 'custom', location: 'detail', title: 'Detail',
+            entry: 'frontend/detail/index.html', targetSchema: 'schemas/item.json',
+          },
+          {
+            id: 'window', kind: 'custom', location: 'window', title: 'Window',
+            entry: 'frontend/window/index.html',
+            receives: { protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 1 } },
+          },
+        ],
+      },
+    }
+    mkdirSync(join(root, 'frontend', 'left'), { recursive: true })
+    mkdirSync(join(root, 'frontend', 'detail'), { recursive: true })
+    mkdirSync(join(root, 'frontend', 'window'), { recursive: true })
+    mkdirSync(join(root, 'schemas'), { recursive: true })
+    for (const entry of ['frontend/left/index.html', 'frontend/detail/index.html', 'frontend/window/index.html']) {
+      writeFileSync(join(root, entry), '<!doctype html>')
+    }
+    writeFileSync(join(root, 'schemas/item.json'), '{}')
+    writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest))
+
+    const loaded = loadPluginDir(root)
+    expect(loaded.error).toBeUndefined()
+    expect(loaded.descriptor?.views).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'left', detailView: 'detail' }),
+      expect.objectContaining({ id: 'detail', targetSchema: 'schemas/item.json' }),
+      expect.objectContaining({
+        id: 'window',
+        receives: { protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 1 } },
+      }),
+    ]))
+
+    rmSync(join(root, 'schemas/item.json'))
+    expect(loadPluginDir(root).error).toMatch(/referenced file is missing or unsafe.*schemas\/item\.json/)
+  })
+
   it('loads a backend-only v2 package into the activation catalog', () => {
     const manifest = JSON.parse(readFixture('valid', 'backend-only-skills.json'))
     mkdirSync(join(root, 'backend'), { recursive: true })
@@ -487,5 +541,56 @@ describe('scanInstalledPlugins', () => {
     const err = scanned.find((s) => s.error)
     expect(ok?.descriptor?.entryFile).toBe(join(good, 'dist/main.js'))
     expect(err?.error).toBeTruthy()
+  })
+
+  it('keeps a legacy package in an arbitrary unpacker directory when no selector exists', () => {
+    const legacyDir = join(root, 'frontend-only')
+    mkdirSync(legacyDir)
+    writeFileSync(join(legacyDir, 'manifest.json'), JSON.stringify(VALID))
+
+    expect(scanInstalledPlugins(root)).toEqual([
+      expect.objectContaining({ dir: legacyDir, descriptor: expect.objectContaining({ id: 'acme.demo' }) }),
+    ])
+  })
+
+  it('loads only the exact active package selected by a valid durable selector', () => {
+    const legacyDir = join(root, 'acme.demo')
+    mkdirSync(legacyDir)
+    writeFileSync(join(legacyDir, 'manifest.json'), JSON.stringify({ ...VALID, version: '9.9.9' }))
+    const selected = {
+      packageVersion: '1.2.3',
+      target: 'universal',
+      artifactDigest: 'a'.repeat(64),
+    }
+    const packageDir = immutablePluginPackageDir(root, 'acme.demo', selected.packageVersion, selected.target)
+    mkdirSync(packageDir, { recursive: true })
+    writeFileSync(join(packageDir, 'manifest.json'), JSON.stringify(VALID))
+    new PluginActivationSelector(root).stageCandidate('acme.demo', selected)
+    new PluginActivationSelector(root).activateCandidate('acme.demo')
+
+    expect(scanInstalledPlugins(root)).toEqual([
+      expect.objectContaining({
+        dir: packageDir,
+        descriptor: expect.objectContaining({ id: 'acme.demo', packageDir }),
+      }),
+    ])
+  })
+
+  it('fails closed instead of falling back to a legacy root when its lifecycle selector is unreadable', () => {
+    const pluginDir = join(root, 'acme.demo')
+    mkdirSync(pluginDir)
+    writeFileSync(join(pluginDir, 'manifest.json'), JSON.stringify(VALID))
+    const selector = new PluginActivationSelector(root)
+    selector.stageCandidate('acme.demo', {
+      packageVersion: '1.0.0',
+      target: 'universal',
+      artifactDigest: 'a'.repeat(64),
+    })
+    writeFileSync(join(root, '.navide-lifecycle', 'acme.demo.json'), '{bad')
+
+    expect(scanInstalledPlugins(root)).toEqual([{
+      dir: pluginDir,
+      error: 'plugin lifecycle selector is unreadable',
+    }])
   })
 })

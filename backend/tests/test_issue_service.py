@@ -108,6 +108,41 @@ class TestDetectHost:
         assert issue_service._detect_host("") == "unknown"
 
 
+@pytest.mark.asyncio
+async def test_public_create_uses_one_deadline_before_launching_mutation(monkeypatch):
+    clock = [0.0]
+    calls = []
+
+    async def fake_cli(args, cwd, *, timeout):
+        calls.append((args[0], timeout))
+        if args[0] == "git":
+            clock[0] = 31.0
+            return 0, "https://github.com/o/r.git\n", ""
+        return 0, "https://github.com/o/r/issues/1", ""
+
+    monkeypatch.setattr(issue_service, "monotonic", lambda: clock[0], raising=False)
+    monkeypatch.setattr(issue_service, "run_allowlisted_text", fake_cli)
+    policy = {"mode": "allowlist", "shell": ["git", "gh"]}
+    result = await issue_service.public_request("create", "/ws", {"title": "test"}, policy)
+    assert result["ok"] is False
+    assert "timed out" in result["error"]
+    assert calls == [("git", 30.0)]
+
+    calls.clear()
+    clock[0] = 0.0
+    async def timely_cli(args, cwd, *, timeout):
+        calls.append((args[0], timeout))
+        if args[0] == "git":
+            clock[0] = 12.0
+            return 0, "https://github.com/o/r.git\n", ""
+        return 0, "https://github.com/o/r/issues/1", ""
+
+    monkeypatch.setattr(issue_service, "run_allowlisted_text", timely_cli)
+    result = await issue_service.public_request("create", "/ws", {"title": "test"}, policy)
+    assert result["ok"] is True
+    assert calls == [("git", 30.0), ("gh", 18.0)]
+
+
 # ── normalization ──────────────────────────────────────────────────────────────
 
 class TestNormalization:

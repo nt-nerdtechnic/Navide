@@ -221,7 +221,7 @@ describe('useSettings — language bootstrap and persistence', () => {
   it.each(['zh-TW', 'en-US', 'ja-JP', '"ja-JP"'])('executes the actual %s renderer bootstrap before root mounting', (raw) => {
     const bootstrapSettings = { [LANGUAGE_KEY]: raw }
     seedSettings(bootstrapSettings)
-    const source = readFileSync(resolve('src/renderer/src/main.ts'), 'utf8')
+    const source = readFileSync(resolve('src/renderer/src/hostMount.ts'), 'utf8')
     const start = source.indexOf('const bootstrapLocaleRaw =')
     const end = source.indexOf('// Theme token layers', start)
     expect(start).toBeGreaterThan(-1)

@@ -6085,6 +6085,71 @@ async def issues_set_state(session: "Session", msg_id: str, msg_type: str, paylo
     await session.send_json(make_response(msg_id, msg_type, result))
 
 
+@handler("issues.public")
+async def issues_public(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Run one fixed, Host-authenticated public Issue operation."""
+    from . import app
+
+    if not session.host_authenticated:
+        await session.send_json(
+            make_error(msg_id, msg_type, "UNAUTHORIZED", "Host session is not authenticated")
+        )
+        return
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"workspace_path", "operation", "arguments", "execution_policy"}
+        or not isinstance(payload.get("workspace_path"), str)
+        or not payload["workspace_path"].strip()
+        or not isinstance(payload.get("operation"), str)
+        or payload["operation"] not in {
+            "provider", "list", "get", "create", "comment", "set_state",
+        }
+        or not isinstance(payload.get("arguments"), dict)
+        or not isinstance(payload.get("execution_policy"), dict)
+    ):
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "issues.public request is malformed")
+        )
+        return
+
+    workspace_path = payload["workspace_path"]
+    resolved_cwd = app.Path(workspace_path).resolve()
+    known_roots = app.attribution.existing_workspace_roots()
+    registered_root = next(
+        (
+            root
+            for root in known_roots
+            if resolved_cwd == root or resolved_cwd.is_relative_to(root)
+        ),
+        None,
+    )
+    if registered_root is None:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "workspace path not registered")
+        )
+        return
+    if not resolved_cwd.is_dir():
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "invalid workspace path")
+        )
+        return
+
+    try:
+        result = await app.issue_service.public_request(
+            payload["operation"],
+            str(resolved_cwd),
+            payload["arguments"],
+            payload["execution_policy"],
+        )
+    except ValueError as exc:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", str(exc)))
+        return
+    except PermissionError as exc:
+        await session.send_json(make_error(msg_id, msg_type, "PERMISSION_DENIED", str(exc)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 # ── Shell run (shell.run) ───────────────────────────────────────────────────
 # Security notes:
 # - Manifest v2 public calls take the ``host_mode=allowlist`` branch above and
@@ -7961,16 +8026,65 @@ async def terminal_reattach(session: "Session", msg_id: str, msg_type: str, payl
     # forbidden "auto-redraw a running, visible pane" (no existing content
     # to reflow-corrupt) — it's the only way a reattached blank xterm
     # recovers its screen, since there is no server-side output buffer.
+    if not isinstance(payload, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "terminal.reattach request is malformed")
+        )
+        return
+    attestation_fields = {
+        "expected_workspace_path", "expected_origin", "expected_profile_ids",
+    }
+    if attestation_fields.intersection(payload) and not session.host_authenticated:
+        await session.send_json(
+            make_error(msg_id, msg_type, "UNAUTHORIZED", "Host session is not authenticated")
+        )
+        return
+    if (
+        "expected_workspace_path" in payload
+        and not isinstance(payload["expected_workspace_path"], str)
+    ) or (
+        "expected_origin" in payload
+        and not isinstance(payload["expected_origin"], str)
+    ) or (
+        "expected_profile_ids" in payload
+        and (
+            not isinstance(payload["expected_profile_ids"], list)
+            or not all(isinstance(profile_id, str) for profile_id in payload["expected_profile_ids"])
+        )
+    ):
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "terminal.reattach attestation is malformed")
+        )
+        return
+
     ids = [str(x) for x in (payload.get("terminal_session_ids") or [])]
     cols = int(payload.get("cols", 0))
     rows = int(payload.get("rows", 0))
-    live_ids = {
-        s.id
-        for s in session.terminals._sessions.values()  # noqa: SLF001
-        if not s.closed
-    }
-    alive = [tid for tid in ids if tid in live_ids]
-    dead = [tid for tid in ids if tid not in live_ids]
+    expected_workspace_path = payload.get("expected_workspace_path")
+    expected_origin = payload.get("expected_origin")
+    expected_profile_ids = payload.get("expected_profile_ids")
+    stored_sessions = session.terminals._sessions  # noqa: SLF001
+    alive: list[str] = []
+    dead: list[str] = []
+    for tid in ids:
+        stored = stored_sessions.get(tid)
+        if stored is None or stored.closed:
+            dead.append(tid)
+            continue
+        if expected_workspace_path is not None and os.path.realpath(stored.cwd) != os.path.realpath(expected_workspace_path):
+            dead.append(tid)
+            continue
+        if expected_origin is not None:
+            stored_origin = stored.metadata.get("origin")
+            if stored_origin != expected_origin and not (
+                expected_origin == "mini-ide" and stored_origin == "editor"
+            ):
+                dead.append(tid)
+                continue
+        if expected_profile_ids is not None and stored.agent_key not in expected_profile_ids:
+            dead.append(tid)
+            continue
+        alive.append(tid)
     # Transfer ownership of reattached PTYs to this window.
     app._claim_ptys(session, alive)
     if cols > 0 and rows > 0:
@@ -7983,15 +8097,32 @@ async def terminal_reattach(session: "Session", msg_id: str, msg_type: str, payl
     from .terminals import live_output_log_for
 
     logs = {tid: live_output_log_for(tid) for tid in alive}
+    sessions: dict[str, dict[str, str]] = {}
+    if session.host_authenticated:
+        for tid in alive:
+            stored = stored_sessions.get(tid)
+            if stored is None:
+                continue
+            row = {
+                "agent_key": stored.agent_key or "",
+                "workspace_path": os.path.realpath(stored.cwd),
+            }
+            origin = stored.metadata.get("origin")
+            if isinstance(origin, str) and origin:
+                row["origin"] = origin
+            sessions[tid] = row
+    response_payload: dict[str, Any] = {
+        "alive": alive,
+        "dead": dead,
+        "logs": {tid: path for tid, path in logs.items() if path},
+    }
+    if session.host_authenticated:
+        response_payload["sessions"] = sessions
     await session.send_json(
         make_response(
             msg_id,
             msg_type,
-            {
-                "alive": alive,
-                "dead": dead,
-                "logs": {tid: path for tid, path in logs.items() if path},
-            },
+            response_payload,
         )
     )
 

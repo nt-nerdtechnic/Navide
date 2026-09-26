@@ -83,4 +83,3 @@ async def handle(session: "Session", msg_id: str, msg_type: str, payload: dict) 
             log.exception("channels: %s failed", msg_type)
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     await session.send_json(make_response(msg_id, msg_type, result))
-

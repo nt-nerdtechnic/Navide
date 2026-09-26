@@ -4,7 +4,7 @@ import { useNotify } from '@navide/plugin-ui/foundation'
 import {
   parseConflicts, buildResolved, countConflicts, hasConflicts,
   type FileSection, type ConflictChoice,
-} from '../lib/conflict-parser'
+} from '@navide/plugin-ui/shared'
 import type { GitTransport } from '../../../shared/gitCompatibility'
 import type { GitFileAccessPort } from '../ports/gitSurface'
 // Type-only — erased at build time, so this never pulls useGit into a bundle.

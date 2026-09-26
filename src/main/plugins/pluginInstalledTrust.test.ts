@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -135,6 +135,7 @@ describe('verifyInstalledRegistryPackage', () => {
     expect(verifyInstalledRegistryPackage(pluginDir, 'acme.demo', context())).toEqual({
       action: 'allow',
       artifactDigest: sha256Hex(archive),
+      target: 'universal',
     })
   })
 
@@ -288,6 +289,15 @@ describe('verifyInstalledRegistryPackage', () => {
   })
 
   it('discovers a package only when its directory, manifest, and retained artifact agree', () => {
+    expect(discoverInstalledRegistryPackageIds(root)).toEqual(['acme.demo'])
+  })
+
+  it('discovers retained immutable target-specific package directories', () => {
+    const canonical = join(root, 'acme.demo', '1.0.0', 'universal', 'package')
+    const temporary = join(root, 'candidate-package')
+    renameSync(pluginDir, temporary)
+    mkdirSync(join(root, 'acme.demo', '1.0.0', 'universal'), { recursive: true })
+    renameSync(temporary, canonical)
     expect(discoverInstalledRegistryPackageIds(root)).toEqual(['acme.demo'])
   })
 

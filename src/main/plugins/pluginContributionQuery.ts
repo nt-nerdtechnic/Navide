@@ -41,3 +41,17 @@ export function composePluginContributionQuery(options: PluginContributionQueryO
   }
   return `?${params.toString()}`
 }
+
+/** Load-time query for a composed provider frame — the plugin's own UI rendering
+ *  inside a receiver, rather than in its own window. It carries the same
+ *  context a contribution window gets: the workspace it belongs to, the
+ *  manifest-v2 runtime, and the VIEW ID (`left`, `window`, `branch-detail`),
+ *  which is what a plugin app dispatches on to mount the right surface. */
+export function composePluginFrameQuery(contributionKey: string, workspacePath: string): string {
+  const params = new URLSearchParams({
+    workspace_path: workspacePath,
+    v2: '1',
+    contribution: contributionKey.split('.').at(-1) ?? '',
+  })
+  return `?${params.toString()}`
+}

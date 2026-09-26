@@ -13,9 +13,6 @@ import {
   applyMentionPickToInput,
   buildMentionPickData,
   chunkForPty,
-  filterMentionCandidates,
-  foldMentionText,
-  MENTION_BROADCAST_ADDRESS,
   shouldOpenMentionMenu,
   stripInputSequences,
   type MentionCandidate,
@@ -25,100 +22,70 @@ import { stopWebglCursorBlink } from '../lib/webglCursorBlink'
 import { createThrottledDiag, diagLog } from '../lib/diagLog'
 import { TERMINAL_CREATE_TIMEOUT_MS, formatTerminalExit, isTerminalCrashLoopOpen, recordTerminalExit, terminalCrashKey } from '../lib/terminalLifecycle'
 import { settingsGet, settingsSet, setContext } from '@navide/plugin-ui/shared'
-
-import type { ITheme } from '@xterm/xterm'
+import {
+  createTerminalInputHandlers,
+  createTerminalMentionMenu,
+  encodeShiftEnter,
+  readXtermTheme,
+  TERMINAL_MOUSE_MODE_RESET,
+  TERMINAL_NEW_PROCESS_RESET,
+  TERMINAL_RECONNECTED_DIVIDER,
+  findFileLinkAt,
+  findFileLinkMatchAt,
+  findUrlLinkMatchAt,
+  findUrlMatches,
+  rootedTailCandidate,
+  shedCjkPieces,
+  shedCjkProse,
+  splitMatchAtRowStarts,
+  trimUrlTrailing,
+  getWrappedLineGroup,
+  groupPosToRowCol,
+  groupRowColToPos,
+  installTerminalLinks,
+  cellColToStrCol,
+  strColToCellCol,
+  splitTerminalLinkSuffix,
+  visualWidth,
+  extractPlanDocRelPath,
+  htmlReportRoute,
+} from '@navide/plugin-ui'
+import { createTerminalFilePicker } from '@navide/plugin-ui/file-picker'
+import type {
+  TerminalAgentProfile,
+  TerminalAgentProfileResolver,
+  WrappedLineGroup,
+} from '@navide/plugin-ui'
 import type { TerminalDockPort, TerminalInputOptions, TerminalSpawnOptions } from '../ports/terminalDock'
 
-// Per-app-theme xterm palettes. CSS vars can't be used directly because
-// getPropertyValue returns the raw `var(--gray-12)` token, not the resolved hex.
-// The light palette remaps ANSI white/brightWhite so TUI apps (designed for dark
-// terminals) stay readable on a light background.
-// Shared ANSI 16-color palette for dark themes, aligned to the base.css color
-// scales so CLI output (green spinners, syntax highlight, etc.) matches the app
-// design instead of falling back to xterm.js's built-in defaults.
-const DARK_ANSI = {
-  black: '#484f58',   brightBlack: '#6e7681',
-  red: '#ff7b72',     brightRed: '#ffa198',
-  green: '#3fb950',   brightGreen: '#56d364',
-  yellow: '#d29922',  brightYellow: '#e3b341',
-  blue: '#58a6ff',    brightBlue: '#79c0ff',
-  magenta: '#bc8cff', brightMagenta: '#d2a8ff',
-  cyan: '#56d4dd',    brightCyan: '#b3f0ff',
-  white: '#b1bac4',   brightWhite: '#ffffff',
-}
-
-// Scrollbar slider colors applied directly to ITheme so Monaco's overlay
-// scrollbar is legible. Default (foreground @ 20%) is too faint on dark bg.
-const DARK_SCROLLBAR = {
-  scrollbarSliderBackground:       'rgba(255,255,255,0.55)',
-  scrollbarSliderHoverBackground:  'rgba(255,255,255,0.75)',
-  scrollbarSliderActiveBackground: 'rgba(255,255,255,0.90)',
-}
-
-const XTERM_THEMES: Record<string, ITheme> = {
-  'dark-github': {
-    background: '#0d1117', foreground: '#e6edf3',
-    cursor: '#58a6ff', selectionBackground: 'rgba(56,139,253,0.35)',
-    ...DARK_ANSI, ...DARK_SCROLLBAR,
-  },
-  'dark-midnight': {
-    background: '#0a0e14', foreground: '#c5d0e6',
-    cursor: '#6cb0ff', selectionBackground: 'rgba(56,139,253,0.3)',
-    ...DARK_ANSI, ...DARK_SCROLLBAR,
-  },
-  'dark-forest': {
-    background: '#0c130d', foreground: '#e9f2e7',
-    cursor: '#6fc28a', selectionBackground: 'rgba(111,194,138,0.3)',
-    ...DARK_ANSI, ...DARK_SCROLLBAR,
-  },
-  'light': {
-    background: '#ffffff', foreground: '#1f2328',
-    cursor: '#0969da', selectionBackground: 'rgba(9,105,218,0.2)',
-    scrollbarSliderBackground:       'rgba(0,0,0,0.35)',
-    scrollbarSliderHoverBackground:  'rgba(0,0,0,0.55)',
-    scrollbarSliderActiveBackground: 'rgba(0,0,0,0.70)',
-    black: '#1f2328',    brightBlack: '#59636e',
-    red: '#cf222e',      brightRed: '#a40e26',
-    green: '#1a7f37',    brightGreen: '#22863a',
-    yellow: '#9a6700',   brightYellow: '#7d4e00',
-    blue: '#0969da',     brightBlue: '#0550ae',
-    magenta: '#8250df',  brightMagenta: '#6639ba',
-    cyan: '#1b7c83',     brightCyan: '#3192aa',
-    white: '#d0d7de',    brightWhite: '#8c959f',  // NOT pure white — readable on light bg
-  },
-  'high-contrast': {
-    // Match the app canvas (--bg-base #0a0c10) like every other theme, so the
-    // pane's padding frame is seamless. White-on-#0a0c10 is still ~20:1 contrast.
-    background: '#0a0c10', foreground: '#ffffff',
-    cursor: '#71b7ff', selectionBackground: 'rgba(113,183,255,0.35)',
-    ...DARK_SCROLLBAR,
-    black: '#686868',   brightBlack: '#a0a0a0',
-    red: '#ff6b66',     brightRed: '#ff9a94',
-    green: '#56d364',   brightGreen: '#7ee787',
-    yellow: '#e3b341',  brightYellow: '#f2cc60',
-    blue: '#79c0ff',    brightBlue: '#a5d6ff',
-    magenta: '#d2a8ff', brightMagenta: '#e2c5ff',
-    cyan: '#56d4dd',    brightCyan: '#b3f0ff',
-    white: '#e6edf3',   brightWhite: '#ffffff',
-  },
-}
-
-function readXtermTheme(): ITheme {
-  const id = typeof document !== 'undefined'
-    ? (document.documentElement.getAttribute('data-theme') ?? 'dark-github')
-    : 'dark-github'
-  return XTERM_THEMES[id] ?? XTERM_THEMES['dark-github']
-}
+export { encodeShiftEnter }
+export type { TerminalAgentProfile, TerminalAgentProfileResolver }
+export {
+  findFileLinkAt,
+  findFileLinkMatchAt,
+  findUrlLinkMatchAt,
+  findUrlMatches,
+  rootedTailCandidate,
+  shedCjkPieces,
+  shedCjkProse,
+  splitMatchAtRowStarts,
+  trimUrlTrailing,
+} from '@navide/plugin-ui'
+export type { WrappedLineGroup } from '@navide/plugin-ui'
+export type { PickerItem } from '@navide/plugin-ui/file-picker'
+export { mergePreferredPath } from '@navide/plugin-ui/file-picker'
+export {
+  cellColToStrCol,
+  getWrappedLineGroup,
+  groupPosToRowCol,
+  groupRowColToPos,
+  strColToCellCol,
+  visualWidth,
+  extractPlanDocRelPath,
+  htmlReportRoute,
+} from '@navide/plugin-ui'
 
 export type SpawnOptions = TerminalSpawnOptions
-
-export interface TerminalAgentProfile {
-  bracketedPaste?: boolean
-  fullScreenTui?: boolean
-  shiftEnterSequence?: string
-}
-
-export type TerminalAgentProfileResolver = (agentKey?: string) => TerminalAgentProfile | undefined
 
 /** Historic aliases some call sites passed before agent keys were canonical. */
 function terminalSpecFor(
@@ -128,24 +95,6 @@ function terminalSpecFor(
   const key = agentKey?.toLowerCase()
   const canonical = key === 'claude-code' ? 'claude' : key === 'agy' ? 'antigravity' : key
   return resolveProfile?.(canonical)
-}
-
-/**
- * Encode the shared Shift+Enter UX for the active CLI's terminal protocol.
- *
- * There is no vendor-neutral byte sequence for a modified Enter key in a
- * traditional PTY, so each spec declares its protocol (shiftEnterSequence /
- * bracketedPaste). Keep the user-facing shortcut uniform and contain the
- * protocol difference here.
- */
-export function encodeShiftEnter(profile?: TerminalAgentProfile): string {
-  const spec = profile
-  if (spec?.shiftEnterSequence) return spec.shiftEnterSequence
-  // Bracketed paste LF guarantees a literal newline insertion without submitting.
-  if (spec?.bracketedPaste) return '\x1b[200~\n\x1b[201~'
-  // Plain shells (bash/zsh) treat \x1b\r as Enter and do not always have bracketed paste enabled.
-  // Ctrl+V (\x16) + Ctrl+J (\x0a) is the standard way to insert a literal newline in readline/ZLE.
-  return '\x16\x0a'
 }
 
 /** Clipboard bytes per `terminal.input` write, matching App.vue's injectText. */
@@ -178,34 +127,6 @@ type PasteChunkFailure =
   | 'refused'
   /** Written to the socket, but the ack did not come back in time. */
   | 'timeout'
-
-/**
- * Mouse tracking (and focus reporting) a previous session may have left on.
- *
- * Stale state here forwards events to the process's stdin before it has had a
- * chance to re-enable what it actually wants, so it is cleared whenever a pane
- * rebinds to a PTY.
- */
-const MOUSE_MODE_RESET = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l'
-
-/**
- * The same reset, plus bracketed paste (DEC 2004) — for a NEW process only.
- *
- * Kept separate on purpose. Clearing 2004 was never about stale mouse state: it
- * rode along in the original reset (a9e7247c, whose comments and message
- * describe only mouse tracking) and six weeks later produced the "paste gets
- * cut off" report, because it desynchronises the two ends. The reset is
- * one-way — xterm forgets, the CLI does not, and having already announced the
- * mode it never announces it again, so the pane stays wrong until it closes.
- *
- * It stays for a resume spawn because there the PTY behind the pane is a fresh
- * process: a replayed snapshot ends in the OLD session's `?2004h`, and until
- * the new process announces its own, a paste would wrap text the other end
- * never asked to be wrapped — a shell would then show a literal "[200~".
- * Reattaching to a LIVE PTY is the opposite case: the mode the snapshot
- * restores is the mode the CLI is still in, which is exactly what we want.
- */
-const MOUSE_MODE_RESET_NEW_PROCESS = `${MOUSE_MODE_RESET}\x1b[?2004l`
 
 /** The alternate-screen ENTER sequence, plus the cursor-home the serializer
  *  always pairs with it. `?1047h` / `?47h` are the pre-xterm-88 spellings —
@@ -441,139 +362,6 @@ try {
   }
 } catch { /* no persisted size — the 80x24 fallback still applies */ }
 
-// VS Code-style unix path regex (no extension whitelist).
-const _EXCL_S = `[^\\x00<>?\\s!\`&*()[\\]'"\\\\;]`
-const _EXCL   = `[^\\x00<>?\\s!\`&*()'"\\\\;]`
-const FILE_LINK_RE = new RegExp(
-  `((?:\\.{1,2}|~|(?:${_EXCL_S}${_EXCL}*))?(?:\\/${_EXCL}+)+)`,
-  'g'
-)
-
-const _SUFFIX_RE = /(?::([\d]+)(?:[.:]([\d]+))?|[(\[]([\d]+)(?:[,:]([\d]+))?[)\]]|#([\d]+)(?::([\d]+))?)$/
-
-function splitSuffix(raw: string): { filepath: string; line?: number } {
-  const m = raw.match(_SUFFIX_RE)
-  if (!m || m.index === undefined) return { filepath: raw }
-  const lineStr = m[1] ?? m[3] ?? m[5]
-  return { filepath: raw.slice(0, m.index), line: lineStr ? parseInt(lineStr, 10) : undefined }
-}
-
-// URLs are matched separately from file paths: raw terminal URLs are ASCII, so
-// stopping at any non-ASCII naturally sheds CJK prose glued around them. The
-// trailing punctuation the surrounding prose contributed (".", ",", ")") is
-// trimmed off afterwards; closing brackets survive only while a matching
-// opener exists inside the URL itself.
-const URL_LINK_RE = /https?:\/\/[^\s<>"'`\u00A0-\uFFFF]+/gi
-const _URL_TRAIL = new Set(['.', ',', ';', ':', '!', '?'])
-const _URL_BRACKETS: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
-export function trimUrlTrailing(raw: string): string {
-  let url = raw
-  while (url.length) {
-    const last = url[url.length - 1]
-    if (_URL_TRAIL.has(last)) { url = url.slice(0, -1); continue }
-    const open = _URL_BRACKETS[last]
-    if (open) {
-      const opens = url.split(open).length - 1
-      const closes = url.split(last).length - 1
-      if (closes > opens) { url = url.slice(0, -1); continue }
-    }
-    break
-  }
-  return url
-}
-
-// Scheme-less ("bare") domains like `leankoo.com`. Inherently guessy —
-// `檔名.com` is also a valid filename — so the match is deliberately
-// conservative; a false positive HIJACKS a click into the browser, so missing
-// beats guessing on every axis:
-//   • TLD allowlist holds only TLDs that are not plausible file extensions
-//     (`deploy.sh`, `Electron.app`, `socket.io` must never linkify). Rarer
-//     TLDs (io/dev/ai/…) linkify only with an explicit scheme or www. prefix.
-//   • www. requires a dotted, TLD-shaped tail (`www.a` is prose, not a host).
-//   • No path tail, and a following '/' kills the match: `leankoo.com/app/x.php`
-//     is a relative file path (a checkout dir named after its domain) — the
-//     pre-existing file-link pipeline can stat-verify it; a URL guess can't be
-//     verified at all.
-// The lookbehind keeps scheme URLs, path segments, and e-mail hosts from
-// re-matching; the lookahead also rejects domain-shaped filenames
-// (`index.com.js`) and prose glued after a port (`host:8080abc`).
-const _BARE_TLDS = 'com|net|org|edu|gov|tw|jp'
-const BARE_URL_RE = new RegExp(
-  '(?<![A-Za-z0-9@.\\-/])' +
-    `(?:www\\.[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}|[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.(?:${_BARE_TLDS}))` +
-    '(?::\\d+)?' +
-    '(?![A-Za-z0-9\\-/:]|\\.[A-Za-z0-9])',
-  'gi'
-)
-
-// A plan doc reference embedded in CLI prose ("計畫已建立：.agent-team/plans/x.html
-// （stage:…"). Extract just the ASCII plan rel-path, matching isHtmlPlanDoc's shape
-// (top-level, non-'_' name under .agent-team/plans/). Because the class is
-// ASCII-only, any surrounding CJK/full-width characters the FILE_LINK_RE swallowed
-// are naturally shed. Returns the workspace-relative path, or undefined.
-const _PLAN_DOC_RE = /\.agent-team\/plans\/[A-Za-z0-9.-][A-Za-z0-9._-]*\.html/
-export function extractPlanDocRelPath(raw: string): string | undefined {
-  return raw.match(_PLAN_DOC_RE)?.[0]
-}
-
-// Full-width CJK punctuation (（）、。：「」…) marks the seam between a CLI's
-// CJK sentence and an embedded path ("報告書：foo/bar.html（說明）") — the
-// path regex can't exclude it outright because CJK ideographs must stay legal
-// path chars (Chinese filenames). Instead, candidates are re-cut here: split
-// on punctuation, keep the piece that still has a '/'. Ideographs and CJK
-// word characters (iteration marks U+3005-3007, Hangzhou numerals / kana
-// repeat marks U+3021-302F and U+3031-303C, full-width alphanumerics U+FF10-FF19 / FF21-FF3A
-// / FF41-FF5A) are never split on. Returns undefined when the string carries
-// no such punctuation.
-const _CJK_PUNCT_RE =
-  /[\u3000-\u3004\u3008-\u3020\u3030\u303D-\u303F\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65]+/
-/** All '/'-containing pieces of `raw` after splitting on full-width CJK
- *  punctuation, with their offsets in `raw`. Empty when `raw` carries no such
- *  punctuation (caller keeps the raw token) or no piece has a '/'. */
-export function shedCjkPieces(raw: string): Array<{ index: number; text: string }> {
-  const re = new RegExp(_CJK_PUNCT_RE.source, 'g')
-  const out: Array<{ index: number; text: string }> = []
-  let last = 0
-  let sawPunct = false
-  let m: RegExpExecArray | null
-  while ((m = re.exec(raw)) !== null) {
-    sawPunct = true
-    const t = raw.slice(last, m.index)
-    if (t.includes('/')) out.push({ index: last, text: t })
-    last = m.index + m[0].length
-  }
-  if (!sawPunct) return []
-  const tail = raw.slice(last)
-  if (tail.includes('/')) out.push({ index: last, text: tail })
-  return out
-}
-
-/** The shed piece containing 0-based `pos` in `raw` — so a click on the
- *  second of two punctuation-joined paths ("結果:a.ts、b.ts" in full-width)
- *  sheds to THAT path — falling back to the first '/'-containing piece when
- *  `pos` sits on the punctuation/prose itself. Undefined when `raw` carries
- *  no full-width punctuation. */
-export function shedCjkProse(raw: string, pos = -1): string | undefined {
-  const pieces = shedCjkPieces(raw)
-  if (!pieces.length) return undefined
-  return (pieces.find((p) => pos >= p.index && pos < p.index + p.text.length) ?? pieces[0]).text
-}
-
-/** Route a stat-verified workspace-internal .html file to the Plan window's
- *  rendered preview (its non-plan-doc branch mounts FilePreviewPane): report
- *  files live outside `.agent-team/plans/` — loop reports, exported docs —
- *  and the mini-IDE would only show their raw source. Undefined for files
- *  outside the pane's workspace (no workspace to anchor the Plan window). */
-export function htmlReportRoute(
-  absPath: string,
-  wsPath: string | undefined
-): { workspace_path: string; rel_path: string } | undefined {
-  if (!wsPath || !/\.html?$/i.test(absPath)) return undefined
-  const root = wsPath.replace(/\/+$/, '')
-  if (!absPath.startsWith(`${root}/`)) return undefined
-  return { workspace_path: root, rel_path: absPath.slice(root.length + 1) }
-}
-
 /** Open a clicked path in the mini-IDE. Files inside the pane's workspace open
  *  as a workspace-relative path; files outside it keep `workspace_path` on the
  *  workspace and name their own root in `file_ws` (their parent directory), so
@@ -618,87 +406,12 @@ export function expandHomePath(fp: string, home: string): string {
 
 // Moved to lib/paths so a caller that only wants the string helper does not
 // load this module. Re-exported because every existing import names it here.
+// The box-frame regex is shared with lib/injectEcho, which also has to find the
+// frame — there by its position rather than to skip it — so the two cannot
+// drift apart.
 import { BOX_ONLY_LINE_RE } from '../../../lib/injectEcho'
 import { collapseHomePath } from '../lib/paths'
 export { collapseHomePath } from '../lib/paths'
-
-export interface PickerItem {
-  abs: string
-  name: string
-  dir: string
-}
-
-/** Merge a click-resolved absolute path into the workspace-search results:
- *  pull it to the front if already present, insert it if absent. Only on the
- *  initial (basename) query — once the user types, plain results show. This is
- *  the sole way a file outside the workspace, or any file when the pane has no
- *  workspace to search, reaches the picker, so it must run even when the
- *  workspace search returned (or could not run) with nothing. */
-export function mergePreferredPath(
-  items: PickerItem[],
-  preferredAbsPath: string | undefined,
-  isInitialQuery: boolean
-): PickerItem[] {
-  if (!preferredAbsPath || !isInitialQuery) return items
-  const idx = items.findIndex((item) => item.abs === preferredAbsPath)
-  if (idx === 0) return items
-  if (idx > 0) {
-    const copy = items.slice()
-    copy.unshift(copy.splice(idx, 1)[0])
-    return copy
-  }
-  const parts = preferredAbsPath.split('/')
-  const name = parts.pop() ?? preferredAbsPath
-  return [{ abs: preferredAbsPath, name, dir: parts.join('/') }, ...items]
-}
-
-// A single character matching the FILE_LINK_RE path-body class (used to test
-// whether a path-like token runs right up against a row boundary).
-const _PATH_CHAR_RE = new RegExp(_EXCL)
-
-// Content-boundary joining: a row only counts as pre-wrapped if no row within
-// this window is more than this many chars longer than it — a pre-wrap break
-// happens only where the CLI ran out of width, so a genuinely broken row must
-// be about as long as the longest row nearby. Rows measurably shorter than a
-// neighbour ended by content, not by the width limit (git's aligned
-// `create mode …` output, ls -l, …), and joining them corrupts the path.
-const _PREWRAP_WINDOW = 4
-const _PREWRAP_SLACK = 8
-
-// A wrapped logical line, reconstructed from two signals:
-//   • xterm's `isWrapped` flag — authoritative for genuine terminal-width
-//     wraps (works for any content).
-//   • a content-boundary check — CLI TUIs (Claude Code, Codex, etc.) measure
-//     the terminal themselves and pre-wrap their output with real newlines at
-//     a width narrower than the pane, so isWrapped is never set and rows never
-//     reach term.cols. We join a row to the previous one when the previous row
-//     ends in a path char, this row's FIRST NON-GUTTER char is a path char,
-//     and the previous row is about as long as the longest row nearby (only a
-//     row that hit the width limit can be a genuine pre-wrap break — see
-//     _PREWRAP_WINDOW / _PREWRAP_SLACK).
-//     Continuation rows carry the block's gutter indent, so that leading
-//     whitespace is stripped from fullText; `strips` records how much, keeping
-//     buffer col ↔ fullText offset mapping exact.
-// Joining is deliberately permissive — text alone cannot distinguish "one
-// path wrapped across rows" from "two paths on adjacent rows"; the click
-// handler resolves that ambiguity via fs.stat_path (see _cmdClickHandler).
-// Shared by the hover/underline link provider and the click handler so both
-// always agree on where a path starts/ends, even across multiple rows.
-export interface WrappedLineGroup {
-  groupStart: number // absolute buffer row where the group starts
-  lineLengths: number[] // per-row contribution length in fullText (gutter stripped)
-  strips: number[] // per-row count of leading gutter chars dropped from fullText
-  fullText: string // concatenated text of every row in the group
-  // fullText offsets where a content-heuristic (non-isWrapped) join occurred.
-  // Paths may cross these (the click handler disambiguates via fs.stat_path);
-  // URLs must not — an unverifiable URL absorbing the next row's prose would
-  // open a wrong address, so URL matching treats these as hard breaks.
-  heuristicBreaks: number[]
-}
-
-// The frame of a CLI's bottom input widget. Defined in lib/injectEcho, which
-// also has to find it — there by the frame's position rather than to skip it —
-// so the two cannot drift apart. See BOX_ONLY_LINE_RE's comment there.
 
 /** Serialize the RENDERED scrollback (what the user actually sees) as text.
  *  Unlike the raw-stream cleanBuffer, TUI repaints overwrite buffer lines in
@@ -744,328 +457,6 @@ export function serializeRenderedBuffer(
   }
   lines.reverse()
   return lines.join('\n')
-}
-
-// Approximate rendered cell width of a string: CJK/full-width glyphs and
-// non-BMP glyphs (emoji) take two cells, everything else one. Mirrors the
-// wide ranges xterm's Unicode service treats as width 2 closely enough for
-// the pre-wrap width comparisons; exactness is not required there (slack 8).
-const _WIDE_CH_RE = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/
-export function visualWidth(s: string): number {
-  let w = 0
-  for (const ch of s) w += ch.length > 1 || _WIDE_CH_RE.test(ch) ? 2 : 1
-  return w
-}
-
-export function getWrappedLineGroup(term: import('@xterm/xterm').Terminal, bufferRow: number): WrappedLineGroup {
-  const buffer = term.buffer.active
-  const lineTextAt = (r: number): string | null => {
-    const ln = buffer.getLine(r)
-    return ln ? ln.translateToString(true) : null
-  }
-  const leadingWs = (s: string): number => s.length - s.trimStart().length
-  // Whether row `r` could have been broken by the CLI's width limit: no row
-  // within the window is measurably longer than it. Lengths are VISUAL cell
-  // widths, not string lengths — the CLI wraps by cells, and a CJK-heavy row
-  // near the width limit holds roughly half the string characters of an ASCII
-  // row, so string-length comparison wrongly rejects the join for CJK paths.
-  const nearWidthLimit = (r: number): boolean => {
-    const len = visualWidth(lineTextAt(r) ?? '')
-    for (let i = r - _PREWRAP_WINDOW; i <= r + _PREWRAP_WINDOW; i++) {
-      if (i !== r && visualWidth(lineTextAt(i) ?? '') > len + _PREWRAP_SLACK) return false
-    }
-    return true
-  }
-  // Whether row `r` is a continuation of row `r - 1`.
-  const continuesFromPrev = (r: number): boolean => {
-    if (r <= 0) return false
-    if (buffer.getLine(r)?.isWrapped) return true
-    const cur = lineTextAt(r)
-    const prev = lineTextAt(r - 1)
-    if (!cur || !prev) return false
-    return (
-      _PATH_CHAR_RE.test(prev[prev.length - 1]) &&
-      _PATH_CHAR_RE.test(cur[leadingWs(cur)]) &&
-      nearWidthLimit(r - 1)
-    )
-  }
-
-  let groupStart = bufferRow
-  for (let steps = 0; steps < 8 && groupStart > 0 && continuesFromPrev(groupStart); steps++) {
-    groupStart--
-  }
-
-  const lineLengths: number[] = []
-  const strips: number[] = []
-  const heuristicBreaks: number[] = []
-  let fullText = ''
-  for (let r = groupStart, steps = 0; steps < 16; r++, steps++) {
-    const lineText = lineTextAt(r)
-    if (lineText === null) break
-    // True xterm wraps keep their cells verbatim; only pre-wrapped (CLI-drawn)
-    // continuations have a gutter indent to strip.
-    const strip = r === groupStart || buffer.getLine(r)?.isWrapped ? 0 : leadingWs(lineText)
-    strips.push(strip)
-    lineLengths.push(lineText.length - strip)
-    fullText += lineText.slice(strip)
-    if (!continuesFromPrev(r + 1)) break
-    if (!buffer.getLine(r + 1)?.isWrapped) heuristicBreaks.push(fullText.length)
-  }
-
-  return { groupStart, lineLengths, strips, fullText, heuristicBreaks }
-}
-
-/** Convert a 0-based offset into `group.fullText` back to an absolute buffer row/col. */
-export function groupPosToRowCol(group: WrappedLineGroup, pos: number): { row: number; col: number } {
-  let remaining = pos
-  for (let i = 0; i < group.lineLengths.length; i++) {
-    const len = group.lineLengths[i]
-    if (i === group.lineLengths.length - 1 || remaining < len) {
-      return { row: group.groupStart + i, col: remaining + group.strips[i] }
-    }
-    remaining -= len
-  }
-  return { row: group.groupStart, col: pos }
-}
-
-/** Convert an absolute buffer row/col to a 0-based offset into `group.fullText`,
- *  or -1 when the position falls outside the row's contributed text (in the
- *  stripped gutter, or right of the trimmed content). */
-export function groupRowColToPos(group: WrappedLineGroup, bufferRow: number, col: number): number {
-  const rowInGroup = bufferRow - group.groupStart
-  if (rowInGroup < 0 || rowInGroup >= group.lineLengths.length) return -1
-  const inRow = col - group.strips[rowInGroup]
-  if (inRow < 0 || inRow >= group.lineLengths[rowInGroup]) return -1
-  let pos = inRow
-  for (let i = 0; i < rowInGroup; i++) pos += group.lineLengths[i]
-  return pos
-}
-
-// Cell column ↔ translateToString offset for one buffer row. Two corrections
-// (same pair as VS Code's convertLinkRangeToBuffer):
-//   • a double-width glyph (CJK) occupies two cells but one string position —
-//     translateToString emits nothing for the width-0 trailing half-cell;
-//   • a multi-code-unit glyph (emoji, surrogate pairs) occupies one glyph cell
-//     but getChars().length string positions.
-// (VS Code's third term — the empty spacer cell a wide glyph leaves when it
-// early-wraps at the row edge — needs no handling here: per-row lengths come
-// from the trimmed translateToString, so the spacer is trailing whitespace
-// that already maps past the row's content.) Identity when the line surface
-// lacks getCell (unit-test mocks); pure-ASCII rows map 1:1.
-export function cellColToStrCol(
-  term: import('@xterm/xterm').Terminal,
-  bufferRow: number,
-  cellCol: number
-): number {
-  const line = term.buffer.active.getLine(bufferRow)
-  if (!line || typeof line.getCell !== 'function') return cellCol
-  let str = 0
-  let glyphStart = 0
-  for (let x = 0; x <= cellCol && x < line.length; x++) {
-    const cell = line.getCell(x)
-    if (!cell) break
-    if (cell.getWidth() === 0) continue // trailing half-cell → previous glyph
-    glyphStart = str
-    str += Math.max(1, cell.getChars().length)
-  }
-  return glyphStart
-}
-
-export function strColToCellCol(
-  term: import('@xterm/xterm').Terminal,
-  bufferRow: number,
-  strCol: number
-): number {
-  const line = term.buffer.active.getLine(bufferRow)
-  if (!line || typeof line.getCell !== 'function') return strCol
-  let str = 0
-  for (let x = 0; x < line.length; x++) {
-    const cell = line.getCell(x)
-    if (!cell) break
-    if (cell.getWidth() === 0) continue
-    const len = Math.max(1, cell.getChars().length)
-    if (strCol < str + len) return x // strCol falls inside this glyph
-    str += len
-  }
-  return strCol
-}
-
-/** The FILE_LINK_RE match containing 0-based `pos` in `text`, or null. */
-export function findFileLinkMatchAt(text: string, pos: number): { text: string; index: number } | null {
-  if (pos < 0) return null
-  FILE_LINK_RE.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = FILE_LINK_RE.exec(text)) !== null) {
-    if (m[0].includes('://')) continue
-    if (pos >= m.index && pos < m.index + m[0].length) return { text: m[0], index: m.index }
-  }
-  return null
-}
-
-export function findFileLinkAt(text: string, pos: number): string | null {
-  return findFileLinkMatchAt(text, pos)?.text ?? null
-}
-
-/** Whole-tail candidate for paths whose folder names contain characters the
- *  path regex must exclude — spaces and half-width parens ("看護媒合平台 (1)")
- *  truncate the regex match mid-path. From the FIRST rooted ('/' or '~') path
- *  start at/before `pos`, the entire remaining logical line is offered as one
- *  candidate; fs.stat arbitrates, so a line with trailing prose simply fails
- *  through to the precise regex-match candidates. */
-export function rootedTailCandidate(
-  text: string,
-  pos: number
-): { index: number; text: string } | undefined {
-  FILE_LINK_RE.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = FILE_LINK_RE.exec(text)) !== null) {
-    if (m[0].includes('://')) continue
-    // The rooted start may hide inside a CJK-prefixed match
-    // ("報告存放在：/Users/…") — shed pieces recover the '/'-anchored piece.
-    let root = -1
-    if (m[0][0] === '/' || m[0][0] === '~') root = m.index
-    else {
-      const piece = shedCjkPieces(m[0]).find((p) => p.text[0] === '/' || p.text[0] === '~')
-      if (piece) root = m.index + piece.index
-    }
-    if (root < 0) continue
-    if (root > pos) return undefined
-    return { index: root, text: text.slice(root).trimEnd() }
-  }
-  return undefined
-}
-
-export interface UrlMatch {
-  index: number
-  text: string // the visible span (what gets underlined)
-  href: string // what openExternal receives — bare domains get https:// prefixed
-}
-
-/** Every URL in `text` — scheme URLs plus conservative bare domains —
- *  trailing punctuation trimmed. `breaks` (fullText offsets of heuristic row
- *  joins, see WrappedLineGroup.heuristicBreaks) are hard boundaries a URL
- *  never crosses. Shared by the link provider and the click handler so the
- *  underline range and the click hitbox always agree. */
-export function findUrlMatches(text: string, breaks: number[] = []): UrlMatch[] {
-  const bounds = [0, ...breaks.filter((b) => b > 0 && b < text.length), text.length]
-  const out: UrlMatch[] = []
-  // When a scheme URL runs into a heuristic break, the next segment's head is
-  // that URL's severed tail ("https://lean" | "koo.com/x") — it must not
-  // re-match as a standalone bare domain on a different host.
-  let prevSegCapped = false
-  for (let i = 0; i < bounds.length - 1; i++) {
-    const seg = text.slice(bounds[i], bounds[i + 1])
-    const segOut: UrlMatch[] = []
-    let capped = false
-    let m: RegExpExecArray | null
-    URL_LINK_RE.lastIndex = 0
-    while ((m = URL_LINK_RE.exec(seg)) !== null) {
-      const trimmed = trimUrlTrailing(m[0])
-      segOut.push({ index: bounds[i] + m.index, text: trimmed, href: trimmed })
-      if (m.index + m[0].length === seg.length) capped = true
-    }
-    BARE_URL_RE.lastIndex = 0
-    while ((m = BARE_URL_RE.exec(seg)) !== null) {
-      if (m.index === 0 && prevSegCapped) continue
-      const trimmed = trimUrlTrailing(m[0])
-      const start = bounds[i] + m.index
-      const end = start + trimmed.length
-      if (segOut.some((u) => start < u.index + u.text.length && end > u.index)) continue
-      segOut.push({ index: start, text: trimmed, href: `https://${trimmed}` })
-    }
-    segOut.sort((a, b) => a.index - b.index)
-    out.push(...segOut)
-    prevSegCapped = capped
-  }
-  return out
-}
-
-/** The URL match containing 0-based `pos` in `text` (trailing punctuation
- *  already trimmed), or null. */
-export function findUrlLinkMatchAt(text: string, pos: number, breaks: number[] = []): UrlMatch | null {
-  if (pos < 0) return null
-  return findUrlMatches(text, breaks).find((u) => pos >= u.index && pos < u.index + u.text.length) ?? null
-}
-
-/** Split a fullText regex match back into per-path pieces at row boundaries
- *  where the next row starts a fresh absolute path ('/' or '~'). List output
- *  (find, ls) puts one path per row; joining glues adjacent paths into one
- *  regex match, but a wrapped path's continuation fragment essentially never
- *  begins with '/', while a NEW path on the next row does — so those
- *  boundaries are where distinct paths meet. */
-export function splitMatchAtRowStarts(
-  group: WrappedLineGroup,
-  matchIndex: number,
-  matchText: string
-): Array<{ index: number; text: string }> {
-  const end = matchIndex + matchText.length
-  const cuts: number[] = []
-  let boundary = 0
-  for (let i = 0; i < group.lineLengths.length - 1; i++) {
-    boundary += group.lineLengths[i] // start offset of row i+1's contribution
-    if (boundary <= matchIndex || boundary >= end) continue
-    const c = group.fullText[boundary]
-    if (c === '/' || c === '~') cuts.push(boundary)
-  }
-  const pieces: Array<{ index: number; text: string }> = []
-  let start = matchIndex
-  for (const cut of [...cuts, end]) {
-    pieces.push({ index: start, text: group.fullText.slice(start, cut) })
-    start = cut
-  }
-  return pieces
-}
-
-function buildFileLinkProvider(
-  term: import('@xterm/xterm').Terminal,
-  isCmdHeld: () => boolean
-): import('@xterm/xterm').ILinkProvider {
-  return {
-    provideLinks(y, callback) {
-      if (!isCmdHeld()) { callback(undefined); return }
-      const group = getWrappedLineGroup(term, y - 1)
-      const links: import('@xterm/xterm').ILink[] = []
-
-      // groupPosToRowCol yields string columns; xterm ranges are cell columns,
-      // and the two diverge after any double-width (CJK) glyph on the row.
-      const pushLink = (index: number, text: string): void => {
-        const start = groupPosToRowCol(group, index)
-        const end = groupPosToRowCol(group, index + text.length - 1)
-        links.push({
-          range: {
-            start: { x: strColToCellCol(term, start.row, start.col) + 1, y: start.row + 1 },
-            end: { x: strColToCellCol(term, end.row, end.col) + 1, y: end.row + 1 },
-          },
-          text,
-          decorations: { underline: true, pointerCursor: true },
-          activate: () => { /* click handled by _cmdClickHandler */ },
-        })
-      }
-
-      // URLs first — their path segment would otherwise also match
-      // FILE_LINK_RE, so file matches overlapping a URL range are skipped.
-      const urls = findUrlMatches(group.fullText, group.heuristicBreaks)
-      for (const u of urls) pushLink(u.index, u.text)
-
-      FILE_LINK_RE.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = FILE_LINK_RE.exec(group.fullText)) !== null) {
-        if (m[0].includes('://')) continue
-        const s = m.index
-        const e = m.index + m[0].length
-        if (urls.some((u) => s < u.index + u.text.length && e > u.index)) continue
-        for (const piece of splitMatchAtRowStarts(group, m.index, m[0])) {
-          // Underline each punctuation-shed span (two paths joined by 、 get
-          // two underlines), matching what a click would open; clicks on the
-          // shed prose still hit-test the raw match.
-          const shed = shedCjkPieces(piece.text)
-          if (!shed.length) pushLink(piece.index, piece.text)
-          else for (const s of shed) pushLink(piece.index + s.index, s.text)
-        }
-      }
-      callback(links.length ? links : undefined)
-    },
-  }
 }
 
 interface UseTerminalOptions {
@@ -1797,405 +1188,20 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     return readBufferLineBeforeCursor(term)
   }
 
-  // ── @-mention floating autocomplete ──────────────────────────────────────────
-  // Imperative-DOM overlay (mirrors showTerminalFilePicker) listing the OTHER CLI
-  // panes' addresses. Focus stays in xterm's textarea; the menu handles its own
-  // keys (↑/↓/Enter/Esc/Space) at the document capture layer so they never
-  // reach xterm, and lets everything else through.
-  //
-  // Typed characters therefore go to the PTY by the ordinary term.onData path
-  // AND narrow the list (_mentionMenuOnData). Keeping focus in the textarea is
-  // what lets an IME work: the composition runs where the browser can host it
-  // and only the committed text (中文) is reported, as one onData chunk. The
-  // prompt stays honest — the user sees "@cod" where they typed it — and the
-  // escape hatch is free: when the filter empties, the menu just closes and the
-  // CLI's own "@" completion takes over with every character already in place.
-  //
-  // Picking writes one PTY frame that erases the query and inserts the
-  // addresses (buildMentionPickData), completing `@codex-1 `.
-  let _mentionMenuCleanup: (() => void) | null = null
-  /** Typed text the open menu should narrow by; null while no menu is open. */
-  let _mentionMenuOnData: ((data: string) => void) | null = null
-
-  function closeMentionMenu(): void {
-    if (_mentionMenuCleanup) {
-      const fn = _mentionMenuCleanup
-      _mentionMenuCleanup = null
-      fn()
-    }
-  }
-
-  /** Dot colour per pane status, matching the sidebar's .status-dot so one pane
-   *  never reads green here and amber there. Statuses this window cannot read
-   *  (`all`, panes in another workspace window) get no dot fill at all. */
-  function mentionStatusColor(status: string | undefined): string {
-    switch (status) {
-      case 'running': return 'var(--success-fg)'
-      case 'awaiting': return 'var(--warning-fg)'
-      case 'idle': return 'var(--status-idle-fg)'
-      case 'starting': return 'var(--status-starting-fg)'
-      case 'error': return 'var(--danger-fg)'
-      case 'exited':
-      case 'stopped': return 'var(--text-disabled)'
-      default: return ''
-    }
-  }
-
-  function openMentionMenu(candidates: MentionCandidate[]): void {
-    if (_mentionMenuCleanup) return          // one menu at a time
-    if (!candidates.length) return           // nothing to offer
-    const host = mountedEl
-    const screen = host?.querySelector('.xterm-screen') as HTMLElement | null
-    if (!screen) return
-    const rect = screen.getBoundingClientRect()
-    const cellW = (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
-    const cellH = (term as any)._core?._renderService?.dimensions?.css?.cell?.height || 0
-    if (!cellW || !cellH) return
-    const buf = term.buffer.active
-    // buf.cursorX / buf.cursorY are viewport-relative (cursorY counts rows from
-    // the top of the visible area), matching the .xterm-screen rect origin.
-    const cellLeft = rect.left + buf.cursorX * cellW
-    const cellTop = rect.top + buf.cursorY * cellH
-    const cellBottom = cellTop + cellH
-
-    const root = document.createElement('div')
-    root.className = 'term-mention-menu-root'
-    // Above every layer the app draws (the highest is 3100) so a menu opened
-    // from the terminal is not buried, but below --z-window-controls: this is
-    // an `inset: 0` sheet, and at its old hardcoded 99999 it sat over the
-    // minimise/close buttons Windows and Linux draw for themselves. Being
-    // transparent made that worse, not better — the buttons stayed visible and
-    // stopped responding.
-    Object.assign(root.style, {
-      position: 'fixed', inset: '0', zIndex: 'calc(var(--z-toast) + 200)',
-      background: 'transparent',
-    })
-
-    const card = document.createElement('div')
-    // This menu floats over the terminal, and the terminal is black in every
-    // app theme — so it follows the terminal, not the app chrome. Dressing it
-    // in the chrome's popover surface put a white card on a black screen when
-    // the app theme was light, which is the mismatch this fixes.
-    //
-    // The colours are the --gray-*/--blue-* primitives, which base.css keeps
-    // constant across themes; the semantic roles (--bg-overlay, --text-primary)
-    // deliberately do not, so they are the wrong vocabulary here. This is the
-    // same palette showTerminalFilePicker uses for the same reason — it spells
-    // the hex literals out, these name them.
-    card.className = 'term-mention-card'
-    Object.assign(card.style, {
-      position: 'fixed', left: `${cellLeft}px`, top: `${cellBottom}px`,
-      width: '248px', maxHeight: '260px', overflowY: 'auto',
-      background: 'var(--gray-11)', border: '1px solid var(--gray-8)',
-      borderRadius: 'var(--radius-md)', boxShadow: '0 8px 28px rgba(0, 0, 0, 0.6)',
-      outline: 'none', padding: '4px', boxSizing: 'border-box',
-    })
-
-    // The query line only appears once there is something to report, so an
-    // untouched menu looks exactly like the one that shipped before.
-    const queryEl = document.createElement('div')
-    queryEl.className = 'term-mention-query'
-    Object.assign(queryEl.style, {
-      display: 'none', gap: '8px', alignItems: 'center', padding: '4px 8px 6px',
-      margin: '0 0 4px', borderBottom: '1px solid var(--gray-9)',
-      color: 'var(--gray-4)', fontSize: '12px',
-    })
-    const queryTextEl = document.createElement('span')
-    Object.assign(queryTextEl.style, { flex: '1', color: 'var(--gray-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })
-    const queryCountEl = document.createElement('span')
-    queryEl.append(queryTextEl, queryCountEl)
-
-    const listEl = document.createElement('div')
-    card.append(queryEl, listEl)
-
-    let query = ''
-    let selectedIdx = 0
-    /** Addresses ticked with Space, in tick order — the order they are inserted. */
-    const checked: string[] = []
-    let visible: MentionCandidate[] = candidates
-    const rows: HTMLElement[] = []
-
-    function renderSelection(): void {
-      rows.forEach((row, i) => {
-        const on = i === selectedIdx
-        row.style.background = on ? 'var(--gray-9)' : ''
-        row.classList.toggle('is-selected', on)
-      })
-      rows[selectedIdx]?.scrollIntoView({ block: 'nearest' })
-    }
-
-    /** Address text with the matched run tinted, so a filtered list shows WHY
-     *  each row survived. Built from indexOf rather than a regex: an address is
-     *  arbitrary user text and would otherwise need escaping. */
-    function appendHighlighted(el: HTMLElement, address: string): void {
-      // Same folding as filterMentionCandidates, so the tinted run is the run
-      // that matched. Offsets are only trusted when folding kept the length
-      // (it does for case and full-width ↔ half-width); otherwise skip the tint.
-      const folded = foldMentionText(address)
-      const needle = foldMentionText(query)
-      const at = query && folded.length === address.length ? folded.indexOf(needle) : -1
-      if (at < 0 || needle.length !== query.length) { el.textContent = address; return }
-      const hit = document.createElement('span')
-      hit.className = 'term-mention-hit'
-      hit.textContent = address.slice(at, at + query.length)
-      Object.assign(hit.style, { color: 'var(--blue-2)', fontWeight: '700' })
-      el.append(
-        document.createTextNode(address.slice(0, at)),
-        hit,
-        document.createTextNode(address.slice(at + query.length))
-      )
-    }
-
-    function buildRows(): void {
-      listEl.replaceChildren()
-      rows.length = 0
-      // Headers only earn their space when they separate something: a filtered
-      // list is usually one group, and a lone header above every row is noise.
-      const groups = new Set(visible.map((c) => c.group).filter(Boolean))
-      const showGroups = groups.size > 1
-      let lastGroup: string | undefined
-      visible.forEach((cand, i) => {
-        if (showGroups && cand.group && cand.group !== lastGroup) {
-          lastGroup = cand.group
-          const hdr = document.createElement('div')
-          hdr.className = 'term-mention-group'
-          // Keyed on `group` (a path for workspace sections), titled with
-          // `groupLabel` — never print a raw key at the user.
-          hdr.textContent = cand.groupLabel ?? cand.group
-          Object.assign(hdr.style, {
-            padding: '6px 8px 3px', color: 'var(--gray-4)', fontSize: '10.5px',
-            letterSpacing: '0.06em', textTransform: 'uppercase',
-          })
-          listEl.appendChild(hdr)
-        }
-        const row = document.createElement('div')
-        row.className = 'term-mention-row'
-        row.dataset.address = cand.address
-        Object.assign(row.style, {
-          display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '5px 8px', cursor: 'pointer', color: 'var(--gray-3)',
-          fontSize: '13px', whiteSpace: 'nowrap',
-          // Inset and rounded, so the selection reads as one item rather than a
-          // band running edge to edge across the card.
-          borderRadius: 'var(--radius-xs)',
-        })
-
-        const isChecked = checked.includes(cand.address)
-        const box = document.createElement('span')
-        box.className = 'term-mention-box'
-        row.classList.toggle('is-checked', isChecked)
-        Object.assign(box.style, {
-          flex: 'none', width: '11px', height: '11px', borderRadius: '3px',
-          border: `1px solid ${isChecked ? 'var(--blue-2)' : 'var(--gray-4)'}`,
-          background: isChecked ? 'var(--blue-2)' : 'transparent',
-        })
-
-        const dot = document.createElement('span')
-        dot.className = 'term-mention-dot'
-        if (cand.status) dot.dataset.status = cand.status
-        const fill = mentionStatusColor(cand.status)
-        Object.assign(dot.style, {
-          flex: 'none', width: '7px', height: '7px', borderRadius: '50%',
-          background: fill || 'transparent',
-          border: fill ? 'none' : '1px solid var(--gray-4)',
-        })
-
-        const name = document.createElement('span')
-        name.className = 'term-mention-name'
-        Object.assign(name.style, { flex: '1', overflow: 'hidden', textOverflow: 'ellipsis' })
-        appendHighlighted(name, cand.address)
-
-        row.append(box, dot, name)
-        if (cand.statusLabel) {
-          const tag = document.createElement('span')
-          tag.className = 'term-mention-status'
-          tag.textContent = cand.statusLabel
-          Object.assign(tag.style, { flex: 'none', color: 'var(--gray-4)', fontSize: '11px' })
-          row.appendChild(tag)
-        }
-
-        row.addEventListener('mouseenter', () => { selectedIdx = i; renderSelection() })
-        row.addEventListener('mousedown', (e) => { e.preventDefault(); selectedIdx = i; pick() })
-        rows.push(row)
-        listEl.appendChild(row)
-      })
-    }
-
-    function renderQueryLine(): void {
-      const show = query !== '' || checked.length > 0
-      queryEl.style.display = show ? 'flex' : 'none'
-      if (!show) return
-      queryTextEl.textContent = query ? `@${query}` : ''
-      queryCountEl.textContent = checked.length
-        ? `✓ ${checked.length}`
-        : `${visible.length}`
-    }
-
-    /** Re-derive the visible list from the current query and redraw. Returns
-     *  false when nothing matches — the caller closes the menu and hands the
-     *  prompt back to the CLI's own completion. */
-    function refilter(): boolean {
-      const next = filterMentionCandidates(candidates, query)
-      if (!next.length) return false
-      const keep = visible[selectedIdx]?.address
-      visible = next
-      const at = keep ? next.findIndex((c) => c.address === keep) : -1
-      selectedIdx = at >= 0 ? at : 0
-      buildRows()
-      renderQueryLine()
-      renderSelection()
-      placeCard()
-      return true
-    }
-
-    function toggleCheck(): void {
-      const cand = visible[selectedIdx]
-      if (!cand) return
-      const at = checked.indexOf(cand.address)
-      if (at >= 0) {
-        checked.splice(at, 1)
-      } else if (cand.address === MENTION_BROADCAST_ADDRESS) {
-        // Broadcast and roll-call are different gestures — "everyone" plus two
-        // named panes would send those two twice.
-        checked.length = 0
-        checked.push(cand.address)
-      } else {
-        const bc = checked.indexOf(MENTION_BROADCAST_ADDRESS)
-        if (bc >= 0) checked.splice(bc, 1)
-        checked.push(cand.address)
-      }
-      buildRows()
-      renderQueryLine()
-      renderSelection()
-    }
-
-    function pick(): void {
-      // No ticks means the highlighted row — so a user who never discovers
-      // multi-select keeps the single-pick behaviour exactly as it was.
-      const addresses = checked.length ? [...checked] : [visible[selectedIdx]?.address].filter(Boolean) as string[]
+  // The public terminal mention menu owns the imperative overlay, filtering,
+  // selection, and document-level keyboard handling. Host state remains here.
+  const mentionMenu = createTerminalMentionMenu({
+    terminal: term,
+    host: () => mountedEl,
+    onPick: (query, addresses) => {
       const data = buildMentionPickData(query, addresses)
-      closeMentionMenu()
-      term.focus()
       if (!data || !inputTransportReady()) return
-      // This write bypasses term.onData, so nothing else will correct the draft
-      // buffer that decides whether the pane counts as "being typed at".
       inputBuffer = applyMentionPickToInput(inputBuffer, query, addresses)
       syncDraft()
       void terminalPort.input(sessionId.value, data, undefined, { human: true })
       opts?.onMentionPick?.(addresses)
-    }
-
-    /** Typed text arriving through term.onData while the menu is open. It has
-     *  already reached the PTY and inputBuffer by the ordinary path; the menu
-     *  only narrows the list. An IME commit lands here as one multi-character
-     *  chunk, which is the whole reason typing is read from onData rather than
-     *  keydown — during composition keydown carries pre-edit keystrokes, never
-     *  the text the user meant. */
-    function onTypedData(data: string): void {
-      if (data === '\x7f') {
-        // Backspace past the query eats the '@' itself: nothing left to narrow.
-        if (!query) { closeMentionMenu(); return }
-        query = [...query].slice(0, -1).join('')
-      } else if (/[\x00-\x1f]/.test(data)) {
-        // Control bytes and terminal reports (focus, mouse) are not typing.
-        return
-      } else {
-        query += data
-      }
-      if (!refilter()) closeMentionMenu()
-    }
-
-    /** Anchor the card under the cursor cell, clamped to the viewport. Re-run
-     *  after the list changes size: a filter that shortens the card would
-     *  otherwise leave a card flipped above the cursor floating away from it. */
-    function placeCard(): void {
-      const cardRect = card.getBoundingClientRect()
-      let left = cellLeft
-      let top = cellBottom
-      if (left + cardRect.width > window.innerWidth) left = window.innerWidth - cardRect.width - 8
-      if (left < 4) left = 4
-      if (top + cardRect.height > window.innerHeight) top = cellTop - cardRect.height  // flip above
-      if (top < 4) top = 4
-      card.style.left = `${left}px`
-      card.style.top = `${top}px`
-    }
-
-    buildRows()
-    root.appendChild(card)
-    document.body.appendChild(root)
-    placeCard()
-
-    // Document-capture keydown: intercept the menu's keys before xterm's textarea
-    // can see them (capture phase + stopPropagation), so the CLI receives nothing
-    // it should not while the menu is open. Every other key falls through to
-    // xterm untouched — printable ones come back as term.onData, where
-    // onTypedData narrows the list (see the header note).
-    const onDocKeydown = (e: KeyboardEvent): void => {
-      // IME guard: while a composition is live, e.key is a raw pre-edit
-      // keystroke ('ㄒ', 'j', Enter to pick a candidate), NOT committed text.
-      // Acting on it would steal the Enter/Backspace the IME needs. Let the
-      // browser drive the composition; the committed text arrives through
-      // term.onData and narrows the list from there.
-      //
-      // MUST stay the first branch: every branch below assumes e.key is real.
-      if (e.isComposing || e.keyCode === 229) return
-      if (e.key === 'ArrowDown') {
-        e.preventDefault(); e.stopPropagation()
-        if (selectedIdx < visible.length - 1) { selectedIdx++; renderSelection() }
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault(); e.stopPropagation()
-        if (selectedIdx > 0) { selectedIdx--; renderSelection() }
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault(); e.stopPropagation()
-        pick()
-      } else if (e.key === 'Escape') {
-        e.preventDefault(); e.stopPropagation()
-        // Deliberately does NOT erase the query: the characters are already on
-        // the prompt, and taking them back would undo typing the user meant.
-        closeMentionMenu(); term.focus()
-      } else if ((e.metaKey || e.ctrlKey) && e.key === ' ') {
-        // Switching input source is how a CJK user reaches the keyboard they
-        // came to search with, so it is the one chord that must not read as
-        // "cancel": closing here lands exactly on the moment they were about
-        // to start typing Chinese. Let it through untouched and keep the menu
-        // open — whatever they commit afterwards arrives through term.onData
-        // and narrows the list like any other typing.
-        //
-        // Stays ABOVE the chord branch, which would otherwise close, and above
-        // the Space branch, which would otherwise tick a row.
-      } else if (e.metaKey || e.ctrlKey || e.altKey) {
-        // A shortcut chord (Cmd+A, etc.) — cancel the menu but let the chord
-        // through rather than mangling it into a literal PTY keystroke. Refocus
-        // the terminal so the chord (e.g. Cmd+V paste) lands there and typing
-        // continues — closing the focused card would otherwise drop focus to
-        // <body>, swallowing the chord and every keystroke after it.
-        closeMentionMenu(); term.focus()
-      } else if (e.key === ' ') {
-        e.preventDefault(); e.stopPropagation()
-        toggleCheck()
-      }
-      // Backspace and printable keys fall through: xterm turns them into
-      // onData ('\x7f', the character, or an IME-committed string), which
-      // maintains inputBuffer as usual and then reaches onTypedData.
-    }
-
-    root.addEventListener('mousedown', (e) => { if (e.target === root) { closeMentionMenu(); term.focus() } })
-    // A click on the card (scrollbar, header) must not pull focus out of the
-    // terminal: the textarea is where the next keystroke — and any IME
-    // composition — has to land. Row picks already prevent default themselves.
-    card.addEventListener('mousedown', (e) => e.preventDefault())
-    document.addEventListener('keydown', onDocKeydown, true)
-    _mentionMenuOnData = onTypedData
-
-    _mentionMenuCleanup = (): void => {
-      _mentionMenuOnData = null
-      document.removeEventListener('keydown', onDocKeydown, true)
-      root.remove()
-    }
-
-    renderQueryLine()
-    renderSelection()
-  }
+    },
+  })
 
   let inputDisposer: { dispose(): void } | null = null
   let outputUnsub: (() => void) | null = null
@@ -2294,6 +1300,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   let _cmdKeyDown: ((e: KeyboardEvent) => void) | null = null
   let _cmdKeyUp: ((e: KeyboardEvent) => void) | null = null
   let _cmdClickHandler: ((e: MouseEvent) => void) | null = null
+  let _linkProviderDisposer: (() => void) | null = null
+  let _filePickerCloser: (() => void) | null = null
   let _mousePosTracker: ((e: MouseEvent) => void) | null = null
   let _pasteHandler: ((e: ClipboardEvent) => void) | null = null
   // Whether THIS pane's xterm textarea currently holds focus. Used to publish
@@ -2630,229 +1638,40 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     term.textarea?.addEventListener('compositionstart', _onCompositionStart)
     term.textarea?.addEventListener('compositionend', _onCompositionEnd)
 
-    // Anchor for Shift+Arrow keyboard selection
-    let selAnchorX = -1
-    let selAnchorY = -1
-
-    // Intercept wheel events to scroll xterm's scrollback buffer.
-    // Prevents xterm's alternateScroll mode from converting trackpad swipes
-    // into arrow-key escape codes that navigate readline history.
-    let scrollRemainder = 0
-    term.attachCustomWheelEventHandler((e: WheelEvent) => {
-      // Alternate buffer = TUI app (Claude Code, Codex, etc.) is active.
-      // Only forward wheel events to the PTY when the app actually enabled
-      // mouse tracking (vim, htop, ...). Without mouse tracking, xterm's
-      // alternateScroll fallback converts each wheel notch into an ↑/↓ arrow
-      // escape sequence, which agent CLIs interpret as readline history
-      // recall — scrolling up would pull the previous submitted prompt into
-      // the input line. Swallow the event instead (scrollLines is a no-op in
-      // alt buffer, so there is nothing else useful to do with it).
-      if (term.buffer.active.type === 'alternate') {
-        const forward = term.modes.mouseTrackingMode !== 'none'
-        // A forwarded wheel event triggers a shifted-viewport repaint that
-        // must not read as agent work — arm the scroll grace (see appendClean).
-        if (forward) {
-          const now = Date.now()
-          // Carry the activity clock through the scroll. Output arriving inside
-          // the grace can't advance it (a repaint is indistinguishable from real
-          // work there), so a scroll lasting longer than IDLE_CONFIRM_MS used to
-          // age out a run that was still going: displayStatus's silence timeout
-          // reads the frozen lastCleanBurstAt and reports idle while the agent
-          // is visibly working. Gate it on RUNNING actually holding right now,
-          // so scrolling a pane that already went idle cannot resurrect the
-          // badge — the same timeout that decides the badge decides this.
-          if (runningLatched.value && now - lastCleanBurstAt.value <= IDLE_CONFIRM_MS) {
-            lastCleanBurstAt.value = now
-          }
-          lastScrollAt.value = now
-        }
-        return forward
-      }
-      // Main buffer: accumulate pixel-delta for smooth trackpad scrollback.
-      // deltaY units depend on deltaMode: LINE → lines, PAGE → pages, PIXEL →
-      // pixels. PAGE mode (some mice / accessibility settings) reports ~1 per
-      // notch; without this branch it fell through to the pixel /3 path and
-      // scrolled ~0.3 line per notch (effectively stuck).
-      let delta: number
-      if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) delta = e.deltaY
-      else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta = e.deltaY * term.rows
-      else delta = e.deltaY / 3
-      scrollRemainder += delta
-      const lines = Math.trunc(scrollRemainder)
-      scrollRemainder -= lines
-      if (lines !== 0) term.scrollLines(lines)
-      return false
-    })
-
-    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if (e.type !== 'keydown') return true
-      // A keyCode 229 that the browser does not consider part of a composition,
-      // while xterm still believes one is running, is only reachable once the
-      // helper has gone stale: a genuine first IME keystroke arrives before
-      // compositionstart (xterm still false), and a genuine in-flight one
-      // reports composing on both sides. Unlatch before xterm swallows this key.
-      if (e.keyCode === 229 && !e.isComposing) finalizeStaleComposition()
-      // IME guard: allow the browser to process composition (e.g. Zhuyin/Pinyin)
-      if (e.isComposing) return true
-
-      const buf = term.buffer.active
-      const curX = buf.cursorX
-      const curY = buf.baseY + buf.cursorY
-
-      // ── Shift/Ctrl/Cmd+Enter: newline without submitting ──────────────────
-      // Traditional PTYs do not preserve modifiers on Enter, so encode the
-      // chord for the active agent's input protocol (CSI-u for Codex, bracketed
-      // paste for modern TUIs, Ctrl+V for bash).
-      //
-      // Cmd+Enter is free everywhere: macOS never delivers it to a PTY. Ctrl+
-      // Enter is NOT — a plain shell receives it as a bare Enter and runs the
-      // command, so claiming it is limited to agent panes, where the CLI's own
-      // prompt is the thing being edited.
-      const isAgentPane = !!activeAgentKey && activeAgentKey !== 'terminal'
-      const newlineChord =
-        (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey) ||
-        (isAgentPane && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) ||
-        (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey)
-      if (newlineChord && e.key === 'Enter') {
-        e.preventDefault()
-        e.stopPropagation()
-        pasteText(encodeShiftEnter(agentProfile(activeAgentKey)), HUMAN_KEY)
-        return false
-      }
-
-      // Every branch below that sends bytes itself and returns false MUST also
-      // call e.preventDefault(): returning false only stops xterm's handling,
-      // not the browser default. Without it the hidden helper-textarea caret
-      // moves away from the end of its value, and xterm's CompositionHelper
-      // (which anchors compositions at value.length) then commits stale text
-      // on the next IME input.
-
-      // ── Shift+←/→: extend selection character by character ────────────────
-      if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey &&
-          (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-        e.preventDefault()
-        if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
-        const newX = e.key === 'ArrowLeft' ? Math.max(0, curX - 1) : Math.min(term.cols - 1, curX + 1)
-        const len = Math.abs(selAnchorX - newX)
-        if (len > 0) term.select(Math.min(selAnchorX, newX), selAnchorY, len)
-        else term.clearSelection()
-        pasteText(e.key === 'ArrowLeft' ? '\x1b[D' : '\x1b[C', HUMAN_KEY)
-        return false
-      }
-
-      // ── Cmd+Shift+←: select to beginning of line ──────────────────────────
-      if (e.metaKey && e.shiftKey && e.key === 'ArrowLeft') {
-        e.preventDefault()
-        if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
-        if (curX > 0) term.select(0, curY, curX)
-        else term.clearSelection()
-        pasteText('\x01', HUMAN_KEY)
-        return false
-      }
-
-      // ── Cmd+Shift+→: select to end of line ────────────────────────────────
-      if (e.metaKey && e.shiftKey && e.key === 'ArrowRight') {
-        e.preventDefault()
-        if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
-        const line = buf.getLine(curY)
-        const lineEnd = line ? line.translateToString(true).length : term.cols
-        const endX = Math.max(lineEnd, curX)
-        if (endX > curX) term.select(curX, curY, endX - curX)
-        else term.clearSelection()
-        pasteText('\x05', HUMAN_KEY)
-        return false
-      }
-
-      // ── Delete/Backspace with active selection: delete the selected region ───
-      if (selAnchorX >= 0 && (e.key === 'Backspace' || e.key === 'Delete') &&
-          !e.metaKey && !e.altKey) {
-        e.preventDefault()
-        const count = Math.abs(curX - selAnchorX)
-        if (count > 0) {
-          // cursor right of anchor → backspace; cursor left → forward-delete
-          pasteText(curX > selAnchorX ? '\x7f'.repeat(count) : '\x1b[3~'.repeat(count), HUMAN_KEY)
-        }
-        selAnchorX = -1; selAnchorY = -1
-        term.clearSelection()
-        return false
-      }
-
-      // ── Clear selection for all other keys (except copy/select-all/etc) ────
-      const keepForCmd = e.metaKey && 'cavz'.includes(e.key.toLowerCase())
-      const isModifierOnly = ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)
-      if (!keepForCmd && !isModifierOnly) {
-        selAnchorX = -1
-        selAnchorY = -1
-        term.clearSelection()
-      }
-
-      // ── Cmd+C: copy the terminal's selection ──────────────────────────────
-      // xterm's own copy handler fires on the DOM `copy` event, which needs a
-      // DOM selection — but `.xterm` is `user-select: none` (xterm.css), so a
-      // terminal selection never becomes one and Cmd+C silently copied
-      // nothing. Write xterm's own selection out instead. With no selection,
-      // fall through untouched so Cmd+C keeps its current (no-op) behaviour.
-      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'c') {
-        const selection = term.getSelection()
-        if (selection) {
-          e.preventDefault()
-          _lastCopyOkAt = Date.now()  // suppresses a late copy-empty from main
-          // Two things this has to report. Chromium rejects writeText when the
-          // document is not focused, and the key is already swallowed by then,
-          // so a rejection is a copy the user believes happened and did not.
-          // And the Edit > Copy accelerator may claim ⌘C before this handler
-          // ever runs (menu.ts binds CmdOrCtrl+C, and native accelerators fire
-          // first) — so the success line is what tells the two copy paths
-          // apart in the log when a copy goes missing.
-          // Holding ⌘C auto-repeats keydown at the OS rate, so the log is gated
-          // on the first press: what matters is which path ran and whether it
-          // worked, not one WebSocket message per repeat.
-          const firstPress = !e.repeat
-          void navigator.clipboard.writeText(selection).then(
-            () => {
-              if (firstPress) {
-                _clipboardDiag(`pane=${paneId} Cmd+C copied ${selection.length} chars (renderer path)`)
-              }
-            },
-            (err) => {
-              if (firstPress) {
-                _clipboardFailure(
-                  `pane=${paneId} Cmd+C clipboard write rejected (${selection.length} chars): ${String(err)}`,
-                  'copy-failed',
-                  selection.length
-                )
-              }
+    const inputHandlers = createTerminalInputHandlers({
+      terminal: term,
+      isAgentPane: () => !!activeAgentKey && activeAgentKey !== 'terminal',
+      send: (text) => { void pasteText(text, HUMAN_KEY) },
+      encodeNewline: () => encodeShiftEnter(agentProfile(activeAgentKey)),
+      finalizeStaleComposition,
+      reportEmptyCopy: () => reportEmptyCopy(),
+      copy: (selection, firstPress = true) => {
+        _lastCopyOkAt = Date.now()
+        void navigator.clipboard.writeText(selection).then(
+          () => {
+            if (firstPress) _clipboardDiag(`pane=${paneId} Cmd+C copied ${selection.length} chars (renderer path)`)
+          },
+          (err) => {
+            if (firstPress) {
+              _clipboardFailure(
+                `pane=${paneId} Cmd+C clipboard write rejected (${selection.length} chars): ${String(err)}`,
+                'copy-failed',
+                selection.length
+              )
             }
-          )
-          return false
-        } else {
-          // Falls through untouched — the menu path still runs exactly as it
-          // does today. All this adds is a word about the empty clipboard the
-          // user is otherwise left to discover on the next paste.
-          reportEmptyCopy()
+          }
+        )
+      },
+      onScroll: () => {
+        const now = Date.now()
+        if (runningLatched.value && now - lastCleanBurstAt.value <= IDLE_CONFIRM_MS) {
+          lastCleanBurstAt.value = now
         }
-      }
-
-      // Font zoom (⌘+ / ⌘- / ⌘= / ⌘0) is NOT handled here: it applies to every
-      // pane at once and must work regardless of which terminal holds focus, so
-      // it lives on a window-level listener (see useTerminalFontSize).
-
-      // ── macOS cursor shortcuts (no Shift) ──────────────────────────────────
-      if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x15', HUMAN_KEY); return false }
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { e.preventDefault(); pasteText('\x01', HUMAN_KEY); return false }
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { e.preventDefault(); pasteText('\x05', HUMAN_KEY); return false }
-      if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x17', HUMAN_KEY); return false }
-
-      // App reserves Ctrl+1..9 for CLI quick-select (see keybindings/defaults).
-      // The central dispatcher normally consumes them, but if it misses (e.g. an
-      // IME reports a non-digit `e.key`) they must never leak into the PTY. Match
-      // on the physical key so the guard holds regardless of layout/IME.
-      if (e.ctrlKey && !e.metaKey && !e.altKey && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
-        e.preventDefault()
-        return false
-      }
-      return true
+        lastScrollAt.value = now
+      },
     })
+    term.attachCustomWheelEventHandler(inputHandlers.wheelHandler)
+    term.attachCustomKeyEventHandler(inputHandlers.keyHandler)
     // Make the whole pane click-focusable so the user can type immediately.
     el.tabIndex = 0
     el.style.cursor = 'text'
@@ -2899,8 +1718,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         e.preventDefault()
         e.stopPropagation()
         if (term.textarea) term.textarea.value = ''
-        selAnchorX = -1
-        selAnchorY = -1
+        inputHandlers.resetSelection()
         // Sent unquoted: the generated name has no spaces, so the shell is
         // happy and an agent scanning for a readable path is not tripped up by
         // quotes it may not strip.
@@ -2936,8 +1754,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // anchor has to go with it. ⌘V is on the keepForCmd list below, so it
       // survives the key handler — and a stale anchor makes the next Backspace
       // take the "delete the selection" branch and emit a burst of deletes.
-      selAnchorX = -1
-      selAnchorY = -1
+      inputHandlers.resetSelection()
     }
     el.addEventListener('paste', _pasteHandler, true)
 
@@ -2969,266 +1786,77 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     window.addEventListener('keydown', _cmdKeyDown)
     window.addEventListener('keyup', _cmdKeyUp)
 
-    term.registerLinkProvider(buildFileLinkProvider(term, () => _isCmdHeld))
-
-    function showTerminalFilePicker(
-      initialQuery: string,
-      lineNum: number | undefined,
-      preferredAbsPath?: string,
-      displayText?: string
-    ): void {
-      document.querySelector('.term-file-picker-root')?.remove()
-      const wsPath = opts?.workspacePath
-
-      const root = document.createElement('div')
-      root.className = 'term-file-picker-root'
-      // Same band as the mention menu, and for the same reason: over every
-      // layer the app draws, under the window's own controls.
-      Object.assign(root.style, {
-        position: 'fixed', inset: '0', zIndex: 'calc(var(--z-toast) + 200)',
-        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-        paddingTop: '80px', background: 'rgba(0,0,0,0.35)',
-      })
-
-      const card = document.createElement('div')
-      Object.assign(card.style, {
-        background: '#161b22', border: '1px solid #30363d', borderRadius: '8px',
-        width: '560px', maxHeight: '420px', display: 'flex', flexDirection: 'column',
-        boxShadow: '0 16px 48px rgba(0,0,0,0.8)', overflow: 'hidden',
-      })
-
-      const pickerInput = document.createElement('input')
-      // Show the full clicked path in the box for context, but the actual search
-      // (see doSearch) still queries by basename — the backend only substring-
-      // matches filenames, not full relative paths.
-      pickerInput.value = displayText ?? initialQuery
-      pickerInput.placeholder = 'Search files...'
-      Object.assign(pickerInput.style, {
-        background: 'transparent', border: 'none', borderBottom: '1px solid #21262d',
-        color: '#e6edf3', fontSize: '14px', padding: '12px 16px', outline: 'none',
-        fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
-      })
-
-      const itemList = document.createElement('div')
-      Object.assign(itemList.style, { overflowY: 'auto', flex: '1' })
-
-      card.appendChild(pickerInput)
-      card.appendChild(itemList)
-      root.appendChild(card)
-      document.body.appendChild(root)
-
-      let currentItems: PickerItem[] = []
-      let selectedIdx = 0
-      let debounceTimer: ReturnType<typeof setTimeout>
-      // Distinguishes "still looking" from "nothing matched" in the empty
-      // state, so the picker is never a silent blank while the backend works.
-      let searchPending = true
-
-      function renderList(): void {
-        itemList.innerHTML = ''
-        if (!currentItems.length) {
-          const msg = document.createElement('div')
-          msg.textContent = searchPending ? 'Searching…' : 'No files found'
-          Object.assign(msg.style, { padding: '10px 16px', color: '#6e7681', fontSize: '12px' })
-          itemList.appendChild(msg)
-          return
-        }
-        currentItems.forEach((item, i) => {
-          const row = document.createElement('div')
-          Object.assign(row.style, {
-            padding: '7px 16px', cursor: 'pointer',
-            display: 'flex', gap: '10px', alignItems: 'baseline',
-            background: i === selectedIdx ? 'rgba(56,139,253,0.2)' : '',
-          })
-          const nameSpan = document.createElement('span')
-          nameSpan.textContent = item.name
-          Object.assign(nameSpan.style, { color: '#e6edf3', fontSize: '13px' })
-          const dirSpan = document.createElement('span')
-          dirSpan.textContent = collapseHomePath(item.dir, _homeDir) || '/'
-          Object.assign(dirSpan.style, { color: '#8b949e', fontSize: '11px' })
-          row.appendChild(nameSpan)
-          row.appendChild(dirSpan)
-          row.addEventListener('mouseenter', () => { selectedIdx = i; renderList() })
-          row.addEventListener('mousedown', (e) => { e.preventDefault(); close(); openInEditor(terminalPort, item.abs, lineNum, wsPath) })
-          itemList.appendChild(row)
-        })
-      }
-
-      // ESC closes the picker no matter where focus went — a click on the card,
-      // or xterm's hidden textarea grabbing focus back, used to leave ESC dead
-      // because it was bound to the input alone. Listen at the document capture
-      // layer for the picker's lifetime and detach on close.
-      const onDocKeydown = (e: KeyboardEvent): void => {
-        if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close() }
-      }
-      function close(): void {
-        clearTimeout(debounceTimer)
-        document.removeEventListener('keydown', onDocKeydown, true)
-        root.remove()
-      }
-
-      async function doSearch(q: string): Promise<void> {
-        searchPending = true
-        // Workspace substring search — only possible when this pane has a
-        // workspace and the user typed something. When it can't run, results
-        // stay empty but the click-resolved path below still surfaces.
-        let items: PickerItem[] = []
-        if (q.trim() && wsPath) {
-          try {
-            const r = await terminalPort.listFiles(wsPath, q, 20)
-            items = (r.ok && r.payload?.files ? r.payload.files : []).map((rel) => {
-              const parts = rel.split('/')
-              const name = parts.pop() ?? rel
-              return { abs: `${wsPath}/${rel}`, name, dir: parts.join('/') }
-            })
-          } catch { items = [] }
-        }
-        // Surface the click-resolved absolute path (pre-selected) even when the
-        // search couldn't run (no workspace) or didn't include it (file outside
-        // the workspace) — otherwise a verified-existing file shows as missing.
-        currentItems = mergePreferredPath(items, preferredAbsPath, q === initialQuery)
-        searchPending = false
-        selectedIdx = 0
-        renderList()
-      }
-
-      pickerInput.addEventListener('input', () => {
-        clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => void doSearch(pickerInput.value), 150)
-      })
-
-      pickerInput.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault()
-          if (selectedIdx < currentItems.length - 1) { selectedIdx++; renderList() }
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault()
-          if (selectedIdx > 0) { selectedIdx--; renderList() }
-        } else if (e.key === 'Enter') {
-          e.preventDefault()
-          const item = currentItems[selectedIdx]
-          if (item) { close(); openInEditor(terminalPort, item.abs, lineNum, wsPath) }
-        }
-      })
-
-      root.addEventListener('mousedown', (e) => { if (e.target === root) close() })
-      document.addEventListener('keydown', onDocKeydown, true)
-      pickerInput.focus()
-      pickerInput.select()
-      renderList() // show 'Searching…' immediately, never a silent blank list
-      void doSearch(initialQuery)
-    }
-
-    _cmdClickHandler = (event: MouseEvent) => {
-      if (!event.metaKey || event.button !== 0) return
-      const xtermScreen = el.querySelector('.xterm-screen')
-      if (!xtermScreen) return
-      const rect = xtermScreen.getBoundingClientRect()
-      const cellW = (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
-      const cellH = (term as any)._core?._renderService?.dimensions?.css?.cell?.height || 0
-      if (!cellW || !cellH) return
-      const col = Math.floor((event.clientX - rect.left) / cellW)
-      const row = Math.floor((event.clientY - rect.top) / cellH)
-      if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return
-      const bufferRow = term.buffer.active.viewportY + row
-      const group = getWrappedLineGroup(term, bufferRow)
-      // The click lands on a cell; the group's text positions are string
-      // offsets, which drift apart after any double-width (CJK) glyph.
-      const strCol = cellColToStrCol(term, bufferRow, col)
-      const clickPos = groupRowColToPos(group, bufferRow, strCol)
-
-      // A URL under the click routes straight to the default browser — checked
-      // before file paths, since a URL's path segment also matches FILE_LINK_RE.
-      const urlMatch = findUrlLinkMatchAt(group.fullText, clickPos, group.heuristicBreaks)
-      if (urlMatch) {
-        event.preventDefault()
-        event.stopPropagation()
-        void terminalPort.openExternal(urlMatch.href)
-        return
-      }
-
-      const match = findFileLinkMatchAt(group.fullText, clickPos)
-      if (!match) return
-      event.preventDefault()
-      event.stopPropagation()
-
-      // A find/ls block glues every adjacent path into one regex match; the
-      // piece under the click (split at rows that start a fresh '/' path) is
-      // the most likely reading. Fall back to the whole match (a path that
-      // happened to wrap right before a '/') and the clicked row's own token,
-      // letting the filesystem pick whichever actually exists.
-      const piece = splitMatchAtRowStarts(group, match.index, match.text)
-        .find((p) => clickPos >= p.index && clickPos < p.index + p.text.length)
-      const pieceRaw = piece?.text ?? match.text
-      const pieceStart = piece?.index ?? match.index
-      const rowText = term.buffer.active.getLine(bufferRow)?.translateToString(true) ?? ''
-      const singleMatch = findFileLinkMatchAt(rowText, strCol)
-      const singleRaw = singleMatch?.text
-      const wsPath = opts?.workspacePath
-
-      // A plan doc reference routes to its dedicated review window, not the
-      // generic file picker. extractPlanDocRelPath sheds any CJK prose the CLI
-      // wrapped around the path ("計畫已建立：…（stage:…"). Workspace stays this
-      // pane's own (resolve base intentionally unchanged) — a plan path that
-      // belongs to a different workspace falls through to the picker as before.
-      const planRel = extractPlanDocRelPath(pieceRaw) ?? extractPlanDocRelPath(match.text)
-      if (planRel && wsPath && terminalPort.openPlan) {
-        void terminalPort.openPlan({ workspacePath: wsPath, relPath: planRel })
-        return
-      }
-
-      const statOk = async (abs: string | undefined): Promise<boolean> => {
-        if (!abs) return false
+    const filePicker = createTerminalFilePicker({
+      query: async (q) => {
+        const wsPath = opts?.workspacePath
+        if (!q.trim() || !wsPath) return []
         try {
-          // Short timeout: a busy/disconnected backend must not stall the
-          // picker from opening — unverified just means fuzzy-search fallback.
-          const r = await terminalPort.statPath(abs, 1500)
-          return !!(r.ok && r.payload?.exists)
-        } catch { return false }
-      }
-      void (async () => {
-        const home = await fetchHomeDir(terminalPort)
-        const resolveAbs = (fp: string): string | undefined => {
-          const expanded = expandHomePath(fp, home)
-          return expanded.startsWith('/')
-            ? expanded
-            : wsPath ? `${wsPath}/${expanded.replace(/^\.\//, '')}` : undefined
+          const r = await terminalPort.listFiles(wsPath, q, 20)
+          return (r.ok && r.payload?.files ? r.payload.files : []).map((rel) => {
+            const parts = rel.split('/')
+            const name = parts.pop() ?? rel
+            return { abs: `${wsPath}/${rel}`, name, dir: parts.join('/') }
+          })
+        } catch { return [] }
+      },
+      onPick: (item, lineNum) => openInEditor(terminalPort, item.abs, lineNum, opts?.workspacePath),
+      collapsePath: (dir) => collapseHomePath(dir, _homeDir) || '/',
+    })
+    _filePickerCloser = filePicker.close
+
+    const links = installTerminalLinks({
+      terminal: term,
+      element: el,
+      isCmdHeld: () => _isCmdHeld,
+      sessionId: () => sessionId.value,
+      openExternal: (href) => terminalPort.openExternal(href),
+      workspacePath: () => opts?.workspacePath,
+      extractPlanDocRelPath,
+      openPlan: terminalPort.openPlan
+        ? ({ workspacePath, relPath }) => terminalPort.openPlan!({ workspacePath: workspacePath!, relPath })
+        : undefined,
+      openFilePicker: (request) => {
+        const wsPath = opts?.workspacePath
+        const statOk = async (abs: string | undefined): Promise<boolean> => {
+          if (!abs) return false
+          try {
+            const r = await terminalPort.statPath(abs, 1500)
+            return !!(r.ok && r.payload?.exists)
+          } catch { return false }
         }
-        // Raw tokens stat first — a filename that genuinely contains
-        // full-width punctuation must beat its punctuation-shed prefix
-        // (docs/README（中文）.md vs docs/README). The shed variants that
-        // follow are cut around the CLICK POSITION, so of two paths joined
-        // by 、 the one under the cursor is the candidate.
-        const shedPiece = shedCjkProse(pieceRaw, clickPos - pieceStart)
-        // Last resort: the whole tail from the first rooted path start —
-        // rescues folder names containing spaces/parens that truncate the
-        // regex match ("看護媒合平台 (1)/…"). Precise candidates keep priority.
-        const tail = rootedTailCandidate(group.fullText, clickPos)
-        const cands = [
-          pieceRaw, shedPiece,
-          match.text, shedCjkProse(match.text, clickPos - match.index),
-          singleRaw, singleMatch ? shedCjkProse(singleMatch.text, strCol - singleMatch.index) : undefined,
-          tail?.text, tail ? shedCjkProse(tail.text, clickPos - tail.index) : undefined,
-        ].filter((c, i, arr): c is string => !!c && arr.indexOf(c) === i)
-        const absList = cands.map((c) => resolveAbs(splitSuffix(c).filepath))
-        const stats = await Promise.all(absList.map(statOk))
-        const okIdx = stats.findIndex(Boolean)
-        // A verified .html inside this workspace opens rendered in the Plan
-        // window (same surface as plan docs), not as source in the mini-IDE.
-        if (okIdx >= 0) {
-          const reportRoute = htmlReportRoute(absList[okIdx]!, wsPath)
-          if (reportRoute && terminalPort.openPlan) {
-            void terminalPort.openPlan({ workspacePath: reportRoute.workspace_path, relPath: reportRoute.rel_path })
-            return
+        void (async () => {
+          const home = await fetchHomeDir(terminalPort)
+          const resolveAbs = (fp: string): string | undefined => {
+            const expanded = expandHomePath(fp, home)
+            return expanded.startsWith('/')
+              ? expanded
+              : wsPath ? `${wsPath}/${expanded.replace(/^\.\//, '')}` : undefined
           }
-        }
-        const chosenRaw = okIdx >= 0 ? cands[okIdx] : (shedPiece ?? pieceRaw)
-        const { filepath, line: lineNum } = splitSuffix(chosenRaw)
-        if (!filepath) return
-        const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
-        showTerminalFilePicker(basename, lineNum, okIdx >= 0 ? absList[okIdx] : undefined, filepath)
-      })()
-    }
+          const absList = request.candidates.map((c) => resolveAbs(splitTerminalLinkSuffix(c).filepath))
+          const stats = await Promise.all(absList.map(statOk))
+          const okIdx = stats.findIndex(Boolean)
+          if (okIdx >= 0) {
+            const reportRoute = htmlReportRoute(absList[okIdx]!, wsPath)
+            if (reportRoute && terminalPort.openPlan) {
+              void terminalPort.openPlan({ workspacePath: reportRoute.workspace_path, relPath: reportRoute.rel_path })
+              return
+            }
+          }
+          const chosenRaw = okIdx >= 0 ? request.candidates[okIdx] : request.fallback
+          const { filepath, line: lineNum } = splitTerminalLinkSuffix(chosenRaw)
+          if (!filepath) return
+          const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
+          filePicker.open({
+            initialQuery: basename,
+            lineNum,
+            preferredAbsPath: okIdx >= 0 ? absList[okIdx] : undefined,
+            displayText: filepath,
+          })
+        })()
+      },
+    })
+    _cmdClickHandler = links.handler
+    _linkProviderDisposer = links.dispose
     el.addEventListener('mousedown', _cmdClickHandler, { capture: true })
 
     mountedEl = el
@@ -3732,9 +2360,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // same event and must not read as a human at the keyboard.
       void terminalPort.input(sessionId.value, data, undefined, isTerminalReport(data) ? undefined : { human: true })
 
-      // An open @-mention menu narrows by what was just typed (this is also
-      // how IME-committed text reaches it — see openMentionMenu).
-      _mentionMenuOnData?.(data)
+      // The public menu narrows from the same onData stream, including IME commits.
+      mentionMenu.onData(data)
 
       // @-mention trigger. Capture the line BEFORE the '@' echoes (onData fires
       // before the PTY round-trips the echo, so readLineBeforeCursor still shows
@@ -3743,7 +2370,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       if (data === '@' || data === '＠') {
         const candidates = opts?.mentionCandidates?.() ?? []
         if (candidates.length && shouldOpenMentionMenu(data, readLineBeforeCursor())) {
-          setTimeout(() => openMentionMenu(candidates), 0)
+          setTimeout(() => mentionMenu.open(candidates), 0)
         }
       }
     })
@@ -3877,7 +2504,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // to the process's stdin before it has a chance to re-enable what it needs.
     // Bracketed paste is deliberately NOT reset: the PTY is the same live
     // process, so the mode the snapshot restores is the mode it is still in.
-    term.write(MOUSE_MODE_RESET)
+    term.write(TERMINAL_MOUSE_MODE_RESET)
     sessionId.value = prev
     status.value = 'running'
     if (reattachOpts?.agentKey) activeAgentKey = reattachOpts.agentKey
@@ -3921,7 +2548,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // Reset mouse tracking modes on reconnect for the same reason as tryReattach
     // — and leave bracketed paste alone for the same reason too. This path does
     // not even replay: xterm's view of the mode never stopped being correct.
-    term.write(MOUSE_MODE_RESET)
+    term.write(TERMINAL_MOUSE_MODE_RESET)
     cleanupSession()
     bindSessionHandlers()
     pendingReattachRedraw = true
@@ -4083,8 +2710,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         // Bracketed paste goes too, and only here: the snapshot just replayed
         // the OLD session's `?2004h`, but the process about to start is a new
         // one that has not asked for it yet.
-        term.write(MOUSE_MODE_RESET_NEW_PROCESS)
-        term.write('\r\n\x1b[2m\x1b[38;5;240m─── reconnected ───\x1b[0m\r\n')
+        term.write(TERMINAL_NEW_PROCESS_RESET)
+        term.write(TERMINAL_RECONNECTED_DIVIDER)
       }
     } else if (opts.replayScrollback && !snapshotReplayed) {
       // A handoff from the pane this one replaces (quota-failover restart):
@@ -4094,7 +2721,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // same reason. Nothing here goes to the PTY.
       snapshotReplayed = true
       term.write(opts.replayScrollback)
-      term.write(MOUSE_MODE_RESET_NEW_PROCESS)
+      term.write(TERMINAL_NEW_PROCESS_RESET)
       term.write('\r\n\x1b[2m\x1b[38;5;240m─── account switched ───\x1b[0m\r\n')
     }
     // Only resume spawns are throttled (they are the heavy ones). Acquire before
@@ -4419,7 +3046,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    * unbracketed multi-line paste reached it as one Enter per line — the first
    * line submits, the rest spill into the next prompt. That is the "paste gets
    * cut off" report, and the reset that caused it is gone from the live-PTY
-   * paths (see MOUSE_MODE_RESET), so xterm's view is now trustworthy there.
+   * paths (see TERMINAL_MOUSE_MODE_RESET), so xterm's view is now trustworthy there.
    *
    * The agent fallback below stays as a belt-and-braces for the one path that
    * still resets — a resume spawn — and for a CLI that enabled the mode before
@@ -4690,6 +3317,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     if (_cmdKeyUp) window.removeEventListener('keyup', _cmdKeyUp)
     if (mountedEl && _mousePosTracker) mountedEl.removeEventListener('mousemove', _mousePosTracker)
     if (mountedEl && _cmdClickHandler) mountedEl.removeEventListener('mousedown', _cmdClickHandler, { capture: true })
+    _linkProviderDisposer?.()
+    _linkProviderDisposer = null
     if (mountedEl && _pasteHandler) mountedEl.removeEventListener('paste', _pasteHandler, true)
     _selectionDisposer.dispose()
     _cancelSelectionPush()
@@ -4698,8 +3327,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       _emptyCopyReporter = undefined
       _reportSelection('') // a disposed pane must not keep answering Copy
     }
-    document.querySelector('.term-file-picker-root')?.remove()
-    closeMentionMenu()  // tear down any open @-mention menu (detaches doc listeners)
+    _filePickerCloser?.()
+    _filePickerCloser = null
+    mentionMenu.close()  // tear down any open @-mention menu (detaches doc listeners)
     term.textarea?.removeEventListener('focus', _onTermFocus)
     term.textarea?.removeEventListener('blur', _onTermBlur)
     window.removeEventListener('focus', _onWindowFocus)

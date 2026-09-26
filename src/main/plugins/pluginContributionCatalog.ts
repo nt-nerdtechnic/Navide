@@ -7,6 +7,7 @@ export type PluginContributionLocation =
   | 'left'
   | 'main'
   | 'window'
+  | 'detail'
 
 /** Public Host discovery record. It deliberately contains no live instance
  * identity; instance handles remain entirely inside the main process. */
@@ -19,6 +20,13 @@ export interface PluginContributionCatalogEntry {
   iconFile: string | null
   kind: 'custom'
   location: PluginContributionLocation
+  detailView?: string
+  targetSchema?: string
+  receives?: {
+    protocolVersion: 1
+    locations: Array<'left' | 'detail'>
+    editorTargets?: { protocolVersion: 1 }
+  }
   manifestOrder: number
 }
 
@@ -38,6 +46,9 @@ export function buildPluginContributionCatalog(
         iconFile: view.iconFile ?? null,
         kind: view.kind,
         location: view.location,
+        ...(view.detailView ? { detailView: view.detailView } : {}),
+        ...(view.targetSchema ? { targetSchema: view.targetSchema } : {}),
+        ...(view.receives ? { receives: view.receives } : {}),
         manifestOrder,
       }))
     )

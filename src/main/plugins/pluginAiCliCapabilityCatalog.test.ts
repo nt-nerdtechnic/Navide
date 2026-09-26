@@ -44,7 +44,7 @@ describe('public AI CLI capability catalog', () => {
       .filter((address) => address.startsWith('aiCli.'))
     const catalogAddresses = Object.keys(PUBLIC_CAPABILITY_CATALOG)
       .filter((address) => address.startsWith('aiCli.') && PUBLIC_CAPABILITY_CATALOG[address]?.kind === 'method')
-    expect(catalogAddresses).toEqual(schemaAddresses)
+    expect([...catalogAddresses].sort()).toEqual([...schemaAddresses].sort())
   })
 
   it('accepts Host-owned profile listing and tuple-owned resume requests', () => {

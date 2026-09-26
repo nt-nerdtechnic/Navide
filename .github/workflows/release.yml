@@ -157,8 +157,9 @@ jobs:
           test -n "${app_path}"
           test ! -e "${app_path}/Contents/Resources/plugins/plans/backend/navide-plans"
           test ! -e "${app_path}/Contents/Resources/plugins/plans/backend/navide-plans-go"
-          # …and the v2 package that replaces it does carry its backend.
-          test -x "${app_path}/Contents/Resources/plugins/navide-plans/backend/navide-plans"
+          # …and the exact selected v2 factory package carries its arm64 backend.
+          artifact_version="$(node -p "require('./package.json').version")"
+          test -x "${app_path}/Contents/Resources/official-artifacts/navide.plans/${artifact_version}/darwin-arm64/package/backend/navide-plans"
           # The voice sidecar is a loose Mach-O in Resources/bin; it must carry
           # the Developer ID signature with the hardened runtime flag.
           stt_bin="${app_path}/Contents/Resources/bin/navide-stt"
@@ -356,8 +357,9 @@ jobs:
           backend="$(find "${work}/squashfs-root/resources/bin" -maxdepth 1 -name 'agent_team_backend' -print -quit)"
           test -n "${backend}"
           file "${backend}" | grep -q 'ELF 64-bit'
-          # …and the v2 Plans package carries its Linux backend.
-          test -x "${work}/squashfs-root/resources/plugins/navide-plans/backend/navide-plans"
+          # …and the exact selected v2 factory package carries its Linux backend.
+          artifact_version="$(node -p "require('./package.json').version")"
+          test -x "${work}/squashfs-root/resources/official-artifacts/navide.plans/${artifact_version}/linux-x64/package/backend/navide-plans"
           rm -rf "${work}"
 
       - name: Attach installers to the workflow run
@@ -521,8 +523,9 @@ jobs:
           backend="$(find "${work}/squashfs-root/resources/bin" -maxdepth 1 -name 'agent_team_backend' -print -quit)"
           test -n "${backend}"
           file "${backend}" | grep -q 'ELF 64-bit.*aarch64'
-          # …and the v2 Plans package carries its Linux backend.
-          test -x "${work}/squashfs-root/resources/plugins/navide-plans/backend/navide-plans"
+          # …and the selected v2 Plans package carries its Linux backend.
+          artifact_version="$(node -p "require('./package.json').version")"
+          test -x "${work}/squashfs-root/resources/official-artifacts/navide.plans/${artifact_version}/linux-arm64/package/backend/navide-plans"
           rm -rf "${work}"
 
       - name: Attach installers to the workflow run
@@ -671,7 +674,8 @@ jobs:
           # and the v2 Plans package must carry its Windows backend. `test -f`
           # rather than `-x`: the executable bit means nothing on NTFS.
           test -f dist-release/win-unpacked/resources/bin/agent_team_backend.exe
-          test -f dist-release/win-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+          artifact_version="$(node -p "require('./package.json').version")"
+          test -f "dist-release/win-unpacked/resources/official-artifacts/navide.plans/${artifact_version}/win32-x64/package/backend/navide-plans.exe"
 
       - name: Attach installers to the workflow run
         # Every run, including a workflow_dispatch dry run: this is how a
@@ -843,14 +847,16 @@ jobs:
           test -f dist-release/latest.yml
           test "$(find dist-release -maxdepth 1 -name 'Navide-*-win-arm64.exe' | wc -l | tr -d ' ')" -eq 1
           test -f dist-release/win-arm64-unpacked/resources/bin/agent_team_backend.exe
-          test -f dist-release/win-arm64-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+          artifact_version="$(node -p "require('./package.json').version")"
+          plans_backend="dist-release/win-arm64-unpacked/resources/official-artifacts/navide.plans/${artifact_version}/win32-arm64/package/backend/navide-plans.exe"
+          test -f "${plans_backend}"
           # The point of this job is a native build, and an installer whose
           # payload is quietly x64 would run anyway — under Prism, exactly what
           # we are trying to stop. The COFF headers are the only witness.
           node scripts/check-pe-machine.mjs arm64 \
             dist-release/win-arm64-unpacked/Navide.exe \
             dist-release/win-arm64-unpacked/resources/bin/agent_team_backend.exe \
-            dist-release/win-arm64-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+            "${plans_backend}"
 
       - name: Fetch the x64 update manifest
         uses: actions/download-artifact@v7

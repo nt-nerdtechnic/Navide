@@ -15,6 +15,8 @@ function mockPlugins(overrides: Record<string, unknown> = {}) {
     ]),
     listFactoryPackages: vi.fn().mockResolvedValue([]),
     restoreFactoryPackage: vi.fn().mockResolvedValue({ ok: true }),
+    restart: vi.fn().mockResolvedValue({ ok: true }),
+    checkUpdates: vi.fn().mockResolvedValue([]),
     remove: vi.fn().mockResolvedValue({ ok: true }),
     ...overrides,
   }
@@ -237,7 +239,43 @@ describe('ExtensionsPane', () => {
 
 
 
+  it('offers an available Registry update before it is staged', async () => {
+    mockPlugins({
+      checkUpdates: vi.fn().mockResolvedValue([
+        { id: 'navide.mini-ide', namespace: 'navide', name: 'mini-ide', latestVersion: '2.0.0' },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
 
+    const row = wrapper.get('[data-id="navide.mini-ide"]')
+    expect(row.find('.ext-update-badge').text()).toContain('2.0.0')
+    expect(row.find('.ext-update').exists()).toBe(true)
+    expect(row.find('.ext-restart').exists()).toBe(false)
+  })
+
+  it('restarts a staged Registry update without offering a second install', async () => {
+    const listInstalled = vi.fn()
+      .mockResolvedValueOnce([{ id: 'navide.mini-ide', packageVersion: '1.0.0', pendingCandidateVersion: '2.0.0', requires: [], sensitive: [] }])
+      .mockResolvedValueOnce([{ id: 'navide.mini-ide', packageVersion: '2.0.0', requires: [], sensitive: [] }])
+    const api = mockPlugins({
+      listInstalled,
+      restart: vi.fn().mockResolvedValue({ ok: true }),
+      checkUpdates: vi.fn().mockResolvedValue([
+        { id: 'navide.mini-ide', namespace: 'navide', name: 'mini-ide', latestVersion: '2.0.0' },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    const row = wrapper.get('[data-id="navide.mini-ide"]')
+    expect(row.find('.ext-candidate').text()).toContain('2.0.0')
+    expect(row.find('.ext-update').exists()).toBe(false)
+    await row.get('.ext-restart').trigger('click')
+    await flushPromises()
+    expect(api.restart).toHaveBeenCalledWith('navide.mini-ide')
+    expect(row.find('.ext-candidate').exists()).toBe(false)
+  })
 
   it('removes an installed plugin', async () => {
     const api = mockPlugins()

@@ -25,7 +25,17 @@
         "location": "left",
         "title": "Git",
         "icon": "assets/git.png",
-        "entry": "frontend/left/index.html"
+        "entry": "frontend/left/index.html",
+        "detailView": "branch-detail"
+      },
+      {
+        "id": "branch-detail",
+        "kind": "custom",
+        "location": "detail",
+        "title": "Branch Comparison",
+        "icon": "assets/git.png",
+        "entry": "frontend/detail/index.html",
+        "targetSchema": "schemas/branch-comparison.json"
       },
       {
         "id": "window",

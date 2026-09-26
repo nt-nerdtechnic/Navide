@@ -2,8 +2,27 @@ import manifestV2Schema from './schemas/plugin-manifest-v2.schema.json' with { t
 import capabilitiesV1 from './schemas/capabilities-v1.json' with { type: 'json' }
 import executionPolicyV1Schema from './schemas/execution-policy-v1.schema.json' with { type: 'json' }
 import { canonicalHtmlPath, canonicalPackagePath } from './archive.js'
+import type { EditorFilesystemParams, EditorFilesystemResults } from './editorFilesystem.js'
+import type { EditorAiParams, EditorAiResults, EditorAiEvents } from './editorAi.js'
+import type { AiTerminalParams, AiTerminalResults } from './aiTerminal.js'
+import type { EditorNativeParams, EditorNativeResults, EditorNativeEvents } from './editorNative.js'
+import type { GitCapabilityParams, GitCapabilityResults } from './gitCapabilities.js'
+import type { GitAccountParams, GitAccountResults, GitCredentialEvents } from './gitAccounts.js'
+import type { IssueParams, IssueResults } from './issues.js'
+import type { EditorPreferenceParams, EditorPreferenceResults, EditorPreferenceEvents } from './editorPreferences.js'
+import type { FilePickerRequest } from './filePicker.js'
+export { validFilePickerRequest } from './filePicker.js'
+export type { FilePickerRequest } from './filePicker.js'
 
 export * from './archive.js'
+export * from './aiTerminal.js'
+export type { FileSearchOptions, EditorFilesystemParams, EditorFilesystemResults } from './editorFilesystem.js'
+export type { EditorAiParams, EditorAiResults, EditorAiEvents, EditorReviewResult } from './editorAi.js'
+export type { EditorNativeParams, EditorNativeResults, EditorNativeEvents, EditorFileSelection } from './editorNative.js'
+export * from './gitCapabilities.js'
+export * from './issues.js'
+export * from './editorPreferences.js'
+export type { GitAccountParams, GitAccountResults, GitAccountSummary } from './gitAccounts.js'
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -12,7 +31,8 @@ export type StorageGetResult =
   | { found: true; value: JsonValue }
   | { found: false; value: null }
 
-export const V2_VIEW_LOCATIONS = ['top', 'bottom', 'right', 'left', 'main', 'window'] as const
+export const V2_VIEW_LOCATIONS = ['top', 'bottom', 'right', 'left', 'main', 'window', 'detail'] as const
+export const V2_RECEIVER_LOCATIONS = ['left', 'detail'] as const
 export const V2_SYSTEM_NAMESPACES = ['fs', 'ui', 'aiCli'] as const
 export const V2_SHELL_MODES = ['allowlist', 'full'] as const
 export const EXECUTION_POLICY_SCHEMA_VERSION = 1 as const
@@ -34,6 +54,13 @@ export type PluginManifestV2Permissions = {
   shell?: PluginShellMode
 }
 
+export type PluginManifestV2Receiver = {
+  protocolVersion: 1
+  locations: (typeof V2_RECEIVER_LOCATIONS)[number][]
+  editorTargets?: { protocolVersion: 1 }
+  closeGuard?: { protocolVersion: 1 }
+}
+
 export type PluginManifestV2View = {
   id: string
   kind: 'custom'
@@ -41,6 +68,9 @@ export type PluginManifestV2View = {
   title: string
   icon?: string
   entry: string
+  detailView?: string
+  targetSchema?: string
+  receives?: PluginManifestV2Receiver
 }
 
 export type PluginManifestV2 = {
@@ -413,7 +443,7 @@ function parseViews(value: unknown): { views: PluginManifestV2View[] } {
   }
   const views = contributes.views.map((raw, index) => {
     const view = assertObject(raw, `manifest contributes.views[${index}]`)
-    assertOnlyKeys(view, ['id', 'kind', 'location', 'title', 'icon', 'entry'], `manifest contributes.views[${index}]`)
+    assertOnlyKeys(view, ['id', 'kind', 'location', 'title', 'icon', 'entry', 'detailView', 'targetSchema', 'receives'], `manifest contributes.views[${index}]`)
     const id = stringValue(required(view, 'id', `manifest contributes.views[${index}]`), `manifest contributes.views[${index}].id`)
     if (!VIEW_ID.test(id)) fail(`manifest contributes.views[${index}].id is invalid`)
     if (view.kind !== 'custom') fail(`manifest contributes.views[${index}].kind must be 'custom'`)
@@ -430,12 +460,54 @@ function parseViews(value: unknown): { views: PluginManifestV2View[] } {
       entry,
     }
     if (view.icon !== undefined) parsed.icon = safePath(view.icon, `manifest contributes.views[${index}].icon`)
+    if (view.detailView !== undefined) {
+      parsed.detailView = stringValue(view.detailView, `manifest contributes.views[${index}].detailView`)
+      if (!VIEW_ID.test(parsed.detailView)) fail(`manifest contributes.views[${index}].detailView is invalid`)
+    }
+    if (view.targetSchema !== undefined) {
+      parsed.targetSchema = safePath(view.targetSchema, `manifest contributes.views[${index}].targetSchema`)
+      if (!parsed.targetSchema.endsWith('.json')) fail(`manifest contributes.views[${index}].targetSchema must be a JSON file`)
+    }
+    if (view.receives !== undefined) {
+      const receives = assertObject(view.receives, `manifest contributes.views[${index}].receives`)
+      assertOnlyKeys(receives, ['protocolVersion', 'locations', 'editorTargets', 'closeGuard'], `manifest contributes.views[${index}].receives`)
+      if (receives.protocolVersion !== 1) fail(`manifest contributes.views[${index}].receives.protocolVersion must be 1`)
+      const locations = uniqueStringArray(receives.locations, `manifest contributes.views[${index}].receives.locations`, 1, 2)
+      if (locations.some((location) => !V2_RECEIVER_LOCATIONS.includes(location as (typeof V2_RECEIVER_LOCATIONS)[number]))) {
+        fail(`manifest contributes.views[${index}].receives.locations contains an invalid location`)
+      }
+      const receiver: PluginManifestV2Receiver = {
+        protocolVersion: 1,
+        locations: locations as PluginManifestV2Receiver['locations'],
+      }
+      if (receives.editorTargets !== undefined) {
+        const editorTargets = assertObject(receives.editorTargets, `manifest contributes.views[${index}].receives.editorTargets`)
+        assertOnlyKeys(editorTargets, ['protocolVersion'], `manifest contributes.views[${index}].receives.editorTargets`)
+        if (editorTargets.protocolVersion !== 1) fail(`manifest contributes.views[${index}].receives.editorTargets.protocolVersion must be 1`)
+        receiver.editorTargets = { protocolVersion: 1 }
+      }
+      if (receives.closeGuard !== undefined) {
+        const closeGuard = assertObject(receives.closeGuard, `manifest contributes.views[${index}].receives.closeGuard`)
+        assertOnlyKeys(closeGuard, ['protocolVersion'], `manifest contributes.views[${index}].receives.closeGuard`)
+        if (closeGuard.protocolVersion !== 1) fail(`manifest contributes.views[${index}].receives.closeGuard.protocolVersion must be 1`)
+        receiver.closeGuard = { protocolVersion: 1 }
+      }
+      parsed.receives = receiver
+    }
+    if (parsed.detailView !== undefined && parsed.location !== 'left') fail(`manifest contributes.views[${index}].detailView is only valid for a left view`)
+    if (parsed.targetSchema !== undefined && parsed.location !== 'detail') fail(`manifest contributes.views[${index}].targetSchema is only valid for a detail view`)
+    if (parsed.receives !== undefined && parsed.location !== 'window') fail(`manifest contributes.views[${index}].receives is only valid for a window view`)
     return parsed
   })
   const ids = new Set<string>()
   for (const view of views) {
     if (ids.has(view.id)) fail(`manifest contributes.views contains duplicate id '${view.id}'`)
     ids.add(view.id)
+  }
+  for (const view of views) {
+    if (view.detailView !== undefined && !views.some((candidate) => candidate.id === view.detailView && candidate.location === 'detail')) {
+      fail(`manifest contributes.views detailView '${view.detailView}' must reference a detail view in the same package`)
+    }
   }
   return { views }
 }
@@ -511,6 +583,7 @@ export function manifestReferencedFiles(manifest: PluginManifestV2): string[] {
   for (const view of manifest.contributes?.views ?? []) {
     paths.push(view.entry)
     if (view.icon) paths.push(view.icon)
+    if (view.targetSchema) paths.push(view.targetSchema)
   }
   if (manifest.marketplace.icon) paths.push(manifest.marketplace.icon)
   if (manifest.backend) paths.push(manifest.backend.entry)
@@ -672,21 +745,22 @@ export class PluginError extends Error {
   }
 }
 
-export interface PublicMethodParams {
-  'fs.readFile': { path: string }
-  'fs.writeFile': { path: string; content: string }
-  'fs.readImage': { path: string }
-  'fs.listDirectory': { path: string }
+export interface PublicMethodParams extends EditorFilesystemParams, EditorAiParams, AiTerminalParams, EditorNativeParams, GitCapabilityParams, GitAccountParams, IssueParams, EditorPreferenceParams {
+  'ui.openFilePicker': FilePickerRequest
+  'fs.readFile': { path: string; encoding?: string; selectionGrant?: string }
+  'fs.writeFile': { path: string; content: string; encoding?: string; expectedMtime?: number; selectionGrant?: string }
+  'fs.readImage': { path: string; selectionGrant?: string }
+  'fs.listDirectory': { path: string; showHidden?: boolean }
   'fs.listFilesFlat': { query?: string; maxResults?: number }
   'fs.glob': { pattern: string }
-  'fs.stat': { path: string }
-  'fs.statPath': { path: string }
+  'fs.stat': { path: string; selectionGrant?: string }
+  'fs.statPath': { path: string; selectionGrant?: string }
   'ui.openInEditor': { path: string; line?: number; column?: number }
   'ui.openPlansWindow': { path: string }
   'ui.openExternal': { url: string }
-  'aiCli.listProfiles': Record<string, never>
-  'aiCli.startSession': { profileId: string; requestId?: string; cols: number; rows: number; yolo?: boolean }
-  'aiCli.resumeSession': { cols: number; rows: number }
+  'aiCli.listProfiles': { terminalView?: boolean }
+  'aiCli.startSession': { profileId: string; requestId?: string; cols: number; rows: number; yolo?: boolean; persistView?: boolean }
+  'aiCli.resumeSession': { cols: number; rows: number; persistView?: boolean }
   'aiCli.cancelStart': { requestId: string }
   'aiCli.reattachSession': { sessionId: string; cols: number; rows: number }
   'aiCli.sendInput': { sessionId: string; data: string }
@@ -700,19 +774,36 @@ export interface PublicMethodParams {
   'storage.delete': { scope: StoragePartitionScope; key: string }
 }
 
-export interface PublicMethodResults {
-  'fs.readFile': { content: string }
-  'fs.writeFile': { ok: boolean }
-  'fs.readImage': { ok: boolean; data_url?: string }
-  'fs.listDirectory': { entries: Array<{ name: string; kind: 'file' | 'directory' }> }
-  'fs.listFilesFlat': { files?: string[] }
+export interface PublicMethodResults extends EditorFilesystemResults, EditorAiResults, AiTerminalResults, EditorNativeResults, GitCapabilityResults, GitAccountResults, IssueResults, EditorPreferenceResults {
+  'ui.openFilePicker': { opened: boolean }
+  'fs.readFile': {
+    content: string
+    ok?: boolean
+    error?: string
+    encoding?: string
+    bom?: boolean
+    mtime?: number
+    is_binary?: boolean
+    is_image?: boolean
+    size?: number
+    ext?: string
+  }
+  'fs.writeFile': { ok: boolean; error?: string; mtime?: number; conflict?: boolean }
+  'fs.readImage': { ok: boolean; data_url?: string; mime?: string; size?: number; error?: string }
+  'fs.listDirectory': {
+    entries: Array<{ name: string; kind: 'file' | 'directory'; rel_path?: string; is_dir?: boolean; is_hidden?: boolean; is_noise?: boolean }>
+    ok?: boolean
+    truncated?: boolean
+    error?: string
+  }
+  'fs.listFilesFlat': { files?: string[]; ok?: boolean; truncated?: boolean; error?: string }
   'fs.glob': { paths: string[] }
   'fs.stat': { kind: 'file' | 'directory'; size: number; modifiedAt: string }
   'fs.statPath': { exists: boolean }
   'ui.openInEditor': { opened: boolean }
   'ui.openPlansWindow': { opened: boolean }
   'ui.openExternal': { opened: boolean }
-  'aiCli.listProfiles': { profiles: Array<{ id: string; label: string }> }
+  'aiCli.listProfiles': { profiles: Array<{ id: string; label: string; fullScreenTui?: boolean; bracketedPaste?: boolean; shiftEnterSequence?: string }> }
   'aiCli.startSession': { sessionId: string }
   'aiCli.resumeSession': { sessionId: string; profileId: string } | null
   'aiCli.cancelStart': Record<string, never>
@@ -732,7 +823,9 @@ export type PublicMethod = keyof PublicMethodParams
 export type Params<M extends PublicMethod> = PublicMethodParams[M]
 export type Result<M extends PublicMethod> = PublicMethodResults[M]
 
-export interface PublicEventPayloads {
+export interface PublicEventPayloads extends EditorAiEvents, EditorNativeEvents, EditorPreferenceEvents, GitCredentialEvents {
+  /** UI notification for a write to this receiver's own selected snapshot. */
+  'ui.pluginStorageChanged': { scope: StoragePartitionScope; key: string; value: JsonValue; deleted: boolean }
   'workspace.filesChanged': {
     changes: Array<{ path: string; kind: 'created' | 'changed' | 'deleted' }>
   }

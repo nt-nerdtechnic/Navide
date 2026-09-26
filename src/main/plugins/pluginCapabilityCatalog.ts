@@ -1,5 +1,13 @@
 import type { JsonValue, StoragePartitionScope } from '../../../packages/plugin-contracts/src/index'
+import { validFilePickerRequest } from '../../../packages/plugin-contracts/src/filePicker'
 import { normalizeJsonValue, utf8ByteLength } from './pluginStorageJson'
+import { EDITOR_FILESYSTEM_METHODS, validateEditorFilesystemRequest } from './editorFilesystemCapability'
+import { EDITOR_AI_METHODS, EDITOR_AI_EVENTS, validateEditorAiRequest } from './editorAiCapability'
+import { EDITOR_NATIVE_METHODS, validateEditorNativeRequest } from './editorNativeCapability'
+import { PUBLIC_GIT_METHODS, validatePublicGitRequest } from './gitPublicCapability'
+import { PUBLIC_ISSUE_METHODS, validateIssueRequest } from './issueCapability'
+import { EDITOR_PREFERENCE_METHODS, validateEditorPreferenceRequest } from './editorPreferenceCapability'
+import { GIT_ACCOUNT_PUBLIC_METHODS, validateGitAccountRequest } from './gitAccountCapability'
 
 /** Public Manifest v2 capability catalog used by the Host broker.
  *
@@ -30,6 +38,9 @@ interface PublicCapabilityCatalogBase {
   kind: 'method' | 'event'
   eligibility: PublicCapabilityEligibility
   validateRequest?: (value: unknown) => value is Record<string, unknown>
+  /** Mirrors the JSON catalog's `requiresUserGesture`: the Host refuses the
+   *  address unless the request carries a gesture it observed itself. */
+  requiresUserGesture?: boolean
 }
 
 /** Public storage entries are deliberately a separate union member: they do
@@ -48,6 +59,8 @@ export interface PublicSystemCapabilityCatalogEntry extends PublicCapabilityCata
    *  `plugin`; storage has its own discriminated entry). */
   scope: PublicCapabilityScope
   storage?: false
+  /** Fixed executable of a typed Host operation; never supplied by a Plugin. */
+  shellCommand?: string
 }
 
 export type PublicCapabilityCatalogEntry =
@@ -136,18 +149,22 @@ function validatePlansWindowRequest(value: unknown): value is Record<string, unk
 
 function validateExternalRequest(value: unknown): value is Record<string, unknown> {
   if (!requestWithString('url', value)) return false
-  return /^https:\/\/[^\s]+$/i.test(String((value as Record<string, unknown>).url))
+  try {
+    const url = new URL(String((value as Record<string, unknown>).url))
+    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname)
+  } catch { return false }
 }
 
 function validateStartRequest(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['profileId', 'requestId', 'cols', 'rows', 'paneId', 'yolo'])) return false
+  if (!isRecord(value) || !hasOnlyKeys(value, ['profileId', 'requestId', 'cols', 'rows', 'paneId', 'yolo', 'persistView'])) return false
   return (
     nonEmptyString(value.profileId) &&
     (value.requestId === undefined || nonEmptyString(value.requestId)) &&
     positiveInteger(value.cols) &&
     positiveInteger(value.rows) &&
     (value.paneId === undefined || nonEmptyString(value.paneId)) &&
-    (value.yolo === undefined || typeof value.yolo === 'boolean')
+    (value.yolo === undefined || typeof value.yolo === 'boolean') &&
+    (value.persistView === undefined || typeof value.persistView === 'boolean')
   )
 }
 
@@ -156,13 +173,29 @@ function validateEmptyRequest(value: unknown): value is Record<string, unknown> 
 }
 
 function validateResumeRequest(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && hasOnlyKeys(value, ['cols', 'rows']) &&
-    positiveInteger(value.cols) && positiveInteger(value.rows)
+  return isRecord(value) && hasOnlyKeys(value, ['cols', 'rows', 'persistView']) &&
+    positiveInteger(value.cols) && positiveInteger(value.rows) &&
+    (value.persistView === undefined || typeof value.persistView === 'boolean')
 }
 
 function validateWriteFileRequest(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && hasOnlyKeys(value, ['path', 'content']) &&
-    nonEmptyString(value.path) && typeof value.content === 'string'
+  return isRecord(value) && hasOnlyKeys(value, ['path', 'content', 'encoding', 'expectedMtime', 'selectionGrant']) &&
+    nonEmptyString(value.path) && typeof value.content === 'string' &&
+    (value.selectionGrant === undefined || nonEmptyString(value.selectionGrant)) &&
+    (value.encoding === undefined || nonEmptyString(value.encoding)) &&
+    (value.expectedMtime === undefined ||
+      (typeof value.expectedMtime === 'number' && Number.isFinite(value.expectedMtime)))
+}
+
+function validateReadFileRequest(value: unknown): value is Record<string, unknown> {
+  return requestWithString('path', value, ['encoding', 'selectionGrant']) &&
+    (value.selectionGrant === undefined || nonEmptyString(value.selectionGrant)) &&
+    (value.encoding === undefined || nonEmptyString(value.encoding))
+}
+
+function validateSelectedPathRequest(value: unknown): value is Record<string, unknown> {
+  return requestWithString('path', value, ['selectionGrant']) &&
+    (value.selectionGrant === undefined || nonEmptyString(value.selectionGrant))
 }
 
 function validateListFilesRequest(value: unknown): value is Record<string, unknown> {
@@ -238,14 +271,65 @@ function storageMethod(
 }
 
 export const PUBLIC_CAPABILITY_CATALOG: Readonly<Record<string, PublicCapabilityCatalogEntry>> = {
-  'fs.readFile': systemMethod('fs.readFile', 'fs', (value) => requestWithString('path', value)),
+  'ui.openFilePicker': systemMethod('ui.openFilePicker', 'ui', (value): value is Record<string, unknown> => validFilePickerRequest(value)),
+  ...Object.fromEntries(EDITOR_NATIVE_METHODS.map(address => [address, {
+    address, kind: 'method', namespace: 'ui', scope: 'workspace', eligibility: 'public',
+    validateRequest: (value: unknown) => validateEditorNativeRequest(address, value),
+  } as PublicSystemCapabilityCatalogEntry])),
+  ...Object.fromEntries(Object.keys(GIT_ACCOUNT_PUBLIC_METHODS).map(address => [address, {
+    address, kind: 'method', namespace: 'ui', scope: 'workspace', eligibility: 'public',
+    validateRequest: (value: unknown) => validateGitAccountRequest(address, value),
+  } as PublicSystemCapabilityCatalogEntry])),
+  ...Object.fromEntries(PUBLIC_ISSUE_METHODS.map(address => [address, {
+    address, namespace: 'shell', scope: 'workspace', kind: 'method', shellCommand: 'git',
+    eligibility: 'public', validateRequest: (value: unknown) => validateIssueRequest(address, value),
+  } as PublicSystemCapabilityCatalogEntry])),
+  ...Object.fromEntries(EDITOR_PREFERENCE_METHODS.map(address => [address, {
+    address, namespace: 'ui', scope: 'workspace', kind: 'method', eligibility: 'public',
+    validateRequest: (value: unknown) => validateEditorPreferenceRequest(address, value),
+  } as PublicSystemCapabilityCatalogEntry])),
+  'ui.editorPreferencesChanged': {
+    address: 'ui.editorPreferencesChanged', namespace: 'ui', scope: 'workspace', kind: 'event', eligibility: 'public',
+  },
+  'ui.pluginStorageChanged': {
+    address: 'ui.pluginStorageChanged', namespace: 'ui', scope: 'workspace', kind: 'event', eligibility: 'public',
+  },
+  'shell.gitCredentialRequested': {
+    address: 'shell.gitCredentialRequested', namespace: 'shell', scope: 'workspace', kind: 'event', eligibility: 'public',
+  },
+  'shell.gitCredentialCancelled': {
+    address: 'shell.gitCredentialCancelled', namespace: 'shell', scope: 'workspace', kind: 'event', eligibility: 'public',
+  },
+  ...Object.fromEntries(PUBLIC_GIT_METHODS.map(address => [address, {
+    address, kind: 'method', namespace: address.startsWith('aiCli.') ? 'aiCli' : 'shell',
+    scope: 'workspace', eligibility: 'public',
+    ...(address.startsWith('shell.') ? { shellCommand: 'git' } : {}),
+    validateRequest: (value: unknown) => validatePublicGitRequest(address, value),
+  } as PublicSystemCapabilityCatalogEntry])),
+  'ui.keybindingsChanged': {
+    address: 'ui.keybindingsChanged', kind: 'event', namespace: 'ui', scope: 'workspace', eligibility: 'public',
+  },
+  ...Object.fromEntries(EDITOR_AI_METHODS.map(address => [
+    address, aiCliMethod(address, (value): value is Record<string, unknown> =>
+      validateEditorAiRequest(address, value)),
+  ])),
+  ...Object.fromEntries(EDITOR_AI_EVENTS.map(address => [address, {
+    address, kind: 'event', namespace: 'aiCli', scope: 'workspace', eligibility: 'public',
+  } satisfies PublicCapabilityCatalogEntry])),
+  ...Object.fromEntries(EDITOR_FILESYSTEM_METHODS.map(address => [
+    address, systemMethod(address, 'fs', (value): value is Record<string, unknown> =>
+      validateEditorFilesystemRequest(address, value)),
+  ])),
+  'fs.readFile': systemMethod('fs.readFile', 'fs', validateReadFileRequest),
   'fs.writeFile': systemMethod('fs.writeFile', 'fs', validateWriteFileRequest),
-  'fs.readImage': systemMethod('fs.readImage', 'fs', (value) => requestWithString('path', value)),
-  'fs.listDirectory': systemMethod('fs.listDirectory', 'fs', (value) => requestWithString('path', value)),
+  'fs.readImage': systemMethod('fs.readImage', 'fs', validateSelectedPathRequest),
+  'fs.listDirectory': systemMethod('fs.listDirectory', 'fs', (value): value is Record<string, unknown> =>
+    requestWithString('path', value, ['showHidden']) &&
+    (value.showHidden === undefined || typeof value.showHidden === 'boolean')),
   'fs.listFilesFlat': systemMethod('fs.listFilesFlat', 'fs', validateListFilesRequest),
   'fs.glob': systemMethod('fs.glob', 'fs', (value) => requestWithString('pattern', value)),
-  'fs.stat': systemMethod('fs.stat', 'fs', (value) => requestWithString('path', value)),
-  'fs.statPath': systemMethod('fs.statPath', 'fs', (value) => requestWithString('path', value)),
+  'fs.stat': systemMethod('fs.stat', 'fs', validateSelectedPathRequest),
+  'fs.statPath': systemMethod('fs.statPath', 'fs', validateSelectedPathRequest),
   'ui.openInEditor': systemMethod('ui.openInEditor', 'ui', validateEditorRequest),
   'ui.openPlansWindow': systemMethod(
     'ui.openPlansWindow',
@@ -253,11 +337,34 @@ export const PUBLIC_CAPABILITY_CATALOG: Readonly<Record<string, PublicCapability
     validatePlansWindowRequest,
     'firstParty',
   ),
-  'ui.openExternal': systemMethod('ui.openExternal', 'ui', validateExternalRequest),
+  'ui.openExternal': {
+    ...systemMethod('ui.openExternal', 'ui', validateExternalRequest),
+    requiresUserGesture: true,
+  },
   'storage.get': storageMethod('storage.get'),
   'storage.set': storageMethod('storage.set'),
   'storage.delete': storageMethod('storage.delete'),
-  'aiCli.listProfiles': aiCliMethod('aiCli.listProfiles', validateEmptyRequest),
+  'aiCli.listProfiles': aiCliMethod('aiCli.listProfiles', (value): value is Record<string, unknown> =>
+    isRecord(value) && hasOnlyKeys(value, ['terminalView']) &&
+    (value.terminalView === undefined || typeof value.terminalView === 'boolean')),
+  'aiCli.readTerminalView': aiCliMethod('aiCli.readTerminalView', validateEmptyRequest),
+  'aiCli.listMentionTargets': aiCliMethod('aiCli.listMentionTargets', validateSessionRequest),
+  'aiCli.saveClipboardImage': aiCliMethod('aiCli.saveClipboardImage', (value): value is Record<string, unknown> =>
+    requestWithString('sessionId', value, ['bytes', 'mediaType']) &&
+    typeof value.mediaType === 'string' && Array.isArray(value.bytes) &&
+    value.bytes.every(byte => typeof byte === 'number' && Number.isInteger(byte) && byte >= 0 && byte <= 255)),
+  'aiCli.showTerminalContextMenu': aiCliMethod('aiCli.showTerminalContextMenu', (value): value is Record<string, unknown> =>
+    isRecord(value) && hasOnlyKeys(value, ['sessionId', 'selection']) && typeof value.selection === 'string' &&
+    (value.sessionId === undefined || nonEmptyString(value.sessionId))),
+  'aiCli.reportTerminalSelection': aiCliMethod('aiCli.reportTerminalSelection', (value): value is Record<string, unknown> =>
+    isRecord(value) && hasOnlyKeys(value, ['sessionId', 'selection']) && typeof value.selection === 'string' &&
+    (value.sessionId === undefined || nonEmptyString(value.sessionId))),
+  'aiCli.saveTerminalView': aiCliMethod('aiCli.saveTerminalView', (value): value is Record<string, unknown> =>
+    requestWithString('sessionId', value, ['snapshots']) &&
+    Array.isArray(value.snapshots) && value.snapshots.every(item => typeof item === 'string')),
+  'aiCli.setTerminalFontSize': aiCliMethod('aiCli.setTerminalFontSize', (value): value is Record<string, unknown> =>
+    isRecord(value) && hasOnlyKeys(value, ['fontSize']) &&
+    typeof value.fontSize === 'number' && Number.isFinite(value.fontSize) && value.fontSize > 0),
   'aiCli.startSession': aiCliMethod('aiCli.startSession', validateStartRequest),
   'aiCli.resumeSession': aiCliMethod('aiCli.resumeSession', validateResumeRequest),
   'aiCli.cancelStart': aiCliMethod('aiCli.cancelStart', (value) => requestWithString('requestId', value)),

@@ -174,6 +174,10 @@ fi
 
 require_publish_env
 
+if [ "$SKIP_BUILD" -eq 0 ]; then
+  pnpm run build:public-packages
+fi
+
 if [ "$ONLY" != "plans" ]; then
   if [ "$SKIP_BUILD" -eq 0 ]; then
     pnpm run build:git:v2

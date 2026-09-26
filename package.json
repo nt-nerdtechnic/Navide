@@ -15,19 +15,20 @@
     "node": ">=22.12 <23"
   },
   "scripts": {
-    "dev": "vite build --config vite.plans.config.ts && vite build --config plugins/navide-plans/vite.config.ts && node scripts/build-plans-v2-backend.mjs --if-needed && electron-vite dev",
+    "dev": "pnpm run build:public-packages && vite build --config vite.plans.config.ts && pnpm run build:mini-ide:v2 && pnpm run build:plans:v2 && node scripts/build-plans-v2-backend.mjs --if-needed && pnpm run build:git:v2 && node scripts/stage-official-plugin-artifacts.mjs && electron-vite dev",
     "build": "pnpm run build:official-plugins && pnpm run build:git:legacy && pnpm run build:pane-helper && pnpm run build:fn-key && electron-vite build",
     "build:pane-helper": "node scripts/build-pane-helper.mjs",
     "build:fn-key": "node scripts/build-fn-key-helper.mjs",
     "build:stt": "node scripts/build-stt.mjs",
-    "build:official-plugins": "pnpm run build:mini-ide && pnpm run build:plans && pnpm run build:git:v2",
+    "build:official-plugins": "pnpm run build:public-packages && pnpm run build:mini-ide && pnpm run build:mini-ide:v2 && pnpm run build:plans && pnpm run build:git:v2 && node scripts/stage-official-plugin-artifacts.mjs",
     "build:mini-ide": "vite build --config vite.mini-ide.config.ts",
+    "build:mini-ide:v2": "vite build --config plugins/navide-mini-ide/vite.config.ts",
     "build:plans:legacy": "vite build --config vite.plans.config.ts",
     "build:plans:v2": "vite build --config plugins/navide-plans/vite.config.ts",
     "build:plans:backend": "node scripts/build-plans-v2-backend.mjs",
     "build:plans": "pnpm run build:plans:legacy && pnpm run build:plans:v2 && pnpm run build:plans:backend",
     "build:plans:fixture": "node scripts/build-plans-backend.mjs",
-    "test:packaged-plans": "pnpm run build:plans:v2 && pnpm run build:plans:fixture && pnpm run build:plans:backend && NAVIDE_TEST_PACKAGED_PLANS=1 NAVIDE_TEST_PRODUCTION_PLANS_BACKEND=1 pnpm test:run tests/integration/plansPackagedRoundtrip.test.ts src/main/plugins/pluginBackendHost.test.ts src/main/plugins/pluginBackendSupervisor.test.ts",
+    "test:packaged-plans": "pnpm run build:public-packages && pnpm run build:plans:v2 && pnpm run build:plans:fixture && pnpm run build:plans:backend && pnpm run build:mini-ide:v2 && pnpm run build:git:v2 && node scripts/stage-official-plugin-artifacts.mjs && NAVIDE_TEST_PACKAGED_PLANS=1 NAVIDE_TEST_PRODUCTION_PLANS_BACKEND=1 pnpm test:run tests/integration/plansPackagedRoundtrip.test.ts src/main/plugins/pluginBackendHost.test.ts src/main/plugins/pluginBackendSupervisor.test.ts",
     "build:git:legacy": "vite build --config vite.git.config.ts",
     "build:git:v2": "vite build --config plugins/navide-git/vite.config.ts",
     "build:git": "pnpm run build:git:legacy && pnpm run build:git:v2",
@@ -36,9 +37,9 @@
     "typecheck:integration": "tsc --noEmit -p tsconfig.integration.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "typecheck:public": "tsc --noEmit -p packages/plugin-contracts/tsconfig.json && tsc --noEmit -p packages/plugin-sdk/tsconfig.json && vue-tsc --noEmit -p packages/plugin-ui/tsconfig.json",
-    "typecheck:plugin-git": "vue-tsc --noEmit -p plugins/navide-git/tsconfig.json",
-    "typecheck:plugin-plans": "vue-tsc --noEmit -p plugins/navide-plans/tsconfig.json",
-    "typecheck": "pnpm run typecheck:node && pnpm run typecheck:integration && pnpm run typecheck:plugin-git && pnpm run typecheck:plugin-plans && pnpm run typecheck:web && pnpm run typecheck:public",
+    "typecheck:plugin-git": "pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-git/tsconfig.json",
+    "typecheck:plugin-plans": "pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-plans/tsconfig.json",
+    "typecheck": "pnpm run typecheck:node && pnpm run typecheck:integration && pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-git/tsconfig.json && vue-tsc --noEmit -p plugins/navide-plans/tsconfig.json && pnpm run typecheck:web && pnpm run typecheck:public",
     "build:public-packages": "tsc -p packages/plugin-contracts/tsconfig.json && tsc -p packages/plugin-sdk/tsconfig.build.json && vite build --config packages/plugin-ui/vite.config.ts && vue-tsc -p packages/plugin-ui/tsconfig.build.json",
     "test": "vitest",
     "test:run": "vitest run",
@@ -72,16 +73,12 @@
         "to": "plugins/mini-ide"
       },
       {
+        "from": "dist-plugins/official-artifacts/factory-resources",
+        "to": "official-artifacts"
+      },
+      {
         "from": "dist-plugins/plans",
         "to": "plugins/plans"
-      },
-      {
-        "from": "dist-plugins/navide-plans",
-        "to": "plugins/navide-plans"
-      },
-      {
-        "from": "dist-plugins/navide-git",
-        "to": "plugins/navide-git"
       },
       {
         "from": "dist-plugins/git",
@@ -202,6 +199,9 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@navide/plugin-contracts": "link:packages/plugin-contracts",
+    "@navide/plugin-sdk": "link:packages/plugin-sdk",
+    "@navide/plugin-ui": "link:packages/plugin-ui",
     "@types/node": "^22",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.9",

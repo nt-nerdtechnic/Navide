@@ -39,6 +39,7 @@ vi.mock('./pluginSurfacePorts', () => ({
 }))
 vi.mock('./GitWindowApp.vue', () => ({ default: { template: '<button>{{ $t("action.close") }}</button>' } }))
 vi.mock('./GitLeftApp.vue', () => ({ default: { template: '<button>{{ $t("action.close") }}</button>' } }))
+vi.mock('./GitDetailApp.vue', () => ({ default: {} }))
 
 describe('Git plugin composition root', () => {
   beforeEach(() => {

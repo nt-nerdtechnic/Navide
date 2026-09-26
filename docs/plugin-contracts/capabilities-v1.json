@@ -33,36 +33,727 @@
     "INTERNAL_ERROR"
   ],
   "methods": [
+    {"address":"ui.openFilePicker","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","items":{"type":"string"}},"line":{"type":"integer","minimum":1},"sessionId":{"type":"string","minLength":1}}},"result":{"type":"object","additionalProperties":false,"required":["opened"],"properties":{"opened":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.listMentionTargets","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"sessionId":{"type":"string","minLength":1}},"required":["sessionId"]},"result":{"type":"object","additionalProperties":false,"properties":{"targets":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"address":{"type":"string"},"group":{"type":"string"}},"required":["address"]}}},"required":["targets"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.saveClipboardImage","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"sessionId":{"type":"string","minLength":1},"bytes":{"type":"array","items":{"type":"integer","minimum":0,"maximum":255}},"mediaType":{"type":"string"}},"required":["sessionId","bytes","mediaType"]},"result":{"type":"object","additionalProperties":false,"properties":{"path":{"type":["string","null"]}},"required":["path"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.showTerminalContextMenu","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"sessionId":{"type":"string","minLength":1},"selection":{"type":"string"}},"required":["selection"]},"result":{"type":"object","additionalProperties":false,"properties":{}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.reportTerminalSelection","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"sessionId":{"type":"string","minLength":1},"selection":{"type":"string"}},"required":["selection"]},"result":{"type":"object","additionalProperties":false,"properties":{}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.readTerminalView","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{}},"result":{"type":"object","additionalProperties":false,"properties":{"fontSize":{"type":"number","exclusiveMinimum":0},"lastSize":{"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"cols":{"type":"integer","minimum":1},"rows":{"type":"integer","minimum":1}},"required":["cols","rows"]}]},"snapshot":{"type":["string","null"]}},"required":["fontSize","lastSize","snapshot"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.saveTerminalView","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"sessionId":{"type":"string","minLength":1},"snapshots":{"type":"array","items":{"type":"string"}}},"required":["sessionId","snapshots"]},"result":{"type":"object","additionalProperties":false,"properties":{}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.setTerminalFontSize","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"fontSize":{"type":"number","exclusiveMinimum":0}},"required":["fontSize"]},"result":{"type":"object","additionalProperties":false,"properties":{}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.getEditorProfile","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["profileId"],"properties":{"profileId":{"type":["string","null"]}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","BACKEND_UNAVAILABLE"]},
+    {"address":"aiCli.setEditorProfile","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["profileId"],"properties":{"profileId":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","BACKEND_UNAVAILABLE"]},
+    {"address":"ui.readEditorPreferences","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{},"required":[]},"result":{"type":"object","additionalProperties":false,"properties":{"preferences":{"type":"object","additionalProperties":false,"properties":{"agentTeam.yolo":{"$ref":"#/$defs/jsonValue"},"agentTeam.analyzerModel":{"$ref":"#/$defs/jsonValue"},"agent-team:theme":{"$ref":"#/$defs/jsonValue"},"agent-team:theme-custom":{"$ref":"#/$defs/jsonValue"},"agent-team:language":{"$ref":"#/$defs/jsonValue"},"agentTeam.uiScale":{"$ref":"#/$defs/jsonValue"},"agentTeam.git.logScope":{"$ref":"#/$defs/jsonValue"},"agentTeam.git.logOrder":{"$ref":"#/$defs/jsonValue"},"agentTeam.git.autoCommit":{"$ref":"#/$defs/jsonValue"},"agentTeam.gitTopRatio":{"$ref":"#/$defs/jsonValue"}},"required":[]}},"required":["preferences"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","BACKEND_UNAVAILABLE"]},
+    {"address":"ui.writeEditorPreference","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"key":{"enum":["agent-team:theme","agent-team:theme-custom","agentTeam.git.logScope","agentTeam.git.logOrder","agentTeam.git.autoCommit","agentTeam.gitTopRatio"]},"value":{"$ref":"#/$defs/jsonValue"}},"required":["key","value"]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","BACKEND_UNAVAILABLE"]},
+    {"address":"shell.issueProvider","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}},"required":[]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"},"provider":{"type":"string"},"host":{"type":"string"},"cli_available":{"type":"boolean"},"authenticated":{"type":"boolean"},"error":{"type":"string"}},"required":["ok","provider","host","cli_available","authenticated"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.listIssues","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"},"limit":{"type":"integer"}},"required":[]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"},"provider":{"type":"string"},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"number":{"type":"integer"},"title":{"type":"string"},"state":{"type":"string"},"author":{"type":"string"},"labels":{"type":"array","items":{"type":"string"}},"assignees":{"type":"array","items":{"type":"string"}},"updated_at":{"type":"string"},"url":{"type":"string"}},"required":["number","title","state","author","labels","assignees","updated_at","url"]}},"error":{"type":"string"}},"required":["ok","provider","issues"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.getIssue","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"},"number":{"type":"integer","minimum":0}},"required":["number"]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"},"issue":{"type":"object","additionalProperties":false,"properties":{"number":{"type":"integer"},"title":{"type":"string"},"state":{"type":"string"},"author":{"type":"string"},"labels":{"type":"array","items":{"type":"string"}},"assignees":{"type":"array","items":{"type":"string"}},"updated_at":{"type":"string"},"url":{"type":"string"},"body":{"type":"string"},"created_at":{"type":"string"},"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"author":{"type":"string"},"body":{"type":"string"},"created_at":{"type":"string"}},"required":["author","body","created_at"]}}},"required":["number","title","state","author","labels","assignees","updated_at","url","body","created_at","comments"]},"error":{"type":"string"}},"required":["ok"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.createIssue","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["title"]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"},"url":{"type":"string"},"error":{"type":"string"}},"required":["ok"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.commentIssue","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"},"number":{"type":"integer","minimum":0},"body":{"type":"string"}},"required":["number","body"]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"},"error":{"type":"string"}},"required":["ok"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.setIssueState","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"},"number":{"type":"integer","minimum":0},"state":{"enum":["open","closed"]}},"required":["number","state"]},"result":{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"},"error":{"type":"string"}},"required":["ok"]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"ui.openPluginWindow","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["contributionKey"],"properties":{"contributionKey":{"type":"string","minLength":1},"path":{"type":"string"},"line":{"type":"integer","minimum":1},"grant":{"type":"string"}}},"result":{"oneOf":[{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"const":true}}},{"type":"object","additionalProperties":false,"required":["ok","error","message"],"properties":{"ok":{"const":false},"error":{"enum":["PLUGIN_NOT_INSTALLED","PLUGIN_UNAVAILABLE"]},"message":{"type":"string"}}}]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","INTERNAL_ERROR"]},
+    {"address":"ui.listGitAccounts","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["available","accounts"],"properties":{"available":{"type":"boolean"},"accounts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","label","host","username","tokenLast4"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"host":{"type":"string"},"username":{"type":"string"},"tokenLast4":{"type":"string"}}}}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","INTERNAL_ERROR"]},
+    {"address":"ui.getGitAccountBinding","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["accountId"],"properties":{"accountId":{"type":["string","null"]}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","INTERNAL_ERROR"]},
+    {"address":"ui.addGitAccount","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["label","host","username","token"],"properties":{"label":{"type":"string","minLength":1},"host":{"type":"string","minLength":1},"username":{"type":"string","minLength":1},"token":{"type":"string","minLength":1}}},"result":{"type":"object","additionalProperties":false,"required":["account"],"properties":{"account":{"type":"object","additionalProperties":false,"required":["id","label","host","username","tokenLast4"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"host":{"type":"string"},"username":{"type":"string"},"tokenLast4":{"type":"string"}}}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","INTERNAL_ERROR"]},
+    {"address":"ui.bindGitAccount","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["accountId"],"properties":{"accountId":{"type":"string","minLength":1}}},"result":{"type":"object","additionalProperties":false,"required":["accountId"],"properties":{"accountId":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","INTERNAL_ERROR"]},
+    {"address":"ui.unbindGitAccount","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["accountId"],"properties":{"accountId":{"type":"null"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","INTERNAL_ERROR"]},
+    {"address":"shell.gitAbort","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"op":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitAddRemote","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"url":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitAddWorktree","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"worktree_path":{"type":"string"},"branch":{"type":"string"},"new_branch":{"type":"boolean"},"selectionGrant":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitAmend","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitApplyPatch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"patch":{"type":"string"},"reverse":{"type":"boolean"},"cached":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitBlame","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitBranches","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCheckIgnore","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCheckStaged","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCheckoutCommit","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"commit_hash":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCheckoutRemoteBranch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"remote_ref":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCherryPick","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"commit_hash":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitClean","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"dry_run":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitClone","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string"},"target_dir":{"type":"string"},"selectionGrant":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCommit","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"all":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCommitFileDiff","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"commit_hash":{"type":"string"},"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCompareBranches","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"base":{"type":"string"},"compare":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitConfigGet","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitConfigSet","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"key":{"type":"string"},"value":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitConflictStages","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitConnectToRemote","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCreateBranch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"switch_to":{"type":"boolean"},"start_point":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCreateTag","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"message":{"type":"string"},"commit_hash":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCredentialCancel","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"request_id":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitCredentialSubmit","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"request_id":{"type":"string"},"value":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDeleteBranch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"force":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDeleteTag","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDiffBlame","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"staged":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDiffBranches","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"base":{"type":"string"},"compare":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDiffFile","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"staged":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDiscard","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"files":{"type":"array","items":{"type":"string"}},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitDiscoverRepositories","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"max_depth":{"type":"number"},"limit":{"type":"number"},"force":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitFetch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitFileLog","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"n":{"type":"number"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.generateCommitMessage","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"model":{"type":"string"},"attempt_count":{"type":"number"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitIgnore","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"pattern":{"type":"string"},"target":{"type":"string"},"untrack":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitInit","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"create_gitignore":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitListConflicts","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitLockWorktree","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"worktree_path":{"type":"string"},"reason":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitLog","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"n":{"type":"number"},"all":{"type":"boolean"},"query":{"type":"string"},"order":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitMarkResolved","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitMerge","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"branch":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitMergeInto","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"target":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitMoveWorktree","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"worktree_path":{"type":"string"},"new_path":{"type":"string"},"selectionGrant":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitPruneWorktrees","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitPull","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitPullRebase","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitPush","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"remote":{"type":"string"},"branch":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitPushForce","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"remote":{"type":"string"},"branch":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitPushUpstream","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"branch":{"type":"string"},"remote":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRebase","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"branch":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRemotes","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRemoveRemote","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRemoveWorktree","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"worktree_path":{"type":"string"},"force":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRepairWorktrees","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitReset","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"commit":{"type":"string"},"mode":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitResolveOurs","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitResolveTheirs","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRestoreFromBranch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"branch":{"type":"string"},"filepath":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitRevert","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"commit_hash":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitShowCommit","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"commit_hash":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitShowFile","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"filepath":{"type":"string"},"rev":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStage","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"files":{"type":"array","items":{"type":"string"}},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStageAll","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStash","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStashApply","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"index":{"type":"number"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStashDrop","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"index":{"type":"number"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStashList","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStashPop","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"index":{"type":"number"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitStatus","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"include_ignored":{"type":"boolean"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitSwitchBranch","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitSync","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitTags","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitUndoCommit","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitUnlockWorktree","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"worktree_path":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitUnstage","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"files":{"type":"array","items":{"type":"string"}},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"shell.gitWorktrees","visibility":"public","permission":{"id":"shell","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":{"$ref":"#/$defs/jsonValue"}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"ui.pickFile","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"title":{"type":"string"}}},"result":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["path","grant"],"properties":{"path":{"type":"string"},"grant":{"type":"string"}}}]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.pickWorkspace","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"defaultPath":{"type":"string"}}},"result":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["path","grant"],"properties":{"path":{"type":"string"},"grant":{"type":"string"}}}]},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.resolvePath","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"grant":{"type":"string"}}},"result":{"type":"string"},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.revealPath","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"grant":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openPath","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"grant":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openTempFile","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["name","content"],"properties":{"name":{"type":"string"},"content":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.listEditors","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"refresh":{"type":"boolean"}}},"result":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","label","available"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"available":{"type":"boolean"}}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openFolderInEditor","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"editorId":{"type":"string"},"grant":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openEditorWindow","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"sidebar":{"type":"string"},"grant":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openMainWindow","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"grant":{"type":"string"},"path":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openBranchDiffWindow","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["base"],"properties":{"base":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openGitWindow","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"path":{"type":"string"},"name":{"type":"string"},"staged":{"type":"boolean"},"commit":{"type":"string"},"base":{"type":"string"},"compare":{"type":"string"},"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.openGitHistoryWindow","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{"repositoryPath":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.readKeybindings","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"},"content":{"type":"string"},"error":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.writeKeybindings","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["content"],"properties":{"content":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"},"error":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"ui.setUiScale","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["scale"],"properties":{"scale":{"type":"number"}}},"result":{"type":"number"},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","USER_CANCELLED","INTERNAL_ERROR"]},
+    {"address":"aiCli.rewrite","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["code","instruction","language","model"],"properties":{"code":{"type":"string"},"instruction":{"type":"string"},"language":{"type":"string"},"model":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"},"text":{"type":"string"},"error":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.complete","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["prefix","suffix","language","model"],"properties":{"prefix":{"type":"string"},"suffix":{"type":"string"},"language":{"type":"string"},"model":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"},"text":{"type":"string"},"error":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.reviewStart","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["mode"],"properties":{"mode":{"enum":["working","branch"]},"base":{"type":"string"},"compare":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["reviewId"],"properties":{"reviewId":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.reviewStop","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["reviewId"],"properties":{"reviewId":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.getModelPreferences","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["provider","model"],"properties":{"provider":{"type":"string"},"model":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.setModelPreferences","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":["provider","model"],"properties":{"provider":{"type":"string"},"model":{"type":"string"}}},"result":{"type":"object","additionalProperties":false,"required":["provider","model"],"properties":{"provider":{"type":"string"},"model":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {"address":"aiCli.listModels","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"params":{"type":"object","additionalProperties":false,"required":[],"properties":{}},"result":{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"},"models":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}},"error":{"type":"string"}}},"errors":["CAPABILITY_DENIED","INVALID_ARGUMENT","WORKSPACE_SCOPE_VIOLATION","BACKEND_UNAVAILABLE","INTERNAL_ERROR"]},
+    {
+      "address": "fs.previewResource",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": { "selectionGrant": { "type": "string", "minLength": 1 },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.listArchive",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": { "selectionGrant": { "type": "string", "minLength": 1 },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "total_entries": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "size",
+                "is_dir"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "number"
+                },
+                "is_dir": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.convertOffice",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": { "selectionGrant": { "type": "string", "minLength": 1 },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "docx",
+              "xlsx"
+            ]
+          },
+          "html": {
+            "type": "string"
+          },
+          "sheets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "rows"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.createFile",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.createDirectory",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.rename",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "destination"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.delete",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.findInFiles",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "isRegex": {
+            "type": "boolean"
+          },
+          "caseSensitive": {
+            "type": "boolean"
+          },
+          "wholeWord": {
+            "type": "boolean"
+          },
+          "includes": {
+            "type": "string"
+          },
+          "excludes": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rel_path",
+                "name",
+                "matches"
+              ],
+              "properties": {
+                "rel_path": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "matches": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "line",
+                      "col",
+                      "end",
+                      "text"
+                    ],
+                    "properties": {
+                      "line": {
+                        "type": "number"
+                      },
+                      "col": {
+                        "type": "number"
+                      },
+                      "end": {
+                        "type": "number"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "address": "fs.replaceInFiles",
+      "visibility": "public",
+      "permission": {
+        "id": "system",
+        "access": "fs",
+        "scope": "workspace"
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query",
+          "replacement",
+          "files"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "isRegex": {
+            "type": "boolean"
+          },
+          "caseSensitive": {
+            "type": "boolean"
+          },
+          "wholeWord": {
+            "type": "boolean"
+          },
+          "replacement": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rel_path",
+                "count"
+              ],
+              "properties": {
+                "rel_path": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "CAPABILITY_DENIED",
+        "INVALID_ARGUMENT",
+        "WORKSPACE_SCOPE_VIOLATION",
+        "BACKEND_UNAVAILABLE",
+        "INTERNAL_ERROR"
+      ]
+    },
     {
       "address": "fs.readFile",
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string" } } },
-      "result": { "type": "object", "additionalProperties": false, "required": ["content"], "properties": { "content": { "type": "string" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "selectionGrant": { "type": "string", "minLength": 1 }, "path": { "type": "string" }, "encoding": { "type": "string", "minLength": 1 } } },
+      "result": { "type": "object", "additionalProperties": false, "required": ["content"], "properties": { "content": { "type": "string" }, "ok": { "type": "boolean" }, "error": { "type": "string" }, "encoding": { "type": "string" }, "bom": { "type": "boolean" }, "mtime": { "type": "number" }, "is_binary": { "type": "boolean" }, "is_image": { "type": "boolean" }, "size": { "type": "number" }, "ext": { "type": "string" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
     {
       "address": "fs.listDirectory",
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string" } } },
-      "result": { "type": "object", "additionalProperties": false, "required": ["entries"], "properties": { "entries": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "kind"], "properties": { "name": { "type": "string" }, "kind": { "enum": ["file", "directory"] } } } } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string" }, "showHidden": { "type": "boolean" } } },
+      "result": { "type": "object", "additionalProperties": false, "required": ["entries"], "properties": { "ok": { "type": "boolean" }, "truncated": { "type": "boolean" }, "error": { "type": "string" }, "entries": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "kind"], "properties": { "name": { "type": "string" }, "kind": { "enum": ["file", "directory"] }, "rel_path": { "type": "string" }, "is_dir": { "type": "boolean" }, "is_hidden": { "type": "boolean" }, "is_noise": { "type": "boolean" } } } } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
     {
       "address": "fs.writeFile",
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["path", "content"], "properties": { "path": { "type": "string" }, "content": { "type": "string" } } },
-      "result": { "type": "object", "additionalProperties": false, "required": ["ok"], "properties": { "ok": { "type": "boolean" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["path", "content"], "properties": { "selectionGrant": { "type": "string", "minLength": 1 }, "path": { "type": "string" }, "content": { "type": "string" }, "encoding": { "type": "string", "minLength": 1 }, "expectedMtime": { "type": "number" } } },
+      "result": { "type": "object", "additionalProperties": false, "required": ["ok"], "properties": { "ok": { "type": "boolean" }, "error": { "type": "string" }, "mtime": { "type": "number" }, "conflict": { "type": "boolean" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
     {
       "address": "fs.readImage",
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string" } } },
-      "result": { "type": "object", "additionalProperties": false, "required": ["ok"], "properties": { "ok": { "type": "boolean" }, "data_url": { "type": "string" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "selectionGrant": { "type": "string", "minLength": 1 }, "path": { "type": "string" } } },
+      "result": { "type": "object", "additionalProperties": false, "required": ["ok"], "properties": { "ok": { "type": "boolean" }, "data_url": { "type": "string" }, "mime": { "type": "string" }, "size": { "type": "number" }, "error": { "type": "string" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
     {
@@ -70,7 +761,7 @@
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
       "params": { "type": "object", "additionalProperties": false, "properties": { "query": { "type": "string" }, "maxResults": { "type": "integer", "minimum": 1 } } },
-      "result": { "type": "object", "additionalProperties": false, "properties": { "files": { "type": "array", "items": { "type": "string" } } } },
+      "result": { "type": "object", "additionalProperties": false, "properties": { "files": { "type": "array", "items": { "type": "string" } }, "ok": { "type": "boolean" }, "truncated": { "type": "boolean" }, "error": { "type": "string" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
     {
@@ -85,7 +776,7 @@
       "address": "fs.stat",
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "selectionGrant": { "type": "string", "minLength": 1 }, "path": { "type": "string" } } },
       "result": { "type": "object", "additionalProperties": false, "required": ["kind", "size", "modifiedAt"], "properties": { "kind": { "enum": ["file", "directory"] }, "size": { "type": "integer", "minimum": 0 }, "modifiedAt": { "type": "string", "format": "date-time" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
@@ -93,7 +784,7 @@
       "address": "fs.statPath",
       "visibility": "public",
       "permission": { "id": "system", "access": "fs", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "selectionGrant": { "type": "string", "minLength": 1 }, "path": { "type": "string" } } },
       "result": { "type": "object", "additionalProperties": false, "required": ["exists"], "properties": { "exists": { "type": "boolean" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
@@ -119,7 +810,7 @@
       "visibility": "public",
       "permission": { "id": "system", "access": "ui", "scope": "plugin" },
       "requiresUserGesture": true,
-      "params": { "type": "object", "additionalProperties": false, "required": ["url"], "properties": { "url": { "type": "string", "format": "uri", "pattern": "^https://" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["url"], "properties": { "url": { "type": "string", "format": "uri", "pattern": "^https?://" } } },
       "result": { "type": "object", "additionalProperties": false, "required": ["opened"], "properties": { "opened": { "type": "boolean" } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "USER_CANCELLED", "INTERNAL_ERROR"]
     },
@@ -127,15 +818,15 @@
       "address": "aiCli.listProfiles",
       "visibility": "public",
       "permission": { "id": "system", "access": "aiCli", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false },
-      "result": { "type": "object", "additionalProperties": false, "required": ["profiles"], "properties": { "profiles": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "label"], "properties": { "id": { "type": "string", "minLength": 1 }, "label": { "type": "string", "minLength": 1 } } } } } },
+      "params": { "type": "object", "additionalProperties": false, "properties": { "terminalView": { "type": "boolean" } } },
+      "result": { "type": "object", "additionalProperties": false, "required": ["profiles"], "properties": { "profiles": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "label"], "properties": { "id": { "type": "string", "minLength": 1 }, "label": { "type": "string", "minLength": 1 }, "fullScreenTui": { "type": "boolean" }, "bracketedPaste": { "type": "boolean" }, "shiftEnterSequence": { "type": "string" } } } } } },
       "errors": ["CAPABILITY_DENIED", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
     {
       "address": "aiCli.startSession",
       "visibility": "public",
       "permission": { "id": "system", "access": "aiCli", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["profileId", "cols", "rows"], "properties": { "profileId": { "type": "string", "minLength": 1 }, "requestId": { "type": "string", "minLength": 1 }, "cols": { "type": "integer", "minimum": 1 }, "rows": { "type": "integer", "minimum": 1 }, "yolo": { "type": "boolean" } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["profileId", "cols", "rows"], "properties": { "profileId": { "type": "string", "minLength": 1 }, "requestId": { "type": "string", "minLength": 1 }, "cols": { "type": "integer", "minimum": 1 }, "rows": { "type": "integer", "minimum": 1 }, "yolo": { "type": "boolean" }, "persistView": { "type": "boolean" } } },
       "result": { "type": "object", "additionalProperties": false, "required": ["sessionId"], "properties": { "sessionId": { "type": "string", "minLength": 1 } } },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "USER_CANCELLED", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
@@ -143,7 +834,7 @@
       "address": "aiCli.resumeSession",
       "visibility": "public",
       "permission": { "id": "system", "access": "aiCli", "scope": "workspace" },
-      "params": { "type": "object", "additionalProperties": false, "required": ["cols", "rows"], "properties": { "cols": { "type": "integer", "minimum": 1 }, "rows": { "type": "integer", "minimum": 1 } } },
+      "params": { "type": "object", "additionalProperties": false, "required": ["cols", "rows"], "properties": { "cols": { "type": "integer", "minimum": 1 }, "rows": { "type": "integer", "minimum": 1 }, "persistView": { "type": "boolean" } } },
       "result": { "oneOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["sessionId", "profileId"], "properties": { "sessionId": { "type": "string", "minLength": 1 }, "profileId": { "type": "string", "minLength": 1 } } }] },
       "errors": ["CAPABILITY_DENIED", "INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION", "BACKEND_UNAVAILABLE", "INTERNAL_ERROR"]
     },
@@ -240,6 +931,14 @@
     }
   ],
   "events": [
+    {"address":"ui.pluginStorageChanged","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["scope","key","value","deleted"],"properties":{"scope":{"enum":["plugin","workspace"]},"key":{"type":"string","minLength":1},"value":{"$ref":"#/$defs/jsonValue"},"deleted":{"type":"boolean"}}}},
+    {"address":"shell.gitCredentialRequested","visibility":"public","permission":{"id":"shell","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["requestId","host","prompt"],"properties":{"requestId":{"type":"string","minLength":1},"host":{"type":"string"},"prompt":{"type":"string"}}}},
+    {"address":"shell.gitCredentialCancelled","visibility":"public","permission":{"id":"shell","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"type":"string","minLength":1}}}},
+    {"address":"ui.editorPreferencesChanged","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"properties":{"preferences":{"type":"object","additionalProperties":false,"properties":{"agentTeam.yolo":{"$ref":"#/$defs/jsonValue"},"agentTeam.analyzerModel":{"$ref":"#/$defs/jsonValue"},"agent-team:theme":{"$ref":"#/$defs/jsonValue"},"agent-team:theme-custom":{"$ref":"#/$defs/jsonValue"},"agent-team:language":{"$ref":"#/$defs/jsonValue"},"agentTeam.uiScale":{"$ref":"#/$defs/jsonValue"},"agentTeam.git.logScope":{"$ref":"#/$defs/jsonValue"},"agentTeam.git.logOrder":{"$ref":"#/$defs/jsonValue"},"agentTeam.git.autoCommit":{"$ref":"#/$defs/jsonValue"},"agentTeam.gitTopRatio":{"$ref":"#/$defs/jsonValue"}},"required":[]}},"required":["preferences"]}},
+    {"address":"ui.keybindingsChanged","visibility":"public","permission":{"id":"system","access":"ui","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["content"],"properties":{"content":{"type":"string"}}}},
+    {"address":"aiCli.reviewResult","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["reviewId","result"],"properties":{"reviewId":{"type":"string"},"result":{"type":"object","additionalProperties":false,"required":["summary","verdict","findings"],"properties":{"summary":{"type":"string"},"verdict":{"enum":["approve","approve_with_comments","request_changes"]},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","file","line","severity","title","body"],"properties":{"id":{"type":"string"},"file":{"type":"string"},"line":{"type":["integer","null"]},"severity":{"enum":["critical","warning","suggestion"]},"title":{"type":"string"},"body":{"type":"string"}}}}}}}}},
+    {"address":"aiCli.reviewEnd","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["reviewId"],"properties":{"reviewId":{"type":"string"}}}},
+    {"address":"aiCli.reviewError","visibility":"public","permission":{"id":"system","access":"aiCli","scope":"workspace"},"payload":{"type":"object","additionalProperties":false,"required":["reviewId","message"],"properties":{"reviewId":{"type":"string"},"message":{"type":"string"}}}},
     {
       "address": "workspace.filesChanged",
       "visibility": "public",

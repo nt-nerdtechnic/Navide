@@ -99,6 +99,7 @@ export function readZipEntries(bytes: Uint8Array): ZipEntry[] {
     }
     const method = buf.readUInt16LE(ptr + 10)
     const compSize = buf.readUInt32LE(ptr + 20)
+    const uncompressedSize = buf.readUInt32LE(ptr + 24)
     const nameLen = buf.readUInt16LE(ptr + 28)
     const extraLen = buf.readUInt16LE(ptr + 30)
     const commentLen = buf.readUInt16LE(ptr + 32)
@@ -144,6 +145,11 @@ export function readZipEntries(bytes: Uint8Array): ZipEntry[] {
       throw new PluginPackageError(`entry data out of bounds for ${name}`)
     }
     const raw = buf.subarray(dataStart, dataStart + compSize)
+    if (uncompressedSize > MAX_ENTRY_OUTPUT) {
+      throw new PluginPackageError(
+        `entry ${name} exceeds the ${MAX_ENTRY_OUTPUT}-byte limit`
+      )
+    }
 
     let data: Buffer
     if (method === 0) data = Buffer.from(raw)
@@ -158,6 +164,10 @@ export function readZipEntries(bytes: Uint8Array): ZipEntry[] {
         )
       }
     } else throw new PluginPackageError(`unsupported compression method ${method} for ${name}`)
+
+    if (data.length !== uncompressedSize) {
+      throw new PluginPackageError(`entry size does not match central directory for ${name}`)
+    }
 
     totalOutput += data.length
     if (totalOutput > MAX_TOTAL_OUTPUT) {

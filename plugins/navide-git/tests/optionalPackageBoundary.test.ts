@@ -99,7 +99,7 @@ describe('factory first-party package boundary', () => {
     expectTypeOf<HostGitTransportStatusSource>().toEqualTypeOf<GitTransportStatusSource>()
   })
 
-  it('ships the retained mini-IDE, Plans, factory v2, and legacy Git artifacts', () => {
+  it('ships retained legacy recovery resources and versioned factory artifacts', () => {
     const manifest = readJson(join(repositoryRoot, 'package.json'))
     const scripts = (manifest.scripts ?? {}) as Record<string, string>
     const build = (manifest.build ?? {}) as { extraResources?: Array<{ from?: string }> }
@@ -110,6 +110,6 @@ describe('factory first-party package boundary', () => {
     expect(resourceSources).toContain('dist-plugins/mini-ide')
     expect(resourceSources).toContain('dist-plugins/plans')
     expect(resourceSources).toContain('dist-plugins/git')
-    expect(resourceSources).toContain('dist-plugins/navide-git')
+    expect(resourceSources).toContain('dist-plugins/official-artifacts/factory-resources')
   })
 })

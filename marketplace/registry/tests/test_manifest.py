@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from registry.manifest import ManifestError, manifest_capabilities, parse_manifest
+from registry.manifest import (
+    ManifestError,
+    manifest_capabilities,
+    manifest_referenced_files,
+    parse_manifest,
+)
 from registry.trust import sensitive_capabilities
 from registry.versions import latest_version, version_key
 from tests.fixtures import contract_manifest, valid_manifest
@@ -101,6 +106,88 @@ def test_manifest_v2_build_metadata_is_accepted() -> None:
     manifest = contract_manifest()
     manifest["version"] = "1.2.3-alpha.1+build.4"
     assert parse_manifest(manifest).version == "1.2.3-alpha.1+build.4"
+
+
+def test_manifest_v2_composition_fields_are_strict_and_referenced() -> None:
+    manifest = contract_manifest()
+    manifest["contributes"]["views"] = [
+        {
+            "id": "left",
+            "kind": "custom",
+            "location": "left",
+            "title": "Left",
+            "entry": "frontend/left/index.html",
+            "detailView": "detail",
+        },
+        {
+            "id": "detail",
+            "kind": "custom",
+            "location": "detail",
+            "title": "Detail",
+            "entry": "frontend/detail/index.html",
+            "targetSchema": "schemas/item.json",
+        },
+        {
+            "id": "window",
+            "kind": "custom",
+            "location": "window",
+            "title": "Window",
+            "entry": "frontend/window/index.html",
+            "receives": {
+                "protocolVersion": 1,
+                "locations": ["left", "detail"],
+                "editorTargets": {"protocolVersion": 1},
+                "closeGuard": {"protocolVersion": 1},
+            },
+        },
+    ]
+    parsed = parse_manifest(manifest)
+    assert parsed.contributes is not None
+    assert parsed.contributes.views[0].detailView == "detail"
+    assert parsed.contributes.views[1].targetSchema == "schemas/item.json"
+    assert parsed.contributes.views[2].receives is not None
+    assert parsed.contributes.views[2].receives.editorTargets is not None
+    assert parsed.contributes.views[2].receives.closeGuard is not None
+    assert "schemas/item.json" in manifest_referenced_files(parsed)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda manifest: manifest["contributes"]["views"][0].update(detailView="detail"),
+        lambda manifest: manifest["contributes"]["views"][0].update(targetSchema="schemas/item.json"),
+        lambda manifest: manifest["contributes"]["views"][0].update(
+            receives={"protocolVersion": 1, "locations": ["left"]}
+        ),
+        lambda manifest: manifest["contributes"]["views"][0].update(
+            location="window", receives={"protocolVersion": 1, "locations": ["left"], "extra": True}
+        ),
+        lambda manifest: manifest["contributes"]["views"][0].update(
+            location="window",
+            receives={
+                "protocolVersion": 1,
+                "locations": ["left"],
+                "closeGuard": {"protocolVersion": 2},
+            },
+        ),
+        lambda manifest: manifest["contributes"]["views"][0].update(
+            location="window",
+            receives={
+                "protocolVersion": 1,
+                "locations": ["left"],
+                "closeGuard": {"protocolVersion": 1, "onPrepare": True},
+            },
+        ),
+        lambda manifest: manifest["contributes"]["views"][0].update(
+            location="window", receives={"protocolVersion": 1, "closeGuard": {"protocolVersion": 1}}
+        ),
+    ],
+)
+def test_manifest_v2_composition_fields_reject_invalid_placement_or_shape(mutate) -> None:
+    manifest = contract_manifest()
+    mutate(manifest)
+    with pytest.raises(ManifestError):
+        parse_manifest(manifest)
 
 
 def test_latest_version_orders_valid_prerelease() -> None:

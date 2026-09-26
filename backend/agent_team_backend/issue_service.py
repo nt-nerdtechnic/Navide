@@ -21,6 +21,8 @@ import asyncio
 import json
 import logging
 import re
+from contextvars import ContextVar
+from time import monotonic
 from typing import Any
 
 from agent_team_backend.host_shell import run_allowlisted_text
@@ -31,6 +33,14 @@ log = logging.getLogger("agent_team_backend.issue_service")
 _TIMEOUT = 30.0
 
 _NUM_RE = re.compile(r"^\d+$")
+
+# Only the authenticated Host's fixed public entry installs this policy.
+# Context-local state prevents concurrent requests borrowing another caller's
+# permissions; legacy Host operations retain their existing behavior.
+_public_shell_policy: ContextVar[tuple[str, frozenset[str]] | None] = ContextVar(
+    "issue_public_shell_policy", default=None
+)
+_public_deadline: ContextVar[float | None] = ContextVar("issue_public_deadline", default=None)
 
 
 # ─── input validation ─────────────────────────────────────────────────────────
@@ -56,7 +66,72 @@ async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
     A missing executable maps to rc 127 so callers can distinguish
     "CLI not installed" from a normal non-zero exit.
     """
-    return await run_allowlisted_text(args, cwd, timeout=_TIMEOUT)
+    policy = _public_shell_policy.get()
+    if policy is not None:
+        mode, commands = policy
+        executable = args[0] if args else ""
+        allowed = mode == "full" or (mode == "allowlist" and executable in commands) or (
+            mode == "denylist" and executable not in commands
+        )
+        if not allowed:
+            raise PermissionError("Issue provider command denied by Execution Policy")
+    deadline = _public_deadline.get()
+    remaining = deadline - monotonic() if deadline is not None else _TIMEOUT
+    if remaining <= 0:
+        return 128, "", "Issue request timed out"
+    return await run_allowlisted_text(args, cwd, timeout=min(_TIMEOUT, remaining))
+
+
+async def public_request(
+    operation: str, workspace_path: str, arguments: dict[str, Any], policy: dict[str, Any]
+) -> dict[str, Any]:
+    """Execute one fixed Issue operation with Host-derived executable policy."""
+    fields = {
+        "provider": (), "list": ("limit",), "get": ("number",),
+        "create": ("title", "body"), "comment": ("number", "body"),
+        "set_state": ("number", "state"),
+    }
+    if operation not in fields or set(arguments) - set(fields[operation]):
+        raise ValueError("Invalid public Issue operation")
+    required = {
+        "provider": (), "list": (), "get": ("number",),
+        "create": ("title",), "comment": ("number", "body"),
+        "set_state": ("number", "state"),
+    }
+    if any(key not in arguments for key in required[operation]):
+        raise ValueError("Missing public Issue argument")
+    for key, value in arguments.items():
+        if key in ("number", "limit"):
+            if type(value) is not int or (key == "number" and value < 0):
+                raise ValueError("Invalid public Issue numeric argument")
+        elif not isinstance(value, str):
+            raise ValueError("Invalid public Issue text argument")
+    if operation == "set_state" and arguments["state"] not in ("open", "closed"):
+        raise ValueError("Invalid public Issue state")
+    if set(policy) != {"mode", "shell"}:
+        raise ValueError("Invalid Host Issue execution policy")
+    mode, commands = policy.get("mode"), policy.get("shell")
+    if mode not in ("full", "allowlist", "denylist") or not isinstance(commands, list) or not all(
+        isinstance(command, str) for command in commands
+    ):
+        raise ValueError("Invalid Host Issue execution policy")
+    token = _public_shell_policy.set((mode, frozenset(commands)))
+    deadline_token = _public_deadline.set(monotonic() + _TIMEOUT)
+    try:
+        if operation == "provider":
+            return await detect_provider(workspace_path)
+        if operation == "list":
+            return await list_issues(workspace_path, arguments.get("limit", 30))
+        if operation == "get":
+            return await get_issue(workspace_path, arguments.get("number"))
+        if operation == "create":
+            return await create_issue(workspace_path, arguments.get("title", ""), arguments.get("body", ""))
+        if operation == "comment":
+            return await comment_issue(workspace_path, arguments.get("number"), arguments.get("body", ""))
+        return await set_issue_state(workspace_path, arguments.get("number"), arguments.get("state", ""))
+    finally:
+        _public_deadline.reset(deadline_token)
+        _public_shell_policy.reset(token)
 
 
 # ─── provider detection ───────────────────────────────────────────────────────

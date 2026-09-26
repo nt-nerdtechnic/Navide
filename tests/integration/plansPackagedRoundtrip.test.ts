@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type {} from '../../plugins/navide-plans/src/provenance'
 import { tmpdir } from 'node:os'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import { manifestV2CapabilityPolicy } from '../../src/main/plugins/pluginPermissions'
@@ -351,6 +351,9 @@ for (const key of ['TMPDIR', 'TEMP', 'TMP'] as const) {
   if (typeof value === 'string' && value.length > 0) packagedBackendEnvironment[key] = value
 }
 
+// Staged official artifacts are keyed by the running App's version.
+const appVersion = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).version as string
+
 describe('Plans packaged backend composition', () => {
   const managers: FrontendPluginManager[] = []
   const supervisors: PluginBackendSupervisor[] = []
@@ -359,7 +362,13 @@ describe('Plans packaged backend composition', () => {
   const originalNav = (globalThis as unknown as { nav?: unknown }).nav
   const originalWindowNav = (window as unknown as { nav?: unknown }).nav
   const originalLocation = window.location.href
+  // The preload exposes the Host-admitted frame bridge unless it runs in the
+  // view's main frame, which is what every test here loads.
+  beforeEach(() => {
+    Object.defineProperty(process, 'isMainFrame', { value: true, configurable: true })
+  })
   afterEach(async () => {
+    delete (process as { isMainFrame?: boolean }).isMainFrame
     vi.restoreAllMocks()
     await Promise.all(supervisors.splice(0).map((supervisor) => supervisor.close()))
     await Promise.all(managers.splice(0).map((manager) => manager.closeBackendPlugins()))
@@ -1191,15 +1200,34 @@ describe('Plans packaged backend composition', () => {
       managers.push(manager)
       try {
         manager.setPlansDiagnosticsEnabled(true)
-        expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', devRoot: process.cwd() })).toEqual({ registered: true })
+        expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', artifactVersion: appVersion, devRoot: process.cwd() })).toEqual({ registered: true })
         const descriptor = manager.getDescriptor(PLANS_PLUGIN_ID)!
         const view = descriptor.views!.find((candidate) => candidate.contributionKey === 'navide.plans.window')!
-        const packageDirectory = realpathSync(join(process.cwd(), 'dist-plugins/navide-plans'))
+        const packageDirectory = realpathSync(join(
+          process.cwd(),
+          'dist-plugins',
+          'official-artifacts',
+          'factory-resources',
+          PLANS_PLUGIN_ID,
+          appVersion,
+          `${process.platform}-${process.arch}`,
+          'package',
+        ))
         const packageVersion = JSON.parse(readFileSync(join(packageDirectory, 'manifest.json'), 'utf8')).version
+        expect(packageVersion).toBe(appVersion)
         expect(manager.getPlansProvenance()).toMatchObject({
-          selectionOrigin: 'factory-bundle', packageDirectory, packageVersion,
-          backendExecutable: realpathSync(productionBackend),
-          frontendEntries: { 'navide.plans.window': view.entryFile },
+          descriptorSource: 'factory-bundle',
+          selectionOrigin: 'factory-bundle',
+          packageDirectory,
+          packageVersion,
+          backendExecutable: realpathSync(join(
+            packageDirectory,
+            'backend',
+            process.platform === 'win32' ? 'navide-plans.exe' : 'navide-plans',
+          )),
+          frontendEntries: {
+            'navide.plans.window': join(packageDirectory, 'frontend', 'window', 'index.html'),
+          },
         })
         manager.setBackendWsUrl('ws://plans-core-test')
         manager.configurePlansFilesystemService(createTestPlansFilesystemPort())

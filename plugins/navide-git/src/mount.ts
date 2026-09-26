@@ -38,6 +38,7 @@ import './pluginDocument.css'
 
 import GitWindowApp from './GitWindowApp.vue'
 import GitLeftApp from './GitLeftApp.vue'
+import GitDetailApp from './GitDetailApp.vue'
 
 // Zero-flash initial theme: the host passes the current app theme as `?theme=`
 // (the plugin origin has no `window.agentTeam.getBootstrapSettings`, so the
@@ -88,11 +89,12 @@ const workspaceGrantPort = createPluginGitWorkspaceGrantPort(capabilitySdk)
 const legacyRepoSelection = createPluginLegacyRepoSelectionPort(capabilitySdk)
 const settingsPort = createPluginGitSettingsPort(capabilitySdk)
 const isLeftContribution = query.get('contribution') === 'left'
+const isDetailContribution = query.get('contribution') === 'branch-detail'
 
 // The Git window owns the AI CLI panel, but not its transport.  Adapt the
 // already-authenticated capability/event closure to the public controller
 // shape so the panel never receives the generic backend or a raw terminal port.
-const aiCliController = isLeftContribution ? null : createAiCliSessionController({
+const aiCliController = isLeftContribution || isDetailContribution ? null : createAiCliSessionController({
   capabilities: {
     invoke: (async (method: string, params: unknown) => {
       const response = await capabilitySdk.request(
@@ -124,7 +126,9 @@ initKeybindingsPort(createPluginKeybindingsPort())
 function mountPlugin(): void {
   const app = isLeftContribution
     ? createApp(GitLeftApp, { surfacePorts, hostPort: contributionHostPort, legacyRepoSelection })
-    : createApp(GitWindowApp, { workspaceGrantPort, aiCliController: aiCliController! })
+    : isDetailContribution
+      ? createApp(GitDetailApp)
+      : createApp(GitWindowApp, { workspaceGrantPort, aiCliController: aiCliController! })
   app.use(i18n)
   app.provide(GIT_TRANSPORT_KEY, surfacePorts.gitTransport)
   app.provide(GIT_FILE_ACCESS_KEY, surfacePorts.fileAccess)
@@ -141,5 +145,10 @@ function mountPlugin(): void {
 try {
   mountPlugin()
 } catch (error: unknown) {
-  console.error('[navide.git] Failed to mount the plugin view.', error)
+  // A composition failure leaves an empty frame; the frame's own console is the
+  // only place that can say why.
+  console.error(
+    `[navide.git] failed to mount the ${isDetailContribution ? 'detail' : isLeftContribution ? 'left' : 'window'} view.`,
+    error,
+  )
 }

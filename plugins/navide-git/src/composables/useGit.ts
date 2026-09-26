@@ -1,5 +1,5 @@
 import { ref, computed, watch, onScopeDispose } from 'vue'
-import type { GitRequestType, GitTransport } from '#git-feature'
+import type { GitRequestType, GitTransport, GitTransportResponse } from '#git-feature'
 import { useGitPreferences } from './useGitPreferences'
 
 export interface GitFileEntry {
@@ -191,8 +191,56 @@ const emptyStatus = (): GitStatus => ({
 export function useGit(
   workspacePath: () => string,
   transport: GitTransport,
+  closeGuard?: { isPrepared: () => boolean },
 ) {
-  const { send, on } = transport
+  const { send: transportSend, on } = transport
+
+  // Read-only requests keep working during a close preparation; every other
+  // type is refused locally so a prepared pane cannot race a user-driven
+  // mutation into a transaction that is about to discard it.
+  const GIT_READ_ONLY_TYPES: ReadonlySet<GitRequestType> = new Set([
+    'git.blame',
+    'git.branches',
+    'git.check_ignore',
+    'git.check_staged',
+    'git.commit_file_diff',
+    'git.compare_branches',
+    'git.config_get',
+    'git.conflict_stages',
+    'git.diff_blame',
+    'git.diff_branches',
+    'git.diff_file',
+    'git.discover_repositories',
+    'git.file_log',
+    'git.list_conflicts',
+    'git.log',
+    'git.remotes',
+    'git.show_commit',
+    'git.show_file',
+    'git.stash_list',
+    'git.status',
+    'git.tags',
+    'git.worktrees',
+  ])
+  function send<TPayload = unknown>(
+    type: GitRequestType,
+    payload?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<GitTransportResponse<TPayload>> {
+    if (closeGuard?.isPrepared() && !GIT_READ_ONLY_TYPES.has(type)) {
+      const message = `Blocked ${type} while the pane is prepared to close.`
+      return Promise.resolve({
+        ok: false,
+        // Callers that read the payload envelope still see the real reason
+        // instead of the generic "no response" fallback.
+        payload: { ok: false, error: message } as TPayload,
+        error: { code: 'GIT_CLOSE_PREPARED', message },
+      })
+    }
+    return timeoutMs === undefined
+      ? transportSend<TPayload>(type, payload)
+      : transportSend<TPayload>(type, payload, timeoutMs)
+  }
 
   const gitStatus = ref<GitStatus>(emptyStatus())
   const statusError = ref('')

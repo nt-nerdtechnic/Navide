@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { composePluginContributionQuery } from './pluginContributionQuery'
+import { composePluginContributionQuery, composePluginFrameQuery } from './pluginContributionQuery'
 import {
   HostLocaleManager,
   readPersistedLocaleFromSettings,
@@ -247,6 +247,18 @@ describe('composePluginContributionQuery', () => {
       v2: '1',
       contribution: 'window',
     })
+  })
+
+  it('gives a composed frame its workspace, its runtime and its view id', () => {
+    // A detail frame mounts the wrong surface without the view id: the shipped
+    // Git detail page boots its window app instead and drops the Host target.
+    const detail = new URLSearchParams(composePluginFrameQuery('navide.git.branch-detail', '/workspace'))
+    expect(detail.get('workspace_path')).toBe('/workspace')
+    expect(detail.get('v2')).toBe('1')
+    expect(detail.get('contribution')).toBe('branch-detail')
+
+    expect(new URLSearchParams(composePluginFrameQuery('navide.git.left', '/w')).get('contribution')).toBe('left')
+    expect(new URLSearchParams(composePluginFrameQuery('navide.plans.window', '/w')).get('contribution')).toBe('window')
   })
 
   it('drops an extra locale when the Host did not provide one', () => {

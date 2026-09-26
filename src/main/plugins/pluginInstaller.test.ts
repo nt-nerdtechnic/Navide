@@ -4,17 +4,20 @@ import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto'
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   prepareInstall,
   commitInstall,
+  stageInstallCandidate,
   defaultInstallerDeps,
   removePlugin,
   isUpdateAvailable,
@@ -30,6 +33,7 @@ import {
 } from './pluginRegistryTrust'
 import { REGISTRY_TRUST_SNAPSHOT_NAME } from './pluginInstalledTrust'
 import { PLUGIN_QUARANTINE_DIR } from './pluginInstallPaths'
+import { PluginActivationSelector, immutablePluginPackageDir } from './pluginActivationSelector'
 import { makeZip, type ZipFile } from './zipFixture'
 
 // The platform to restore after a test that switched it: whatever this file
@@ -712,6 +716,105 @@ describe('commitInstall', () => {
   // contract.
   beforeEach(() => setPlatformId('linux'))
   afterEach(() => setPlatformId(BASELINE))
+
+  // Whether a directory can be flushed is a fact about the kernel these tests
+  // run on, not about the pinned package platform: a Windows runner refuses a
+  // directory fsync, so real-filesystem writes flush under the host's own id.
+  function onHostKernel<T>(write: () => T): T {
+    const pinned = platformId()
+    setPlatformId(BASELINE)
+    try {
+      return write()
+    } finally {
+      setPlatformId(pinned)
+    }
+  }
+  const hostInstallerDeps: InstallerDeps = {
+    ...defaultInstallerDeps,
+    syncDirectory: (path) => onHostKernel(() => defaultInstallerDeps.syncDirectory!(path)),
+  }
+
+  it('stages a Registry package into its immutable target directory without replacing the active install', async () => {
+    const { bytes, digest } = v2Pkg()
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-candidate-'))
+    try {
+      const deps: InstallerDeps = {
+        ...hostInstallerDeps,
+        async download() {
+          return { bytes, digestHeader: digest }
+        },
+      }
+      const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
+      const staged = stageInstallCandidate(prepared, root, deps)
+
+      expect(staged.candidateDir).toBe(join(root, 'acme.demo', '1.0.0', 'universal', 'package'))
+      expect(staged.descriptor?.packageDir).toBe(staged.candidateDir)
+      expect(existsSync(join(root, 'acme.demo', 'manifest.json'))).toBe(false)
+      expect(readFileSync(join(staged.candidateDir, 'manifest.json'), 'utf8')).toContain('acme.demo')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('quarantines an unreferenced interrupted candidate before staging a fresh verified candidate', async () => {
+    const { bytes, digest } = v2Pkg()
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-candidate-existing-'))
+    try {
+      const deps: InstallerDeps = {
+        ...hostInstallerDeps,
+        async download() {
+          return { bytes, digestHeader: digest }
+        },
+      }
+      const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
+      stageInstallCandidate(prepared, root, deps)
+      const restaged = stageInstallCandidate(prepared, root, deps)
+      expect(existsSync(restaged.candidateDir)).toBe(true)
+      expect(
+        readdirSync(join(root, PLUGIN_QUARANTINE_DIR)).some((entry) => entry.startsWith('acme.demo.unreferenced.'))
+      ).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves the retained active package and selector untouched when the staging durability boundary fails', async () => {
+    const { bytes, digest } = v2Pkg()
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-stage-fsync-'))
+    try {
+      const active = {
+        packageVersion: '0.9.0',
+        target: 'universal',
+        artifactDigest: 'a'.repeat(64),
+      }
+      const activeDir = immutablePluginPackageDir(root, 'acme.demo', active.packageVersion, active.target)
+      mkdirSync(activeDir, { recursive: true })
+      writeFileSync(join(activeDir, 'retained.txt'), 'keep')
+      const selector = new PluginActivationSelector(root)
+      onHostKernel(() => {
+        selector.stageCandidate('acme.demo', active)
+        selector.activateCandidate('acme.demo')
+        selector.completeActivation('acme.demo')
+      })
+      const deps: InstallerDeps = {
+        ...hostInstallerDeps,
+        async download() {
+          return { bytes, digestHeader: digest }
+        },
+        syncDirectory() {
+          throw new Error('injected staging fsync failure')
+        },
+      }
+      const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
+
+      expect(() => stageInstallCandidate(prepared, root, deps)).toThrow(/injected staging fsync failure/)
+      expect(readFileSync(join(activeDir, 'retained.txt'), 'utf8')).toBe('keep')
+      expect(selector.read('acme.demo')).toMatchObject({ active })
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', prepared.version, 'universal'))).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 
   it('writes a backend-only package without creating a frontend descriptor', async () => {
     const { bytes, digest } = v2Pkg([

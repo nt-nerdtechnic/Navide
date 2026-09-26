@@ -107,6 +107,7 @@ jobs:
       - name: Build navide.plans
         # The same build commands scripts/publish-first-party-plugins.sh runs.
         run: |
+          pnpm run build:public-packages
           pnpm run build:plans:v2
           pnpm run build:plans:backend
 

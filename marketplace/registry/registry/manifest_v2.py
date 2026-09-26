@@ -100,13 +100,38 @@ class ManifestV2Marketplace(ManifestV2Model):
         return value
 
 
+class ManifestV2EditorTargets(ManifestV2Model):
+    protocolVersion: Literal[1]
+
+
+class ManifestV2CloseGuard(ManifestV2Model):
+    protocolVersion: Literal[1]
+
+
+class ManifestV2Receives(ManifestV2Model):
+    protocolVersion: Literal[1]
+    locations: list[Literal["left", "detail"]] = Field(min_length=1, max_length=2)
+    editorTargets: ManifestV2EditorTargets | None = None
+    closeGuard: ManifestV2CloseGuard | None = None
+
+    @field_validator("locations")
+    @classmethod
+    def _check_unique_locations(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("must contain unique values")
+        return value
+
+
 class ManifestV2View(ManifestV2Model):
     id: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
     kind: Literal["custom"]
-    location: Literal["top", "bottom", "right", "left", "main", "window"]
+    location: Literal["top", "bottom", "right", "left", "main", "window", "detail"]
     title: str = Field(min_length=1, max_length=80, pattern=_V2_DISPLAY_TEXT_RE)
     icon: str | None = Field(default=None, min_length=1)
     entry: str = Field(min_length=1)
+    detailView: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]*$")
+    targetSchema: str | None = Field(default=None, min_length=1)
+    receives: ManifestV2Receives | None = None
 
     @field_validator("icon")
     @classmethod
@@ -122,6 +147,23 @@ class ManifestV2View(ManifestV2Model):
             raise ValueError("must be a safe package-relative HTML path")
         return value
 
+    @field_validator("targetSchema")
+    @classmethod
+    def _check_target_schema(cls, value: str | None) -> str | None:
+        if value is not None and (canonical_package_path(value) is None or not value.endswith(".json")):
+            raise ValueError("must be a safe package-relative JSON path")
+        return value
+
+    @model_validator(mode="after")
+    def _check_composition_fields(self) -> ManifestV2View:
+        if self.detailView is not None and self.location != "left":
+            raise ValueError("detailView is only valid for a left view")
+        if self.targetSchema is not None and self.location != "detail":
+            raise ValueError("targetSchema is only valid for a detail view")
+        if self.receives is not None and self.location != "window":
+            raise ValueError("receives is only valid for a window view")
+        return self
+
 
 class ManifestV2Contributes(ManifestV2Model):
     views: list[ManifestV2View] = Field(min_length=1, max_length=16)
@@ -131,6 +173,10 @@ class ManifestV2Contributes(ManifestV2Model):
         ids = [view.id for view in self.views]
         if len(set(ids)) != len(ids):
             raise ValueError("contributes.views must contain unique ids")
+        detail_ids = {view.id for view in self.views if view.location == "detail"}
+        for view in self.views:
+            if view.detailView is not None and view.detailView not in detail_ids:
+                raise ValueError("detailView must reference a detail view in the same package")
         return self
 
 

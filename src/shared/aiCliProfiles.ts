@@ -21,3 +21,24 @@ export const AI_CLI_PROFILES = {
 } as const
 
 export type AiCliProfileId = keyof typeof AI_CLI_PROFILES
+
+/** Presentation metadata for the existing embedded editor terminal. Keeping
+ * its richer profile set opt-in preserves current Git/Plans launch defaults. */
+export const TERMINAL_AI_CLI_PROFILES = {
+  ...AI_CLI_PROFILES,
+  opencode: { label: 'OpenCode', command: 'opencode' },
+  droid: { label: 'Droid', command: 'droid', yoloFlag: '--auto high' },
+} as const
+
+export const FULL_SCREEN_AI_CLI_PROFILES: readonly string[] = [
+  'claude', 'antigravity', 'opencode', 'qwen', 'kilo', 'copilot',
+]
+
+export const BRACKETED_PASTE_AI_CLI_PROFILES: readonly string[] = [
+  'claude', 'codex', 'antigravity', 'droid', 'grok', 'kimi',
+]
+
+/** Profiles whose terminal adapter uses a dedicated Shift+Enter sequence. */
+export const AI_CLI_SHIFT_ENTER_SEQUENCES: Readonly<Record<string, string>> = {
+  codex: '\x1b[13;2u',
+}

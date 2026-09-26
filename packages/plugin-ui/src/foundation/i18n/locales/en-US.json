@@ -15,6 +15,7 @@
     "close-left-dirty": "{count} file(s) have unsaved changes. Close tabs to the left anyway?",
     "close-all-dirty": "{count} file(s) have unsaved changes. Close all anyway?",
     "reload-dirty": "{count} file(s) have unsaved changes. Reload and discard them?",
+    "quit-dirty": "{count} file(s) have unsaved changes. Quit and discard them?",
     "select-theme": "Select color theme…",
     "search-shortcuts": "Search keyboard shortcuts…",
     "select-language": "Select language mode…",
@@ -271,6 +272,7 @@
       "open-accounts": "Open Git accounts"
     },
     "left-view-unavailable": "The embedded Git view is temporarily unavailable.",
+    "detail-open-failed": "Could not open the detail view. The Git pane keeps the current target.",
     "open-workspace": "Open a workspace to use Git.",
     "settings-unavailable": "Git preferences could not be loaded.",
     "settings-retry": "Retry",
@@ -293,6 +295,9 @@
     "problems": {
       "title": "Problems",
       "tab-shortcut": "Problems (⌘⇧M)"
+    },
+    "pluginViews": {
+      "unavailable": "This view is provided by a plugin and could not be opened."
     },
     "plans": {
       "stage-in-review": "In Review",

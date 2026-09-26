@@ -26,8 +26,13 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from .package import PackageError, build_package
-from .signing import generate_keypair, sign_digest
+from .package import (
+    DuplicateJsonKeyError,
+    PackageError,
+    _reject_duplicate_json_keys,
+    build_package,
+)
+from .signing import generate_keypair, read_private_key_file, sign_digest
 
 
 TOKEN_ENV = "NAVIDE_PLUGIN_TOKEN"
@@ -43,11 +48,10 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     priv_path = out_dir / f"{args.name}.key"
     pub_path = out_dir / f"{args.name}.pub"
-    # The private key is owner-only from creation; the registry refuses to read
-    # a private key file readable by group/other.
+    # Never replace an existing key; the new file is owner-only from creation.
     fd = os.open(
         priv_path,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     try:
@@ -67,21 +71,30 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 def cmd_pack(args: argparse.Namespace) -> int:
     src = Path(args.src_dir)
     try:
-        data = build_package(src, target=args.target)
+        files = json.loads(
+            (src / "artifact-files.json").read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        if not isinstance(files, dict) or set(files) != {"files"} or not isinstance(files["files"], list) or not all(isinstance(path, str) for path in files["files"]):
+            raise PackageError("artifact-files.json must contain only a files array")
+        data = build_package(src, files["files"], target=args.target)
     except PackageError as exc:
         print(f"pack failed: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, DuplicateJsonKeyError, json.JSONDecodeError) as exc:
+        print(f"pack failed: artifact-files.json is invalid: {exc}", file=sys.stderr)
         return 1
     manifest = json.loads((src / "manifest.json").read_text())
     default_out = f"{manifest['id']}-{manifest['version']}.vsix"
     out_path = Path(args.out) if args.out else Path(default_out)
     out_path.write_bytes(data)
-    print(f"packed {out_path} ({len(data)} bytes, sha256 {_digest(data)})")
+    print(f"packed {out_path} for {args.target} ({len(data)} bytes, sha256 {_digest(data)})")
     return 0
 
 
 def cmd_sign(args: argparse.Namespace) -> int:
     package_path = Path(args.package)
-    private_pem = Path(args.key).read_text()
+    private_pem = read_private_key_file(Path(args.key))
     signature = sign_digest(private_pem, _digest(package_path.read_bytes()))
     if args.out:
         Path(args.out).write_text(signature)
@@ -96,8 +109,8 @@ def post_package(
     package_path: Path | str,
     token: str,
     signature: str | None = None,
-    *,
     target: str = "universal",
+    *,
     client: object | None = None,
 ) -> tuple[int, str]:
     """Upload a package to `<registry_url>/api/publish`.

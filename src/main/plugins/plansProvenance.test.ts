@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { appendPlansProvenanceQuery, FrontendPluginManager, registerBundledPlans } from './frontendPluginManager'
@@ -14,7 +14,9 @@ function packageFixture(directory: string): string {
   writeFileSync(join(directory, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
   writeFileSync(join(directory, 'frontend/left/index.html'), '<!doctype html>')
   writeFileSync(join(directory, 'frontend/window/index.html'), '<!doctype html>')
-  copyFileSync(process.execPath, join(directory, PLANS_BACKEND))
+  // A tiny stand-in with the executable bit: the provenance scan only stats
+  // the entry, and copying the real Node binary into every fixture is slow.
+  writeFileSync(join(directory, PLANS_BACKEND), Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
   chmodSync(join(directory, PLANS_BACKEND), 0o700)
   return realpathSync(directory)
 }
@@ -30,7 +32,10 @@ describe('Plans Host provenance query', () => {
       expect(scanned.error).toBeUndefined()
       manager.registerInstalledPackage({ ...scanned.packageSummary!, provenance }, scanned.descriptor!, { official: true })
       expect(registerBundledPlans(manager, {
-        isPackaged: false, resourcesPath: '', devRoot: root,
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
         installedActivation: { ...scanned.activation!, provenance },
       })).toEqual({ registered: true })
       expect(manager.getPlansProvenance()).toMatchObject({
@@ -50,8 +55,19 @@ describe('Plans Host provenance query', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'plans-provenance-')))
     const manager = new FrontendPluginManager()
     try {
-      const directory = packageFixture(join(root, 'dist-plugins/navide-plans'))
-      expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', devRoot: root })).toEqual({ registered: true })
+      const directory = packageFixture(join(
+        root,
+        'dist-plugins',
+        'official-artifacts/factory-resources/navide.plans/0.1.0',
+        `${process.platform}-${process.arch}`,
+        'package',
+      ))
+      expect(registerBundledPlans(manager, {
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
+      })).toEqual({ registered: true })
       expect(manager.getPlansProvenance()).toMatchObject({
         descriptorSource: 'factory-bundle', selectionOrigin: 'factory-bundle',
         acquisitionProvenance: 'factory-bundled', packageDirectory: directory,
@@ -73,7 +89,10 @@ describe('Plans Host provenance query', () => {
       const other = loadPluginDir(packageFixture(join(root, 'other')))
       manager.registerInstalledPackage({ ...selected.packageSummary!, provenance: 'official-registry' }, selected.descriptor!, { official: true })
       expect(registerBundledPlans(manager, {
-        isPackaged: false, resourcesPath: '', devRoot: root,
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
         installedActivation: other.activation!,
       })).toEqual({
         registered: false,

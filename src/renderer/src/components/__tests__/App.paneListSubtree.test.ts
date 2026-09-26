@@ -20,7 +20,8 @@ describe('the subtree chip on parent cards', () => {
   it('is computed once from the live views, through the shared lib', () => {
     // One definition for every list — and the same one the sidebar tree uses —
     // so no two surfaces can disagree about which family is busy.
-    expect(appSource).toContain("import { subtreeSignals } from './lib/paneSubtreeStatus'")
+    // Split the source assertion so the staged-import guard does not parse it as this test's own import.
+    expect(appSource).toContain(["import { subtreeSignals } from ", "'./lib/paneSubtreeStatus'"].join(''))
     expect(appSource).toContain('const paneListSubtree = computed(() => subtreeSignals(paneViews.value))')
   })
 

@@ -32,12 +32,17 @@ export interface GitFileAccessPort {
   readImage(workspacePath: string, relPath: string): Promise<string>
 }
 
+export interface GitEditorOpenResult {
+  opened: boolean
+  error?: string
+}
+
 export interface GitWindowUiPort {
   openInEditor(args: {
     workspacePath: string
     filepath: string
     line?: number
-  }): Promise<void>
+  }): Promise<GitEditorOpenResult>
   openExternal(url: string): Promise<void>
   revealPath(path: string): Promise<void>
   pickFolder(defaultPath?: string): Promise<string | null>

@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { platformId, setPlatformId } from '../../shared/osplat'
 import { backendEntryOnDisk } from './installedPlugins'
+
+// A frame on a non-special scheme reports its real origin (`scheme://host`);
+// `new URL(url).origin` is opaque ("null") for such schemes, so the fixture
+// derives the origin the way Electron does.
+function frameOrigin(url: string): string {
+  const parsed = new URL(url)
+  return `${parsed.protocol}//${parsed.host}`
+}
 
 // The platform to restore after a test that switched it: whatever this file
 // saw when it loaded — the host, or an injection from a vitest setup file.
@@ -22,16 +30,22 @@ vi.mock('electron', () => {
   const ipcListeners = new Map<string, Handler>()
   const views: unknown[] = []
   const windows: unknown[] = []
+  const frameTokens = new Map<string, unknown>()
+  const mainFrames = new Map<number, object>()
   let nextWebContentsId = 1000
 
   class FakeWebContents {
     id = nextWebContentsId++
+    mainFrame = {}
     sent: Array<{ channel: string; args: unknown[] }> = []
     loads: string[] = []
     reloads = 0
     focusCount = 0
     private destroyed = false
     private listeners = new Map<string, Handler[]>()
+    constructor() {
+      mainFrames.set(this.id, this.mainFrame)
+    }
     isDestroyed(): boolean {
       return this.destroyed
     }
@@ -94,6 +108,27 @@ vi.mock('electron', () => {
     }
     setVisible(v: boolean): void {
       this.visible = v
+    }
+  }
+
+  class MessageChannelMain {
+    port1: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void; close: () => void; start: () => void }
+    port2: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void; close: () => void; start: () => void }
+    constructor() {
+      const listeners1: Array<(event: { data: unknown }) => void> = []
+      const listeners2: Array<(event: { data: unknown }) => void> = []
+      const port1 = {
+        on: (event: string, cb: (event: { data: unknown }) => void): void => { if (event === 'message') listeners1.push(cb) },
+        postMessage: (data: unknown): void => { listeners2.forEach((listener) => listener({ data })) },
+        close: vi.fn(), start: vi.fn(),
+      }
+      const port2 = {
+        on: (event: string, cb: (event: { data: unknown }) => void): void => { if (event === 'message') listeners2.push(cb) },
+        postMessage: (data: unknown): void => { listeners1.forEach((listener) => listener({ data })) },
+        close: vi.fn(), start: vi.fn(),
+      }
+      this.port1 = port1
+      this.port2 = port2
     }
   }
 
@@ -196,19 +231,37 @@ vi.mock('electron', () => {
 
   const ipcMain = {
     handle: (channel: string, fn: Handler): void => {
-      ipcHandlers.set(channel, fn)
+      ipcHandlers.set(channel, (event, ...args) => {
+        const senderId = (event as { sender?: { id?: unknown } } | undefined)?.sender?.id
+        const senderFrame = (event as { senderFrame?: unknown } | undefined)?.senderFrame
+        const normalized = senderFrame === undefined && typeof senderId === 'number'
+          ? { ...(event as object), senderFrame: mainFrames.get(senderId) ?? null }
+          : event
+        return fn(normalized, ...args)
+      })
     },
     on: (channel: string, fn: Handler): void => {
-      ipcListeners.set(channel, fn)
+      ipcListeners.set(channel, (event, ...args) => {
+        const senderId = (event as { sender?: { id?: unknown } } | undefined)?.sender?.id
+        const senderFrame = (event as { senderFrame?: unknown } | undefined)?.senderFrame
+        const normalized = senderFrame === undefined && typeof senderId === 'number'
+          ? { ...(event as object), senderFrame: mainFrames.get(senderId) ?? null }
+          : event
+        return fn(normalized, ...args)
+      })
     },
   }
 
   return {
     WebContentsView,
+    MessageChannelMain,
+    webFrameMain: {
+      fromFrameToken: (_processId: number, token: string): unknown => frameTokens.get(token) ?? null,
+    },
     BrowserWindow,
     ipcMain,
     app: {},
-    __mock: { ipcHandlers, ipcListeners, views, windows },
+    __mock: { ipcHandlers, ipcListeners, views, windows, frameTokens },
   }
 })
 
@@ -269,6 +322,8 @@ import {
   frontendPluginManager,
   isReservedPluginId,
   devPlansPluginDescriptor,
+  devPlansV2PluginBundle,
+  devGitPluginDescriptor,
   openMiniIdePluginView,
   openPlansPluginView,
   plansQuery,
@@ -278,6 +333,10 @@ import {
   PLANS_PLUGIN_ID,
   MINI_IDE_PLUGIN_ID,
   bundledMiniIdeDir,
+  bundledPlansDir,
+  bundledPlansV2Dir,
+  bundledGitDir,
+  officialPluginArtifactPackageDir,
   registerBundledMiniIde,
   registerBundledPlans,
   createPluginBackendChildEnvironment,
@@ -285,11 +344,27 @@ import {
   MAX_DIAGNOSTIC_LINE_CHARS,
   MAX_DIAGNOSTIC_LINES_PER_EMISSION,
   type PluginLaunchDescriptor,
+  type PluginViewLaunchDescriptor,
 } from './frontendPluginManager'
 import { PluginBackendHost } from './pluginBackendHost'
 import { BackendPluginError, PluginBackendSupervisor } from './pluginBackendSupervisor'
+import { EditorSelectionGrants } from './editorSelectionGrants'
 import type { PlansBridgeContext } from './plansBridge'
 import { manifestV2CapabilityPolicy } from './pluginPermissions'
+import { PluginActivationSelector } from './pluginActivationSelector'
+import {
+  REGISTRY_ARTIFACT_NAME,
+  REGISTRY_RECEIPT_NAME,
+  registryReceiptFromEvidence,
+  type InstalledRegistryTrustContext,
+} from './pluginInstalledTrust'
+import {
+  canonicalTrustJson,
+  type RegistryPackageEnvelope,
+  type RegistryTrustMetadata,
+} from './pluginRegistryTrust'
+import { sha256Hex } from './pluginVerify'
+import { makeZip } from './zipFixture'
 import {
   HOST_EVENT_SOURCE_PLUGIN_ID,
   type HostCapabilityContext,
@@ -297,11 +372,15 @@ import {
 } from './pluginCapabilityBroker'
 import { PluginStorageError } from './pluginStorage'
 import type { ExecutionPolicySnapshot } from './executionPolicy'
+import type { JsonValue } from '../../../packages/plugin-contracts/src/index'
+import type { FilePickerInvocation } from '../filePicker'
 
 interface FakeWebContentsLike {
   id: number
+  mainFrame: object
   sent: Array<{ channel: string; args: unknown[] }>
   loads: string[]
+  reloads: number
   focusCount: number
   isDestroyed(): boolean
   focus(): void
@@ -325,18 +404,20 @@ interface FakeWindowLike {
   close(): void
   emit(event: string, ...args: unknown[]): void
 }
-const { ipcHandlers, ipcListeners, views, windows } = (
+const { ipcHandlers, ipcListeners, views, windows, frameTokens } = (
   electron as unknown as {
     __mock: {
       ipcHandlers: Map<string, (...args: unknown[]) => unknown>
       ipcListeners: Map<string, (...args: unknown[]) => unknown>
       views: FakeViewLike[]
       windows: FakeWindowLike[]
+      frameTokens: Map<string, unknown>
     }
   }
 ).__mock
 
 interface FakeHostContents {
+  isDestroyed(): boolean
   on(event: string, cb: (...args: unknown[]) => void): void
   removeListener(event: string, cb: (...args: unknown[]) => void): void
   emit(event: string, ...args: unknown[]): void
@@ -361,6 +442,7 @@ class FakeBrowserWindow {
    *  that supply their own `send` spy keep the listener surface the manager
    *  wires up on every open. */
   private hostContents: FakeHostContents = {
+    isDestroyed: () => false,
     on: (event, cb) => {
       const list = this.hostContentsListeners.get(event) ?? []
       list.push(cb)
@@ -448,6 +530,8 @@ describe('backend Host session registration', () => {
   it('re-registers on the new socket when the previous registration is pending', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
+    ;(host.webContents as FakeHostContents & { id: number }).id = 7000
+    ;(host.webContents as FakeHostContents & { mainFrame: object }).mainFrame = {}
     mgr.open(
       asHost(host),
       { id: 'acme.host-session', requires: ['terminal'], devUrl: '', entryFile: '/plugins/acme.host-session/index.html' },
@@ -550,6 +634,1768 @@ describe('backend Host session registration', () => {
     expect(mgr.isPlansBackendAvailable()).toBe(true)
     mgr.markPlansBackendUnavailable('child-crash')
     expect(mgr.isPlansBackendAvailable()).toBe(false)
+  })
+
+  it('rejects an unadmitted iframe while preserving the exact Host frame admission seam', async () => {
+    const packageDir = mkdtempSync(join(tmpdir(), 'navide-frame-manager-'))
+    try {
+      mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+      writeFileSync(join(packageDir, 'frontend/index.html'), '<!doctype html>')
+      const mgr = new FrontendPluginManager()
+      const descriptor: PluginLaunchDescriptor = {
+        id: 'acme.frame', packageVersion: '1.0.0', packageDir,
+        requires: [], devUrl: '', entryFile: join(packageDir, 'frontend/index.html'),
+        capabilityPolicy: manifestV2CapabilityPolicy({}),
+        views: [{
+          id: 'left', contributionKey: 'acme.frame.left', kind: 'custom', location: 'left',
+          title: 'Frame', entryFile: join(packageDir, 'frontend/index.html'),
+        }],
+      }
+      mgr.registerDescriptor(descriptor, { builtin: true })
+      mgr.setCapabilityGrantResolver(() => ({
+        packageVersion: '1.0.0', system: [], storage: true,
+      }))
+      const host = new FakeBrowserWindow()
+      const parent = {}
+      ;(host.webContents as FakeHostContents & { id: number; mainFrame: unknown }).id = 42
+      ;(host.webContents as FakeHostContents & { mainFrame: unknown }).mainFrame = parent
+      const reserved = await mgr.reservePluginFrameContribution(asHost(host), 'acme.frame.left', '/workspace')
+      expect(reserved.ok).toBe(true)
+      if (!reserved.ok) return
+
+      const unadmitted = {
+        isDestroyed: () => false,
+        detached: false,
+        frameTreeNodeId: 1,
+        parent: {},
+        url: 'about:blank',
+      }
+      expect(mgr.bindPluginFrameBlank(reserved.bindingId, unadmitted as never)).toBe(false)
+
+      const admittedCandidate = { ...unadmitted, parent }
+      expect(mgr.bindPluginFrameBlank(reserved.bindingId, admittedCandidate as never)).toBe(true)
+      const ready = ipcHandlers.get('plugin:frame:document-ready')
+      expect(ready?.({ sender: { id: 42 }, senderFrame: admittedCandidate }, { nonce: 'wrong-nonce' })).toBe(false)
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('admits through the document-ready IPC handler and closes only the selected frame instance', async () => {
+    const packageDir = mkdtempSync(join(tmpdir(), 'navide-frame-close-'))
+    const closeGrant = vi.spyOn(EditorSelectionGrants.prototype, 'close')
+    try {
+      mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+      writeFileSync(join(packageDir, 'frontend/index.html'), '<!doctype html>')
+      const mgr = new FrontendPluginManager()
+      const descriptor: PluginLaunchDescriptor = {
+        id: 'acme.frame.close', packageVersion: '1.0.0', packageDir,
+        requires: [], devUrl: '', entryFile: join(packageDir, 'frontend/index.html'),
+        capabilityPolicy: manifestV2CapabilityPolicy({}),
+        views: [
+          { id: 'left', contributionKey: 'acme.frame.close.left', kind: 'custom', location: 'left', title: 'Left', entryFile: join(packageDir, 'frontend/index.html') },
+          { id: 'right', contributionKey: 'acme.frame.close.right', kind: 'custom', location: 'right', title: 'Right', entryFile: join(packageDir, 'frontend/index.html') },
+        ],
+      }
+      mgr.registerDescriptor(descriptor, { builtin: true })
+      mgr.setCapabilityGrantResolver(() => ({ packageVersion: '1.0.0', system: [], storage: true }))
+      const admitDocument = vi.spyOn(mgr as unknown as {
+        admitPluginFrameDocument: (frame: unknown, receiverWebContentsId: number, nonce: string) => boolean
+      }, 'admitPluginFrameDocument')
+      const host = new FakeBrowserWindow()
+      const hostContents = host.webContents as unknown as FakeHostContents & { id: number; mainFrame: object }
+      hostContents.id = 314
+      hostContents.mainFrame = {}
+
+      const admit = async (contributionKey: string, frameTreeNodeId: number) => {
+        const reserved = await mgr.reservePluginFrameContribution(asHost(host), contributionKey, '/workspace')
+        expect(reserved.ok).toBe(true)
+        if (!reserved.ok) throw new Error('frame reservation failed')
+        const frame = {
+          detached: false,
+          frameTreeNodeId,
+          parent: hostContents.mainFrame,
+          url: 'about:blank',
+          origin: 'null',
+          isDestroyed: () => false,
+          postMessage: vi.fn(),
+        }
+        expect(mgr.bindPluginFrameBlank(reserved.bindingId, frame as never)).toBe(true)
+        frame.url = reserved.entryUrl
+        frame.origin = frameOrigin(reserved.entryUrl)
+        hostContents.emit('did-start-navigation', {
+          frame,
+          isSameDocument: false,
+          url: reserved.entryUrl,
+        })
+        const pending = (mgr as unknown as {
+          pendingPluginFrames: Map<string, { frame: unknown; hostWindow: { webContents: { id: number } } }>
+        }).pendingPluginFrames.get(reserved.bindingId)
+        expect(pending?.frame).toBe(frame)
+        expect(pending?.hostWindow.webContents.id).toBe(hostContents.id)
+        const running = (mgr as unknown as {
+          running: Map<string, { carrier: string; id: string; workspacePath: string | null; capabilityContext?: { runtimeBinding?: { packageVersion?: string } | null } }>
+        }).running
+        expect([...running.values()][0]).toMatchObject({
+          carrier: 'frame',
+          id: 'acme.frame.close',
+          workspacePath: resolve('/workspace'),
+          capabilityContext: { runtimeBinding: { packageVersion: '1.0.0' } },
+        })
+        const ready = ipcHandlers.get('plugin:frame:document-ready')
+        expect(ready).toBeDefined()
+        const event = { sender: { id: hostContents.id }, senderFrame: frame }
+        const childNonce = `child-document-${frameTreeNodeId}`
+        const result = await ready?.(event, { nonce: childNonce })
+        expect(admitDocument).toHaveBeenCalledWith(frame, hostContents.id, childNonce)
+        expect(result).toBe(true)
+        return { reserved, frame }
+      }
+
+      const left = await admit('acme.frame.close.left', 11)
+      const leftInstanceId = (mgr as unknown as {
+        pendingPluginFrames: Map<string, { instanceId: string }>
+      }).pendingPluginFrames.get(left.reserved.bindingId)?.instanceId
+      expect(leftInstanceId).toEqual(expect.any(String))
+      const leftDispose = vi.fn()
+      mgr.registerInstanceSubscription(leftInstanceId!, leftDispose)
+      const right = await admit('acme.frame.close.right', 12)
+
+      expect(mgr.closePluginFrame(left.reserved.bindingId)).toBe(true)
+      expect(mgr.closePluginFrame(left.reserved.bindingId)).toBe(false)
+      expect(leftDispose).toHaveBeenCalledTimes(1)
+      expect(closeGrant).toHaveBeenCalledWith(leftInstanceId)
+      expect(mgr.hasBackendActivity()).toBe(false)
+      expect(mgr.closePluginFrame(right.reserved.bindingId)).toBe(true)
+      expect(closeGrant).toHaveBeenCalledTimes(2)
+    } finally {
+      closeGrant.mockRestore()
+      rmSync(packageDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('registered receiver frame lifecycle', () => {
+  type ReceiverSetup = {
+    mgr: FrontendPluginManager
+    host: FakeBrowserWindow
+    receiver: FakeViewLike
+    receiverEvent: { sender: { id: number }; senderFrame: object }
+    receiverId: string
+    descriptor: PluginLaunchDescriptor
+    providerView: PluginViewLaunchDescriptor
+    workspacePath: string
+  }
+
+  async function setupReceiver(withDetailPair = false, withEditorTargets = false, workspacePath = '/workspace', withCloseGuard = false): Promise<ReceiverSetup> {
+    const mgr = new FrontendPluginManager()
+    const host = new FakeBrowserWindow()
+    const hostContents = host.webContents as FakeHostContents & { id: number; mainFrame: object }
+    hostContents.id = 7000
+    hostContents.mainFrame = {}
+    expect(hostContents.id).toBe(7000)
+    expect(hostContents.mainFrame).toBeDefined()
+    const packageDir = process.cwd()
+    const entryFile = join(packageDir, 'package.json')
+    const descriptor: PluginLaunchDescriptor = {
+      id: 'acme.receiver-lifecycle',
+      packageVersion: '1.0.0',
+      packageDir,
+      requires: [],
+      devUrl: '',
+      entryFile,
+      capabilityPolicy: manifestV2CapabilityPolicy(withDetailPair ? { system: ['ui'] } : {}),
+      capabilityContext: {
+        publisherEligible: true,
+        userGrant: { packageVersion: '1.0.0', system: withDetailPair ? ['ui'] : [] },
+        runtimeBinding: {
+          pluginId: 'acme.receiver-lifecycle',
+          packageVersion: '1.0.0',
+          workspaceId: 'workspace-1',
+          instanceId: 'host-placeholder',
+          audience: 'receiver-test',
+        },
+      },
+      views: [],
+    }
+    const receiverView: PluginViewLaunchDescriptor = {
+      id: 'receiver', contributionKey: 'acme.receiver-lifecycle.receiver', kind: 'custom',
+      location: 'window', title: 'Receiver', entryFile,
+      receives: {
+        protocolVersion: 1, locations: ['left', 'detail'],
+        ...(withEditorTargets ? { editorTargets: { protocolVersion: 1 as const } } : {}),
+        ...(withCloseGuard ? { closeGuard: { protocolVersion: 1 as const } } : {}),
+      },
+    }
+    const providerView: PluginViewLaunchDescriptor = {
+      id: 'provider', contributionKey: 'acme.receiver-lifecycle.provider', kind: 'custom',
+      location: 'left', title: 'Provider', entryFile,
+      ...(withDetailPair ? { detailView: 'detail' } : {}),
+    }
+    const detailView: PluginViewLaunchDescriptor = {
+      id: 'detail', contributionKey: 'acme.receiver-lifecycle.detail', kind: 'custom',
+      location: 'detail', title: 'Detail', entryFile,
+      targetSchema: 'plugins/navide-git/schemas/branch-comparison.json',
+    }
+    descriptor.views = withDetailPair ? [receiverView, providerView, detailView] : [receiverView, providerView]
+    mgr.registerDescriptor(descriptor, { builtin: true })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion: '1.0.0', system: withDetailPair ? ['ui'] : [], storage: true }))
+    if (withDetailPair) mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    const handle = await mgr.openView(descriptor, receiverView, {
+      hostWindow: asHost(host), bounds: 'hidden', capabilityContext: descriptor.capabilityContext,
+      workspacePath, initiallyVisible: false,
+    })
+    const running = (mgr as unknown as { running: Map<string, { view: FakeViewLike }> }).running.get(handle.instanceId)
+    if (!running) throw new Error('receiver fixture did not create a running view')
+    const receiver = running.view
+    expect(receiver.webContents.id).not.toBe(7000)
+    expect(receiver.webContents.mainFrame).not.toBe(hostContents.mainFrame)
+    const receiverEvent = { sender: { id: receiver.webContents.id }, senderFrame: receiver.webContents.mainFrame }
+    const register = ipcHandlers.get('plugin:receiver:register')
+    const registration = register?.(receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'],
+      ...(withEditorTargets ? { editorTargets: { protocolVersion: 1 } } : {}),
+      ...(withCloseGuard ? { closeGuard: { protocolVersion: 1 } } : {}),
+    }) as { receiverId: string }
+    expect(registration?.receiverId).toEqual(expect.any(String))
+    return { mgr, host, receiver, receiverEvent, receiverId: registration.receiverId, descriptor, providerView, workspacePath }
+  }
+
+  async function mountOffer(fixture: ReceiverSetup): Promise<{ itemId: string; offerId: string }> {
+    const { mgr, receiver, receiverEvent, receiverId, descriptor, providerView } = fixture
+    expect(mgr.offerReceiverProvider(receiverId, descriptor, providerView, fixture.workspacePath)).toEqual({ ok: true })
+    const offerMessage = receiver.webContents.sent.at(-1)
+    const offerId = (offerMessage?.args[0] as { offer?: { offerId?: unknown } } | undefined)?.offer?.offerId
+    expect(offerId).toEqual(expect.any(String))
+    const mount = ipcHandlers.get('plugin:receiver:mount')
+    const result = await mount?.(receiverEvent, { receiverId, offerId, placement: { mountHostId: `host-${offerId}` } }) as { itemId: string }
+    expect(result.itemId).toEqual(expect.any(String))
+    return { itemId: result.itemId, offerId: offerId as string }
+  }
+
+  async function admitItem(fixture: ReceiverSetup, itemId: string): Promise<{ port: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void }; frame: { postMessage: ReturnType<typeof vi.fn> } }> {
+    const items = (fixture.mgr as unknown as { receiverItems: Map<string, { bindingId: string }> }).receiverItems
+    const pending = (fixture.mgr as unknown as { pendingPluginFrames: Map<string, { entryUrl: string }> }).pendingPluginFrames
+    const bindingId = items.get(itemId)?.bindingId
+    expect(bindingId).toBeTruthy()
+    const token = `receiver-frame-${itemId}`
+    const frame = {
+      processId: 1,
+      frameToken: token,
+      frameTreeNodeId: 100 + frameTokens.size,
+      detached: false,
+      parent: fixture.receiver.webContents.mainFrame,
+      url: 'about:blank',
+      origin: 'null',
+      isDestroyed: () => false,
+      postMessage: vi.fn(),
+    }
+    frameTokens.set(token, frame)
+    const blankReady = ipcHandlers.get('plugin:receiver:blank-ready')
+    const locator = await blankReady?.(
+      { sender: { id: fixture.receiver.webContents.id }, senderFrame: fixture.receiver.webContents.mainFrame },
+      { itemId, frameToken: token },
+    ) as { locator: string }
+    expect(locator.locator).toBe(pending.get(bindingId!)?.entryUrl)
+    frame.url = locator.locator
+    frame.origin = frameOrigin(locator.locator)
+    fixture.receiver.webContents.emit('did-start-navigation', {
+      frame, isSameDocument: false, url: locator.locator,
+    })
+    const hostMainFrame = (fixture.host.webContents as FakeHostContents & { mainFrame: object }).mainFrame
+    const foreignFrame = { ...frame, frameTreeNodeId: frame.frameTreeNodeId + 1, parent: hostMainFrame }
+    const documentReady = ipcHandlers.get('plugin:frame:document-ready')
+    expect(documentReady?.(
+      { sender: { id: fixture.receiver.webContents.id }, senderFrame: foreignFrame },
+      { nonce: `foreign-${itemId}` },
+    )).toBe(false)
+    const nonce = `document-${itemId}`
+    expect(documentReady?.(
+      { sender: { id: fixture.receiver.webContents.id }, senderFrame: frame },
+      { nonce },
+    )).toBe(true)
+    expect(frame.postMessage).toHaveBeenCalledTimes(1)
+    const [channel, payload, ports] = frame.postMessage.mock.calls[0] as [string, { documentGeneration: number; nonce: string }, Array<{ on: Function; postMessage: Function }>]
+    expect(channel).toBe('plugin:frame:port')
+    expect(payload).toMatchObject({ documentGeneration: 1, nonce })
+    expect(ports).toHaveLength(1)
+    return { port: ports[0] as never, frame }
+  }
+
+  async function prepareEditorSource(workspacePath = '/workspace', withCloseGuard = false): Promise<{
+    fixture: ReceiverSetup
+    sourceItemId: string
+    sourcePort: Awaited<ReturnType<typeof admitItem>>['port']
+    providerMessages: unknown[]
+    providerPort: Awaited<ReturnType<typeof admitItem>>['port']
+    sourceMessages: unknown[]
+    detailItemId: string
+  }> {
+    const pending = await startEditorSourceWithoutWaitingForDetailResponse(workspacePath, withCloseGuard)
+    const offer = pending.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .find((candidate) => candidate?.location === 'detail')
+    expect(offer?.offerId).toEqual(expect.any(String))
+    const detail = await ipcHandlers.get('plugin:receiver:mount')?.(pending.fixture.receiverEvent, {
+      receiverId: pending.fixture.receiverId, offerId: offer?.offerId,
+      placement: { mountHostId: `host-${offer?.offerId}` },
+    }) as { itemId: string }
+    const detailReady = await admitItem(pending.fixture, detail.itemId)
+    const sourceMessages: unknown[] = []
+    detailReady.port.on('message', (event) => sourceMessages.push(event.data))
+    detailReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(sourceMessages.some((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toBe(true))
+    const initialTarget = (sourceMessages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await expect(resolveDetailTarget(
+      detailReady.port,
+      sourceMessages,
+      'prepare-detail-target-ack',
+      initialTarget,
+      { applied: true },
+    )).resolves.toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(pending.providerMessages).toContainEqual(expect.objectContaining({
+      channel: 'plugin:response', payload: expect.objectContaining({ requestId: pending.detailRequestId }),
+    })))
+    return {
+      fixture: pending.fixture,
+      sourceItemId: detail.itemId,
+      sourcePort: detailReady.port,
+      providerMessages: pending.providerMessages,
+      providerPort: pending.providerPort,
+      sourceMessages,
+      detailItemId: detail.itemId,
+    }
+  }
+
+  async function openAdditionalDetail(
+    prepared: Awaited<ReturnType<typeof prepareEditorSource>>,
+    requestId: string,
+    compare: string,
+  ): Promise<{ itemId: string; port: Awaited<ReturnType<typeof admitItem>>['port']; messages: unknown[] }> {
+    const response = new Promise<unknown>((resolve) => {
+      prepared.providerPort.on('message', (event) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+      })
+    })
+    const offersBefore = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    ).length
+    prepared.providerPort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    )).toHaveLength(offersBefore + 1))
+    const offer = prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .filter((candidate) => candidate?.location === 'detail' && candidate.offerId)
+      .at(-1)
+    const mounted = await ipcHandlers.get('plugin:receiver:mount')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+      offerId: offer?.offerId,
+      placement: { mountHostId: `host-${offer?.offerId}` },
+    }) as { itemId: string }
+    const admitted = await admitItem(prepared.fixture, mounted.itemId)
+    const messages: unknown[] = []
+    admitted.port.on('message', (event) => messages.push(event.data))
+    admitted.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      payload: { type: 'plugin:view:detail-target', data: expect.objectContaining({ revision: 1 }) },
+    })) )
+    const update = (messages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await expect(resolveDetailTarget(admitted.port, messages, `${requestId}-ack`, update, { applied: true })).resolves.toMatchObject({ ok: true })
+    await expect(response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    return { itemId: mounted.itemId, port: admitted.port, messages }
+  }
+
+  async function startEditorSourceWithoutWaitingForDetailResponse(workspacePath = '/workspace', withCloseGuard = false): Promise<{
+    fixture: ReceiverSetup
+    sourceItemId: string
+    sourcePort: Awaited<ReturnType<typeof admitItem>>['port']
+    providerMessages: unknown[]
+    providerPort: Awaited<ReturnType<typeof admitItem>>['port']
+    detailRequestId: string
+  }> {
+    const fixture = await setupReceiver(true, true, workspacePath, withCloseGuard)
+    const source = await mountOffer(fixture)
+    const sourceReady = await admitItem(fixture, source.itemId)
+    const providerMessages: unknown[] = []
+    sourceReady.port.on('message', (event) => providerMessages.push(event.data))
+    sourceReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    const detailRequestId = 'detail-pending-until-applied'
+    sourceReady.port.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: detailRequestId,
+      payload: { reqId: detailRequestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'pending-ack' },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    return {
+      fixture,
+      sourceItemId: source.itemId,
+      sourcePort: sourceReady.port,
+      providerMessages,
+      providerPort: sourceReady.port,
+      detailRequestId,
+    }
+  }
+
+  async function invokeOpenInEditor(
+    port: Awaited<ReturnType<typeof admitItem>>['port'],
+    requestId: string,
+    args: Record<string, unknown>,
+    messages: unknown[],
+    waitForResponse = true,
+  ): Promise<{ response: Promise<unknown> }> {
+    const response = new Promise<unknown>((resolve) => {
+      const listener = (event: { data: unknown }) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+      }
+      port.on('message', listener)
+    })
+    port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'openInEditor', args } })
+    if (waitForResponse) {
+      await vi.waitFor(() => expect(messages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(true))
+    }
+    return { response }
+  }
+
+  async function resolveDetailTarget(
+    port: Awaited<ReturnType<typeof admitItem>>['port'],
+    messages: unknown[],
+    requestId: string,
+    update: { targetId: string; revision: number },
+    decision: { applied: true } | { applied: false; reason: 'refused' | 'busy' },
+    waitForResponse = true,
+  ): Promise<unknown> {
+    port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailTarget', args: {
+        targetId: update.targetId, revision: update.revision, decision,
+      } } })
+    if (waitForResponse) await vi.waitFor(() => expect(messages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+    )).toBe(true))
+    return (messages.find((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+    ) as { payload: { response: unknown } } | undefined)?.payload.response
+  }
+
+  it('admits the legitimate receiver child after details-first navigation and posts one authenticated port', async () => {
+    const fixture = await setupReceiver()
+    const item = await mountOffer(fixture)
+    const admitted = await admitItem(fixture, item.itemId)
+    expect(admitted.port).toBeTruthy()
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.has(item.itemId)).toBe(true)
+  })
+
+  it('settles a refused initial detail open false and removes only its provisional item', async () => {
+    const prepared = await startEditorSourceWithoutWaitingForDetailResponse()
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    )).toBe(true))
+    const detailOffer = prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .find((offer) => offer?.location === 'detail')
+    const detail = await ipcHandlers.get('plugin:receiver:mount')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, offerId: detailOffer?.offerId,
+      placement: { mountHostId: `host-${detailOffer?.offerId}` },
+    }) as { itemId: string }
+    const detailReady = await admitItem(prepared.fixture, detail.itemId)
+    const detailMessages: unknown[] = []
+    detailReady.port.on('message', (event) => detailMessages.push(event.data))
+    detailReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(detailMessages.some((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toBe(true))
+    const update = (detailMessages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await resolveDetailTarget(detailReady.port, detailMessages, 'initial-refusal', update, { applied: false, reason: 'refused' }, false)
+    await vi.waitFor(() => expect(prepared.providerMessages).toContainEqual(expect.objectContaining({
+      channel: 'plugin:response', payload: expect.objectContaining({
+        requestId: prepared.detailRequestId,
+        response: expect.objectContaining({ ok: true, result: { opened: false, reason: 'provider-unavailable' } }),
+      }),
+    })))
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    expect(items.has(detail.itemId)).toBe(false)
+    expect(items.has(prepared.sourceItemId)).toBe(true)
+  })
+
+  it('keeps openDetail pending through offer and mount until the initial provider target is applied', async () => {
+    const prepared = await startEditorSourceWithoutWaitingForDetailResponse()
+    const hasDetailResponse = () => prepared.providerMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === prepared.detailRequestId,
+    )
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    )).toBe(true))
+    expect(hasDetailResponse()).toBe(false)
+
+    const detailOffer = prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .find((offer) => offer?.location === 'detail')
+    expect(detailOffer?.offerId).toEqual(expect.any(String))
+    const detail = await ipcHandlers.get('plugin:receiver:mount')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+      offerId: detailOffer?.offerId,
+      placement: { mountHostId: `host-${detailOffer?.offerId}` },
+    }) as { itemId: string }
+    const detailReady = await admitItem(prepared.fixture, detail.itemId)
+    const detailMessages: unknown[] = []
+    detailReady.port.on('message', (event) => detailMessages.push(event.data))
+    detailReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(detailMessages.some((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toBe(true))
+    expect(hasDetailResponse()).toBe(false)
+
+    const targetMessage = detailMessages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }
+    await expect(resolveDetailTarget(
+      detailReady.port,
+      detailMessages,
+      'initial-target-applied',
+      targetMessage.payload.data,
+      { applied: true },
+    )).resolves.toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(hasDetailResponse()).toBe(true))
+    expect(prepared.providerMessages.find((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === prepared.detailRequestId,
+    )).toMatchObject({ payload: { response: { ok: true, result: { opened: true } } } })
+  })
+
+  it('rejects malformed, boolean, wrong-version, and extra-field editor target registrations', async () => {
+    const fixture = await setupReceiver()
+    const register = ipcHandlers.get('plugin:receiver:register')
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], editorTargets: true,
+    })).toThrow()
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 2 },
+    })).toThrow()
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 1, extra: false },
+    })).toThrow()
+  })
+
+  it('rejects malformed, wrong-version, extra-field, and undeclared close-guard registrations', async () => {
+    const fixture = await setupReceiver()
+    const register = ipcHandlers.get('plugin:receiver:register')
+    for (const closeGuard of [
+      true,
+      { protocolVersion: 2 },
+      { protocolVersion: 1, extra: false },
+      { protocolVersion: 1, onPrepare: () => undefined },
+    ]) {
+      expect(() => register?.(fixture.receiverEvent, {
+        protocolVersion: 1, locations: ['left', 'detail'], closeGuard,
+      }), JSON.stringify(closeGuard)).toThrow()
+    }
+    // The fixture view does not declare receives.closeGuard, so a live guard is
+    // a declaration mismatch rather than an implicit upgrade.
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], closeGuard: { protocolVersion: 1 },
+    })).toThrow()
+  })
+
+  it('lists left contributions and opens only an authenticated receiver-scoped offer', async () => {
+    const fixture = await setupReceiver()
+    const list = ipcHandlers.get('plugin:receiver:list-left-contributions')
+    expect(list?.(fixture.receiverEvent, { receiverId: fixture.receiverId })).toEqual([
+      {
+        contributionKey: 'acme.receiver-lifecycle.provider',
+        title: 'Provider',
+        // Display metadata only: the receiver paints the icon, never learns the plugin.
+        icon: null,
+        iconMonochrome: false,
+      },
+    ])
+
+    const open = ipcHandlers.get('plugin:receiver:open-left')
+    expect(open?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId,
+      contributionKey: 'acme.receiver-lifecycle.provider',
+    })).toEqual({ offered: true })
+    expect(fixture.receiver.webContents.sent.at(-1)?.channel).toBe('plugin:receiver:offer')
+
+    const foreignEvent = {
+      sender: { id: (fixture.host.webContents as FakeHostContents & { id: number }).id },
+      senderFrame: fixture.receiver.webContents.mainFrame,
+    }
+    expect(() => list?.(foreignEvent, { receiverId: fixture.receiverId })).toThrow('receiver left catalog is unavailable')
+    expect(() => open?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId,
+      contributionKey: 'missing.provider',
+    })).toThrow('receiver left contribution is unavailable')
+  })
+
+  it('delivers two independent detail targets through list/open-left, mount, ready, and frame-port paths', async () => {
+    const fixture = await setupReceiver(true)
+    const list = ipcHandlers.get('plugin:receiver:list-left-contributions')
+    const open = ipcHandlers.get('plugin:receiver:open-left')
+    expect(list?.(fixture.receiverEvent, { receiverId: fixture.receiverId })).toEqual([
+      {
+        contributionKey: 'acme.receiver-lifecycle.provider',
+        title: 'Provider',
+        icon: null,
+        iconMonochrome: false,
+      },
+    ])
+    expect(open?.(fixture.receiverEvent, { receiverId: fixture.receiverId, contributionKey: 'acme.receiver-lifecycle.provider' }))
+      .toEqual({ offered: true })
+
+    const mountOfferId = async (offerId: string): Promise<{ itemId: string }> => {
+      return await ipcHandlers.get('plugin:receiver:mount')?.(fixture.receiverEvent, {
+        receiverId: fixture.receiverId, offerId,
+        placement: { mountHostId: `host-${offerId}` },
+      }) as { itemId: string }
+    }
+    const sourceOffer = (fixture.receiver.webContents.sent.at(-1)?.args[0] as { offer?: { offerId?: string } }).offer
+    expect(sourceOffer?.offerId).toEqual(expect.any(String))
+    const source = await mountOfferId(sourceOffer?.offerId as string)
+    const sourceReady = await admitItem(fixture, source.itemId)
+    const sourceMessages: unknown[] = []
+    sourceReady.port.on('message', (event) => sourceMessages.push(event.data))
+    sourceReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    const detailOffers = () => fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: Record<string, unknown> }).offer)
+      .filter((offer): offer is Record<string, unknown> => offer?.location === 'detail')
+    const invokeDetail = async (requestId: string, target: unknown): Promise<{ response: Promise<unknown>; offer: Record<string, unknown> }> => {
+      const response = new Promise<unknown>((resolve) => {
+        sourceReady.port.on('message', (event) => {
+          const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+          if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+        })
+      })
+      const offersBefore = detailOffers().length
+      sourceReady.port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+          contributionKey: 'acme.receiver-lifecycle.detail', target,
+        } } })
+      await vi.waitFor(() => expect(detailOffers()).toHaveLength(offersBefore + 1))
+      expect(sourceMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(false)
+      return { response, offer: detailOffers().at(-1)! }
+    }
+    const targetA = { resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'topic-a' }, presentation: { mode: 'branch-diff' } }
+    const targetB = { resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'topic-b' }, presentation: { mode: 'branch-diff' } }
+    const openedA = await invokeDetail('detail-a', targetA)
+    const offerA = openedA.offer
+    const offerAId = offerA?.offerId as string
+    expect(offerA).not.toHaveProperty('target')
+    expect(JSON.stringify(offerA)).not.toContain('topic-a')
+    const detailA = await mountOfferId(offerAId)
+    const readyA = await admitItem(fixture, detailA.itemId)
+    const messagesA: unknown[] = []
+    readyA.port.on('message', (event) => messagesA.push(event.data))
+    readyA.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(messagesA).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      payload: {
+        type: 'plugin:view:detail-target',
+        data: { targetId: expect.any(String), revision: 1, target: targetA },
+      },
+    })))
+    const updateA = (messagesA.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await resolveDetailTarget(readyA.port, messagesA, 'detail-a-ack', updateA, { applied: true })
+    await expect(openedA.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+
+    const openedB = await invokeDetail('detail-b', targetB)
+    const offerB = openedB.offer
+    const offerBId = offerB?.offerId as string
+    expect(offerB?.offerId).not.toBe(offerA?.offerId)
+    expect(offerB).not.toHaveProperty('target')
+    expect(JSON.stringify(offerB)).not.toContain('topic-b')
+    const detailB = await mountOfferId(offerBId)
+    const readyB = await admitItem(fixture, detailB.itemId)
+    const messagesB: unknown[] = []
+    readyB.port.on('message', (event) => messagesB.push(event.data))
+    readyB.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(messagesB).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      payload: {
+        type: 'plugin:view:detail-target',
+        data: { targetId: expect.any(String), revision: 1, target: targetB },
+      },
+    })))
+    const updateB = (messagesB.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await resolveDetailTarget(readyB.port, messagesB, 'detail-b-ack', updateB, { applied: true })
+    await expect(openedB.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    expect(messagesA).not.toContainEqual(expect.objectContaining({
+      payload: { type: 'plugin:view:detail-target', data: expect.objectContaining({ target: targetB }) },
+    }))
+    expect(messagesB).not.toContainEqual(expect.objectContaining({
+      payload: { type: 'plugin:view:detail-target', data: expect.objectContaining({ target: targetA }) },
+    }))
+
+    const close = ipcHandlers.get('plugin:receiver:request-close')
+    const resolveClose = (port: { postMessage: (data: unknown) => void }, requestId: string, closeRequest: { closeId: string; itemId: string }, decision: unknown): void => {
+      port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailClose', args: {
+          closeId: closeRequest.closeId, itemId: closeRequest.itemId, decision,
+        } } })
+    }
+    const refusalPromise = close?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: detailA.itemId }) as Promise<unknown>
+    await vi.waitFor(() => expect(messagesA.some((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    )).toBe(true))
+    const refusalRequest = (messagesA.find((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ) as { payload: { closeId: string; itemId: string } }).payload
+    resolveClose(sourceReady.port, 'wrong-provider', refusalRequest, { accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(sourceMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string; response?: { ok?: boolean } } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'wrong-provider',
+    )).toBe(true))
+    const wrongProviderResponse = sourceMessages.find((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'wrong-provider',
+    ) as { payload: { response: { ok?: boolean; error?: { code?: string } } } }
+    expect(wrongProviderResponse.payload.response).toMatchObject({ ok: false, error: { code: 'CAPABILITY_DENIED' } })
+    resolveClose(readyA.port, 'refuse-close', refusalRequest, { accepted: false, reason: 'refused' })
+    await expect(refusalPromise).resolves.toEqual({ closed: false, reason: 'refused' })
+
+    const busyPromise = close?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: detailB.itemId }) as Promise<unknown>
+    await vi.waitFor(() => expect(messagesB.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    )).toHaveLength(1))
+    const busyRequest = (messagesB.find((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ) as { payload: { closeId: string; itemId: string } }).payload
+    resolveClose(readyB.port, 'busy-close', busyRequest, { accepted: false, reason: 'busy' })
+    await expect(busyPromise).resolves.toEqual({ closed: false, reason: 'busy' })
+
+    const acceptedPromise = close?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: detailB.itemId }) as Promise<unknown>
+    await vi.waitFor(() => expect(messagesB.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    )).toHaveLength(2))
+    const acceptedRequest = messagesB.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ).at(-1) as { payload: { closeId: string; itemId: string } }
+    resolveClose(readyB.port, 'accept-close', acceptedRequest.payload, { accepted: true, reason: 'accepted' })
+    await expect(acceptedPromise).resolves.toEqual({ closed: true })
+  })
+
+  it('prepares receiver close transactions atomically across refusal, timeout, and commit', async () => {
+    const prepared = await prepareEditorSource()
+    const second = await openAdditionalDetail(prepared, 'atomic-detail-b', 'atomic-b')
+    const third = await openAdditionalDetail(prepared, 'atomic-detail-c', 'atomic-c')
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const requestClose = (itemIds: string[]): Promise<unknown> => closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds,
+    }) as Promise<unknown>
+    const detailPorts = [
+      { itemId: prepared.detailItemId, port: prepared.sourcePort, messages: prepared.sourceMessages },
+      second,
+      third,
+    ]
+    const closeRequests = (messages: unknown[]) => messages.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ) as Array<{ payload: { closeId: string; itemId: string } }>
+    const resolveClose = (
+      target: { port: { postMessage: (data: unknown) => void }; messages: unknown[] },
+      request: { closeId: string; itemId: string },
+      requestId: string,
+      decision: { accepted: true; reason: 'accepted' } | { accepted: false; reason: 'refused' | 'busy' },
+    ): void => {
+      target.port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailClose', args: {
+          closeId: request.closeId, itemId: request.itemId, decision,
+        } } })
+    }
+    const waitForCloseRequests = async (target: { messages: unknown[] }, count: number) => {
+      await vi.waitFor(() => expect(closeRequests(target.messages)).toHaveLength(count))
+      return closeRequests(target.messages).at(-1)!.payload
+    }
+    const assertLivePort = async (target: { port: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void }; messages: unknown[] }, requestId: string) => {
+      const response = new Promise<unknown>((resolve) => {
+        target.port.on('message', (event) => {
+          const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+          if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+        })
+      })
+      target.port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId, payload: {} })
+      await expect(response).resolves.toMatchObject({ ok: false })
+    }
+
+    const refused = requestClose(detailPorts.slice(0, 2).map((item) => item.itemId))
+    await expect(requestClose([prepared.detailItemId])).resolves.toEqual({ closed: false, reason: 'busy' })
+    const requestA = await waitForCloseRequests(detailPorts[0]!, 1)
+    const requestB = await waitForCloseRequests(detailPorts[1]!, 1)
+
+    const detailOffers = () => prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .filter((offer): offer is { offerId: string; location: 'detail' } =>
+        offer?.location === 'detail' && typeof offer.offerId === 'string')
+    const targetUpdateRequestId = 'atomic-target-update-while-closing'
+    const targetUpdateResponse = new Promise<unknown>((resolve) => {
+      prepared.providerPort.on('message', (event) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === targetUpdateRequestId) {
+          resolve(message.payload.response)
+        }
+      })
+    })
+    const detailOffersBeforeTargetUpdate = detailOffers().length
+    prepared.providerPort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: targetUpdateRequestId,
+      payload: { reqId: targetUpdateRequestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'pending-ack' },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    await vi.waitFor(() => expect(detailOffers()).toHaveLength(detailOffersBeforeTargetUpdate + 1))
+    const targetUpdateOffer = detailOffers().at(-1)!
+    const targetMessagesBefore = prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ).length
+    await expect(ipcHandlers.get('plugin:receiver:accept-existing')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, offerId: targetUpdateOffer.offerId, itemId: prepared.detailItemId,
+    })).resolves.toEqual({ accepted: false, reason: 'busy' })
+    await expect(targetUpdateResponse).resolves.toMatchObject({
+      ok: true, result: { opened: false, reason: 'provider-unavailable' },
+    })
+    expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toHaveLength(targetMessagesBefore)
+
+    resolveClose(detailPorts[1]!, requestA, 'atomic-wrong-provider', { accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(second.messages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'atomic-wrong-provider',
+    )).toBe(true))
+    resolveClose(detailPorts[0]!, requestA, 'atomic-accept-a', { accepted: true, reason: 'accepted' })
+    for (const [index, decision] of [
+      { accepted: false as const, reason: 'refused' as const },
+      { accepted: false as const, reason: 'busy' as const },
+    ].entries()) {
+      const duplicateRequestId = `atomic-duplicate-${index}`
+      resolveClose(detailPorts[0]!, requestA, duplicateRequestId, decision)
+      await vi.waitFor(() => expect(prepared.sourceMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === duplicateRequestId,
+      )).toBe(true))
+      expect(prepared.sourceMessages.find((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === duplicateRequestId,
+      )).toMatchObject({ payload: { response: { ok: false, error: { code: 'CAPABILITY_DENIED' } } } })
+    }
+    resolveClose(detailPorts[1]!, requestB, 'atomic-refuse-b', { accepted: false, reason: 'refused' })
+    await expect(refused).resolves.toEqual({ closed: false, reason: 'refused' })
+    expect(items.has(prepared.detailItemId)).toBe(true)
+    expect(items.has(second.itemId)).toBe(true)
+    expect(closeRequests(prepared.sourceMessages).length).toBe(1)
+    expect(closeRequests(second.messages).length).toBe(1)
+    expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:close-cancelled',
+    )).toHaveLength(1)
+    expect(second.messages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:close-cancelled',
+    )).toHaveLength(1)
+    await assertLivePort(detailPorts[0]!, 'atomic-live-after-refusal-a')
+    await assertLivePort(detailPorts[1]!, 'atomic-live-after-refusal-b')
+
+    vi.useFakeTimers()
+    try {
+      const timedOut = requestClose(detailPorts.map((item) => item.itemId).slice(0, 2))
+      const timeoutA = await waitForCloseRequests(detailPorts[0]!, 2)
+      await waitForCloseRequests(detailPorts[1]!, 2)
+      resolveClose(detailPorts[0]!, timeoutA, 'atomic-timeout-accept-a', { accepted: true, reason: 'accepted' })
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(timedOut).resolves.toEqual({ closed: false, reason: 'timeout' })
+      expect(items.has(prepared.detailItemId)).toBe(true)
+      expect(items.has(second.itemId)).toBe(true)
+      await assertLivePort(detailPorts[0]!, 'atomic-live-after-timeout-a')
+      await assertLivePort(detailPorts[1]!, 'atomic-live-after-timeout-b')
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const closeRequestCountsBeforeCommit = detailPorts.map((item) => closeRequests(item.messages).length)
+    const committed = requestClose(detailPorts.map((item) => item.itemId))
+    const commitRequests = await Promise.all(detailPorts.map((item, index) =>
+      waitForCloseRequests(item, closeRequestCountsBeforeCommit[index]! + 1)))
+    detailPorts.forEach((item, index) => {
+      resolveClose(item, commitRequests[index]!, `atomic-commit-${index}`, { accepted: true, reason: 'accepted' })
+    })
+    await expect(committed).resolves.toEqual({ closed: true })
+    expect(items.has(prepared.detailItemId)).toBe(false)
+    expect(items.has(second.itemId)).toBe(false)
+    expect(items.has(third.itemId)).toBe(false)
+  })
+
+  it('requires guarded receiver consent before any provider close preparation', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const resolveReceiver = ipcHandlers.get('plugin:receiver:resolve-close')
+    const receiverPayloads = (): Array<{ receiverId: string; closeId: string; reason: string; documentGeneration: number }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { receiverId: string; closeId: string; reason: string; documentGeneration: number })
+    const providerCloseRequests = (): Array<{ payload: { closeId: string; itemId: string } }> =>
+      prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+
+    const pending = closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(receiverPayloads()[0]).toEqual({
+      receiverId: prepared.fixture.receiverId,
+      closeId: expect.any(String),
+      reason: 'receiver-item-batch',
+      documentGeneration: expect.any(Number),
+    })
+    expect(providerCloseRequests()).toHaveLength(0)
+
+    const hostContents = prepared.fixture.host.webContents as FakeHostContents & { id: number; mainFrame: object }
+    expect(() => resolveReceiver?.(
+      { sender: { id: hostContents.id }, senderFrame: hostContents.mainFrame },
+      { receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' } },
+    )).toThrow()
+    expect(() => resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: 'foreign-receiver', closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' },
+    })).toThrow()
+    expect(providerCloseRequests()).toHaveLength(0)
+
+    resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => expect(providerCloseRequests()).toHaveLength(1))
+    expect(() => resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' },
+    })).toThrow()
+
+    const request = providerCloseRequests()[0]!
+    expect(request.payload.itemId).toBe(prepared.detailItemId)
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'guarded-provider-accept',
+      payload: { reqId: 'guarded-provider-accept', ns: 'ui', method: 'resolveDetailClose', args: {
+        closeId: request.payload.closeId, itemId: request.payload.itemId, decision: { accepted: true, reason: 'accepted' },
+      } },
+    })
+    await expect(pending).resolves.toEqual({ closed: true })
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    expect(items.has(prepared.detailItemId)).toBe(false)
+  })
+
+  it('keeps guarded items alive on receiver refusal and cancels both sides after a provider refusal', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const resolveReceiver = ipcHandlers.get('plugin:receiver:resolve-close')
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    const receiverPayloads = (): Array<{ closeId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string })
+    const receiverCancellations = (): Array<{ closeId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-cancelled')
+        .map((message) => message.args[0] as { closeId: string })
+    const providerCloseRequests = (): Array<{ payload: { closeId: string; itemId: string } }> =>
+      prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+
+    const refused = closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: false, reason: 'refused' },
+    })
+    await expect(refused).resolves.toEqual({ closed: false, reason: 'refused' })
+    expect(providerCloseRequests()).toHaveLength(0)
+    expect(items.has(prepared.detailItemId)).toBe(true)
+
+    const second = closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(2))
+    const secondReceiverRequest = receiverPayloads()[1]!
+    resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: secondReceiverRequest.closeId, decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => expect(providerCloseRequests()).toHaveLength(1))
+    const providerRequest = providerCloseRequests()[0]!
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'guarded-provider-refuse',
+      payload: { reqId: 'guarded-provider-refuse', ns: 'ui', method: 'resolveDetailClose', args: {
+        closeId: providerRequest.payload.closeId, itemId: providerRequest.payload.itemId, decision: { accepted: false, reason: 'refused' },
+      } },
+    })
+    await expect(second).resolves.toEqual({ closed: false, reason: 'refused' })
+    await vi.waitFor(() => expect(receiverCancellations()).toContainEqual({ receiverId: prepared.fixture.receiverId, closeId: secondReceiverRequest.closeId }))
+    expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:close-cancelled',
+    )).toHaveLength(1)
+    expect(items.has(prepared.detailItemId)).toBe(true)
+  })
+
+  it('holds a native window close across receiver consent and provider prepare until commit', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const mgr = prepared.fixture.mgr
+    const receiverPayloads = (): Array<{ closeId: string; reason: string; receiverId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string; reason: string; receiverId: string })
+    const closeRequestsIn = (messages: unknown[]): Array<{ payload: { closeId: string; itemId: string } }> =>
+      messages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+    const items = (mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    expect(items.size).toBe(2)
+
+    const preparation = mgr.prepareWindowClose(asHost(prepared.fixture.host), 'native-window-close')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(receiverPayloads()[0]).toMatchObject({
+      receiverId: prepared.fixture.receiverId, reason: 'native-window-close',
+    })
+    expect(closeRequestsIn(prepared.providerMessages)).toHaveLength(0)
+    expect(closeRequestsIn(prepared.sourceMessages)).toHaveLength(0)
+
+    ipcHandlers.get('plugin:receiver:resolve-close')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId,
+      decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => {
+      expect(closeRequestsIn(prepared.providerMessages)).toHaveLength(1)
+      expect(closeRequestsIn(prepared.sourceMessages)).toHaveLength(1)
+    })
+    for (const [port, messages, requestId] of [
+      [prepared.providerPort, prepared.providerMessages, 'native-left-accept'],
+      [prepared.sourcePort, prepared.sourceMessages, 'native-detail-accept'],
+    ] as const) {
+      const request = closeRequestsIn(messages)[0]!
+      port.postMessage({
+        kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailClose', args: {
+          closeId: request.payload.closeId, itemId: request.payload.itemId,
+          decision: { accepted: true, reason: 'accepted' },
+        } },
+      })
+    }
+
+    const outcome = await preparation
+    expect(outcome).toEqual({ ok: true, id: expect.any(String) })
+    expect(items.size).toBe(2)
+    mgr.commitWindowClose((outcome as { id: string }).id)
+    expect(items.size).toBe(0)
+  })
+
+  it('keeps provider items alive and cancels the receiver when a native close is refused', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const mgr = prepared.fixture.mgr
+    const receiverPayloads = (): Array<{ closeId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string })
+    const providerCloseRequests = (): Array<{ payload: { closeId: string; itemId: string } }> =>
+      prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+    const items = (mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+
+    const preparation = mgr.prepareWindowClose(asHost(prepared.fixture.host), 'reload')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:close-request').map((message) => (message.args[0] as { reason: string }).reason),
+    ).toEqual(['reload'])
+    ipcHandlers.get('plugin:receiver:resolve-close')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId,
+      decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => expect(providerCloseRequests()).toHaveLength(1))
+    const request = providerCloseRequests()[0]!
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'native-window-refuse',
+      payload: { reqId: 'native-window-refuse', ns: 'ui', method: 'resolveDetailClose', args: {
+        closeId: request.payload.closeId, itemId: request.payload.itemId, decision: { accepted: false, reason: 'refused' },
+      } },
+    })
+
+    await expect(preparation).resolves.toEqual({ ok: false, reason: 'refused' })
+    expect(items.has(prepared.detailItemId)).toBe(true)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:close-cancelled' &&
+      (message.args[0] as { closeId: string }).closeId === receiverPayloads()[0]!.closeId,
+    )).toBe(true))
+  })
+
+  it('keeps receiver registrations when a top-level navigation never commits', async () => {
+    const fixture = await setupReceiver(false, false, '/workspace', true)
+    const contents = fixture.receiver.webContents as unknown as { emit: (event: string, ...args: unknown[]) => void; mainFrame: unknown }
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+    contents.emit('did-start-navigation', { frame: contents.mainFrame, isSameDocument: false })
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+  })
+
+  it('keeps a receiver that registered during the initial load current across did-finish-load', async () => {
+    const fixture = await setupReceiver(false, false, '/workspace', true)
+    const contents = fixture.receiver.webContents as unknown as { emit: (event: string, ...args: unknown[]) => void }
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+
+    // The receiver app registers during entry-script execution; the first
+    // completed load must not invalidate that registration.
+    contents.emit('did-finish-load')
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+    const preparation = fixture.mgr.prepareWindowClose(asHost(fixture.host), 'native-window-close')
+    await vi.waitFor(() => expect(fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:close-request')).toBe(true))
+    const request = fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:close-request').at(-1)!
+    ipcHandlers.get('plugin:receiver:resolve-close')?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId,
+      closeId: (request.args[0] as { closeId: string }).closeId,
+      decision: { accepted: false, reason: 'refused' },
+    })
+    await expect(preparation).resolves.toEqual({ ok: false, reason: 'refused' })
+
+    // Only a committed navigation retires the old registration. It advances
+    // before the incoming document registers during load, not on did-finish-load.
+    contents.emit('did-navigate')
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(false)
+
+    // The incoming document's registration stays current across its load.
+    const register = ipcHandlers.get('plugin:receiver:register')
+    const reloaded = register?.(fixture.receiverEvent, {
+      protocolVersion: 1,
+      locations: ['left', 'detail'],
+      closeGuard: { protocolVersion: 1 },
+    }) as { receiverId: string }
+    expect(reloaded.receiverId).toEqual(expect.any(String))
+    contents.emit('did-finish-load')
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+  })
+
+  it('protects a guarded receiver with zero providers during a native close', async () => {
+    const fixture = await setupReceiver(false, false, '/workspace', true)
+    const mgr = fixture.mgr
+    const receiverPayloads = (): Array<{ closeId: string; reason: string }> =>
+      fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string; reason: string })
+    const resolveReceiver = ipcHandlers.get('plugin:receiver:resolve-close')
+
+    const refused = mgr.prepareWindowClose(asHost(fixture.host), 'quit')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(receiverPayloads()[0]).toMatchObject({ reason: 'quit' })
+    resolveReceiver?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId, closeId: receiverPayloads()[0]!.closeId,
+      decision: { accepted: false, reason: 'busy' },
+    })
+    await expect(refused).resolves.toEqual({ ok: false, reason: 'busy' })
+
+    const accepted = mgr.prepareWindowClose(asHost(fixture.host), 'quit')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(2))
+    resolveReceiver?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId, closeId: receiverPayloads()[1]!.closeId,
+      decision: { accepted: true, reason: 'accepted' },
+    })
+    const outcome = await accepted
+    expect(outcome).toEqual({ ok: true, id: expect.any(String) })
+    mgr.cancelWindowClose((outcome as { id: string }).id)
+  })
+
+  it('times out an unanswered guarded consent and releases the receiver lock for the next request', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const receiverPayloads = (): unknown[] =>
+      prepared.fixture.receiver.webContents.sent.filter((message) => message.channel === 'plugin:receiver:close-request')
+    const providerCloseRequests = (): unknown[] => prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request')
+
+    vi.useFakeTimers()
+    try {
+      const timedOut = closeTransaction?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+      }) as Promise<unknown>
+      await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(timedOut).resolves.toEqual({ closed: false, reason: 'timeout' })
+      expect(providerCloseRequests()).toHaveLength(0)
+      const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+      expect(items.has(prepared.detailItemId)).toBe(true)
+
+      const retried = closeTransaction?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+      }) as Promise<unknown>
+      await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(2))
+      const retryRequest = receiverPayloads()[1] as { args: Array<{ closeId: string }> }
+      ipcHandlers.get('plugin:receiver:resolve-close')?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, closeId: retryRequest.args[0].closeId, decision: { accepted: false, reason: 'busy' },
+      })
+      await expect(retried).resolves.toEqual({ closed: false, reason: 'busy' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('directs editor targets with exact receiver correlation and settles only the first current reply', async () => {
+    const prepared = await prepareEditorSource()
+    const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-open', {
+      path: 'src/main.ts', line: 7, column: 9,
+    }, prepared.sourceMessages)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ), JSON.stringify(prepared.sourceMessages)).toBe(true))
+    const targetMessage = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).at(-1)
+    const targetPayload = targetMessage?.args[0] as {
+      receiverId: string
+      correlation: string
+      target: { path: string; line: number; column: number; sourceItem: string }
+    }
+    expect(targetPayload).toEqual({
+      receiverId: prepared.fixture.receiverId,
+      correlation: expect.any(String),
+      target: { path: join('src', 'main.ts'), line: 7, column: 9, sourceItem: prepared.sourceItemId },
+    })
+    const resolve = ipcHandlers.get('plugin:receiver:resolve-editor-target')
+    const hostContents = prepared.fixture.host.webContents as FakeHostContents & { id: number; mainFrame: object }
+    expect(() => resolve?.(
+      { sender: { id: hostContents.id }, senderFrame: hostContents.mainFrame },
+      { ...targetPayload, result: { opened: true } },
+    )).toThrow()
+    expect(() => resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: 'stale-receiver', correlation: targetPayload.correlation, result: { opened: true },
+    })).toThrow()
+    expect(() => resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: 'stale-correlation', result: { opened: true },
+    })).toThrow()
+    resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: targetPayload.correlation, result: { opened: true },
+    })
+    expect(await (await openCall).response).toEqual({ reqId: 'editor-open', ok: true, result: { opened: true } })
+    expect(() => resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: targetPayload.correlation, result: { opened: false },
+    })).toThrow()
+
+    const secondCall = invokeOpenInEditor(prepared.sourcePort, 'editor-refused', {
+      path: 'src/other.ts', line: 1, column: 1,
+    }, prepared.sourceMessages)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    )).toHaveLength(2))
+    const secondPayload = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).at(-1)?.args[0] as { receiverId: string; correlation: string }
+    resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: secondPayload.correlation, result: { opened: false },
+    })
+    expect(await (await secondCall).response).toEqual({ reqId: 'editor-refused', ok: true, result: { opened: false } })
+  })
+
+  it('rejects invalid or outside editor paths before receiver delivery', async () => {
+    const prepared = await prepareEditorSource()
+    const before = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).length
+    const openCall = await invokeOpenInEditor(prepared.sourcePort, 'editor-invalid-path', {
+      path: '../outside.ts', line: 1, column: 1,
+    }, prepared.sourceMessages)
+    expect(await openCall.response).toMatchObject({ ok: false })
+    expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    )).toHaveLength(before)
+  })
+
+  it('accepts an inside symlink and sends its canonical root-relative target', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-canonical-'))
+    const realDirectory = join(workspacePath, 'real')
+    mkdirSync(realDirectory)
+    writeFileSync(join(realDirectory, 'main.ts'), 'export {}')
+    symlinkSync(realDirectory, join(workspacePath, 'linked'))
+    try {
+      const prepared = await prepareEditorSource(workspacePath)
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-symlink-inside', {
+        path: 'linked/main.ts', line: 7, column: 9,
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).at(-1)?.args[0] as { receiverId: string; correlation: string; target: { path: string } }
+      expect(target.target.path).toBe(join('real', 'main.ts'))
+      ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+        receiverId: target.receiverId, correlation: target.correlation, result: { opened: true },
+      })
+      expect(await (await openCall).response).toMatchObject({ ok: true, result: { opened: true } })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['outside symlink ancestor', 'outside-link', false],
+    ['dangling outside symlink ancestor', 'dangling-link', false],
+  ])('rejects an %s without receiver delivery', async (_name, linkName) => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-symlink-reject-'))
+    const outsidePath = mkdtempSync(join(tmpdir(), 'navide-editor-outside-'))
+    if (linkName === 'outside-link') writeFileSync(join(outsidePath, 'main.ts'), 'outside')
+    try {
+      symlinkSync(join(outsidePath, 'main.ts'), join(workspacePath, linkName))
+      const prepared = await prepareEditorSource(workspacePath)
+      const before = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).length
+      const openCall = await invokeOpenInEditor(prepared.sourcePort, `editor-${linkName}`, {
+        path: `${linkName}/main.ts`,
+      }, prepared.sourceMessages)
+      expect(await openCall.response).toMatchObject({ ok: true, result: { opened: false } })
+      expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toHaveLength(before)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(outsidePath, { recursive: true, force: true })
+    }
+  })
+
+  it('allows a missing ordinary inside leaf and preserves its root-relative spelling', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-missing-leaf-'))
+    try {
+      const prepared = await prepareEditorSource(workspacePath)
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-missing-leaf', {
+        path: 'new/ordinary.ts',
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).at(-1)?.args[0] as { receiverId: string; correlation: string; target: { path: string } }
+      expect(target.target.path).toBe(join('new', 'ordinary.ts'))
+      ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+        receiverId: target.receiverId, correlation: target.correlation, result: { opened: false },
+      })
+      expect(await (await openCall).response).toMatchObject({ ok: true, result: { opened: false } })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('settles false when a symlink target changes before acknowledgement', async () => {
+    vi.useFakeTimers()
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-identity-drift-'))
+    const realDirectory = join(workspacePath, 'real')
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'navide-editor-drift-outside-'))
+    mkdirSync(realDirectory)
+    writeFileSync(join(realDirectory, 'main.ts'), 'inside')
+    writeFileSync(join(outsideDirectory, 'main.ts'), 'outside')
+    const linkPath = join(workspacePath, 'linked')
+    symlinkSync(realDirectory, linkPath)
+    try {
+      const prepared = await prepareEditorSource(workspacePath)
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-identity-drift', {
+        path: 'linked/main.ts',
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).at(-1)?.args[0] as { receiverId: string; correlation: string }
+      renameSync(realDirectory, join(workspacePath, 'real-original'))
+      symlinkSync(outsideDirectory, realDirectory)
+      expect(() => ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+        receiverId: target.receiverId, correlation: target.correlation, result: { opened: true },
+      })).toThrow()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await (await openCall).response).toMatchObject({ ok: true, result: { opened: false } })
+    } finally {
+      vi.useRealTimers()
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(outsideDirectory, { recursive: true, force: true })
+    }
+  })
+
+  it('settles false and ignores a late acknowledgement after receiver disposal', async () => {
+    const prepared = await prepareEditorSource()
+    const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-disposed', {
+      path: 'src/disposed.ts', line: 2, column: 3,
+    }, prepared.sourceMessages, false)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ), JSON.stringify(prepared.sourceMessages)).toBe(true))
+    const targetPayload = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).at(-1)?.args[0] as { receiverId: string; correlation: string }
+    await ipcHandlers.get('plugin:receiver:dispose')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+    })
+    await Promise.resolve()
+    expect(prepared.sourceMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'editor-disposed',
+    )).toBe(false)
+    expect(() => ipcHandlers.get('plugin:receiver:list-left-contributions')?.(
+      prepared.fixture.receiverEvent, { receiverId: prepared.fixture.receiverId },
+    )).toThrow()
+    expect(() => ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+      receiverId: targetPayload.receiverId, correlation: targetPayload.correlation, result: { opened: true },
+    })).toThrow()
+  })
+
+  it('reuses one admitted detail item for equivalent resources and advances revisions after refusal', async () => {
+    const prepared = await prepareEditorSource()
+
+    const detailOffers = () => prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer: { location?: string; offerId?: string; resourceKey?: string } }).offer)
+      .filter((offer) => offer.location === 'detail')
+    const initialOffer = detailOffers()[0]
+    expect(initialOffer).toMatchObject({ offerId: expect.any(String), resourceKey: expect.any(String) })
+    const itemCount = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size
+    const assertDetailPortPing = async (requestId: string): Promise<void> => {
+      prepared.sourcePort.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId, payload: {} })
+      await vi.waitFor(() => expect(prepared.sourceMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(true))
+      expect(prepared.sourceMessages.find((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toMatchObject({ payload: { response: { ok: false } } })
+    }
+
+    const openEquivalent = async (requestId: string): Promise<{
+      offerId: string
+      resourceKey: string
+      response: Promise<unknown>
+    }> => {
+      const target = {
+        presentation: { mode: 'branch-diff' },
+        resource: { compare: 'pending-ack', base: 'main', repository: '.', kind: 'branch-comparison' },
+      }
+      const response = new Promise<unknown>((resolve) => {
+        prepared.providerPort.on('message', (event) => {
+          const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+          if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+        })
+      })
+      prepared.providerPort.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+          contributionKey: 'acme.receiver-lifecycle.detail', target,
+        } } })
+      expect(prepared.providerMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(false)
+      const offer = detailOffers().at(-1)
+      expect(offer?.resourceKey).toBe(initialOffer.resourceKey)
+      return { ...offer as { offerId: string; resourceKey: string }, response }
+    }
+
+    const acceptExisting = async (
+      offerId: string,
+      requestId: string,
+      decision?: { applied: true } | { applied: false; reason: 'refused' | 'busy' },
+    ) => {
+      const targetMessageCount = prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+      ).length
+      const pending = ipcHandlers.get('plugin:receiver:accept-existing')?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, offerId, itemId: prepared.detailItemId,
+      }) as Promise<unknown>
+      await vi.waitFor(() => expect(prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+      )).toHaveLength(targetMessageCount + 1))
+      const update = (prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+      ).at(-1) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+      if (decision === undefined) return { pending, revision: update.revision }
+      await resolveDetailTarget(prepared.sourcePort, prepared.sourceMessages, requestId, update, decision)
+      return { result: await pending, revision: update.revision }
+    }
+
+    const reused = await openEquivalent('detail-reuse')
+    await expect(acceptExisting(reused.offerId, 'detail-reuse-ack', { applied: true })).resolves.toMatchObject({
+      result: { accepted: true, itemId: prepared.detailItemId }, revision: 2,
+    })
+    await expect(reused.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    expect((prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(itemCount)
+
+    const refusedOffer = await openEquivalent('detail-refused')
+    await expect(acceptExisting(refusedOffer.offerId, 'detail-refused-ack', { applied: false, reason: 'refused' })).resolves.toMatchObject({
+      result: { accepted: false, reason: 'refused' }, revision: 3,
+    })
+    await expect(refusedOffer.response).resolves.toMatchObject({ ok: true, result: { opened: false } })
+    await assertDetailPortPing('reused-detail-ping-after-refusal')
+    const acceptedAgain = await openEquivalent('detail-after-refusal')
+    await expect(acceptExisting(acceptedAgain.offerId, 'detail-after-refusal-ack', { applied: true })).resolves.toMatchObject({
+      result: { accepted: true, itemId: prepared.detailItemId }, revision: 4,
+    })
+    await expect(acceptedAgain.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    expect((prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(itemCount)
+
+    vi.useFakeTimers()
+    try {
+      const timedOut = await openEquivalent('detail-timeout')
+      const acceptance = await acceptExisting(timedOut.offerId, 'detail-timeout-accept')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(acceptance.pending).resolves.toEqual({ accepted: false, reason: 'timeout' })
+      await expect(timedOut.response).resolves.toMatchObject({ ok: true, result: { opened: false } })
+      expect((prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(itemCount)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    await assertDetailPortPing('reused-detail-ping-after-timeout')
+  })
+
+  it('times out an unanswered editor target as opened false', async () => {
+    vi.useFakeTimers()
+    try {
+      const prepared = await prepareEditorSource()
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-timeout', {
+        path: 'src/timeout.ts', line: 4, column: 5,
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await (await openCall).response).toEqual({ reqId: 'editor-timeout', ok: true, result: { opened: false } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels a reused open when its left source tears down without deleting the existing detail item', async () => {
+    const prepared = await prepareEditorSource()
+    const items = (prepared.fixture.mgr as unknown as {
+      receiverItems: Map<string, { bindingId: string; offer: { location?: string } }>
+    }).receiverItems
+    const leftItem = [...items.entries()].find(([, item]) => item.offer.location === 'left')
+    expect(leftItem).toBeTruthy()
+    const [leftItemId, leftRecord] = leftItem as [string, { bindingId: string; offer: { location?: string } }]
+    expect(leftItemId).not.toBe(prepared.detailItemId)
+
+    const detailOffers = () => prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string; resourceKey?: string } }).offer)
+      .filter((offer) => offer?.location === 'detail') as Array<{ offerId: string; location: 'detail'; resourceKey?: string }>
+    const existingOffer = detailOffers()[0]
+    expect(existingOffer).toMatchObject({ offerId: expect.any(String), location: 'detail' })
+
+    const requestId = 'detail-source-teardown'
+    prepared.providerPort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'pending-ack' },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    await vi.waitFor(() => expect(detailOffers()).toHaveLength(2))
+    const replacementOffer = detailOffers().at(-1) as { offerId: string; location: 'detail'; resourceKey?: string }
+    expect(replacementOffer.resourceKey).toBe(existingOffer.resourceKey)
+
+    const targetMessagesBefore = prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ).length
+    const acceptance = ipcHandlers.get('plugin:receiver:accept-existing')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+      offerId: replacementOffer.offerId,
+      itemId: prepared.detailItemId,
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toHaveLength(targetMessagesBefore + 1))
+
+    expect(prepared.fixture.mgr.closePluginFrame(leftRecord.bindingId)).toBe(true)
+    await expect(acceptance).resolves.toEqual({ accepted: false, reason: 'unavailable' })
+    await Promise.resolve()
+    expect(prepared.providerMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+    )).toBe(false)
+    expect(items.has(leftItemId)).toBe(false)
+    expect(items.has(prepared.detailItemId)).toBe(true)
+
+    const pingRequestId = 'reused-detail-ping-after-source-teardown'
+    const pingResponse = new Promise<unknown>((resolve) => {
+      prepared.sourcePort.on('message', (event) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === pingRequestId) {
+          resolve(message.payload.response)
+        }
+      })
+    })
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: pingRequestId, payload: {},
+    })
+    await expect(pingResponse).resolves.toMatchObject({ ok: false })
+  })
+
+  it('keeps a surviving admitted sibling live for a directed private-port response after aborting another item', async () => {
+    const fixture = await setupReceiver()
+    const first = await mountOffer(fixture)
+    const sibling = await mountOffer(fixture)
+    await admitItem(fixture, first.itemId)
+    const surviving = await admitItem(fixture, sibling.itemId)
+    const abort = ipcHandlers.get('plugin:receiver:abort')
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    const response = new Promise<{ data: unknown }>((resolve) => surviving.port.on('message', resolve))
+    surviving.port.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'sibling-live-request', payload: {},
+    })
+    const message = await response
+    expect(message.data).toMatchObject({
+      channel: 'plugin:response',
+      documentGeneration: 1,
+      payload: { requestId: 'sibling-live-request', response: { ok: false } },
+    })
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.has(sibling.itemId)).toBe(true)
+  })
+
+  it('uses the registered receiver WCV id, rejects foreign abort senders, and preserves siblings', async () => {
+    const fixture = await setupReceiver()
+    const first = await mountOffer(fixture)
+    const second = await mountOffer(fixture)
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.has(second.itemId)).toBe(true)
+    const hostContents = fixture.host.webContents as FakeHostContents & { id: number }
+    const hostMainFrame = (fixture.host.webContents as FakeHostContents & { mainFrame: object }).mainFrame
+    const items = (fixture.mgr as unknown as { receiverItems: Map<string, { bindingId: string }> }).receiverItems
+    const pending = (fixture.mgr as unknown as { pendingPluginFrames: Map<string, { receiverWebContents: { id: number } }> }).pendingPluginFrames
+    const firstBinding = items.get(first.itemId)?.bindingId
+    const secondBinding = items.get(second.itemId)?.bindingId
+    expect(firstBinding).toBeTruthy()
+    expect(secondBinding).toBeTruthy()
+    expect(pending.get(firstBinding!)?.receiverWebContents.id).toBe(fixture.receiver.webContents.id)
+    expect(pending.get(firstBinding!)?.receiverWebContents.id).not.toBe(hostContents.id)
+    expect(fixture.receiver.webContents.mainFrame).not.toBe(hostMainFrame)
+
+    const abort = ipcHandlers.get('plugin:receiver:abort')
+    const foreignEvent = { sender: { id: hostContents.id }, senderFrame: fixture.receiver.webContents.mainFrame }
+    await abort?.(foreignEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    await abort?.(fixture.receiverEvent, { receiverId: 'stale-receiver', itemId: first.itemId })
+    expect(items.has(first.itemId)).toBe(true)
+
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    expect(items.has(first.itemId)).toBe(false)
+    expect(items.has(second.itemId)).toBe(true)
+    expect(pending.has(firstBinding!)).toBe(false)
+    expect(pending.has(secondBinding!)).toBe(true)
+  })
+
+  it('sends one exact item-closed payload and suppresses later stale cleanup after dispose', async () => {
+    const fixture = await setupReceiver()
+    const first = await mountOffer(fixture)
+    const second = await mountOffer(fixture)
+    const abort = ipcHandlers.get('plugin:receiver:abort')
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    const dispose = ipcHandlers.get('plugin:receiver:dispose')
+    await dispose?.(fixture.receiverEvent, { receiverId: fixture.receiverId })
+    const closed = fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:item-closed')
+      .map((message) => message.args[0])
+    expect(closed).toEqual([
+      { receiverId: fixture.receiverId, itemId: first.itemId, documentGeneration: 0 },
+    ])
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    await dispose?.(fixture.receiverEvent, { receiverId: fixture.receiverId })
+    expect(fixture.receiver.webContents.sent.filter((message) => message.channel === 'plugin:receiver:item-closed')).toHaveLength(1)
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(0)
+  })
+
+  it('rechecks registration after a delayed reserve and closes the reserved binding before returning an item', async () => {
+    const fixture = await setupReceiver()
+    expect(fixture.mgr.offerReceiverProvider(fixture.receiverId, fixture.descriptor, fixture.providerView, '/workspace')).toEqual({ ok: true })
+    const offerId = ((fixture.receiver.webContents.sent.at(-1)?.args[0] as { offer?: { offerId: string } }).offer?.offerId)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const original = fixture.mgr.reservePluginFrameContribution.bind(fixture.mgr)
+    let reserved: Awaited<ReturnType<FrontendPluginManager['reservePluginFrameContribution']>> | undefined
+    vi.spyOn(fixture.mgr, 'reservePluginFrameContribution').mockImplementation(async (...args) => {
+      await gate
+      reserved = await original(...args)
+      return reserved
+    })
+    const mount = ipcHandlers.get('plugin:receiver:mount')
+    const mounting = mount?.(fixture.receiverEvent, { receiverId: fixture.receiverId, offerId, placement: { mountHostId: `host-${offerId}` } })
+    await Promise.resolve()
+    await ipcHandlers.get('plugin:receiver:dispose')?.(fixture.receiverEvent, { receiverId: fixture.receiverId })
+    release()
+    await expect(mounting).rejects.toThrow('receiver mount is unavailable')
+    expect(reserved?.ok).toBe(true)
+    const bindingId = reserved?.ok ? reserved.bindingId : ''
+    expect((fixture.mgr as unknown as { pendingPluginFrames: Map<string, unknown> }).pendingPluginFrames.has(bindingId)).toBe(false)
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(0)
   })
 })
 
@@ -811,6 +2657,67 @@ describe('Plans private filesystem grant revalidation', () => {
 })
 
 describe('devPlansPluginDescriptor', () => {
+  it('resolves v2 artifacts from explicit version and target coordinates while legacy paths stay unchanged', () => {
+    const source = { isPackaged: true, resourcesPath: '/resources', artifactVersion: '4.5.6' }
+    expect(officialPluginArtifactPackageDir(source, MINI_IDE_PLUGIN_ID, 'universal')).toBe(
+      join('/resources', 'official-artifacts', MINI_IDE_PLUGIN_ID, '4.5.6', 'universal', 'package')
+    )
+    expect(bundledPlansV2Dir(source)).toBe(
+      join('/resources', 'official-artifacts', PLANS_PLUGIN_ID, '4.5.6', `${process.platform}-${process.arch}`, 'package')
+    )
+    expect(bundledPlansDir(source)).toBe(join('/resources', 'plugins', 'plans'))
+    expect(bundledGitDir(source)).toBe(join('/resources', 'plugins', 'git'))
+    expect(officialPluginArtifactPackageDir(
+      { isPackaged: false, resourcesPath: '', artifactVersion: '4.5.6', devRoot: '/repo' },
+      MINI_IDE_PLUGIN_ID,
+      'universal',
+    )).toBe(join(
+      '/repo',
+      'dist-plugins',
+      'official-artifacts',
+      'factory-resources',
+      MINI_IDE_PLUGIN_ID,
+      '4.5.6',
+      'universal',
+      'package',
+    ))
+  })
+
+  it('does not discover a combined Plans version from a sibling artifact directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-explicit-version-'))
+    try {
+      const decoy = join(
+        root,
+        'dist-plugins',
+        'official-artifacts',
+        'factory-resources',
+        PLANS_PLUGIN_ID,
+        '9.9.9',
+        `${process.platform}-${process.arch}`,
+        'package',
+      )
+      mkdirSync(join(decoy, 'frontend/left'), { recursive: true })
+      mkdirSync(join(decoy, 'frontend/window'), { recursive: true })
+      mkdirSync(join(decoy, 'backend'), { recursive: true })
+      writeFileSync(join(decoy, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
+      writeFileSync(join(decoy, 'frontend/left/index.html'), '<!doctype html>')
+      writeFileSync(join(decoy, 'frontend/window/index.html'), '<!doctype html>')
+      const backendEntry = join(decoy, 'backend/navide-plans')
+      writeFileSync(backendEntry, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+      chmodSync(backendEntry, 0o700)
+
+      expect(devPlansV2PluginBundle('1.2.3', root)).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses the universal Git artifact path for an explicit development version', () => {
+    expect(devGitPluginDescriptor('4.5.6', '/repo').entryFile).toBe(
+      join('/repo', 'dist-plugins', 'official-artifacts', 'factory-resources', GIT_PLUGIN_ID, '4.5.6', 'universal', 'package', 'frontend/window/index.html')
+    )
+  })
+
   it('describes the navide.plans dev bundle with the plans-only event grant', () => {
     const desc = devPlansPluginDescriptor()
     expect(desc.id).toBe(PLANS_PLUGIN_ID)
@@ -852,6 +2759,7 @@ describe('devPlansPluginDescriptor', () => {
       expect(registerBundledPlans(mgr, {
         isPackaged: false,
         resourcesPath: '',
+        artifactVersion: '0.1.92',
         devRoot: root,
       })).toEqual({ registered: true })
       expect(mgr.getDescriptor(PLANS_PLUGIN_ID)?.packageVersion).toBeUndefined()
@@ -909,6 +2817,7 @@ describe('devPlansPluginDescriptor', () => {
       expect(registerBundledPlans(mgr, {
         isPackaged: false,
         resourcesPath: '',
+        artifactVersion: '2.0.0',
         devRoot: join(root, 'no-bundled-copy'),
         installedActivation: {
           pluginId: PLANS_PLUGIN_ID,
@@ -944,6 +2853,71 @@ describe('devPlansPluginDescriptor', () => {
       message: 'Backend activation has no selected package descriptor.',
     }))
     expect(mgr.hasBackendActivity()).toBe(false)
+  })
+
+  it('registers an installed backend-only activation only for its exact package identity', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.backend-only'
+    const packageVersion = '1.0.0'
+    const packageDir = process.cwd()
+    const activation = {
+      pluginId,
+      packageVersion,
+      packageDir,
+      entryFile: '/plugins/acme.backend-only/backend',
+      protocolVersion: 1 as const,
+      activation: 'startup' as const,
+      approvedMethods: ['backend.run'],
+      approvedEvents: [],
+    }
+
+    mgr.registerInstalledPackage(
+      { id: pluginId, packageVersion, requires: [] },
+      undefined,
+      {},
+      packageDir,
+    )
+    mgr.registerBackendActivation(activation)
+
+    expect(mgr.hasBackendActivation(pluginId, packageVersion)).toBe(true)
+    expect(mgr.getBackendActivation(pluginId, packageVersion)).toEqual(
+      expect.objectContaining({ pluginId, packageVersion }),
+    )
+
+    await mgr.revokePackageVersion(pluginId, packageVersion)
+    expect(mgr.hasBackendActivation(pluginId, packageVersion)).toBe(false)
+
+    // The dynamic activation catalog may restore this Host-verified
+    // backend-only version after the restart drain completes.
+    mgr.registerBackendActivation(activation)
+    expect(mgr.hasBackendActivation(pluginId, packageVersion)).toBe(true)
+
+    await mgr.closeBackendPlugins()
+  })
+
+  it('rejects a backend-only activation with a mismatched installed package root', () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.backend-only'
+    mgr.registerInstalledPackage(
+      { id: pluginId, packageVersion: '1.0.0', requires: [] },
+      undefined,
+      {},
+      process.cwd(),
+    )
+
+    expect(() => mgr.registerBackendActivation({
+      pluginId,
+      packageVersion: '1.0.0',
+      packageDir: join(process.cwd(), 'src'),
+      entryFile: '/plugins/acme.backend-only/backend',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['backend.run'],
+      approvedEvents: [],
+    })).toThrowError(expect.objectContaining({
+      code: 'INVALID_ACTIVATION',
+      message: 'Backend activation does not match the installed package identity.',
+    }))
   })
 
   it('rejects a backend activation whose package root is not the selected descriptor root', () => {
@@ -2506,6 +4480,249 @@ describe('package-version grant revocation', () => {
   })
 })
 
+describe('immutable package restart frontend seam', () => {
+  it('drains old work behind a plugin barrier and restores native placement from the current descriptor only', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.restartable'
+    const oldVersion = '1.0.0'
+    const newVersion = '2.0.0'
+    const contributionKey = `${pluginId}.main`
+    const oldView: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey, kind: 'custom', location: 'main', title: 'Restartable',
+      entryFile: '/plugins/acme.restartable/v1/index.html',
+    }
+    const newView: PluginViewLaunchDescriptor = { ...oldView, entryFile: '/plugins/acme.restartable/v2/index.html' }
+    const makeDescriptor = (packageVersion: string, view: PluginViewLaunchDescriptor): PluginLaunchDescriptor => ({
+      id: pluginId, packageVersion, packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: view.entryFile, views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const oldDescriptor = makeDescriptor(oldVersion, oldView)
+    const newDescriptor = makeDescriptor(newVersion, newView)
+    const oldContext: HostCapabilityContext = {
+      publisherEligible: false,
+      userGrant: { packageVersion: oldVersion, system: [], storage: true },
+      runtimeBinding: {
+        pluginId, packageVersion: oldVersion, workspaceId: 'workspace-1', instanceId: null, audience: contributionKey,
+      },
+    }
+    mgr.registerDescriptor(oldDescriptor)
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    const host = new FakeBrowserWindow()
+    try {
+      await mgr.openView(oldDescriptor, oldView, {
+        hostWindow: asHost(host), bounds: { x: 5, y: 7, width: 450, height: 320 },
+        workspacePath: '/workspace', query: '?workspace_path=%2Fworkspace&file_grant=stale', capabilityContext: oldContext,
+      })
+      const oldSurface = host.children[0] as FakeViewLike
+
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      expect(revoke).toHaveBeenCalledWith(pluginId, oldVersion)
+      expect(oldSurface.webContents.isDestroyed()).toBe(true)
+
+      mgr.registerDescriptor(newDescriptor)
+      mgr.setPluginStorageSnapshotSelection(pluginId, {
+        activeVersion: newVersion,
+        previousVersion: oldVersion,
+      })
+      await expect(mgr.openView(newDescriptor, newView, {
+        hostWindow: asHost(new FakeBrowserWindow()), bounds: 'fill', workspacePath: '/workspace',
+        capabilityContext: {
+          ...oldContext,
+          userGrant: { packageVersion: newVersion, system: [], storage: true },
+          runtimeBinding: { ...oldContext.runtimeBinding!, packageVersion: newVersion },
+        },
+      })).rejects.toMatchObject({ code: 'PLUGIN_STOPPING' })
+
+      const restoring = mgr.restorePackageRestart(transaction, newVersion)
+      const restoredSurface = host.children[0] as FakeViewLike
+      expect(restoredSurface.webContents.loads).toEqual([
+        `${newView.entryFile}?workspace_path=%2Fworkspace`,
+      ])
+      ipcListeners.get('plugin:ready')?.({ sender: { id: restoredSurface.webContents.id } })
+      await expect(restoring).resolves.toEqual({ restoredInstances: 1, skippedDestroyedHostWindows: 0 })
+      mgr.completePackageRestart(transaction)
+
+      const restored = [...(mgr as unknown as { running: Map<string, {
+        capabilityContext: HostCapabilityContext | null
+      }> }).running.values()][0]
+      expect(restored?.capabilityContext?.runtimeBinding?.packageVersion).toBe(newVersion)
+      expect(restored?.capabilityContext?.storageSnapshots).toEqual(new Map([
+        ['candidate', newVersion], ['active', newVersion], ['previous', oldVersion],
+      ]))
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('preflights hidden candidate views without a catalog entry or capability binding', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor: PluginLaunchDescriptor = {
+      id: 'acme.candidate', packageVersion: '2.0.0', packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: '/plugins/acme.candidate/index.html',
+      views: [{
+        id: 'main', contributionKey: 'acme.candidate.main', kind: 'custom', location: 'main', title: 'Candidate',
+        entryFile: '/plugins/acme.candidate/index.html',
+      }],
+    }
+    const host = new FakeBrowserWindow()
+    const onFailure = vi.fn()
+    mgr.setActivationFailureHandler(onFailure)
+
+    const preflight = mgr.preflightPackageFrontend(descriptor, asHost(host))
+    const surface = host.children[0] as FakeViewLike
+    const running = [...(mgr as unknown as { running: Map<string, {
+      capabilityContext: HostCapabilityContext | null
+    }> }).running.values()][0]
+    expect(running?.capabilityContext).toBeNull()
+    expect(mgr.getDescriptor(descriptor.id)).toBeUndefined()
+    ipcListeners.get('plugin:ready')?.({ sender: { id: surface.webContents.id } })
+
+    await expect(preflight).resolves.toBeUndefined()
+    expect(host.children).toHaveLength(0)
+    expect(mgr.listContributionCatalog()).toEqual([])
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
+  it('reports a destroyed Host window explicitly instead of treating the placement as restored', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.destroyed-host'
+    const oldVersion = '1.0.0'
+    const newVersion = '2.0.0'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey: `${pluginId}.main`, kind: 'custom', location: 'main', title: 'Destroyed host',
+      entryFile: '/plugins/acme.destroyed-host/index.html',
+    }
+    const descriptor = (packageVersion: string): PluginLaunchDescriptor => ({
+      id: pluginId, packageVersion, packageDir: process.cwd(), requires: [], devUrl: '', entryFile: view.entryFile,
+      views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const oldDescriptor = descriptor(oldVersion)
+    const host = new FakeBrowserWindow()
+    mgr.registerDescriptor(oldDescriptor)
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const oldContext: HostCapabilityContext = {
+      publisherEligible: false, userGrant: { packageVersion: oldVersion, system: [], storage: true },
+      runtimeBinding: { pluginId, packageVersion: oldVersion, workspaceId: 'workspace-1', instanceId: null, audience: view.contributionKey },
+    }
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      await mgr.openView(oldDescriptor, view, {
+        hostWindow: asHost(host), bounds: 'fill', workspacePath: '/workspace', capabilityContext: oldContext,
+      })
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      host.destroyed = true
+      mgr.registerDescriptor(descriptor(newVersion))
+      mgr.setPluginStorageSnapshotSelection(pluginId, { activeVersion: newVersion, previousVersion: oldVersion })
+
+      await expect(mgr.restorePackageRestart(transaction, newVersion)).resolves.toEqual({
+        restoredInstances: 0, skippedDestroyedHostWindows: 1,
+      })
+      mgr.completePackageRestart(transaction)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('does not silently complete a renderer-owned guest placement', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.pending-guest'
+    const oldVersion = '1.0.0'
+    const newVersion = '2.0.0'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'left', contributionKey: `${pluginId}.left`, kind: 'custom', location: 'left', title: 'Guest',
+      entryFile: '/plugins/acme.pending-guest/index.html',
+    }
+    const descriptor = (packageVersion: string): PluginLaunchDescriptor => ({
+      id: pluginId, packageVersion, packageDir: process.cwd(), requires: [], devUrl: '', entryFile: view.entryFile,
+      views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const host = new FakeBrowserWindow()
+    mgr.registerDescriptor(descriptor(oldVersion))
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      await expect(mgr.prepareGuestContribution(asHost(host), view.contributionKey, {
+        workspacePath: '/workspace', query: '?workspace_path=%2Fworkspace',
+      })).resolves.toMatchObject({ ok: true })
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      mgr.registerDescriptor(descriptor(newVersion))
+      mgr.setPluginStorageSnapshotSelection(pluginId, { activeVersion: newVersion, previousVersion: oldVersion })
+
+      await expect(mgr.restorePackageRestart(transaction, newVersion)).rejects.toThrow(/guest re-prepare/)
+      expect(() => mgr.completePackageRestart(transaction)).toThrow(/required placements/)
+      mgr.cancelPackageRestart(transaction)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('closes drained placements when the selected package has no frontend', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.to-backend-only'
+    const oldVersion = '1.0.1'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey: `${pluginId}.main`, kind: 'custom', location: 'window', title: 'Window',
+      entryFile: '/plugins/acme.to-backend-only/index.html',
+    }
+    const oldDescriptor: PluginLaunchDescriptor = {
+      id: pluginId, packageVersion: oldVersion, packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: view.entryFile, views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    }
+    const host = new FakeBrowserWindow()
+    const close = vi.fn()
+    Object.assign(host, { close })
+    mgr.registerDescriptor(oldDescriptor)
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      await mgr.openView(oldDescriptor, view, {
+        hostWindow: asHost(host), bounds: 'fill', workspacePath: '/workspace', closeHostOnHide: true,
+        capabilityContext: {
+          publisherEligible: false, userGrant: { packageVersion: oldVersion, system: [], storage: true },
+          runtimeBinding: { pluginId, packageVersion: oldVersion, workspaceId: 'workspace-1', instanceId: null, audience: view.contributionKey },
+        },
+      })
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      mgr.registerInstalledPackage({ id: pluginId, requires: [], packageVersion: '1.0.0' }, undefined, {}, process.cwd())
+      expect(() => mgr.completePackageRestart(transaction)).toThrow(/required placements/)
+
+      mgr.completePackageRestartWithoutFrontend(transaction)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect((mgr as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has(pluginId)).toBe(false)
+      expect(() => mgr.completePackageRestart(transaction)).toThrow(/not active/)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('refuses to drop placements while the selected package still has a frontend', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.still-frontend'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey: `${pluginId}.main`, kind: 'custom', location: 'main', title: 'Main',
+      entryFile: '/plugins/acme.still-frontend/index.html',
+    }
+    mgr.registerDescriptor({
+      id: pluginId, packageVersion: '1.0.0', packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: view.entryFile, views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      const transaction = await mgr.beginPackageRestart(pluginId, '1.0.0')
+      expect(() => mgr.completePackageRestartWithoutFrontend(transaction)).toThrow(/still has a frontend/)
+      mgr.cancelPackageRestart(transaction)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+})
+
 describe('registerDescriptor reserved-id guard', () => {
   it('refuses a third-party plugin claiming a reserved built-in id', () => {
     const mgr = new FrontendPluginManager()
@@ -2686,6 +4903,47 @@ describe('registerDescriptor reserved-id guard', () => {
       },
       storageSnapshotTier: 'active',
     })
+  })
+
+  it('binds the lifecycle-selected previous Mini-IDE storage snapshot', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageDescriptor: PluginLaunchDescriptor = {
+      id: MINI_IDE_PLUGIN_ID,
+      packageVersion: '2.0.0',
+      requires: ['ui'],
+      capabilityPolicy: { kind: 'manifest-v2', system: ['ui'], grants: [] },
+      devUrl: '',
+      entryFile: '/plugins/mini-ide/index.html',
+      views: [{
+        id: 'left',
+        contributionKey: 'navide.mini-ide.left',
+        kind: 'custom',
+        location: 'left',
+        title: 'Mini IDE',
+        entryFile: '/plugins/mini-ide/index.html',
+      }],
+    }
+    mgr.registerDescriptor(packageDescriptor, { builtin: true })
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: '2.0.0',
+      system: ['ui'],
+      storage: true,
+    }))
+    mgr.setMiniIdeStorageSnapshotContext('2.0.0', '1.9.0')
+
+    await expect(mgr.openContribution(asHost(new FakeBrowserWindow()), 'navide.mini-ide.left', {
+      bounds: 'fill',
+      workspacePath: '/workspace',
+    })).resolves.toEqual({ ok: true })
+
+    const running = [...(mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext | null }>
+    }).running.values()]
+    expect([...running[0].capabilityContext!.storageSnapshots!.entries()]).toEqual([
+      ['candidate', '2.0.0'],
+      ['active', '2.0.0'],
+      ['previous', '1.9.0'],
+    ])
   })
 
   it('derives the same workspace identity across manager instances', () => {
@@ -3051,6 +5309,313 @@ describe('registerDescriptor reserved-id guard', () => {
       expect(onFailure).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('durable plugin selector startup wiring', () => {
+  function writeTrustedActivePackage(root: string, pluginId: string): {
+    trust: InstalledRegistryTrustContext
+    selection: { packageVersion: string; target: string; artifactDigest: string }
+  } {
+    const version = '1.0.0'
+    const target = 'universal'
+    const packageDir = join(root, pluginId, version, target, 'package')
+    mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+    const manifest = JSON.stringify({
+      schemaVersion: 2,
+      apiVersion: '^1.0.0',
+      id: pluginId,
+      name: 'Recovery',
+      version,
+      publisher: 'acme',
+      permissions: {},
+      marketplace: { description: 'Recovery test plugin', license: 'MIT' },
+      contributes: {
+        views: [{
+          id: 'main',
+          kind: 'custom',
+          location: 'main',
+          title: 'Recovery',
+          entry: 'frontend/index.html',
+        }],
+      },
+    })
+    const archive = new Uint8Array(makeZip([
+      { name: 'manifest.json', data: manifest },
+      { name: 'frontend/index.html', data: '<!doctype html>' },
+    ]))
+    writeFileSync(join(packageDir, 'manifest.json'), manifest)
+    writeFileSync(join(packageDir, 'frontend', 'index.html'), '<!doctype html>')
+    writeFileSync(join(packageDir, REGISTRY_ARTIFACT_NAME), archive)
+
+    const rootKey = generateKeyPairSync('ed25519')
+    const signerKey = generateKeyPairSync('ed25519')
+    const rootPem = rootKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const signerPem = signerKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const signed = (value: unknown, key = signerKey.privateKey): string =>
+      edSign(null, Buffer.from(canonicalTrustJson(value)), key).toString('base64')
+    const artifactDigest = sha256Hex(archive)
+    const envelope: RegistryPackageEnvelope = {
+      schemaVersion: 1,
+      artifactDigest,
+      packageId: pluginId,
+      version,
+      target,
+      publisherId: 'acme',
+      keyId: 'selector-test',
+      signedAt: '2026-08-16T11:00:00.000Z',
+    }
+    const metadata: RegistryTrustMetadata = {
+      schemaVersion: 1,
+      registryProfile: 'official',
+      rootFingerprint: `sha256:${'1'.repeat(64)}`,
+      generatedAt: '2026-08-16T10:00:00.000Z',
+      expiresAt: '2026-08-17T10:00:00.000Z',
+      signers: [{
+        keyId: 'selector-test',
+        publicKey: signerPem,
+        status: 'active',
+        notBefore: '2026-08-01T00:00:00.000Z',
+        notAfter: '2026-09-01T00:00:00.000Z',
+      }],
+      blockedPublishers: [],
+      blockedPackages: [],
+    }
+    writeFileSync(
+      join(packageDir, REGISTRY_RECEIPT_NAME),
+      JSON.stringify(registryReceiptFromEvidence({
+        packageId: pluginId,
+        version,
+        publisherId: 'acme',
+        target,
+        artifactDigest,
+        envelope,
+        envelopeSignature: signed(envelope),
+      })),
+    )
+    return {
+      trust: {
+        pinnedRootKey: rootPem,
+        snapshot: {
+          schemaVersion: 1,
+          metadata,
+          metadataSignature: signed(metadata, rootKey.privateKey),
+        },
+        expectedTarget: target,
+        now: new Date('2026-08-16T12:00:00.000Z'),
+      },
+      selection: { packageVersion: version, target, artifactDigest },
+    }
+  }
+
+  it('projects the selected active and previous package versions into generic storage', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-projection-'))
+    try {
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate('acme.storage', {
+        packageVersion: '1.0.0',
+        target: 'universal',
+        artifactDigest: '11'.repeat(32),
+      })
+      selector.activateCandidate('acme.storage')
+      selector.stageCandidate('acme.storage', {
+        packageVersion: '2.0.0',
+        target: 'universal',
+        artifactDigest: '22'.repeat(32),
+      })
+      selector.activateCandidate('acme.storage')
+
+      const mgr = new FrontendPluginManager()
+      mgr.projectPluginStorageSnapshotSelections(root)
+
+      const selections = (mgr as unknown as {
+        pluginStorageSnapshotSelections: Map<string, { activeVersion: string; previousVersion?: string }>
+      }).pluginStorageSnapshotSelections
+      expect(selections.get('acme.storage')).toEqual({
+        activeVersion: '2.0.0',
+        previousVersion: '1.0.0',
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('re-verifies the exact recovered active package before scanning after a cold interrupted activation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-cold-recovery-'))
+    try {
+      const pluginId = 'acme.recovery'
+      const { trust, selection } = writeTrustedActivePackage(root, pluginId)
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate(pluginId, selection)
+      selector.activateCandidate(pluginId)
+      selector.stageCandidate(pluginId, {
+        packageVersion: '2.0.0', target: 'universal', artifactDigest: '22'.repeat(32),
+      })
+      selector.beginActivation(pluginId)
+
+      const result = new FrontendPluginManager().loadInstalledPlugins(root, {
+        provenance: 'official-registry', trust,
+      })
+
+      expect(result.loaded).toEqual([pluginId])
+      expect(result.errors).toEqual([])
+      expect(new PluginActivationSelector(root).read(pluginId)).toMatchObject({
+        active: selection,
+        candidate: { packageVersion: '2.0.0' },
+      })
+      expect(new PluginActivationSelector(root).read(pluginId)?.activation).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not recover or register when the exact retained rollback package no longer verifies', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-recovery-trust-failure-'))
+    try {
+      const pluginId = 'acme.recovery'
+      const { trust, selection } = writeTrustedActivePackage(root, pluginId)
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate(pluginId, selection)
+      selector.activateCandidate(pluginId)
+      const candidate = {
+        packageVersion: '2.0.0', target: 'universal', artifactDigest: '22'.repeat(32),
+      }
+      selector.stageCandidate(pluginId, candidate)
+      selector.beginActivation(pluginId)
+      selector.activateCandidate(pluginId)
+      writeFileSync(
+        join(root, pluginId, selection.packageVersion, selection.target, 'package', REGISTRY_ARTIFACT_NAME),
+        'tampered retained artifact',
+      )
+
+      const result = new FrontendPluginManager().loadInstalledPlugins(root, {
+        provenance: 'official-registry', trust,
+      })
+
+      expect(result.loaded).toEqual([])
+      expect(result.activationCatalog).toEqual([])
+      expect(result.errors.join(' ')).toMatch(/interrupted lifecycle recovery blocked/i)
+      expect(new PluginActivationSelector(root).read(pluginId)).toMatchObject({
+        active: candidate,
+        previous: selection,
+        activation: { kind: 'candidate', phase: 'promoted' },
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an official package when its verified digest differs from the durable active selector', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-digest-'))
+    try {
+      const pluginId = 'acme.digest'
+      const version = '1.0.0'
+      const packageDir = join(root, pluginId, version, 'universal', 'package')
+      mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+      const manifest = JSON.stringify({
+        schemaVersion: 2,
+        apiVersion: '^1.0.0',
+        id: pluginId,
+        name: 'Digest',
+        version,
+        publisher: 'acme',
+        permissions: {},
+        marketplace: { description: 'Digest test plugin', license: 'MIT' },
+        contributes: {
+          views: [{
+            id: 'main',
+            kind: 'custom',
+            location: 'main',
+            title: 'Digest',
+            entry: 'frontend/index.html',
+          }],
+        },
+      })
+      const archive = new Uint8Array(makeZip([
+        { name: 'manifest.json', data: manifest },
+        { name: 'frontend/index.html', data: '<!doctype html>' },
+      ]))
+      writeFileSync(join(packageDir, 'manifest.json'), manifest)
+      writeFileSync(join(packageDir, 'frontend', 'index.html'), '<!doctype html>')
+      writeFileSync(join(packageDir, REGISTRY_ARTIFACT_NAME), archive)
+
+      const rootKey = generateKeyPairSync('ed25519')
+      const signerKey = generateKeyPairSync('ed25519')
+      const rootPem = rootKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+      const signerPem = signerKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+      const signed = (value: unknown, key = signerKey.privateKey): string =>
+        edSign(null, Buffer.from(canonicalTrustJson(value)), key).toString('base64')
+      const digest = sha256Hex(archive)
+      const envelope: RegistryPackageEnvelope = {
+        schemaVersion: 1,
+        artifactDigest: digest,
+        packageId: pluginId,
+        version,
+        target: 'universal',
+        publisherId: 'acme',
+        keyId: 'selector-test',
+        signedAt: '2026-08-16T11:00:00.000Z',
+      }
+      const metadata: RegistryTrustMetadata = {
+        schemaVersion: 1,
+        registryProfile: 'official',
+        rootFingerprint: `sha256:${'1'.repeat(64)}`,
+        generatedAt: '2026-08-16T10:00:00.000Z',
+        expiresAt: '2026-08-17T10:00:00.000Z',
+        signers: [{
+          keyId: 'selector-test',
+          publicKey: signerPem,
+          status: 'active',
+          notBefore: '2026-08-01T00:00:00.000Z',
+          notAfter: '2026-09-01T00:00:00.000Z',
+        }],
+        blockedPublishers: [],
+        blockedPackages: [],
+      }
+      writeFileSync(
+        join(packageDir, REGISTRY_RECEIPT_NAME),
+        JSON.stringify(registryReceiptFromEvidence({
+          packageId: pluginId,
+          version,
+          publisherId: 'acme',
+          target: 'universal',
+          artifactDigest: digest,
+          envelope,
+          envelopeSignature: signed(envelope),
+        }))
+      )
+
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate(pluginId, {
+        packageVersion: version,
+        target: 'universal',
+        artifactDigest: '00'.repeat(32),
+      })
+      selector.activateCandidate(pluginId)
+
+      const mgr = new FrontendPluginManager()
+      const trust: InstalledRegistryTrustContext = {
+        pinnedRootKey: rootPem,
+        snapshot: {
+          schemaVersion: 1,
+          metadata,
+          metadataSignature: signed(metadata, rootKey.privateKey),
+        },
+        expectedTarget: 'universal',
+        now: new Date('2026-08-16T12:00:00.000Z'),
+      }
+      const result = mgr.loadInstalledPlugins(root, {
+        provenance: 'official-registry',
+        trust,
+      })
+
+      expect(result.loaded).toEqual([])
+      expect(result.activationCatalog).toEqual([])
+      expect(result.errors.join(' ')).toMatch(/digest/i)
+      expect(mgr.getDescriptor(pluginId)).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })
@@ -3608,14 +6173,14 @@ describe('bundled mini-IDE builtin resolution', () => {
   })
 
   it('resolves resourcesPath/plugins/mini-ide when packaged', () => {
-    expect(bundledMiniIdeDir({ isPackaged: true, resourcesPath: '/res' })).toBe(
+    expect(bundledMiniIdeDir({ isPackaged: true, resourcesPath: '/res', artifactVersion: '1.2.3' })).toBe(
       join('/res', 'plugins', 'mini-ide')
     )
   })
 
   it('resolves dist-plugins/mini-ide under the dev root when unpackaged', () => {
     expect(
-      bundledMiniIdeDir({ isPackaged: false, resourcesPath: '/res', devRoot: '/repo' })
+      bundledMiniIdeDir({ isPackaged: false, resourcesPath: '/res', artifactVersion: '1.2.3', devRoot: '/repo' })
     ).toBe(join('/repo', 'dist-plugins', 'mini-ide'))
   })
 
@@ -3623,7 +6188,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     const dir = join(root, 'plugins', 'mini-ide')
     writeBundled(dir)
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(true)
     const desc = mgr.getDescriptor(MINI_IDE_PLUGIN_ID)
     expect(desc?.entryFile).toBe(join(dir, 'index.html'))
@@ -3637,6 +6202,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     const result = registerBundledMiniIde(mgr, {
       isPackaged: false,
       resourcesPath: '/unused',
+      artifactVersion: '1.0.0',
       devRoot: root,
     })
     expect(result.registered).toBe(true)
@@ -3655,7 +6221,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     }
     mgr.registerDescriptor(installed, { official: true })
 
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(true)
     // Installed copy stays active; the bundled one is only the fallback.
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)?.entryFile).toBe(installed.entryFile)
@@ -3674,7 +6240,7 @@ describe('bundled mini-IDE builtin resolution', () => {
       },
       { official: true }
     )
-    registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
 
     mgr.removeInstalledPlugin(MINI_IDE_PLUGIN_ID)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)?.entryFile).toBe(join(dir, 'index.html'))
@@ -3682,7 +6248,7 @@ describe('bundled mini-IDE builtin resolution', () => {
 
   it('a missing bundled dir is refused without crashing (dialog fallback)', () => {
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(result.reason).toBeTruthy()
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
@@ -3693,7 +6259,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'manifest.json'), 'not json at all')
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
   })
@@ -3707,7 +6273,7 @@ describe('bundled mini-IDE builtin resolution', () => {
       requires: [],
     })
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(result.reason).toMatch(/acme\.impostor/)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
@@ -3721,7 +6287,7 @@ describe('bundled mini-IDE builtin resolution', () => {
       JSON.stringify({ id: MINI_IDE_PLUGIN_ID, version: '1.0.0', entry: 'index.html', requires: [] })
     )
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(result.reason).toMatch(/entry file missing/)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
@@ -3976,6 +6542,14 @@ describe('opaque view instance ownership', () => {
     }
   }
 
+  function v2WindowDescriptor(id = 'acme.window-target'): PluginLaunchDescriptor {
+    const descriptor = v2PackageDescriptor(id)
+    return {
+      ...descriptor,
+      views: [descriptor.views![1]!],
+    }
+  }
+
   it('creates independently addressable opaque instances for one package', async () => {
     const mgr = new FrontendPluginManager()
     const packageDesc = packageDescriptor()
@@ -4009,6 +6583,416 @@ describe('opaque view instance ownership', () => {
     expect(hostB.focusCount).toBeGreaterThan(0)
     expect((hostA.children[0] as FakeViewLike).webContents.focusCount).toBeGreaterThan(0)
     expect((hostB.children[0] as FakeViewLike).webContents.focusCount).toBeGreaterThan(0)
+  })
+
+  it('mints a receiver-owned file grant for new and reused window contribution targets', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor()
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-workspace-')))
+    try {
+      const firstPath = join(workspacePath, 'first.ts')
+      const secondPath = join(workspacePath, 'second.ts')
+      const firstHost = new FakeBrowserWindow()
+      const firstOpening = mgr.openContributionWindow(
+        asHost(firstHost),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=first.ts&file_grant=caller-grant`,
+          trustedEditorFileTarget: { path: firstPath },
+        },
+      )
+      const firstView = firstHost.children[0] as FakeViewLike
+      firstView.webContents.emit('did-finish-load')
+      const firstResult = await firstOpening
+      expect(firstResult).toEqual({ ok: true })
+      const firstLoaded = new URLSearchParams(firstView.webContents.loads[0]!.split('?')[1])
+      // A trusted target is withheld from the bootstrap URL until the initial
+      // backend binding has completed. The renderer must never receive the
+      // caller's grant or an unbound file target during that await.
+      expect(firstLoaded.get('file_grant')).toBeNull()
+      expect(firstLoaded.get('filepath')).toBeNull()
+
+      const running = (mgr as unknown as {
+        running: Map<string, { hostWindow: FakeBrowserWindow; capabilityContext: HostCapabilityContext | null }>
+      }).running
+      const firstInstanceId = [...running.entries()].find(([, plugin]) => plugin.hostWindow === firstHost)?.[0]
+      expect(firstInstanceId).toBeTruthy()
+      const firstPlugin = running.get(firstInstanceId!)!
+      const firstBinding = firstPlugin.capabilityContext!.runtimeBinding!
+      const grants = (mgr as unknown as {
+        editorSelectionGrants: {
+          resolve: (owner: { instanceId: string; workspaceId: string; packageVersion: string }, grant: unknown, kind: 'file') => string
+        }
+      }).editorSelectionGrants
+      const firstOwner = {
+        instanceId: firstInstanceId!,
+        workspaceId: firstBinding.workspaceId!,
+        packageVersion: firstBinding.packageVersion,
+      }
+      const firstTarget = firstView.webContents.sent.at(-1)
+      expect(firstTarget?.channel).toBe('plugin:openTarget')
+      const firstParams = firstTarget?.args[0] as Record<string, string>
+      const firstGrant = firstParams.file_grant
+      expect(firstGrant).toBeTruthy()
+      expect(firstGrant).not.toBe('caller-grant')
+      expect(grants.resolve(firstOwner, firstGrant, 'file')).toBe(firstPath)
+
+      const reused = await mgr.openContributionWindow(
+        asHost(firstHost),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=second.ts&file_grant=caller-reused`,
+          trustedEditorFileTarget: { path: secondPath },
+        },
+      )
+      expect(reused).toEqual({ ok: true })
+      expect(firstView.webContents.loads).toHaveLength(1)
+      const target = firstView.webContents.sent.at(-1)
+      expect(target?.channel).toBe('plugin:openTarget')
+      const secondParams = target?.args[0] as Record<string, string>
+      expect(secondParams.file_grant).toBeTruthy()
+      expect(secondParams.file_grant).not.toBe('caller-reused')
+      expect(grants.resolve(firstOwner, secondParams.file_grant, 'file')).toBe(secondPath)
+
+      await expect(mgr.openContributionWindow(
+        asHost(firstHost),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&file_grant=caller-only`,
+        },
+      )).resolves.toEqual({ ok: true })
+      const strippedTarget = firstView.webContents.sent.at(-1)?.args[0] as Record<string, string>
+      expect(strippedTarget.file_grant).toBeUndefined()
+
+      expect(() => grants.resolve(
+        { ...firstOwner, instanceId: 'sibling-instance' },
+        secondParams.file_grant,
+        'file',
+      )).toThrow(/owned by this instance/)
+      expect(() => grants.resolve(
+        { ...firstOwner, workspaceId: 'sibling-workspace' },
+        secondParams.file_grant,
+        'file',
+      )).toThrow(/owned by this instance/)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('withholds a new target when its live dispatch gate expires during binding', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-gated')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-gated-')))
+    try {
+      const host = new FakeBrowserWindow()
+      let active = true
+      vi.spyOn(mgr, 'waitForBackendBinding').mockResolvedValue()
+      const opening = mgr.openContributionWindow(
+        asHost(host),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=main.ts&file_grant=caller-grant`,
+          trustedEditorFileTarget: { path: join(workspacePath, 'main.ts') },
+          canDispatch: () => active,
+        },
+      )
+      await Promise.resolve()
+      const view = host.children[0] as FakeViewLike
+      expect(view).toBeDefined()
+      active = false
+      view.webContents.emit('did-finish-load')
+      await expect(opening).resolves.toEqual({ ok: false, error: 'request is no longer active' })
+      expect(host.children).toHaveLength(0)
+      const loaded = new URLSearchParams(view.webContents.loads[0]!.split('?')[1])
+      expect(loaded.get('file_grant')).toBeNull()
+      expect(loaded.get('filepath')).toBeNull()
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(0)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a trusted target whose canonical path changes while binding is pending', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-canonical')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-canonical-')))
+    try {
+      const targetPath = join(workspacePath, 'target.ts')
+      const replacementPath = join(workspacePath, 'replacement.ts')
+      writeFileSync(targetPath, 'original')
+      writeFileSync(replacementPath, 'replacement')
+      const expectedCanonicalPath = realpathSync(targetPath)
+      vi.spyOn(mgr, 'waitForBackendBinding').mockResolvedValue()
+      const host = new FakeBrowserWindow()
+      const opening = mgr.openContributionWindow(
+        asHost(host),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=target.ts`,
+          trustedEditorFileTarget: { path: targetPath, expectedCanonicalPath, workspaceOnly: true },
+        },
+      )
+      await Promise.resolve()
+      const view = host.children[0] as FakeViewLike
+      expect(view).toBeDefined()
+      rmSync(targetPath)
+      symlinkSync(replacementPath, targetPath)
+      view.webContents.emit('did-finish-load')
+
+      await expect(opening).resolves.toEqual({
+        ok: false,
+        error: 'selected resource changed before opening',
+      })
+      expect(host.children).toHaveLength(0)
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(0)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('replays the last receiver target after a readiness retry without its expired request gate', async () => {
+    vi.useFakeTimers()
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-retry')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    mgr.setActivationFailureHandler(vi.fn())
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-retry-')))
+    try {
+      const targetPath = join(workspacePath, 'target.ts')
+      writeFileSync(targetPath, 'target')
+      const host = new FakeBrowserWindow()
+      const contribution = descriptor.views![0]!.contributionKey
+      await mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}`,
+      })
+      const view = host.children[0] as FakeViewLike
+      view.webContents.emit('did-finish-load')
+      let active = true
+      await expect(mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=target.ts`,
+        trustedEditorFileTarget: { path: targetPath },
+        canDispatch: () => active,
+      })).resolves.toEqual({ ok: true })
+      const beforeRetry = view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')
+      expect(beforeRetry).toHaveLength(1)
+
+      // The original request has ended by the time the readiness budget causes
+      // a guest reload. Replay uses only the receiver-owned delivered params.
+      active = false
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(view.webContents.reloads).toBe(1)
+      let reopenActive = true
+      const canceled = mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=target.ts`,
+        trustedEditorFileTarget: { path: targetPath },
+        canDispatch: () => reopenActive,
+      })
+      reopenActive = false
+      view.webContents.emit('did-finish-load')
+      await expect(canceled).resolves.toEqual({ ok: false, error: 'request is no longer active' })
+      const afterRetry = view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')
+      expect(afterRetry).toHaveLength(2)
+      expect(afterRetry[1]!.args[0]).toEqual(afterRetry[0]!.args[0])
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let a readiness retry replay overwrite a target reopened while loading', async () => {
+    vi.useFakeTimers()
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-retry-reopen')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    mgr.setActivationFailureHandler(vi.fn())
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-retry-reopen-')))
+    try {
+      const firstPath = join(workspacePath, 'first.ts')
+      const secondPath = join(workspacePath, 'second.ts')
+      writeFileSync(firstPath, 'first')
+      writeFileSync(secondPath, 'second')
+      const host = new FakeBrowserWindow()
+      const contribution = descriptor.views![0]!.contributionKey
+      await mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}`,
+      })
+      const view = host.children[0] as FakeViewLike
+      view.webContents.emit('did-finish-load')
+      await mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=first.ts`,
+        trustedEditorFileTarget: { path: firstPath },
+      })
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(view.webContents.reloads).toBe(1)
+      const reopening = mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=second.ts`,
+        trustedEditorFileTarget: { path: secondPath },
+        canDispatch: () => true,
+      })
+      // The entry is still loading, so the old replay waits for the new
+      // document and the reopened target cannot be sent into stale content.
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(1)
+      view.webContents.emit('did-finish-load')
+      await expect(reopening).resolves.toEqual({ ok: true })
+      const targets = view.webContents.sent
+        .filter(({ channel }) => channel === 'plugin:openTarget')
+        .map(({ args }) => args[0] as Record<string, string>)
+      expect(targets).toHaveLength(3)
+      expect(targets.at(-1)?.file_grant).toBeTruthy()
+      const grants = (mgr as unknown as {
+        editorSelectionGrants: { resolve: (owner: unknown, grant: unknown, kind: 'file') => string }
+      }).editorSelectionGrants
+      const running = (mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext | null }>
+      }).running
+      const plugin = [...running.values()][0]
+      const binding = plugin.capabilityContext!.runtimeBinding!
+      expect(grants.resolve({
+        instanceId: binding.instanceId!,
+        workspaceId: binding.workspaceId!,
+        packageVersion: binding.packageVersion,
+      }, targets.at(-1)!.file_grant, 'file')).toBe(secondPath)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('delivers Host-contained HTML preview targets without file grants on fresh and reused windows', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-html-preview')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-html-preview-')))
+    try {
+      const firstPath = join(workspacePath, 'first.html')
+      const secondPath = join(workspacePath, 'second.html')
+      writeFileSync(firstPath, '<p>first</p>')
+      writeFileSync(secondPath, '<p>second</p>')
+      const host = new FakeBrowserWindow()
+      const contribution = descriptor.views![0]!.contributionKey
+      const firstOpening = mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=forged.html&rel_path=stale.html&file_ws=/outside&file_grant=caller`,
+        trustedEditorFileTarget: {
+          path: firstPath,
+          expectedCanonicalPath: realpathSync(firstPath),
+          workspaceOnly: true,
+        },
+      })
+      const view = host.children[0] as FakeViewLike
+      view.webContents.emit('did-finish-load')
+      await expect(firstOpening).resolves.toEqual({ ok: true })
+      const bootstrap = new URLSearchParams(view.webContents.loads[0]!.split('?')[1])
+      expect(bootstrap.get('filepath')).toBeNull()
+      expect(bootstrap.get('file_ws')).toBeNull()
+      expect(bootstrap.get('file_grant')).toBeNull()
+      view.webContents.emit('did-finish-load')
+      const firstTarget = view.webContents.sent.at(-1)?.args[0] as Record<string, string>
+      expect(firstTarget).toMatchObject({ filepath: realpathSync(firstPath) })
+      expect(firstTarget.file_ws).toBeUndefined()
+      expect(firstTarget.file_grant).toBeUndefined()
+      expect(firstTarget.rel_path).toBeUndefined()
+
+      await expect(mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=forged-second.html&file_ws=/outside&file_grant=caller-second`,
+        trustedEditorFileTarget: {
+          path: secondPath,
+          expectedCanonicalPath: realpathSync(secondPath),
+          workspaceOnly: true,
+        },
+      })).resolves.toEqual({ ok: true })
+      const reusedTarget = view.webContents.sent.at(-1)?.args[0] as Record<string, string>
+      expect(reusedTarget).toMatchObject({ filepath: realpathSync(secondPath) })
+      expect(reusedTarget.file_ws).toBeUndefined()
+      expect(reusedTarget.file_grant).toBeUndefined()
+
+      const stalePath = join(workspacePath, 'stale.html')
+      const replacementPath = join(workspacePath, 'replacement.html')
+      writeFileSync(stalePath, '<p>stale</p>')
+      writeFileSync(replacementPath, '<p>replacement</p>')
+      const expectedStalePath = realpathSync(stalePath)
+      rmSync(stalePath)
+      symlinkSync(replacementPath, stalePath)
+      const sentBeforeStale = view.webContents.sent.length
+      await expect(mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=stale.html`,
+        trustedEditorFileTarget: {
+          path: stalePath,
+          expectedCanonicalPath: expectedStalePath,
+          workspaceOnly: true,
+        },
+      })).resolves.toEqual({ ok: false, error: 'selected resource changed before opening' })
+      expect(view.webContents.sent).toHaveLength(sentBeforeStale)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a preview target when the Plans window contribution is missing', async () => {
+    const mgr = new FrontendPluginManager()
+    const host = new FakeBrowserWindow()
+    await expect(mgr.openContributionWindow(
+      asHost(host),
+      'navide.plans.window',
+      {
+        workspacePath: '/workspace',
+        query: '?workspace_path=%2Fworkspace&filepath=plan.html&file_grant=caller',
+        trustedEditorFileTarget: {
+          path: '/workspace/plan.html',
+          workspaceOnly: true,
+        },
+      },
+    )).resolves.toEqual({ ok: false, error: 'contribution is not installed' })
+    expect(host.children).toHaveLength(0)
   })
 
   it('resolves stale catalog objects against the current registered package', async () => {
@@ -4117,6 +7101,37 @@ describe('opaque view instance ownership', () => {
       error: { code: 'BAD_REQUEST', message: 'unknown plugin sender' },
     })
     expect(window.instanceId).toBeTruthy()
+  })
+
+  it('does not let a child frame inherit the native sender identity', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageDesc = packageDescriptor()
+    mgr.registerDescriptor(packageDesc)
+    const host = new FakeBrowserWindow()
+    await mgr.openView(packageDesc, packageDesc.views![0], {
+      hostWindow: asHost(host),
+      bounds: 'fill',
+    })
+    const view = host.children[0] as FakeViewLike
+    const call = ipcHandlers.get('plugin:cap:call')
+    expect(call).toBeDefined()
+
+    await expect(call!(
+      {
+        sender: { id: view.webContents.id },
+        senderFrame: {
+          isDestroyed: () => false,
+          parent: {},
+          frameTreeNodeId: 77,
+          url: 'file:///unadmitted-child.html',
+        },
+      },
+      { reqId: 'child-inherit', ns: 'ping', method: 'ping', args: {} },
+    )).resolves.toEqual({
+      reqId: '',
+      ok: false,
+      error: { code: 'BAD_REQUEST', message: 'unknown plugin sender' },
+    })
   })
 
   it('destroys every live instance when a package is removed', async () => {
@@ -4246,6 +7261,119 @@ describe('opaque view instance ownership', () => {
     })
     expect(eventsOf(leftView, 'workspace.filesChanged')).toHaveLength(1)
     expect(eventsOf(windowView, 'workspace.filesChanged')).toHaveLength(1)
+  })
+
+  it('routes Mini-IDE PTY bytes to the public AI CLI event consumed by its panel', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = new FrontendPluginManager()
+      const packageDesc = v2PackageDescriptor(MINI_IDE_PLUGIN_ID)
+      const context = v2Context({ pluginId: MINI_IDE_PLUGIN_ID, sessionId: 'mini-session' })
+      mgr.registerDescriptor({ ...packageDesc, capabilityContext: context }, { official: true })
+      const host = new FakeBrowserWindow()
+      const handle = await mgr.openView(packageDesc, packageDesc.views![0], {
+        hostWindow: asHost(host),
+        bounds: 'fill',
+        capabilityContext: context,
+      })
+      const view = host.children[0] as FakeViewLike
+      mgr.noteTerminalRoutes(handle.instanceId, 'terminal.create', {
+        terminal_session_id: 'mini-session',
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'mini-session',
+        data: new TextEncoder().encode('PR133_FAKE_CODEX_READY'),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toEqual([{
+        type: 'aiCli.output',
+        data: { sessionId: 'mini-session', data: 'PR133_FAKE_CODEX_READY' },
+      }])
+      expect(eventsOf(view, 'terminal.output')).toHaveLength(0)
+
+      dispatchEvent(mgr, 'terminal.exit', {
+        terminal_session_id: 'mini-session',
+        exit_code: 0,
+      })
+      expect(eventsOf(view, 'aiCli.exited')).toEqual([{
+        type: 'aiCli.exited',
+        data: { sessionId: 'mini-session', exitCode: 0 },
+      }])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('decodes public PTY bytes per session and flushes the UTF-8 tail before exit', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = new FrontendPluginManager()
+      const packageDesc = v2PackageDescriptor('navide.git')
+      const context = v2Context({ pluginId: 'navide.git', sessionId: 'binary-session' })
+      mgr.registerDescriptor({ ...packageDesc, capabilityContext: context }, { official: true })
+      const host = new FakeBrowserWindow()
+      const handle = await mgr.openView(packageDesc, packageDesc.views![0], {
+        hostWindow: asHost(host),
+        bounds: 'fill',
+        capabilityContext: context,
+      })
+      const view = host.children[0] as FakeViewLike
+      mgr.noteTerminalRoutes(handle.instanceId, 'terminal.create', {
+        terminal_session_id: 'binary-session',
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0xe2]),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toHaveLength(0)
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0x82, 0xac]),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toContainEqual({
+        type: 'aiCli.output',
+        data: { sessionId: 'binary-session', data: '€' },
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: 'A',
+      })
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0xe2, 0x82, 0xac]),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toContainEqual({
+        type: 'aiCli.output',
+        data: { sessionId: 'binary-session', data: 'A€' },
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0xe2]),
+      })
+      vi.advanceTimersByTime(12)
+      dispatchEvent(mgr, 'terminal.exit', {
+        terminal_session_id: 'binary-session',
+        exit_code: 0,
+      })
+      expect(eventsOf(view, 'aiCli.output')).toContainEqual({
+        type: 'aiCli.output',
+        data: { sessionId: 'binary-session', data: '�' },
+      })
+      expect(eventsOf(view, 'aiCli.exited')).toContainEqual({
+        type: 'aiCli.exited',
+        data: { sessionId: 'binary-session', exitCode: 0 },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not route workspace events across packages sharing version and workspace', async () => {
@@ -5242,8 +8370,8 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     mgr.noteTerminalRoutes('acme.term', 'terminal.create', { terminal_session_id: 't-1' })
     // No backend transport in tests — reaching 'no-backend' proves the cast
     // passed sender, shape, scoping AND the whitelist.
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'))).toBe('no-backend')
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'log_sent'))).toBe(
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'), view.webContents.mainFrame as never)).toBe('no-backend')
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'log_sent'), view.webContents.mainFrame as never)).toBe(
       'no-backend'
     )
   })
@@ -5252,10 +8380,10 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
     const view = openPlugin(mgr, host, 'acme.term', ['terminal'])
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'resize'))).toBe(
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'resize'), view.webContents.mainFrame as never)).toBe(
       'not-castable'
     )
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'kill'))).toBe(
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'kill'), view.webContents.mainFrame as never)).toBe(
       'not-castable'
     )
   })
@@ -5264,7 +8392,7 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
     const view = openPlugin(mgr, host, 'acme.fsonly', ['fs'])
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'))).toBe('denied')
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'), view.webContents.mainFrame as never)).toBe('denied')
   })
 
   it('rejects terminal request controls from a sibling route owner', async () => {
@@ -5295,9 +8423,9 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
     const view = openPlugin(mgr, host, 'acme.term', ['terminal'])
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'nope'))).toBe('unmapped')
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'nope'), view.webContents.mainFrame as never)).toBe('unmapped')
     expect(mgr.handleCast(999999, castPayload('terminal', 'input'))).toBe('unknown-sender')
-    expect(mgr.handleCast(view.webContents.id, { nope: true })).toBe('malformed')
+    expect(mgr.handleCast(view.webContents.id, { nope: true }, view.webContents.mainFrame as never)).toBe('malformed')
   })
 
   it('is wired to the plugin:cap:cast IPC channel', () => {
@@ -5339,12 +8467,12 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     return views[views.length - 1]
   }
 
-  it('creates a dedicated host window with the legacy editor options', () => {
+  it('creates a dedicated host window with the legacy editor options', async () => {
     // The hidden title bar is the macOS shape; other platforms get the system
     // frame (systemFrameUnlessMac), so pin the platform this test describes.
     setPlatformId('darwin')
     const winsBefore = windows.length
-    const ok = openMiniIdePluginView('/ws', 'http://h:1')
+    const ok = await openMiniIdePluginView('/ws', 'http://h:1')
     expect(ok).toBe(true)
     expect(windows.length).toBe(winsBefore + 1)
     const win = lastWindow()
@@ -5361,8 +8489,8 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(view.bounds).toEqual({ x: 0, y: 0, width: 1000, height: 700 })
   })
 
-  it('delivers Host language changes to an already open Mini-IDE through its shipped ui capability', () => {
-    openMiniIdePluginView('/ws', '', { locale: 'en-US' })
+  it('delivers Host language changes to an already open Mini-IDE through its shipped ui capability', async () => {
+    await openMiniIdePluginView('/ws', '', { locale: 'en-US' })
     const view = lastView()
     view.webContents.emit('did-finish-load')
     view.webContents.sent.length = 0
@@ -5375,25 +8503,25 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     }
   })
 
-  it('passes Japanese into the initial editor query and reuses the view for language changes', () => {
-    openMiniIdePluginView('/ws', '', { locale: 'ja-JP', filepath: 'a.ts' }, 'light')
+  it('passes Japanese into the initial editor query and reuses the view for language changes', async () => {
+    await openMiniIdePluginView('/ws', '', { locale: 'ja-JP', filepath: 'a.ts' }, 'light')
     const view = lastView()
     expect(view.webContents.loads[0]).toContain('locale=ja-JP')
     view.webContents.emit('did-finish-load')
-    openMiniIdePluginView('/ws', '', { locale: 'en-US', filepath: 'b.ts' }, 'light')
+    await openMiniIdePluginView('/ws', '', { locale: 'en-US', filepath: 'b.ts' }, 'light')
     expect(lastView()).toBe(view)
     expect(view.webContents.loads).toHaveLength(1)
     expect(view.webContents.sent.filter(message => message.channel === 'plugin:openTarget').at(-1)?.args[0])
       .toMatchObject({ locale: 'en-US', filepath: 'b.ts' })
   })
 
-  it('passes the current theme in the entry query', () => {
-    openMiniIdePluginView('/ws', '', {}, 'light')
+  it('passes the current theme in the entry query', async () => {
+    await openMiniIdePluginView('/ws', '', {}, 'light')
     expect(lastView().webContents.loads[0]).toContain('theme=light')
   })
 
-  it('mirrors the plugin page title onto the dedicated host window', () => {
-    openMiniIdePluginView('/ws', 'http://h:1')
+  it('mirrors the plugin page title onto the dedicated host window', async () => {
+    await openMiniIdePluginView('/ws', 'http://h:1')
     const win = lastWindow()
     // The host's own webContents is blank; without mirroring the window would
     // keep its creation-time title in the macOS Window menu forever.
@@ -5402,22 +8530,22 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(win.title).toBe('main.ts — Mini-IDE')
   })
 
-  it('ignores an empty page title so the window keeps its feature name', () => {
-    openMiniIdePluginView('/ws', 'http://h:1')
+  it('ignores an empty page title so the window keeps its feature name', async () => {
+    await openMiniIdePluginView('/ws', 'http://h:1')
     const win = lastWindow()
     lastView().webContents.emit('page-title-updated', {}, '')
     expect(win.title).toBe('Mini-IDE')
   })
 
-  it('reopen restores and focuses the dedicated window without reloading', () => {
-    openMiniIdePluginView('/ws', '', {}, 'light')
+  it('reopen restores and focuses the dedicated window without reloading', async () => {
+    await openMiniIdePluginView('/ws', '', {}, 'light')
     const win = lastWindow()
     const view = lastView()
     view.webContents.emit('did-finish-load')
     win.minimized = true
 
     const winsBefore = windows.length
-    openMiniIdePluginView('/ws', '', { filepath: 'a.ts' }, 'light')
+    await openMiniIdePluginView('/ws', '', { filepath: 'a.ts' }, 'light')
     expect(windows.length).toBe(winsBefore) // same window reused
     expect(win.minimized).toBe(false)
     expect(win.focusCount).toBeGreaterThan(0)
@@ -5427,17 +8555,17 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(targets[0].args[0]).toMatchObject({ workspace_path: '/ws', filepath: 'a.ts' })
   })
 
-  it('a theme change alone does not reload the running view', () => {
-    openMiniIdePluginView('/ws', '', {}, 'light')
+  it('a theme change alone does not reload the running view', async () => {
+    await openMiniIdePluginView('/ws', '', {}, 'light')
     const view = lastView()
     view.webContents.emit('did-finish-load')
 
-    openMiniIdePluginView('/ws', '', {}, 'dark-github')
+    await openMiniIdePluginView('/ws', '', {}, 'dark-github')
     expect(view.webContents.loads).toHaveLength(1) // still the first load
   })
 
-  it('hideSelf closes the dedicated window and tears the view down', () => {
-    openMiniIdePluginView('/ws')
+  it('hideSelf closes the dedicated window and tears the view down', async () => {
+    await openMiniIdePluginView('/ws')
     const win = lastWindow()
     const view = lastView()
 
@@ -5448,19 +8576,105 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(view.webContents.isDestroyed()).toBe(true)
   })
 
-  it('close then reopen recreates the window and view cleanly', () => {
-    openMiniIdePluginView('/ws')
+  it('close then reopen recreates the window and view cleanly', async () => {
+    await openMiniIdePluginView('/ws')
     const win1 = lastWindow()
     win1.close()
 
     const winsBefore = windows.length
     const viewsBefore = views.length
-    const ok = openMiniIdePluginView('/ws')
+    const ok = await openMiniIdePluginView('/ws')
     expect(ok).toBe(true)
     expect(windows.length).toBe(winsBefore + 1) // fresh window
     expect(views.length).toBe(viewsBefore + 1) // fresh view
     expect(lastWindow()).not.toBe(win1)
     expect(lastView().webContents.loads).toHaveLength(1)
+  })
+
+  it('rejects a recovery target whose canonical path changed before grant minting', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'mini-recovery-target-')))
+    try {
+      const targetPath = join(workspacePath, 'target.ts')
+      const replacementPath = join(workspacePath, 'replacement.ts')
+      writeFileSync(targetPath, 'original')
+      writeFileSync(replacementPath, 'replacement')
+      const expectedCanonicalPath = realpathSync(targetPath)
+      rmSync(targetPath)
+      symlinkSync(replacementPath, targetPath)
+      frontendPluginManager.setCapabilityContext(MINI_IDE_PLUGIN_ID, {
+        publisherEligible: true,
+        userGrant: { packageVersion: '1.0.0', system: ['fs'] },
+        runtimeBinding: {
+          pluginId: MINI_IDE_PLUGIN_ID,
+          packageVersion: '1.0.0',
+          workspaceId: 'legacy-workspace',
+          instanceId: 'legacy-instance',
+          audience: 'legacy-mini-ide',
+        },
+      })
+      const viewsBefore = views.length
+      const ok = await openMiniIdePluginView(
+        workspacePath,
+        '',
+        { filepath: 'target.ts', file_ws: workspacePath },
+        '',
+        { trustedEditorFileTarget: { path: targetPath, expectedCanonicalPath } },
+      )
+      expect(ok).toBe(false)
+      expect(views).toHaveLength(viewsBefore)
+      expect(lastWindow().destroyed).toBe(true)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('withholds a legacy recovery target until the existing entry finishes loading', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'mini-recovery-ready-')))
+    const externalRoot = realpathSync(mkdtempSync(join(tmpdir(), 'mini-recovery-external-')))
+    try {
+      const targetPath = join(externalRoot, 'picked.html')
+      writeFileSync(targetPath, '<p>picked</p>')
+      frontendPluginManager.setCapabilityContext(MINI_IDE_PLUGIN_ID, {
+        publisherEligible: true,
+        userGrant: { packageVersion: '1.0.0', system: ['fs'] },
+        runtimeBinding: {
+          pluginId: MINI_IDE_PLUGIN_ID,
+          packageVersion: '1.0.0',
+          workspaceId: 'legacy-workspace',
+          instanceId: 'legacy-instance',
+          audience: 'legacy-mini-ide',
+        },
+      })
+      expect(await openMiniIdePluginView(workspacePath)).toBe(true)
+      const view = lastView()
+      const reopening = openMiniIdePluginView(
+        workspacePath,
+        '',
+        { filepath: 'picked.html', file_ws: externalRoot, file_grant: 'caller-grant' },
+        '',
+        {
+          canDispatch: () => true,
+          trustedEditorFileTarget: {
+            path: targetPath,
+            expectedCanonicalPath: realpathSync(targetPath),
+          },
+        },
+      )
+      expect(view.webContents.loads).toHaveLength(1)
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(0)
+
+      view.webContents.emit('did-finish-load')
+      expect(await reopening).toBe(true)
+      const target = view.webContents.sent.at(-1)
+      expect(target?.channel).toBe('plugin:openTarget')
+      const params = target?.args[0] as Record<string, string>
+      expect(params.filepath).toBe('picked.html')
+      expect(params.file_grant).toBeTruthy()
+      expect(params.file_grant).not.toBe('caller-grant')
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(externalRoot, { recursive: true, force: true })
+    }
   })
 })
 
@@ -5779,6 +8993,217 @@ describe('Manifest v2 capability runtime deferral', () => {
     })
   })
 
+  it('notifies matching plugin storage instances after successful mutations only', async () => {
+    const mgr = new FrontendPluginManager()
+    const storageDescriptor = (
+      id: string,
+      workspacePath: string,
+      storageSnapshotTier: StorageSnapshotTier = 'active',
+      packageVersion = '1.0.0',
+    ): PluginLaunchDescriptor => ({
+      id,
+      packageVersion,
+      requires: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['ui'] }),
+      capabilityContext: {
+        publisherEligible: false,
+        userGrant: { packageVersion, system: ['ui'], storage: true },
+        runtimeBinding: {
+          pluginId: id,
+          packageVersion,
+          workspaceId: mgr.workspaceIdForPath(workspacePath),
+          instanceId: null,
+          audience: `${id}.main`,
+        },
+        storageSnapshots: new Map([
+          ['candidate', packageVersion],
+          ['active', packageVersion],
+          ['previous', '0.9.0'],
+        ]),
+        storageSnapshotTier,
+      },
+      devUrl: '',
+      entryFile: `/plugins/${id}/index.html`,
+      views: [{
+        id: 'main',
+        contributionKey: `${id}.main`,
+        kind: 'custom',
+        location: 'main',
+        title: id,
+        entryFile: `/plugins/${id}/index.html`,
+      }],
+    })
+    const firstDescriptor = storageDescriptor('acme.storage-owned', '/workspace')
+    mgr.registerDescriptor(firstDescriptor)
+    const firstHost = new FakeBrowserWindow()
+    const firstHandle = await mgr.openView(firstDescriptor, firstDescriptor.views![0], {
+      hostWindow: asHost(firstHost),
+      bounds: 'fill',
+      workspacePath: '/workspace',
+      capabilityContext: firstDescriptor.capabilityContext,
+    })
+    const first = { mgr, view: firstHost.children[0] as FakeViewLike, instanceId: firstHandle.instanceId }
+    const secondDescriptor = storageDescriptor('acme.storage-owned', '/other-workspace')
+    const secondHost = new FakeBrowserWindow()
+    await mgr.openView(secondDescriptor, secondDescriptor.views![0], {
+      hostWindow: asHost(secondHost),
+      bounds: 'fill',
+      workspacePath: '/other-workspace',
+      capabilityContext: secondDescriptor.capabilityContext,
+    })
+    const secondView = secondHost.children[0] as FakeViewLike
+    const candidateDescriptor = storageDescriptor('acme.storage-owned', '/candidate-workspace', 'candidate')
+    const candidateHost = new FakeBrowserWindow()
+    await mgr.openView(candidateDescriptor, candidateDescriptor.views![0], {
+      hostWindow: asHost(candidateHost),
+      bounds: 'fill',
+      workspacePath: '/candidate-workspace',
+      capabilityContext: candidateDescriptor.capabilityContext,
+    })
+    const candidateView = candidateHost.children[0] as FakeViewLike
+
+    const otherDescriptor: PluginLaunchDescriptor = {
+      id: 'acme.storage-other',
+      packageVersion: '1.0.0',
+      requires: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['ui'] }),
+      capabilityContext: {
+        publisherEligible: false,
+        userGrant: { packageVersion: '1.0.0', system: ['ui'], storage: true },
+        runtimeBinding: {
+          pluginId: 'acme.storage-other',
+          packageVersion: '1.0.0',
+          workspaceId: mgr.workspaceIdForPath('/workspace'),
+          instanceId: null,
+          audience: 'acme.storage-other.main',
+        },
+        storageSnapshots: new Map([
+          ['candidate', '1.0.0'],
+          ['active', '1.0.0'],
+          ['previous', '0.9.0'],
+        ]),
+        storageSnapshotTier: 'active',
+      },
+      devUrl: '',
+      entryFile: '/plugins/acme.storage-other/index.html',
+      views: [{
+        id: 'main',
+        contributionKey: 'acme.storage-other.main',
+        kind: 'custom',
+        location: 'main',
+        title: 'Other storage',
+        entryFile: '/plugins/acme.storage-other/index.html',
+      }],
+    }
+    mgr.registerDescriptor(otherDescriptor)
+    const otherHost = new FakeBrowserWindow()
+    await mgr.openView(otherDescriptor, otherDescriptor.views![0], {
+      hostWindow: asHost(otherHost),
+      bounds: 'fill',
+      workspacePath: '/workspace',
+      capabilityContext: otherDescriptor.capabilityContext,
+    })
+    const otherView = otherHost.children[0] as FakeViewLike
+    const viewsToCheck = [first.view, secondView, candidateView, otherView]
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+
+    mgr.setPublicStorageHandler(() => null)
+    const handler = ipcHandlers.get(CALL)
+    expect(handler).toBeDefined()
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-plugin-set',
+      ns: 'storage',
+      method: 'set',
+      args: { scope: 'plugin', key: 'agentTeam.git.logScope', value: 'all' },
+    })).resolves.toMatchObject({ ok: true })
+
+    const storageEvents = (view: FakeViewLike) => view.webContents.sent.filter((message) =>
+      (message.args[0] as { type?: string }).type === 'ui.pluginStorageChanged')
+    expect(storageEvents(first.view)).toEqual([expect.objectContaining({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.pluginStorageChanged',
+        data: {
+          scope: 'plugin',
+          key: 'agentTeam.git.logScope',
+          value: 'all',
+          deleted: false,
+        },
+      }],
+    })])
+    expect(storageEvents(secondView)).toHaveLength(1)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+
+    const firstRuntime = (mgr as unknown as {
+      running: Map<string, { capabilityContext?: HostCapabilityContext | null }>
+    }).running.get(first.instanceId)?.capabilityContext?.runtimeBinding
+    expect(firstRuntime).toBeDefined()
+    ;(mgr as unknown as {
+      dispatchPluginStorageChanged: (plan: unknown, scope: 'plugin' | 'workspace', key: string, value: JsonValue, deleted: boolean) => void
+    }).dispatchPluginStorageChanged({
+      kind: 'public',
+      address: 'storage.set',
+      scope: 'plugin',
+      args: { scope: 'plugin', key: 'versioned', value: true },
+      runtime: { ...firstRuntime!, packageVersion: '2.0.0' },
+      storage: {
+        partition: { pluginId: 'acme.storage-owned', workspaceId: null, key: 'versioned' },
+        snapshot: { pluginId: 'acme.storage-owned', tier: 'active', packageVersion: '2.0.0' },
+      },
+    }, 'plugin', 'versioned', true, false)
+    expect(storageEvents(first.view)).toHaveLength(1)
+    expect(storageEvents(secondView)).toHaveLength(1)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-workspace-set',
+      ns: 'storage',
+      method: 'set',
+      args: { scope: 'workspace', key: 'agentTeam.gitTabRepo', value: '/workspace' },
+    })).resolves.toMatchObject({ ok: true })
+    expect(storageEvents(first.view)).toHaveLength(1)
+    expect(storageEvents(secondView)).toHaveLength(0)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-plugin-delete',
+      ns: 'storage',
+      method: 'delete',
+      args: { scope: 'plugin', key: 'agentTeam.git.logScope' },
+    })).resolves.toMatchObject({ ok: true })
+    expect(storageEvents(first.view)[0].args[0]).toMatchObject({
+      type: 'ui.pluginStorageChanged',
+      data: {
+        scope: 'plugin',
+        key: 'agentTeam.git.logScope',
+        value: null,
+        deleted: true,
+      },
+    })
+    expect(storageEvents(secondView)).toHaveLength(1)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+    mgr.setPublicStorageHandler(() => {
+      throw new PluginStorageError('INTERNAL_ERROR', 'storage failed')
+    })
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-plugin-failed',
+      ns: 'storage',
+      method: 'set',
+      args: { scope: 'plugin', key: 'agentTeam.git.logScope', value: 'all' },
+    })).resolves.toMatchObject({ ok: false, error: { code: 'INTERNAL_ERROR' } })
+    expect(storageEvents(first.view)).toHaveLength(0)
+    expect(storageEvents(secondView)).toHaveLength(0)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+  })
+
   it('keeps the selected storage tier fixed for a live v2 instance', async () => {
     const mgr = new FrontendPluginManager()
     const activeContext: HostCapabilityContext = {
@@ -6020,6 +9445,690 @@ describe('first-party Git private bridge', () => {
     })) as Record<string, unknown>
   }
 
+  async function publicCall(
+    view: FakeViewLike,
+    ns: string,
+    method: string,
+    args: Record<string, unknown>,
+    reqId = 'public-git-1',
+  ): Promise<Record<string, unknown>> {
+    const handler = ipcHandlers.get(CAPABILITY_CALL)
+    expect(handler).toBeDefined()
+    return (await handler!({ sender: { id: view.webContents.id } }, {
+      reqId,
+      ns,
+      method,
+      args,
+    })) as Record<string, unknown>
+  }
+
+  it('dispatches typed public Git requests while retaining the private identity guard', async () => {
+    const { mgr, view } = await openGitView()
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-git-status-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'shell', 'gitStatus', { repositoryPath: '.' }, 'public-git-status')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
+    expect(request.type).toBe('git.status')
+    expect(request.payload).toEqual({ workspace_path: resolve('/workspace') })
+    socket.receive({ id: request.id, type: request.type, ok: true, payload: { branch: 'main' }, error: null, timestamp: '' })
+    await expect(operation).resolves.toEqual({ reqId: 'public-git-status', ok: true, result: { branch: 'main' } })
+
+    await expect(call(view, 'git.request', {
+      type: 'git.status',
+      payload: { workspace_path: '/workspace', instanceId: 'forged' },
+    }, 'private-identity-guard')).resolves.toMatchObject({
+      reqId: 'private-identity-guard',
+      ok: false,
+      error: { code: 'BAD_REQUEST' },
+    })
+    expect(socket.sent).toHaveLength(1)
+  })
+
+  it('denies an agent public Git plan before opening a backend connection', async () => {
+    const { mgr, view, instanceId } = await openGitView()
+    const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+    const handler = vi.fn()
+    mgr.setPublicCapabilityHandler(handler)
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-public-git',
+      ns: 'shell',
+      method: 'gitStatus',
+      args: { repositoryPath: '.' },
+    })).resolves.toMatchObject({
+      reqId: 'denied-public-git',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(handler).not.toHaveBeenCalled()
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+  })
+
+  it('rejects a public clone selection grant owned by another Git instance', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'public-git-clone-owner-')))
+    try {
+      const { mgr, instanceId } = await openGitView(workspacePath)
+      const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+      const secondDescriptor = gitDescriptor(mgr, workspacePath, 'git-left')
+      const secondHost = new FakeBrowserWindow()
+      const secondHandle = await mgr.openView(secondDescriptor, secondDescriptor.views![0], {
+        hostWindow: asHost(secondHost),
+        bounds: 'fill',
+        workspacePath,
+        capabilityContext: secondDescriptor.capabilityContext,
+      })
+      const running = (mgr as unknown as {
+        running: Map<string, { capabilityContext?: HostCapabilityContext | null }>
+      }).running
+      const secondBinding = running.get(secondHandle.instanceId)?.capabilityContext?.runtimeBinding
+      expect(secondBinding).toBeDefined()
+      const selectionGrants = (mgr as unknown as {
+        editorSelectionGrants: { mint: (owner: { instanceId: string; workspaceId: string; packageVersion: string }, path: string, kind: 'directory') => { grant: string } }
+      }).editorSelectionGrants
+      const target = join(workspacePath, 'clone-target')
+      const selected = selectionGrants.mint({
+        instanceId: secondBinding!.instanceId!,
+        workspaceId: secondBinding!.workspaceId!,
+        packageVersion: secondBinding!.packageVersion,
+      }, target, 'directory')
+      const firstBinding = running.get(instanceId)?.capabilityContext?.runtimeBinding
+      expect(firstBinding).toBeDefined()
+      const request = {
+        kind: 'public' as const,
+        address: 'shell.gitClone',
+        scope: 'workspace' as const,
+        args: {
+          repositoryPath: '.',
+          url: 'https://github.com/acme/repo.git',
+          target_dir: target,
+          selectionGrant: selected.grant,
+        },
+        runtime: firstBinding!,
+      }
+
+      await expect(mgr.executePublicCapability(request)).rejects.toThrow(/owned by this instance/)
+      expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('dispatches public Git account methods through the fixed mapping and bound workspace', async () => {
+    const { mgr, view } = await openGitView('/workspace', 'git-history')
+    const bind = vi.fn()
+    const unbind = vi.fn()
+    mgr.setGitAccountHandlers({
+      available: () => true,
+      list: () => [{ id: 'account-1', label: 'GitHub', host: 'github.com', username: 'alice', tokenLast4: '1234' }],
+      add: () => ({ id: 'unused', label: 'unused', host: 'github.com', username: 'unused', tokenLast4: '0000' }),
+      update: () => undefined,
+      remove: () => undefined,
+      bind,
+      unbind,
+      getBinding: () => 'account-1',
+      getCredential: () => null,
+    })
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+
+    await expect(publicCall(view, 'ui', 'listGitAccounts', {}, 'public-account-list')).resolves.toEqual({
+      reqId: 'public-account-list',
+      ok: true,
+      result: {
+        available: true,
+        accounts: [{ id: 'account-1', label: 'GitHub', host: 'github.com', username: 'alice', tokenLast4: '1234' }],
+      },
+    })
+    await expect(publicCall(view, 'ui', 'bindGitAccount', { accountId: 'account-1' }, 'public-account-bind')).resolves.toEqual({
+      reqId: 'public-account-bind',
+      ok: true,
+      result: { accountId: 'account-1' },
+    })
+    expect(bind).toHaveBeenCalledWith(resolve('/workspace'), 'account-1')
+
+    await expect(publicCall(view, 'ui', 'bindGitAccount', {
+      accountId: 'account-1',
+      workspace_path: '/other-workspace',
+    }, 'public-account-forged-workspace')).resolves.toMatchObject({
+      reqId: 'public-account-forged-workspace',
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT' },
+    })
+    expect(bind).toHaveBeenCalledTimes(1)
+    expect(unbind).not.toHaveBeenCalled()
+  })
+
+  it('denies an agent public Git account plan before invoking account handlers', async () => {
+    const { mgr, instanceId } = await openGitView()
+    const bind = vi.fn()
+    mgr.setGitAccountHandlers({
+      available: () => true,
+      list: () => [],
+      add: () => ({ id: 'unused', label: 'unused', host: 'github.com', username: 'unused', tokenLast4: '0000' }),
+      update: () => undefined,
+      remove: () => undefined,
+      bind,
+      unbind: () => undefined,
+      getBinding: () => null,
+      getCredential: () => null,
+    })
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-public-account',
+      ns: 'ui',
+      method: 'bindGitAccount',
+      args: { accountId: 'account-1' },
+    })).resolves.toMatchObject({
+      reqId: 'denied-public-account',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(bind).not.toHaveBeenCalled()
+  })
+
+  it('opens the Host file picker with bound view context and Host-owned search', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace', 'git-file-picker')
+    mgr.setBackendWsUrl('ws://public-file-picker-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const runtime = (
+      mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(instanceId)!.capabilityContext.runtimeBinding!
+    const invocationRef: { current: Pick<FilePickerInvocation, 'request' | 'canDispatch' | 'search'> | null } = { current: null }
+    const open = vi.fn(async (candidate: FilePickerInvocation) => {
+      invocationRef.current = candidate
+      const matches = await candidate.search(candidate.request.query as string)
+      return { opened: matches.length > 0 }
+    })
+    const cancelInstance = vi.fn()
+    const cancelSession = vi.fn()
+    mgr.setFilePickerHost({ open, cancelInstance, cancelSession })
+
+    const pending = mgr.executePublicCapability({
+      kind: 'public',
+      address: 'ui.openFilePicker',
+      scope: 'workspace',
+      runtime,
+      args: {
+        query: 'read',
+        candidates: ['README.md'],
+        line: 4,
+      },
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request).toMatchObject({
+      type: 'fs.list_files_flat',
+      payload: { workspace_path: '/workspace', query: 'read', max_results: 20 },
+    })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true, files: ['README.md'], truncated: false },
+      error: null,
+      timestamp: '',
+    })
+    await expect(pending).resolves.toEqual({ opened: true })
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(invocationRef.current?.request).toEqual({
+      query: 'read',
+      candidates: ['README.md'],
+      line: 4,
+    })
+    expect(invocationRef.current?.canDispatch()).toBe(true)
+    expect(cancelSession).not.toHaveBeenCalled()
+  })
+
+  it('rejects a file picker request for a foreign session before Host lookup', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace', 'git-file-picker-session')
+    const open = vi.fn(async () => ({ opened: true }))
+    mgr.setFilePickerHost({ open, cancelInstance: vi.fn(), cancelSession: vi.fn() })
+    const runtime = (
+      mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(instanceId)!.capabilityContext.runtimeBinding!
+
+    await expect(mgr.executePublicCapability({
+      kind: 'public',
+      address: 'ui.openFilePicker',
+      scope: 'workspace',
+      runtime,
+      args: {
+        query: 'secret',
+        candidates: ['secret.txt'],
+        sessionId: 'foreign-session',
+      },
+    })).rejects.toThrow(/session is no longer owned/)
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('invalidates an in-flight file picker when its instance is destroyed', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace', 'git-file-picker-teardown')
+    const capturedRef: { current: Pick<FilePickerInvocation, 'canDispatch'> | null } = { current: null }
+    const cancelInstance = vi.fn()
+    mgr.setFilePickerHost({
+      open: vi.fn(async (invocation: FilePickerInvocation) => {
+        capturedRef.current = invocation
+        return { opened: false }
+      }),
+      cancelInstance,
+      cancelSession: vi.fn(),
+    })
+    const runtime = (
+      mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(instanceId)!.capabilityContext.runtimeBinding!
+
+    await expect(mgr.executePublicCapability({
+      kind: 'public',
+      address: 'ui.openFilePicker',
+      scope: 'workspace',
+      runtime,
+      args: {
+        query: 'read',
+        candidates: [],
+      },
+    })).resolves.toEqual({ opened: false })
+    expect(capturedRef.current?.canDispatch()).toBe(true)
+    mgr.destroyInstance(instanceId)
+    expect(cancelInstance).toHaveBeenCalledWith(instanceId)
+    expect(capturedRef.current?.canDispatch()).toBe(false)
+  })
+
+  it('dispatches public Issue requests with Host-derived workspace and executable policy', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-issues-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'shell', 'listIssues', {
+      repositoryPath: '.',
+      limit: 5,
+    }, 'public-issues-list')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request.type).toBe('issues.public')
+    expect(request.payload).toEqual({
+      workspace_path: resolve('/workspace'),
+      operation: 'list',
+      arguments: { limit: 5 },
+      execution_policy: { mode: 'allowlist', shell: ['git', 'gh', 'glab'] },
+    })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true, provider: 'github', issues: [] },
+      error: null,
+      timestamp: '',
+    })
+    await expect(operation).resolves.toEqual({
+      reqId: 'public-issues-list',
+      ok: true,
+      result: { ok: true, provider: 'github', issues: [] },
+    })
+
+    await expect(publicCall(view, 'shell', 'listIssues', {
+      repositoryPath: '.',
+      limit: 5,
+      execution_policy: { mode: 'full', shell: ['sh'] },
+    }, 'public-issues-forged-policy')).resolves.toMatchObject({
+      reqId: 'public-issues-forged-policy',
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT' },
+    })
+    expect(socket.sent).toHaveLength(1)
+  })
+
+  it('derives an agent public Issue policy from the current Host snapshot', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: ['git', 'gh'] },
+      revision: 7,
+      state: 'user',
+    }))
+    mgr.setBackendWsUrl('ws://public-agent-issues-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = mgr.executeAgentCapability(instanceId, {
+      reqId: 'agent-public-issues',
+      ns: 'shell',
+      method: 'listIssues',
+      args: { limit: 3 },
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request.type).toBe('issues.public')
+    expect(request.payload.execution_policy).toEqual({ mode: 'allowlist', shell: ['git', 'gh'] })
+    expect(request.payload).toMatchObject({
+      workspace_path: resolve('/workspace'),
+      operation: 'list',
+      arguments: { limit: 3 },
+    })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true, provider: 'github', issues: [] },
+      error: null,
+      timestamp: '',
+    })
+    await expect(operation).resolves.toMatchObject({
+      reqId: 'agent-public-issues',
+      ok: true,
+      result: { ok: true, provider: 'github', issues: [] },
+    })
+  })
+
+  it('denies an agent public Issue request before opening the backend when policy is stale or unavailable', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+    const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-agent-public-issues',
+      ns: 'shell',
+      method: 'listIssues',
+      args: {},
+    })).resolves.toMatchObject({
+      reqId: 'denied-agent-public-issues',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: ['git'] },
+      revision: 2,
+      state: 'corrupt',
+    }))
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-corrupt-public-issues',
+      ns: 'shell',
+      method: 'listIssues',
+      args: {},
+    })).resolves.toMatchObject({
+      reqId: 'denied-corrupt-public-issues',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+  })
+
+  it('reads only fixed Host editor preferences through the existing settings backend', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-editor-preferences-read-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'ui', 'readEditorPreferences', {}, 'public-editor-preferences-read')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
+    expect(request.type).toBe('ui.settings.get')
+    expect(request.payload).toEqual({})
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: {
+        settings: {
+          'agentTeam.yolo': '0',
+          'agent-team:theme': 'dark',
+          'agentTeam.git.logScope': 'all',
+          token: 'must-not-cross',
+          'other.setting': { nested: true },
+        },
+      },
+      error: null,
+      timestamp: '',
+    })
+
+    await expect(operation).resolves.toEqual({
+      reqId: 'public-editor-preferences-read',
+      ok: true,
+      result: {
+        preferences: {
+          'agentTeam.yolo': '0',
+          'agent-team:theme': 'dark',
+          'agentTeam.git.logScope': 'all',
+        },
+      },
+    })
+  })
+
+  it('writes only a fixed writable Host editor preference through ui.settings.set', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-editor-preferences-write-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'ui', 'writeEditorPreference', {
+      key: 'agent-team:theme',
+      value: 'light',
+    }, 'public-editor-preferences-write')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
+    expect(request.type).toBe('ui.settings.set')
+    expect(request.payload).toEqual({ updates: { 'agent-team:theme': 'light' } })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true },
+      error: null,
+      timestamp: '',
+    })
+
+    await expect(operation).resolves.toEqual({
+      reqId: 'public-editor-preferences-write',
+      ok: true,
+      result: { ok: true },
+    })
+  })
+
+  it('denies editor preference writes before opening a backend connection when the agent policy omits UI', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace')
+    const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-editor-preferences-write',
+      ns: 'ui',
+      method: 'writeEditorPreference',
+      args: { key: 'agent-team:theme', value: 'light' },
+    })).resolves.toMatchObject({
+      reqId: 'denied-editor-preferences-write',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+  })
+
+  it('publishes filtered Host editor preferences to each authorized v2 instance', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    view.webContents.sent.length = 0
+
+    mgr.dispatchHostSettingsChanged({
+      settings: {
+        'agentTeam.yolo': '1',
+        'agent-team:language': 'zh-TW',
+        'agentTeam.gitTopRatio': 0.4,
+        token: 'must-not-cross',
+        'unknown.setting': 'ignored',
+      },
+    })
+
+    expect(view.webContents.sent).toContainEqual({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.editorPreferencesChanged',
+        data: {
+          preferences: {
+            'agentTeam.yolo': '1',
+            'agent-team:language': 'zh-TW',
+            'agentTeam.gitTopRatio': 0.4,
+          },
+        },
+      }],
+    })
+    const publicEvent = view.webContents.sent.find((entry) =>
+      (entry.args[0] as { type?: string }).type === 'ui.editorPreferencesChanged')
+    expect(JSON.stringify(publicEvent)).not.toContain('must-not-cross')
+  })
+
+  it('overlays retained v1 mini-IDE settings through the selected snapshot adapter', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor: PluginLaunchDescriptor = {
+      id: MINI_IDE_PLUGIN_ID,
+      requires: ['ui'],
+      devUrl: '',
+      entryFile: '/plugins/mini-ide/index.html',
+    }
+    mgr.registerBuiltin(descriptor)
+    const host = new FakeBrowserWindow()
+    const instanceId = mgr.open(asHost(host), descriptor, 'fill', { workspacePath: '/workspace' })
+    expect(instanceId).toBeTruthy()
+    const view = host.children[0] as FakeViewLike
+    const reads: Record<string, unknown>[] = []
+    const writes: Record<string, unknown>[] = []
+    mgr.setMiniIdeLegacyPreferences({
+      read: async (settings) => {
+        reads.push(settings)
+        return { ...settings, 'ide-sidebar-width': 'snapshot-value' }
+      },
+      write: async (updates) => {
+        writes.push(updates)
+        const remaining = { ...updates }
+        delete remaining['ide-sidebar-width']
+        delete remaining['ide-ai-panel-width']
+        delete remaining['agentTeam.search.opts']
+        return remaining
+      },
+    })
+    mgr.setBackendWsUrl('ws://mini-ide-settings-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const handler = ipcHandlers.get(CAPABILITY_CALL)!
+
+    const read = handler(
+      { sender: { id: view.webContents.id } },
+      { reqId: 'mini-settings-read', ns: 'ui', method: 'settings_get', args: {} },
+    )
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const getRequest = JSON.parse(socket.sent[0]!) as { id: string; type: string }
+    socket.receive({
+      id: getRequest.id,
+      type: getRequest.type,
+      ok: true,
+      payload: { settings: { 'ide-sidebar-width': 'host-value', 'other.setting': true } },
+      error: null,
+      timestamp: '',
+    })
+    await expect(read).resolves.toEqual({
+      reqId: 'mini-settings-read',
+      ok: true,
+      result: { settings: { 'ide-sidebar-width': 'snapshot-value', 'other.setting': true } },
+    })
+    expect(reads).toEqual([{ 'ide-sidebar-width': 'host-value', 'other.setting': true }])
+
+    const selectedWrite = await handler(
+      { sender: { id: view.webContents.id } },
+      {
+        reqId: 'mini-settings-write-selected',
+        ns: 'ui',
+        method: 'settings_set',
+        args: { updates: { 'ide-sidebar-width': 'new-value' } },
+      },
+    )
+    expect(selectedWrite).toEqual({
+      reqId: 'mini-settings-write-selected',
+      ok: true,
+      result: { ok: true },
+    })
+    expect(writes).toEqual([{ 'ide-sidebar-width': 'new-value' }])
+    expect(socket.sent).toHaveLength(1)
+
+    const mixedWrite = handler(
+      { sender: { id: view.webContents.id } },
+      {
+        reqId: 'mini-settings-write-mixed',
+        ns: 'ui',
+        method: 'settings_set',
+        args: { updates: { 'ide-ai-panel-width': 'new-width', 'other.setting': 1 } },
+      },
+    )
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2))
+    const setRequest = JSON.parse(socket.sent[1]!) as { id: string; type: string; payload: unknown }
+    expect(setRequest.payload).toEqual({ updates: { 'other.setting': 1 } })
+    socket.receive({
+      id: setRequest.id,
+      type: setRequest.type,
+      ok: true,
+      payload: { ok: true },
+      error: null,
+      timestamp: '',
+    })
+    await expect(mixedWrite).resolves.toMatchObject({ ok: true })
+
+    view.webContents.sent.length = 0
+    ;(mgr as unknown as { dispatchEvent: (event: string, payload: unknown) => void }).dispatchEvent(
+      'ui.settings_changed',
+      { source: 'host', settings: { 'ide-sidebar-width': 'backend', 'other.setting': false } },
+    )
+    expect(view.webContents.sent).toContainEqual({
+      channel: 'plugin:cap:event',
+      args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'other.setting': false } } }],
+    })
+    expect(JSON.stringify(view.webContents.sent)).not.toContain('ide-sidebar-width')
+    if (instanceId) mgr.destroyInstance(instanceId)
+  })
+
   it('keeps Plans provenance invisible by default and overrides caller diagnostics when explicitly enabled', async () => {
     const disabled = await openPlansView()
     expect(disabled.view.webContents.loads[0]).not.toContain('plans_diagnostics')
@@ -6035,7 +10144,16 @@ describe('first-party Git private bridge', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'plans-factory-query-')))
     const mgr = new FrontendPluginManager()
     try {
-      const packageDir = join(root, 'dist-plugins/navide-plans')
+      const packageDir = join(
+        root,
+        'dist-plugins',
+        'official-artifacts',
+        'factory-resources',
+        PLANS_PLUGIN_ID,
+        '0.1.0',
+        `${process.platform}-${process.arch}`,
+        'package',
+      )
       mkdirSync(join(packageDir, 'frontend/left'), { recursive: true })
       mkdirSync(join(packageDir, 'frontend/window'), { recursive: true })
       mkdirSync(join(packageDir, 'backend'), { recursive: true })
@@ -6043,7 +10161,12 @@ describe('first-party Git private bridge', () => {
       writeFileSync(join(packageDir, 'frontend/left/index.html'), '<!doctype html>')
       writeFileSync(join(packageDir, 'frontend/window/index.html'), '<!doctype html>')
       copyFileSync(process.execPath, join(packageDir, backendEntryOnDisk('backend/navide-plans')))
-      expect(registerBundledPlans(mgr, { isPackaged: false, resourcesPath: '', devRoot: root })).toEqual({ registered: true })
+      expect(registerBundledPlans(mgr, {
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
+      })).toEqual({ registered: true })
       mgr.setPlansDiagnosticsEnabled(true)
       mgr.setCapabilityGrantResolver(() => ({ packageVersion: '0.1.0', system: ['fs', 'ui', 'aiCli'], storage: true }))
       const descriptor = mgr.getDescriptor(PLANS_PLUGIN_ID)!
@@ -6191,7 +10314,7 @@ describe('first-party Git private bridge', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('uses the global policy for an agent plugin-scoped UI call without a workspace', async () => {
+  it('applies the global policy to an agent plugin-scoped UI call and withholds it without a user gesture', async () => {
     const mgr = new FrontendPluginManager()
     const pluginId = 'acme.plugin-ui'
     const packageVersion = '1.0.0'
@@ -6242,13 +10365,20 @@ describe('first-party Git private bridge', () => {
         capabilityContext: context,
       })
 
+      // The execution policy allows this plugin-scoped UI call without a
+      // workspace (otherwise the code below would be CAPABILITY_DENIED), but the
+      // Host still withholds a gesture-gated address from an agent-driven call.
       await expect(mgr.executeAgentCapability(handle.instanceId, {
         reqId: 'agent-plugin-ui-1',
         ns: 'ui',
         method: 'openExternal',
         args: { url: 'https://example.com' },
-      })).resolves.toMatchObject({ reqId: 'agent-plugin-ui-1', ok: true })
-      expect(handler).toHaveBeenCalledOnce()
+      })).resolves.toMatchObject({
+        reqId: 'agent-plugin-ui-1',
+        ok: false,
+        error: { code: 'USER_CANCELLED' },
+      })
+      expect(handler).not.toHaveBeenCalled()
     } finally {
       await mgr.closeBackendPlugins()
     }
@@ -6291,7 +10421,7 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    expect(view.webContents.sent).toEqual([{
+    expect(view.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6303,16 +10433,28 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
+    expect(view.webContents.sent).toHaveLength(2)
   })
 
   it.each(['zh-TW', 'en-US', 'ja-JP'])('routes only Host-owned %s language to v2 Git views', async (locale) => {
     const { mgr, view } = await openGitView()
+    // The merged Host dispatches both the public editor-preferences event for
+    // views bound to it and the generic host-settings event.
     mgr.dispatchHostSettingsChanged({ settings: { 'agent-team:language': locale, 'unknown.setting': 'ignored' } })
-    expect(view.webContents.sent).toEqual([{
-      channel: 'plugin:cap:event',
-      args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'agent-team:language': locale } } }],
-    }])
+    expect(view.webContents.sent).toEqual([
+      {
+        channel: 'plugin:cap:event',
+        args: [{
+          type: 'ui.editorPreferencesChanged',
+          data: { preferences: { 'agent-team:language': locale } },
+        }],
+      },
+      {
+        channel: 'plugin:cap:event',
+        args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'agent-team:language': locale } } }],
+      },
+    ])
   })
 
   it('routes Host-owned language settings changes to active Plans v2 views', async () => {
@@ -6325,7 +10467,7 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    expect(view.webContents.sent).toEqual([{
+    expect(view.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6336,7 +10478,8 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
+    expect(view.webContents.sent).toHaveLength(2)
   })
 
   it('preserves Git package-private settings contract: Plans receives only Host language and never Git settings or storage', async () => {
@@ -6376,7 +10519,8 @@ describe('first-party Git private bridge', () => {
     gitView.webContents.sent.length = 0
     plansView.webContents.sent.length = 0
 
-    // 1. Git-only Host settings: Git receives them, Plans receives nothing
+    // 1. Git-only Host settings: private Git receives them and both v2 views
+    // receive the public editor-preference projection.
     mgr.dispatchHostSettingsChanged({
       settings: {
         'agentTeam.yolo': '0',
@@ -6384,8 +10528,8 @@ describe('first-party Git private bridge', () => {
         'agent-team:theme': 'dark',
       },
     })
-    expect(gitView.webContents.sent).toHaveLength(1)
-    expect(gitView.webContents.sent[0]).toEqual({
+    expect(gitView.webContents.sent).toHaveLength(2)
+    expect(gitView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6399,7 +10543,20 @@ describe('first-party Git private bridge', () => {
         },
       }],
     })
-    expect(plansView.webContents.sent).toHaveLength(0)
+    expect(plansView.webContents.sent).toHaveLength(1)
+    expect(plansView.webContents.sent[0]).toMatchObject({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.editorPreferencesChanged',
+        data: {
+          preferences: {
+            'agentTeam.yolo': '0',
+            'agentTeam.analyzerModel': 'qwen2:latest',
+            'agent-team:theme': 'dark',
+          },
+        },
+      }],
+    })
 
     gitView.webContents.sent.length = 0
     plansView.webContents.sent.length = 0
@@ -6411,7 +10568,8 @@ describe('first-party Git private bridge', () => {
         'agent-team:language': 'zh-TW',
       },
     })
-    expect(gitView.webContents.sent).toEqual([{
+    expect(gitView.webContents.sent).toHaveLength(2)
+    expect(gitView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6423,8 +10581,9 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
-    expect(plansView.webContents.sent).toEqual([{
+    })
+    expect(plansView.webContents.sent).toHaveLength(2)
+    expect(plansView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6435,12 +10594,13 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
 
     gitView.webContents.sent.length = 0
     plansView.webContents.sent.length = 0
 
-    // 3. Plugin-storage settings: Git receives git user preference, Plans receives nothing
+    // 3. Plugin-storage settings: Git receives both the public generic event
+    // and its existing private compatibility event; Plans receives nothing.
     mgr.setPublicStorageHandler(() => null)
     const handler = ipcHandlers.get(CAPABILITY_CALL)
     await handler!(
@@ -6452,11 +10612,26 @@ describe('first-party Git private bridge', () => {
         args: { scope: 'plugin', key: 'agentTeam.git.logScope', value: 'all' },
       },
     )
-    expect(gitView.webContents.sent).toHaveLength(1)
-    expect(gitView.webContents.sent[0].args[0]).toMatchObject({
-      type: 'ui.settings_changed',
-      data: { source: 'plugin-storage' },
-    })
+    expect(gitView.webContents.sent).toHaveLength(2)
+    expect(gitView.webContents.sent).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.pluginStorageChanged',
+        data: {
+          scope: 'plugin',
+          key: 'agentTeam.git.logScope',
+          value: 'all',
+          deleted: false,
+        },
+      }],
+    }))
+    expect(gitView.webContents.sent).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      args: [expect.objectContaining({
+        type: 'ui.settings_changed',
+        data: expect.objectContaining({ source: 'plugin-storage' }),
+      })],
+    }))
     expect(plansView.webContents.sent).toHaveLength(0)
   })
 
@@ -6505,7 +10680,8 @@ describe('first-party Git private bridge', () => {
     })
 
     // Plans v2 receives only language
-    expect(plansView.webContents.sent).toEqual([{
+    expect(plansView.webContents.sent).toHaveLength(2)
+    expect(plansView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6516,7 +10692,7 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
 
     // Explicit recovery Git receives only git read-only settings; language MUST NOT enter legacy Git fan-out
     expect(legacyGitView.webContents.sent).toEqual([{
@@ -6542,8 +10718,10 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    // Plans v2 receives language
-    expect(plansView.webContents.sent).toEqual([{
+    // Plans v2 receives language through both the public editor contract and
+    // its existing private settings contract.
+    expect(plansView.webContents.sent).toHaveLength(2)
+    expect(plansView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6554,7 +10732,7 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
 
     // Legacy Git fan-out receives NOTHING (language is completely blocked from legacy Git)
     expect(legacyGitView.webContents.sent).toHaveLength(0)
@@ -7811,6 +11989,213 @@ describe('first-party Git private bridge', () => {
     }
   })
 
+  it('forwards public filesystem encoding and editor metadata without dropping backend conflicts', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-public-fs-editor-metadata-'))
+    try {
+      const { mgr } = await openGitView(workspacePath)
+      mgr.setBackendWsUrl('ws://public-fs-editor-metadata-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const runtime = (
+        mgr as unknown as {
+          running: Map<string, { capabilityContext: HostCapabilityContext }>
+        }
+      ).running.get([...(
+        mgr as unknown as { running: Map<string, unknown> }
+      ).running.keys()][0]!)!.capabilityContext.runtimeBinding!
+
+      const dispatch = async (address: 'fs.readFile' | 'fs.writeFile', args: Record<string, unknown>, response: unknown) => {
+        const pending = mgr.executePublicCapability({
+          kind: 'public', address, scope: 'workspace', runtime, args,
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+        const request = JSON.parse(socket.sent.pop()!) as { id: string; type: string; payload: Record<string, unknown> }
+        socket.receive({ id: request.id, type: request.type, ok: true, payload: response, error: null, timestamp: '' })
+        return { request, result: await pending }
+      }
+
+      const read = await dispatch('fs.readFile', { path: 'document.txt', encoding: 'utf16le' }, {
+        ok: true,
+        content: 'ok',
+        encoding: 'UTF-16LE',
+        bom: true,
+        mtime: 123,
+        size: 2,
+        ext: '.txt',
+      })
+      expect(read.request.payload).toEqual({ workspace_path: workspacePath, rel_path: 'document.txt', encoding_override: 'utf16le' })
+      expect(read.result).toEqual({
+        ok: true,
+        content: 'ok',
+        encoding: 'UTF-16LE',
+        bom: true,
+        mtime: 123,
+        size: 2,
+        ext: '.txt',
+      })
+
+      const binary = await dispatch('fs.readFile', { path: 'image.bin' }, {
+        ok: false,
+        error: 'Binary file',
+        is_binary: true,
+        is_image: false,
+        size: 4,
+        ext: '.bin',
+      })
+      expect(binary.result).toEqual({
+        ok: false,
+        error: 'Binary file',
+        is_binary: true,
+        is_image: false,
+        size: 4,
+        ext: '.bin',
+        content: '',
+      })
+
+      const failed = await dispatch('fs.readFile', { path: 'missing.txt' }, {
+        ok: false,
+        error: 'File not found',
+        size: 0,
+        ext: '.txt',
+      })
+      expect(failed.result).toEqual({
+        ok: false,
+        error: 'File not found',
+        size: 0,
+        ext: '.txt',
+        content: '',
+      })
+
+      const write = await dispatch('fs.writeFile', {
+        path: 'document.txt', content: 'updated', encoding: 'utf8', expectedMtime: 0,
+      }, { ok: true })
+      expect(write.request.payload).toEqual({
+        workspace_path: workspacePath, rel_path: 'document.txt', content: 'updated', encoding: 'utf8', expected_mtime: 0,
+      })
+
+      const omitted = await dispatch('fs.writeFile', { path: 'document.txt', content: 'updated again' }, { ok: false, conflict: true })
+      expect(omitted.request.payload).toEqual({ workspace_path: workspacePath, rel_path: 'document.txt', content: 'updated again' })
+      expect(omitted.result).toEqual({ ok: false, conflict: true })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('routes external selected read, write, and stat requests to the selected file workspace', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'navide-public-fs-selected-workspace-')))
+    const externalPath = realpathSync(mkdtempSync(join(tmpdir(), 'navide-public-fs-selected-external-')))
+    try {
+      writeFileSync(join(externalPath, 'notes.txt'), 'external')
+      const { mgr } = await openGitView(workspacePath)
+      mgr.setBackendWsUrl('ws://public-fs-selected-file-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const running = (mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }).running
+      const instanceId = [...running.keys()].at(-1)!
+      const runtime = running.get(instanceId)!.capabilityContext.runtimeBinding!
+      const selectionGrants = (mgr as unknown as {
+        editorSelectionGrants: { mint: (owner: { instanceId: string; workspaceId: string; packageVersion: string }, path: string, kind: 'file') => { grant: string } }
+      }).editorSelectionGrants
+      const selected = selectionGrants.mint({
+        instanceId: runtime.instanceId!,
+        workspaceId: runtime.workspaceId!,
+        packageVersion: runtime.packageVersion,
+      }, join(externalPath, 'notes.txt'), 'file')
+
+      const dispatch = async (
+        address: 'fs.readFile' | 'fs.writeFile' | 'fs.stat',
+        args: Record<string, unknown>,
+        response: unknown,
+      ) => {
+        const before = socket.sent.length
+        const pending = mgr.executePublicCapability({
+          kind: 'public', address, scope: 'workspace', runtime, args,
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(before + 1))
+        const request = JSON.parse(socket.sent.at(-1)!) as { id: string; type: string; payload: Record<string, unknown> }
+        socket.receive({ id: request.id, type: request.type, ok: true, payload: response, error: null, timestamp: '' })
+        return { request, result: await pending }
+      }
+
+      const read = await dispatch('fs.readFile', { path: 'notes.txt', selectionGrant: selected.grant }, { content: 'external' })
+      expect(read.request.payload).toEqual({ workspace_path: externalPath, rel_path: 'notes.txt' })
+      expect(read.result).toEqual({ content: 'external' })
+
+      const write = await dispatch('fs.writeFile', {
+        path: 'notes.txt', content: 'updated', selectionGrant: selected.grant,
+      }, { ok: true })
+      expect(write.request.payload).toEqual({ workspace_path: externalPath, rel_path: 'notes.txt', content: 'updated' })
+
+      const stat = await dispatch('fs.stat', { path: 'notes.txt', selectionGrant: selected.grant }, { exists: true })
+      expect(stat.request.payload).toEqual({ workspace_path: externalPath, path: join(externalPath, 'notes.txt') })
+      expect(stat.result).toEqual({ exists: true })
+
+      const sent = socket.sent.length
+      await expect(mgr.executePublicCapability({
+        kind: 'public', address: 'fs.readFile', scope: 'workspace', runtime,
+        args: { path: 'sibling.txt', selectionGrant: selected.grant },
+      })).rejects.toThrow(/selected file/)
+      expect(socket.sent).toHaveLength(sent)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(externalPath, { recursive: true, force: true })
+    }
+  })
+
+  it('forwards fs.listDirectory showHidden only when provided', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-public-fs-list-hidden-'))
+    try {
+      const { mgr } = await openGitView(workspacePath)
+      mgr.setBackendWsUrl('ws://public-fs-list-hidden-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const runtime = (
+        mgr as unknown as { running: Map<string, { capabilityContext: HostCapabilityContext }> }
+      ).running.get([...(
+        mgr as unknown as { running: Map<string, unknown> }
+      ).running.keys()][0]!)!.capabilityContext.runtimeBinding!
+      const dispatch = async (args: Record<string, unknown>, response: unknown) => {
+        const pending = mgr.executePublicCapability({
+          kind: 'public', address: 'fs.listDirectory', scope: 'workspace', runtime, args,
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+        const request = JSON.parse(socket.sent.pop()!) as { id: string; type: string; payload: Record<string, unknown> }
+        socket.receive({ id: request.id, type: request.type, ok: true, payload: response, error: null, timestamp: '' })
+        return { request, result: await pending }
+      }
+      const listed = await dispatch({ path: 'src' }, {
+        ok: true,
+        entries: [
+          { name: 'src', rel_path: 'src', is_dir: true, is_hidden: false, is_noise: false },
+          { name: 'README.md', kind: 'file' },
+        ],
+        truncated: true,
+      })
+      expect(listed.request.payload).toEqual({ workspace_path: workspacePath, rel_path: 'src' })
+      expect(listed.result).toEqual({
+        ok: true,
+        entries: [
+          { name: 'src', kind: 'directory', rel_path: 'src', is_dir: true, is_hidden: false, is_noise: false },
+          { name: 'README.md', kind: 'file' },
+        ],
+        truncated: true,
+      })
+
+      const hidden = await dispatch({ path: 'src', showHidden: false }, {
+        ok: false,
+        error: 'not a directory',
+      })
+      expect(hidden.request.payload).toEqual({
+        workspace_path: workspacePath, rel_path: 'src', show_hidden: false,
+      })
+      expect(hidden.result).toEqual({ ok: false, error: 'not a directory', entries: [] })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('rejects Git contribution paths through a dangling symlink', async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), 'navide-git-workspace-'))
     const outsidePath = mkdtempSync(join(tmpdir(), 'navide-git-outside-'))
@@ -8268,8 +12653,44 @@ describe('first-party Git private bridge', () => {
       (message) => message.channel === 'plugin:cap:event' &&
         (message.args[0] as { type?: string }).type === 'git.credential_request',
     )
+    const publicCredentialEvents = (view: FakeViewLike, type: string) => view.webContents.sent.filter(
+      (message) => message.channel === 'plugin:cap:event' &&
+        (message.args[0] as { type?: string }).type === type,
+    )
     expect(credentialEvents(first.view)).toHaveLength(1)
     expect(credentialEvents(secondView)).toHaveLength(0)
+    expect(publicCredentialEvents(first.view, 'shell.gitCredentialRequested')).toEqual([{
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'shell.gitCredentialRequested',
+        data: {
+          requestId: 'askpass-1',
+          host: 'github.com',
+          prompt: "Username for 'https://github.com': ",
+        },
+      }],
+    }])
+    expect(publicCredentialEvents(secondView, 'shell.gitCredentialRequested')).toHaveLength(0)
+    const publicRequest = first.view.webContents.sent.find((message) =>
+      (message.args[0] as { type?: string }).type === 'shell.gitCredentialRequested')
+    expect(JSON.stringify(publicRequest)).not.toContain('credential_owner_nonce')
+    expect(JSON.stringify(publicRequest)).not.toContain('/workspace')
+
+    socket.receive({
+      id: 'credential-event-wrong-workspace',
+      type: 'git.credential_request',
+      payload: {
+        request_id: 'askpass-wrong-workspace',
+        workspace_path: '/other-workspace',
+        host: 'github.com',
+        prompt: 'must not route',
+        credential_owner_nonce: fetchRequest.payload.credential_owner_nonce,
+      },
+      timestamp: '',
+    })
+    expect(publicCredentialEvents(first.view, 'shell.gitCredentialRequested')).toHaveLength(1)
+    expect(credentialEvents(first.view)).toHaveLength(1)
+    expect(publicCredentialEvents(secondView, 'shell.gitCredentialRequested')).toHaveLength(0)
 
     await expect(call(secondView, 'git.request', {
       type: 'git.credential_submit',
@@ -8306,6 +12727,156 @@ describe('first-party Git private bridge', () => {
       timestamp: '',
     })
     await expect(operation).resolves.toMatchObject({ ok: true })
+
+    const secondOperation = call(first.view, 'git.request', {
+      type: 'git.fetch',
+      payload: { workspace_path: '/workspace' },
+    }, 'git-interactive-fetch-cancelled')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(3))
+    const secondFetchRequest = JSON.parse(socket.sent[2]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    socket.receive({
+      id: 'credential-event-2',
+      type: 'git.credential_request',
+      payload: {
+        request_id: 'askpass-2',
+        workspace_path: '/workspace',
+        host: 'gitlab.com',
+        prompt: 'Username: ',
+        credential_owner_nonce: secondFetchRequest.payload.credential_owner_nonce,
+      },
+      timestamp: '',
+    })
+    socket.receive({
+      id: secondFetchRequest.id,
+      type: secondFetchRequest.type,
+      ok: true,
+      payload: { ok: true },
+      error: null,
+      timestamp: '',
+    })
+    await expect(secondOperation).resolves.toMatchObject({ ok: true })
+    expect(publicCredentialEvents(first.view, 'shell.gitCredentialCancelled')).toEqual([{
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'shell.gitCredentialCancelled',
+        data: { requestId: 'askpass-2' },
+      }],
+    }])
+    expect(publicCredentialEvents(secondView, 'shell.gitCredentialCancelled')).toHaveLength(0)
+  })
+
+  it('keeps public terminal view state bound to the authenticated contribution', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const runtime = (
+      opened.mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(opened.instanceId)!.capabilityContext.runtimeBinding!
+    const execute = (address: string, args: Record<string, unknown>) =>
+      opened.mgr.executePublicCapability({
+        kind: 'public',
+        address,
+        scope: 'workspace',
+        runtime,
+        args,
+      })
+    const requests: Array<{ origin: string; request: Record<string, unknown> }> = []
+    opened.mgr.setTerminalStorageHandler(async (origin, request, canDispatch) => {
+      requests.push({ origin, request: request as unknown as Record<string, unknown> })
+      expect(canDispatch()).toBe(true)
+      return {
+        fontSize: 14,
+        lastSize: { cols: 100, rows: 30 },
+        ptyId: 'private-pty',
+        snapshot: 'nv1:private-history',
+      }
+    })
+
+    await expect(execute('aiCli.readTerminalView', {})).resolves.toMatchObject({
+      fontSize: 14,
+      lastSize: { cols: 100, rows: 30 },
+      snapshot: 'nv1:private-history',
+    })
+    const context = (
+      opened.mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(opened.instanceId)!.capabilityContext
+    context.sessionBindings = new Map([['owned-session', runtime]])
+
+    await expect(execute('aiCli.saveTerminalView', {
+      sessionId: 'owned-session',
+      snapshots: ['nv1:owned-history'],
+    })).resolves.toEqual({})
+    await expect(execute('aiCli.setTerminalFontSize', {
+      fontSize: 16,
+    })).resolves.toEqual({})
+
+    expect(requests.map(({ origin, request }) => [origin, request.operation])).toEqual([
+      ['host', 'read'],
+      ['host', 'snapshot'],
+      ['host', 'font'],
+    ])
+    expect(JSON.stringify(requests)).not.toContain('private-pty')
+  })
+
+  it('lists the opt-in terminal profile registry with fixed full-screen metadata', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const runtime = (
+      opened.mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(opened.instanceId)!.capabilityContext.runtimeBinding!
+    const result = await opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.listProfiles',
+      scope: 'workspace',
+      runtime,
+      args: { terminalView: true },
+    }) as { profiles: unknown[] }
+    expect(result.profiles).toEqual(expect.arrayContaining([
+      { id: 'droid', label: 'Droid', bracketedPaste: true },
+      { id: 'claude', label: 'Claude Code', fullScreenTui: true, bracketedPaste: true },
+      { id: 'codex', label: 'Codex', bracketedPaste: true, shiftEnterSequence: '\x1b[13;2u' },
+    ]))
+  })
+
+  it('drops native terminal resource requests when the session binding is wrong', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const ownerCalls: unknown[] = []
+    opened.mgr.setTerminalStorageHandler(async () => {
+      ownerCalls.push('unexpected')
+      return null
+    })
+    await expect(publicCall(opened.view, 'aiCli', 'saveTerminalView', {
+      sessionId: 'sibling-session',
+      snapshots: ['nv1:history'],
+    }, 'terminal-wrong-session')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(ownerCalls).toHaveLength(0)
+  })
+
+  it('allows selection reporting after exit without a session id while retaining session checks when supplied', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    opened.mgr.setPublicCapabilityHandler((plan) => opened.mgr.executePublicCapability(plan))
+
+    await expect(publicCall(opened.view, 'aiCli', 'reportTerminalSelection', {
+      selection: 'copied after exit',
+    }, 'terminal-selection-after-exit')).resolves.toMatchObject({ ok: true })
+
+    await expect(publicCall(opened.view, 'aiCli', 'reportTerminalSelection', {
+      sessionId: 'sibling-session',
+      selection: 'must be denied',
+    }, 'terminal-selection-sibling')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
   })
 
   it('buffers early AI output and resumes a detached session by Host tuple', async () => {
@@ -8422,6 +12993,167 @@ describe('first-party Git private bridge', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('recovers an owned AI terminal through a symlinked workspace without clearing its PTY', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-ai-symlink-recovery-')))
+    const workspace = join(root, 'real-workspace')
+    const alias = join(root, 'linked-workspace')
+    mkdirSync(workspace)
+    symlinkSync(workspace, alias, 'dir')
+    try {
+      const opened = await openGitView(alias, 'git-window')
+      const operations: Array<{ operation: string; ptyId?: string | null }> = []
+      opened.mgr.setTerminalStorageHandler(async (_origin, request) => {
+        operations.push(request)
+        return { fontSize: 12, lastSize: null, ptyId: 'live-pty', snapshot: null }
+      })
+      opened.mgr.setBackendWsUrl('ws://git-ai-symlink-recovery-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const runtime = (
+        opened.mgr as unknown as {
+          running: Map<string, { capabilityContext: HostCapabilityContext }>
+        }
+      ).running.get(opened.instanceId)!.capabilityContext.runtimeBinding!
+      const resume = opened.mgr.executePublicCapability({
+        kind: 'public', address: 'aiCli.resumeSession', scope: 'workspace', runtime,
+        args: { cols: 80, rows: 24, persistView: true },
+      })
+      await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+      const request = JSON.parse(socket.sent[0]!)
+      expect(request.payload.expected_workspace_path).toBe(alias)
+      socket.receive({
+        id: request.id, type: request.type, ok: true,
+        payload: {
+          alive: ['live-pty'], dead: [],
+          sessions: { 'live-pty': {
+            agent_key: 'claude', workspace_path: workspace, origin: 'navide.git',
+          } },
+        },
+        error: null, timestamp: '',
+      })
+      await expect(resume).resolves.toEqual({ sessionId: 'live-pty', profileId: 'claude' })
+      expect(operations).not.toContainEqual(expect.objectContaining({ operation: 'session', ptyId: null }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('attests the Host allowlisted profiles before persisted ledger reattach effects', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    opened.mgr.setTerminalStorageHandler(async () => ({
+      fontSize: 12,
+      lastSize: null,
+      ptyId: null,
+      snapshot: null,
+    }))
+    opened.mgr.setBackendWsUrl('ws://git-ai-profile-attestation-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const internal = opened.mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext }>
+      wsClient: unknown
+      aiSessions: Map<string, Record<string, unknown>>
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const runtime = plugin.capabilityContext.runtimeBinding!
+    internal.aiSessions.set('attested-session', {
+      sessionId: 'attested-session',
+      profileId: 'claude',
+      pluginId: runtime.pluginId,
+      packageVersion: runtime.packageVersion,
+      workspaceId: runtime.workspaceId,
+      audience: runtime.audience,
+      attachedInstanceId: null,
+      client: internal.wsClient,
+      createdAt: Date.now(),
+      persistView: true,
+    })
+
+    const resume = opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.resumeSession',
+      scope: 'workspace',
+      runtime,
+      args: { cols: 100, rows: 30, persistView: true },
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request.type).toBe('terminal.reattach')
+    expect(request.payload.expected_profile_ids).toEqual(plugin.capabilityContext.aiCliProfiles)
+    expect(request.payload.expected_workspace_path).toBe(resolve('/workspace'))
+    expect(request.payload.expected_origin).toBe('navide.git')
+
+    socket.receive({
+      id: JSON.parse(socket.sent[0]!).id,
+      type: request.type,
+      ok: true,
+      payload: { alive: ['attested-session'], dead: [] },
+      error: null,
+      timestamp: '',
+    })
+    await expect(resume).resolves.toEqual({ sessionId: 'attested-session', profileId: 'claude' })
+  })
+
+  it('rejects a detached ledger session whose profile is no longer Host-allowlisted before backend dispatch', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    opened.mgr.setBackendWsUrl('ws://git-ai-revoked-profile-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const internal = opened.mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext }>
+      wsClient: unknown
+      aiSessions: Map<string, Record<string, unknown>>
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const runtime = plugin.capabilityContext.runtimeBinding!
+    plugin.capabilityContext.aiCliProfiles = ['claude']
+    internal.aiSessions.set('revoked-profile-session', {
+      sessionId: 'revoked-profile-session',
+      profileId: 'droid',
+      pluginId: runtime.pluginId,
+      packageVersion: runtime.packageVersion,
+      workspaceId: runtime.workspaceId,
+      audience: runtime.audience,
+      attachedInstanceId: null,
+      client: internal.wsClient,
+      createdAt: Date.now(),
+    })
+
+    await expect(opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.resumeSession',
+      scope: 'workspace',
+      runtime,
+      args: { cols: 100, rows: 30 },
+    })).resolves.toBeNull()
+    expect(socket.sent).toHaveLength(0)
+  })
+
+  it('rejects a start request whose profile is no longer Host-allowlisted before backend dispatch', async () => {
+    const opened = await openGitView('/workspace', 'git-ai-start-revoked-profile-test')
+    opened.mgr.setBackendWsUrl('ws://git-ai-start-revoked-profile-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const internal = opened.mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext }>
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const runtime = plugin.capabilityContext.runtimeBinding!
+    plugin.capabilityContext.aiCliProfiles = ['claude']
+
+    await expect(opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.startSession',
+      scope: 'workspace',
+      runtime,
+      args: { profileId: 'droid', requestId: 'revoked-start', cols: 80, rows: 24 },
+    })).rejects.toThrow(/profile 'droid' is not available/)
+    expect(socket.sent).toHaveLength(0)
   })
 
   it('bounds and expires AI output that arrives before session creation commits', async () => {

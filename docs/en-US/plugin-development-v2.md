@@ -57,6 +57,15 @@ status changes only Registry trust and marketplace classification; it does not
 grant access to private Host modules or force an official package to be
 installed. The base App must remain usable with an empty plugin catalog.
 
+The `@navide/plugin-ui/editor` subpath provides the shared text editor and a
+typed consumer-injected `EditorPort`. It does not expose Host transports,
+diagnostics stores, window state, or filesystem authority. See
+[Shared editor composition](editor-design.md#shared-editor-composition) for
+its peer dependency, effect adapter, and restricted-preflight contract. Raw
+terminal and vendor-shell modules remain Host-owned; Plugins use the public
+safe AI CLI controller instead. The user reaffirmed this graph for miniIDE
+migration on 2026-09-11, superseding the earlier private-feature proposal.
+
 The package manifests declare public npm publication metadata and use normal
 SemVer 2.0.0 versions, but registry publication is future work outside Issue
 06. The package implementations live under
@@ -109,20 +118,27 @@ acme-files/
 }
 ```
 
-The Issue 06 SDK distribution includes a `navide-plugin` executable with these
+The SDK distribution includes a `navide-plugin` executable with these
 commands:
 
 ```text
 navide-plugin validate <directory>
-navide-plugin package <directory> [--out <file>]
+navide-plugin package <directory> [--target <target>] [--out <file>]
+navide-plugin sign <package> --key <private-key> [--out <signature>]
+navide-plugin verify <package> --key <public-key> --signature <signature>
 ```
 
-`validate` rejects duplicate JSON keys, unknown manifest fields, unsafe paths,
-symlinks, missing referenced files, and files outside the frontend/assets
-package boundary. `package` emits a deterministic `.vsix` ZIP with a root
-`manifest.json`; it rejects manifests containing backend contributions. The
-CLI has no Host transport, process execution, signing, registry publishing,
-scaffolding, or development server.
+Every staging directory includes an `artifact-files.json` control file with one
+explicit `files` array. It is not included in the archive. `validate` rejects
+duplicate JSON keys, unknown manifest fields, unsafe paths, symlinks, missing
+referenced files, source-only material, and package shapes that do not match
+their manifest. `package` emits a deterministic `.vsix` ZIP with a root
+`manifest.json`. Frontend-only packages use `universal`; backend and combined
+packages must name the build host's exact platform-architecture target and
+contain one self-contained executable. `sign` and `verify` use a detached
+Ed25519 signature over the SHA-256 digest of the complete archive. The CLI has
+no Host transport, process execution, registry publishing, scaffolding, or
+development server.
 
 ## Issue 06 external workspace workflow
 
@@ -464,6 +480,7 @@ rejected. A manifest may declare at most 16 views.
 | `right` | Right workbench region |
 | `left` | Left workbench region; use this when migrating a legacy sidebar contribution |
 | `main` | Primary workbench content region |
+| `detail` | Detail region filled by a composed receiver; never opens on its own |
 | `window` | Separate top-level window |
 
 `sidebar` is not a v2 location value. Unknown locations fail schema validation.
@@ -589,6 +606,63 @@ fields, unknown permissions, duplicate JSON object keys, and unknown view kinds
 fail closed. Manifest v2 initially supports only `custom` views.
 `tree`/`provider` is deferred until its provider registration, item shape,
 pagination, cancellation, error, and lifecycle Interface is published.
+
+### Composed View Contracts
+
+> Provisional. These fields are implemented and enforced by the Host, but the
+> composition contract is still being stabilised; treat them as an evolving
+> Interface rather than a frozen one.
+
+A `detail` view is the region a receiver fills with plugin-rendered detail
+pages. It never opens on its own: the Host mounts it only when the receiver
+that owns it accepts a detail request. Three manifest fields wire the
+composition, and each is valid for exactly one location:
+
+| Field | Valid on | Meaning |
+|---|---|---|
+| `detailView` | `left` | Id of the `detail` view in the same package that presents this surface's detail pages |
+| `targetSchema` | `detail` | Package-relative `.json` path describing the payload this detail view accepts |
+| `receives` | `window` | Declares this window as a composition receiver |
+
+```json
+{
+  "contributes": {
+    "views": [
+      { "id": "left", "kind": "custom", "location": "left", "title": "Changes",
+        "entry": "frontend/left/index.html", "detailView": "detail" },
+      { "id": "detail", "kind": "custom", "location": "detail", "title": "Change",
+        "entry": "frontend/detail/index.html", "targetSchema": "schemas/target.json" },
+      { "id": "window", "kind": "custom", "location": "window", "title": "Workspace",
+        "entry": "frontend/window/index.html",
+        "receives": { "protocolVersion": 1, "locations": ["left", "detail"],
+                      "closeGuard": { "protocolVersion": 1 } } }
+    ]
+  }
+}
+```
+
+`detailView` must reference a `detail` view declared in the same package. A
+left surface without `detailView` has no detail region, so the Host refuses its
+detail requests instead of silently dropping them. `receives.locations` lists
+the source locations this receiver serves (`left` and/or `detail`, at most two,
+unique); `receives.editorTargets` additionally lets the receiver accept opens
+of host editor targets, and `receives.closeGuard` makes it part of the close
+transaction:
+
+The Host asks a guarded receiver before it destroys a window. The receiver
+answers busy, accepts, or cancels; an accepted close is committed only after
+every other receiver and provider in the same transaction accepts, so a refusal
+or an unanswered request keeps the window, its views, and their uncommitted
+state alive. Close, reload, and quit share a per-window preparation lock; a
+refused, timed-out, or failed request reports a refusal and releases that lock
+without committing a second close. Each block carries `protocolVersion: 1`
+and is frozen until a later profile is published.
+
+Declaring a contract is not registering it. A `receives` declaration without
+the corresponding runtime registration fails closed: the Host refuses requests
+to that surface instead of routing them to an unguarded view. The same applies
+to `editorTargets` and `closeGuard` — a receiver that declares but does not
+register is unavailable for that capability, never implicitly trusted.
 
 ## Agent Execution Policy
 
@@ -881,7 +955,7 @@ are not Manifest v2 permissions.
 |---|---|---|
 | `system:fs` | `fs.readFile`, `fs.listDirectory`, `fs.glob`, `fs.stat`, `workspace.filesChanged` | `workspace` |
 | `system:ui` | `ui.openInEditor` | `workspace` |
-| `system:ui` | `ui.openExternal` | `plugin` (HTTPS; Host user-gesture gate) |
+| `system:ui` | `ui.openExternal` | `plugin` (HTTP/HTTPS web links; Host user-gesture gate) |
 | `system:aiCli` | `aiCli.listProfiles`, `startSession`, `resumeSession`, `cancelStart`, `reattachSession`, `sendInput`, `resizeSession`, `redrawSession`, `interruptSession`, `stopSession`, `output`, `exited` | `workspace` |
 | `shell` | `shell.run` | `workspace` |
 
@@ -1120,6 +1194,61 @@ Issues 25 and 26 must reuse this Execution Policy contract, its Policy Sources,
 Host-minted Initiators, and the shared Host broker for miniIDE composition.
 They must not introduce an IDE-specific policy, permission, or Initiator model.
 
+### Independent plugin windows and editor capability adapters
+
+`ui.openPluginWindow` opens an installed contribution whose declared location
+is `window`. The SDK exposes it as
+`createPluginViewRuntimeClient().openContributionWindow(...)`. Its closed
+arguments are `contributionKey`, optional `path`, `line`, and `grant`.
+The contribution key selects a resource; it does not assert caller or target
+runtime identity. The Host derives the workspace from the caller binding,
+checks its `ui` permission, exact-version Grant and applicable Execution
+Policy, and resolves the registered target contribution. A path must be
+contained by that workspace or covered by the caller's exact-file selection.
+The Host creates a new target-owned selection grant when transferring an
+external file. Caller grants, instance identifiers, URLs and raw query maps
+are never transferred as authority.
+
+The result is `{ ok: true }` or a structured failure with
+`PLUGIN_NOT_INSTALLED` / `PLUGIN_UNAVAILABLE` and a message. An absent or
+uninstalled IDE must be reported to the user; it must not silently open the
+Host editor or the operating system's default editor. Explicit external-editor
+preferences remain separate. Recovery for an installed plugin version is
+distinct from treating an uninstalled or disabled plugin as present.
+The miniIDE package declares `navide.mini-ide.window`; its complete activation
+and parity verification remain part of Issue 26, not implied by this API.
+
+Typed Git methods under `shell` use a Host-fixed Git operation mapping.
+`aiCli.generateCommitMessage` retains AI authority. The Git package's public
+`@navide/navide-git/composition` export is side-effect-free build-time
+composition: consumers inject authority and bundle the surfaces, without an
+installed Git plugin or a runtime import of its mount entry.
+
+Issue operations use `shell.issueProvider`, `shell.listIssues`,
+`shell.getIssue`, `shell.createIssue`, `shell.commentIssue`, and
+`shell.setIssueState`. They reuse the existing provider services. The Host
+derives repository containment and the executable policy from the authenticated
+Initiator, then checks the actual `git`, `gh`, or `glab` command before each
+provider subprocess. Public Issue requests share a 30-second subprocess budget
+across repository detection and the provider command, beneath the Host's
+35-second request timeout; once that budget expires, no further mutation
+command is started. A remote mutation already submitted before a timeout may still
+have an unknown outcome and must not be retried blindly. A plugin cannot supply
+backend routes or policy fields.
+Account operations use the fixed `ui.listGitAccounts`,
+`ui.getGitAccountBinding`, `ui.addGitAccount`, `ui.bindGitAccount`, and
+`ui.unbindGitAccount` methods. Responses contain masked account summaries;
+stored credentials and backend authentication tokens stay with the Host.
+
+Editor read/write metadata, expected-mtime conflicts, search, native pickers,
+and review operations use the closed public capability catalog. Review request
+IDs are Host-minted and instance-bound, with teardown on cancellation or
+instance/backend loss. Selected-file filesystem authority remains exact-file.
+External HTML preview separately retains its existing parent-directory
+resource-read scope for relative assets and sibling resource URLs; it does
+not grant directory listing or sibling writes, and the resource URL never
+contains the backend WebSocket authentication token.
+
 ### Embedded AI CLI public mapping
 
 `AiCliDock` currently consumes the generic terminal transport. The public
@@ -1137,10 +1266,21 @@ catalog exposes only the Host-mediated AI CLI addresses below:
 | `aiCli.redrawSession` | Redraw an owned session |
 | `aiCli.interruptSession` | Interrupt an owned session |
 | `aiCli.stopSession` | Stop an owned session |
+| `aiCli.readTerminalView` | Read Host-owned font, last dimensions and serialized history; no PTY/storage identity |
+| `aiCli.saveTerminalView` | Save serialized history for an owned session |
+| `aiCli.setTerminalFontSize` | Update the existing terminal font owner |
+| `aiCli.listMentionTargets` | Project the existing qualified messaging roster for an owned session |
+| `aiCli.saveClipboardImage` | Save pasted image bytes through the existing Host image store |
+| `aiCli.showTerminalContextMenu` / `aiCli.reportTerminalSelection` | Use the instance's native clipboard menu and selection owner |
 | `aiCli.output` / `aiCli.exited` | Directed output and exit events |
 
-`aiCli.startSession` accepts only an allowlisted `profileId` and terminal
-display dimensions. The Host derives the command, arguments, working directory,
+`aiCli.startSession` accepts an allowlisted `profileId`, terminal display
+dimensions, the existing optional YOLO choice and an opaque start request ID.
+Optional `persistView` on start/resume selects Host-owned terminal persistence;
+it does not accept a storage key or process identity. `listProfiles` can opt
+into `terminalView` presentation metadata and the existing embedded editor
+profile set. Shared Git/Plans consumers retain their existing defaults.
+The Host derives the command, arguments, working directory,
 environment, credentials, workspace, pane metadata, session ID, view instance,
 and event audience. Resize and redraw carry validated positive terminal
 dimensions, and stop carries an explicit force value; neither permits raw PTY
@@ -1151,11 +1291,65 @@ Directed output and exit events are delivered only to the authenticated
 audience that created or reattached the session.
 `shell.run`, raw command/executable/arguments/environment/working-directory
 parameters, and PID control have no `aiCli` mapping and must fail closed.
-The Host executor also applies the catalog's active user-gesture requirement
-for `ui.openExternal` before opening a URL.
+The Host executor also enforces the catalog's `requiresUserGesture` flag for
+`ui.openExternal` before opening a URL: the plugin preload records a Host-observed
+trusted pointer or key event for its own view, and the broker refuses the address
+with `USER_CANCELLED` when the request carries no such gesture from the last five
+seconds. Each observed gesture permits only one `ui.openExternal` attempt;
+other capability calls do not consume it. Agent- and backend-originated calls
+never carry one, so an unattended view cannot hand a URL to the OS browser.
 Filesystem calls used by the dock's `@`-file picker remain authorized by
 the public `system:fs` catalog; they are not absorbed into the AI CLI
 permission.
+
+Terminal presentation persistence is not Plugin Storage. The Host maps the
+migrated miniIDE window to the exact legacy miniIDE entry URL and default
+Electron partition; other public consumers have contribution/workspace-derived
+keys at the Host terminal owner. The Host renderer and legacy miniIDE renderer
+remain separate origins. Minimal terminal-only bootstrap branches load no IDE
+UI, and the owner stays available without a visible editor/main window.
+Only fixed font/dimensions/session/history operations cross that internal
+boundary. No package chooses an origin, key, raw PTY or arbitrary method.
+The only miniIDE Plugin Storage migration keys remain `ide-sidebar-width`,
+`ide-ai-panel-width`, and `agentTeam.search.opts`.
+
+Persisted-session adoption requires backend-owned profile, canonical workspace
+and origin metadata, checked before ownership transfer or redraw. The bundled
+Mini-IDE also accepts its own pre-migration `editor` origin when recovering a
+session; other origins remain excluded. Both sides compare canonical workspace
+paths, including when the user opened the workspace through a symlink. Public
+output stays text; the Host streams UTF-8 decoding across backend binary
+batches. Clipboard images reuse the existing `dropped-files` store and media
+types. Embedded terminal native file-drop behavior is not introduced by this
+migration: that gesture belongs to the separate Host TerminalPane surface.
+
+`ui.openFilePicker` preserves the embedded terminal's searchable file popup
+through a Host-owned picker-only view. Its request contains `query`, untrusted
+`candidates`, optional `line`, and an optional owned `sessionId`. A candidate or
+a renderer's user Initiator classification does not authorize an external file.
+The Host performs lookup internally; the isolated picker returns an opaque row
+identifier on actual selection. The public result is only `{ opened: boolean }`.
+Neither filesystem lookup results nor a selected-file grant are returned to
+the calling package.
+
+The existing direct workspace HTML behavior is separate from external-file
+selection: a canonical contained `.html`/`.htm` candidate opens the installed
+Plans window's read-only `filepath` preview branch without showing the picker.
+That branch uses the receiver's existing `fs.previewResource` authorization
+and a sandboxed resource iframe, retaining relative assets. It does not enter
+the `rel_path` Plans document model or extend `plans.list`, `plans.read`,
+mutation or MCP allowlists. Missing Plans is an explicit error, never a Host
+preview implementation or implicit legacy replacement.
+
+The invocation binds the source instance, workspace, optional session, and
+picker sender/main frame. Navigation, workspace changes, instance/session
+teardown and policy revocation invalidate dispatch. The selected canonical
+identity is checked again before the receiving editor obtains an exact-file
+grant. No directory/list/write authority follows from picker selection.
+`@navide/plugin-ui/file-picker` exports only the popup presentation helper so
+the fixed Host renderer can reuse it without loading terminal or IDE code.
+Runtime focus, IME, placement and outside-click behavior remain part of the
+consolidated manual migration verification.
 
 ### Issue 15 runtime boundary
 
@@ -1248,10 +1442,18 @@ additive contract only after authors can implement and test the complete
 provider Interface.
 
 An update is downloaded and verified in the background but is not a live code
-swap. The user chooses **Restart Plugin**. Navide drains that plugin, atomically
-activates one complete frontend/backend package version, and restores its view
-placements. Failure returns to the verified previous version. Navide itself and
-unrelated plugins do not restart.
+swap. The update is staged at an immutable target-specific package directory,
+receives current trust verification plus restricted frontend and backend
+preflight, and is then offered through **Restart Plugin**. Navide drains only that plugin,
+atomically selects one complete frontend/backend package version and its
+matching storage selection, then restores native view placements from fresh
+Host-owned descriptor and Grant data. Navide itself and unrelated plugins do
+not restart. An older mutable Registry installation is adopted as the previous
+version only after its retained archive, receipt, grant, and current Registry
+trust verify; a failed check cannot turn it into an active selection.
+Interrupted activation recovery, rollback to a retained previous
+package, and retention/garbage collection are separate lifecycle work; a
+restart never claims to undo completed external effects.
 
 ## Backend trust
 
@@ -1285,8 +1487,8 @@ it does not restrict filesystem, network, subprocess, or OS access.
   rotating, expired, and revoked keys. Rotation has a bounded old/new overlap.
 - Yank prevents new installs; revocation also blocks install, update, activation,
   and future backend spawn. A newly revoked running frontend plugin is stopped
-  and quarantined; the later Electron backend supervisor must enforce the same
-  decision before and during backend execution.
+  and quarantined; the Electron backend supervisor re-verifies the current
+  root-signed trust decision immediately before every child spawn.
 - Developer Mode accepts one explicitly selected local unpacked Manifest v1 or
   Manifest v2 frontend directory only when `AGENT_TEAM_PLUGIN_DEV=1` and
   `AGENT_TEAM_PLUGIN_DEV_PATH` names that exact directory. Manifest v1 is a

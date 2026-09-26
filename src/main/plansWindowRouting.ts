@@ -73,8 +73,8 @@ export function getContributionWindowConfig(
   }
 
   return {
-    width: 1280,
-    height: 820,
+    width: contributionKey === 'navide.mini-ide.window' ? 1100 : 1280,
+    height: contributionKey === 'navide.mini-ide.window' ? 760 : 820,
     title,
     // Hidden on macOS, where the system still paints the traffic lights over
     // it; a system frame elsewhere, because this window's content is a plugin

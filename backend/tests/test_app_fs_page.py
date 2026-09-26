@@ -31,6 +31,7 @@ def workspace(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "page.html").write_text('<link rel="stylesheet" href="./sub/style.css">')
+    (ws / "page.htm").write_text('<link rel="stylesheet" href="./sub/style.css">')
     (ws / "style.css").write_text("body { margin: 0 }")
     (ws / "font.woff2").write_bytes(b"wOF2fake")
     (ws / "script.js").write_text("alert(1)")
@@ -98,8 +99,9 @@ def test_page_relative_subresource_inherits_the_capability(client, workspace):
     assert resp.text == "h1 { color: red }"
 
 
-def test_page_html_inline_with_csp_sandbox(client, workspace):
-    resp = _get(client, workspace, "page.html")
+@pytest.mark.parametrize("page_name", ["page.html", "page.htm"])
+def test_page_html_inline_with_csp_sandbox(client, workspace, page_name):
+    resp = _get(client, workspace, page_name)
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
     assert "content-disposition" not in resp.headers

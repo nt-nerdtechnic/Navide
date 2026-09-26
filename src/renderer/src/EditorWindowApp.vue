@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBackend } from './composables/useBackend'
+import { createHostEditorPort } from './composables/hostEditorPort'
 import { createHostGitTransport } from './composables/hostGitTransport'
 import { createHostGitSettingsPort, createHostGitSurfacePorts, createHostKeybindingsPort, createHostTerminalDockPort } from './composables/hostSurfacePorts'
 import { revealPath } from './composables/hostShell'
@@ -9,7 +10,7 @@ import ExplorerPane from './components/ExplorerPane.vue'
 import WindowControls from './components/WindowControls.vue'
 import SearchPane from './components/SearchPane.vue'
 import GitPane from './components/GitPane.vue'
-import EditorPane from './editor/EditorPane.vue'
+import { EditorPane } from '@navide/plugin-ui/editor'
 import DiffPane from './editor/DiffPane.vue'
 import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
@@ -82,6 +83,7 @@ const initialBranchDiffBase = params.get('branch_diff_base') ?? ''
 const initialBranchDiffCompare = params.get('branch_diff_compare') ?? ''
 
 const backend = useBackend()
+const editorPort = createHostEditorPort(backend)
 const gitTransport = createHostGitTransport(backend)
 const surfacePorts = createHostGitSurfacePorts(backend, gitTransport)
 const terminalPort = createHostTerminalDockPort(backend)
@@ -2144,7 +2146,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             v-show="tabKey(f) === activeKey"
             :ref="(el) => setEditorRef(tabKey(f), el)"
             :workspace-path="fileWs(f)"
-            :backend="backend"
+            :port="editorPort"
             :rel-path="f.relPath"
             :name="f.name"
             :initial-line="f.line"
@@ -2235,7 +2237,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
               v-show="tabKey(f) === secondaryGroup.activeKey"
               :ref="(el) => setEditorRefSecondary(tabKey(f), el)"
               :workspace-path="fileWs(f)"
-              :backend="backend"
+              :port="editorPort"
               :rel-path="f.relPath"
               :name="f.name"
               embedded

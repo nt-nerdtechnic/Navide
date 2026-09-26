@@ -264,5 +264,3 @@ def test_enforce_is_used_by_every_backend_typing_path():
     src = inspect.getsource(ws_handlers)
     route = src[src.index('@handler("agent_msg.route")'):]
     assert "terminal_policy.enforce(" in route[: route.index("@handler(", 10)]
-
-

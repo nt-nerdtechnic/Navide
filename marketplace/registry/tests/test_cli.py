@@ -8,9 +8,9 @@ import pytest
 
 from registry import cli
 from registry.package import read_package
-from registry.signing import Ed25519SignatureVerifier, read_private_key_file
+from registry.signing import Ed25519SignatureVerifier
 from tests.conftest import SignedEnv
-from tests.fixtures import contract_manifest, valid_manifest
+from tests.fixtures import contract_manifest, valid_manifest, windows_backend_bytes
 
 
 def _make_src(tmp_path: Path) -> Path:
@@ -19,6 +19,9 @@ def _make_src(tmp_path: Path) -> Path:
     (src / "manifest.json").write_text(json.dumps(valid_manifest()))
     (src / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\n-icon")
     (src / "README.md").write_text("# Hello\n")
+    (src / "artifact-files.json").write_text(
+        json.dumps({"files": ["manifest.json", "icon.png", "README.md"]})
+    )
     return src
 
 
@@ -31,6 +34,7 @@ def test_cli_help_exits_zero() -> None:
 def test_keygen_writes_usable_keypair(tmp_path: Path) -> None:
     assert cli.main(["keygen", "--out-dir", str(tmp_path), "--name", "acme"]) == 0
     priv = (tmp_path / "acme.key").read_text()
+    assert stat.S_IMODE((tmp_path / "acme.key").stat().st_mode) == 0o600
     pub = (tmp_path / "acme.pub").read_text()
     from registry.signing import sign_digest
 
@@ -41,14 +45,14 @@ def test_keygen_writes_usable_keypair(tmp_path: Path) -> None:
     )
 
 
-def test_keygen_writes_owner_only_private_key(tmp_path: Path) -> None:
+def test_keygen_refuses_to_overwrite_existing_private_key(tmp_path: Path) -> None:
     existing = tmp_path / "acme.key"
     existing.write_text("old")
     existing.chmod(0o644)
-    assert cli.main(["keygen", "--out-dir", str(tmp_path), "--name", "acme"]) == 0
-    assert stat.S_IMODE(existing.stat().st_mode) == 0o600
-    # The registry's own strict reader accepts it.
-    assert read_private_key_file(existing).startswith("-----BEGIN PRIVATE KEY-----")
+    with pytest.raises(FileExistsError):
+        cli.main(["keygen", "--out-dir", str(tmp_path), "--name", "acme"])
+    assert existing.read_text() == "old"
+    assert stat.S_IMODE(existing.stat().st_mode) == 0o644
 
 
 def test_pack_builds_valid_package(tmp_path: Path) -> None:
@@ -59,12 +63,19 @@ def test_pack_builds_valid_package(tmp_path: Path) -> None:
     assert loaded.manifest.id == "acme.hello"
 
 
+def test_pack_requires_one_explicit_canonical_file_list(tmp_path: Path) -> None:
+    src = _make_src(tmp_path)
+    (src / "artifact-files.json").write_text('{"files":["manifest.json"],"files":[]}')
+    assert cli.main(["pack", str(src)]) == 1
+
+
 def test_pack_validates_a_windows_backend_for_its_target(tmp_path: Path) -> None:
     src = tmp_path / "plugin-src"
     (src / "backend").mkdir(parents=True)
     manifest = contract_manifest("backend-only-skills.json")
     (src / "manifest.json").write_text(json.dumps(manifest))
-    (src / "backend" / "navide-skills.exe").write_bytes(b"MZ\x90\x00")
+    (src / "backend" / "navide-skills.exe").write_bytes(windows_backend_bytes("x64"))
+    (src / "artifact-files.json").write_text(json.dumps({"files": ["manifest.json", "backend/navide-skills.exe"]}))
     out = tmp_path / "out.vsix"
     # Without the target the bare entry is required, as before.
     assert cli.main(["pack", str(src), "--out", str(out)]) == 1
@@ -80,6 +91,7 @@ def test_pack_sign_publish_roundtrip(
     key = tmp_path / "acme.key"
     sig = tmp_path / "acme.sig"
     key.write_text(signed_env.private_pem)
+    key.chmod(0o600)
 
     # pack -> sign via the CLI commands.
     assert cli.main(["pack", str(src), "--out", str(pkg)]) == 0
@@ -102,9 +114,16 @@ def test_pack_sign_publish_roundtrip(
 def test_publish_carries_the_registry_target(
     tmp_path: Path, signed_env: SignedEnv
 ) -> None:
-    src = _make_src(tmp_path)
+    src = tmp_path / "plugin-src"
+    (src / "backend").mkdir(parents=True)
+    manifest = contract_manifest("backend-only-skills.json")
+    manifest.update({"id": "acme.hello", "publisher": "acme"})
+    (src / "manifest.json").write_text(json.dumps(manifest))
+    mach_header = (0xFEEDFACF).to_bytes(4, "little") + (0x0100000C).to_bytes(4, "little")
+    (src / "backend" / "navide-skills").write_bytes(mach_header)
+    (src / "artifact-files.json").write_text(json.dumps({"files": ["manifest.json", "backend/navide-skills"]}))
     pkg = tmp_path / "acme.hello-1.0.0.vsix"
-    assert cli.main(["pack", str(src), "--out", str(pkg)]) == 0
+    assert cli.main(["pack", str(src), "--out", str(pkg), "--target", "darwin-arm64"]) == 0
     signature = signed_env.sign(cli._digest(pkg.read_bytes()))
     status, _ = cli.post_package(
         "http://testserver",

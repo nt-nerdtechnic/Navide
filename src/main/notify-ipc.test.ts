@@ -70,6 +70,9 @@ vi.mock('electron', () => {
     app,
     BrowserWindow,
     Notification,
+    // The frame-asset protocol registers at index.ts module evaluation; the
+    // test only needs it inert.
+    protocol: { registerSchemesAsPrivileged: () => {}, handle: () => {}, unhandle: () => {} },
     dialog: {
       showMessageBox: () => Promise.resolve({ response: 0 }),
       showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }),

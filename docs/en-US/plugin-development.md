@@ -109,6 +109,23 @@ The `emitManifest()` hook writes `manifest.json` into the output directory at
 `closeBundle`, so the build output is itself a valid, loadable plugin
 directory.
 
+### Build ownership and portability
+
+A plugin-owned Vite and TypeScript configuration must resolve Navide public
+packages (`@navide/plugin-contracts`, `@navide/plugin-sdk`, and
+`@navide/plugin-ui`) through normal package resolution. Do not alias them to
+repository `packages/*/src` paths, and never alias another plugin's source.
+A copied plugin directory must build from its own configuration after its public
+framework and third-party dependencies are installed; it must not need the Host
+source tree or sibling plugin package metadata.
+
+The App's monorepo build may supply an artifact version and output directory to
+a plugin build explicitly. That adapter is App-owned integration only: the
+plugin configuration must retain a package-owned manifest fallback for detached
+builds. Factory artifacts use the App version required by the Host's exact
+artifact lookup; a detached source manifest is not by itself an App factory
+artifact.
+
 ### 3. Package the build
 
 Keep Marketplace plugin builds independent from the base App build. Validate

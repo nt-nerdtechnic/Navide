@@ -41,8 +41,8 @@ describe('W1: Welcome window controls on Windows/Linux', () => {
     asPlatform('linux', () => expect(needsDrawnWindowControls()).toBe(true))
   })
 
-  it("main.ts sets data-window-controls='drawn' only behind that gate", () => {
-    const main = read('main.ts')
+  it("the renderer bootstrap sets data-window-controls='drawn' only behind that gate", () => {
+    const main = read('hostMount.ts')
     expect(main).toContain('needsDrawnWindowControls()')
     expect(main).toContain("dataset.windowControls = 'drawn'")
     // The attribute write must be guarded by the gate, not unconditional.

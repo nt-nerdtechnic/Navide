@@ -11,9 +11,18 @@
 // confirmation (sensitive `fs`/`aiCli`/`shell` capabilities) AFTER verification but
 // BEFORE anything is written to disk.
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
+import { fsyncFileSync, syncDirectorySync } from './fsSync'
 import { isWindows } from '../../shared/osplat'
 import { canonicalArchivePath, portableArchiveCollisionKey } from './pluginPathPolicy'
 import {
@@ -62,6 +71,7 @@ import {
   PLUGIN_QUARANTINE_MARKER,
   PLUGIN_STAGING_DIR,
 } from './pluginInstallPaths'
+import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
 /** What a caller must supply to install a specific marketplace version. The
  *  trusted `expectedDigest` and (optional) signature material come from the
@@ -172,6 +182,8 @@ export interface InstallerDeps {
   /** Atomic directory move used by the production install transaction. */
   rename?(from: string, to: string): void
   pathExists?(path: string): boolean
+  /** Durably flush a directory after package staging or a directory rename. */
+  syncDirectory?(path: string): void
 }
 
 /** Default deps: global `fetch` (Electron main / Node 18+) + `node:fs`. */
@@ -187,6 +199,7 @@ export const defaultInstallerDeps: InstallerDeps = {
   },
   writeFile(path, data) {
     writeFileSync(path, data)
+    fsyncFileSync(path)
   },
   readFile(path) {
     try {
@@ -207,6 +220,9 @@ export const defaultInstallerDeps: InstallerDeps = {
   },
   pathExists(path) {
     return existsSync(path)
+  },
+  syncDirectory(path) {
+    syncDirectorySync(path)
   },
 }
 
@@ -494,6 +510,110 @@ function writePreparedPackage(
       join(targetDir, OFFICIAL_RECEIPT_NAME),
       new TextEncoder().encode(JSON.stringify(receipt, null, 2))
     )
+  }
+}
+
+export interface StagedInstall {
+  /** Immutable Host-owned candidate directory. It is not a scan root and is
+   * never registered as a production descriptor by this operation. */
+  candidateDir: string
+  target: string
+  descriptor: PluginLaunchDescriptor | undefined
+}
+
+/** Write a verified package beside, never over, the current active package.
+ * Candidate discovery/activation is intentionally a separate Host lifecycle
+ * decision: staging does not revoke instances, change grants, or expose routes. */
+export function stageInstallCandidate(
+  prepared: PreparedInstall,
+  pluginsRoot: string,
+  deps: InstallerDeps = defaultInstallerDeps,
+): StagedInstall {
+  if (!deps.rename || !deps.pathExists) {
+    throw new InstallError('immutable candidate staging requires atomic directory rename support')
+  }
+  assertSafeArchiveEntries(prepared.entries)
+  const safeEntries = prepared.entries.map((entry) => ({
+    entry,
+    path: canonicalEntryPath(entry),
+  }))
+  const smuggledHostFile = safeEntries.find(({ path }) => {
+    const collisionKey = portableArchiveCollisionKey(path)
+    return collisionKey !== null && HOST_OWNED_ARCHIVE_NAMES.has(collisionKey)
+  })
+  if (smuggledHostFile) throw new InstallError(`package must not contain ${smuggledHostFile.path}`)
+  const backendEntry = assertBackendExecutable(prepared.manifest, prepared.entries)
+  const target = prepared.registryEvidence?.receipt.target
+  if (!target) {
+    throw new InstallError('immutable candidate staging requires Registry target evidence')
+  }
+  const candidateDir = immutablePluginPackageDir(pluginsRoot, prepared.id, prepared.version, target)
+  if (deps.pathExists(candidateDir)) {
+    const selector = new PluginActivationSelector(pluginsRoot)
+    let referenced = false
+    try {
+      const record = selector.read(prepared.id)
+      referenced = [record?.active, record?.previous, record?.candidate].some((selection) =>
+        selection?.packageVersion === prepared.version &&
+        selection.target === target,
+      )
+    } catch {
+      // A corrupt record is a recovery boundary: never relocate bytes that it
+      // may still reference, and do not infer a replacement candidate.
+      throw new InstallError(`immutable candidate cannot be reconciled while ${prepared.id} lifecycle is unreadable`)
+    }
+    if (referenced) {
+      throw new InstallError(`immutable candidate already exists for ${prepared.id}@${prepared.version}`)
+    }
+    // An immutable package without any durable lifecycle reference is never
+    // auto-adopted: it may have survived an interrupted stage before consent
+    // was recorded. Preserve it as forensic quarantine evidence, then allow a
+    // fresh verified candidate to stage beside it.
+    const quarantineRoot = join(pluginsRoot, PLUGIN_QUARANTINE_DIR)
+    const quarantinePath = join(quarantineRoot, `${prepared.id}.unreferenced.${randomUUID()}`)
+    try {
+      deps.mkdirp(quarantineRoot)
+      deps.rename(candidateDir, quarantinePath)
+    } catch (error) {
+      throw new InstallError(
+        `immutable candidate could not be quarantined: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+  const stagingRoot = join(pluginsRoot, PLUGIN_STAGING_DIR)
+  const stagingDir = join(stagingRoot, `${prepared.id}.${randomUUID()}`)
+  const trustSnapshotPath = join(pluginsRoot, REGISTRY_TRUST_SNAPSHOT_NAME)
+  if (prepared.registryEvidence) {
+    assertRegistryTrustSnapshotDoesNotRollback(
+      deps.readFile(trustSnapshotPath),
+      prepared.registryEvidence.trustSnapshot,
+    )
+  }
+  try {
+    deps.mkdirp(stagingRoot)
+    writePreparedPackage(prepared, stagingDir, backendEntry, safeEntries, deps)
+    deps.syncDirectory?.(stagingDir)
+    deps.mkdirp(dirname(candidateDir))
+    deps.rename(stagingDir, candidateDir)
+    deps.syncDirectory?.(dirname(candidateDir))
+    if (prepared.registryEvidence) {
+      const writeTrustSnapshot = deps.writeRegistryTrustSnapshot ?? writeRegistryTrustSnapshot
+      writeTrustSnapshot(pluginsRoot, prepared.registryEvidence.trustSnapshot)
+    }
+  } catch (error) {
+    // A package that never reached its immutable candidate location is only a
+    // transient write; leave active/previous packages and any committed
+    // candidate untouched. Ticket 29 owns recovery for interrupted writes.
+    deps.rmrf(stagingDir)
+    throw error
+  }
+  return {
+    candidateDir,
+    target,
+    descriptor:
+      isManifestV2(prepared.manifest) && prepared.manifest.contributes === undefined
+        ? undefined
+        : manifestToDescriptor(prepared.manifest, candidateDir),
   }
 }
 

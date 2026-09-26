@@ -63,7 +63,7 @@ def test_registry_signs_artifact_envelope_and_root_signs_trust_metadata(
     publisher_signature = signed_env.sign(hashlib.sha256(package).hexdigest())
     published = signed_env.client.post(
         "/api/publish",
-        params={"signature": publisher_signature, "target": "darwin-arm64"},
+        params={"signature": publisher_signature, "target": "universal"},
         files={"package": ("plugin.vsix", package, "application/zip")},
         headers={"Authorization": f"Bearer {signed_env.token}"},
     )
@@ -72,14 +72,14 @@ def test_registry_signs_artifact_envelope_and_root_signs_trust_metadata(
     detail = signed_env.client.get("/api/extensions/acme/hello").json()
     assert "public_key" not in detail
     version = detail["versions"][0]
-    assert version["target"] == "darwin-arm64"
+    assert version["target"] == "universal"
     envelope = version["registry_envelope"]
     assert envelope == {
         "schemaVersion": 1,
         "artifactDigest": version["package_digest"],
         "packageId": "acme.hello",
         "version": "1.0.0",
-        "target": "darwin-arm64",
+        "target": "universal",
         "publisherId": "acme",
         "keyId": "registry-2026-01",
         "signedAt": envelope["signedAt"],
