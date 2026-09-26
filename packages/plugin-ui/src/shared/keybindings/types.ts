@@ -28,5 +28,6 @@ export function removalTarget(rule: KeybindingRule): string {
 
 // Widened to `unknown` (rather than `void`) so invokeCommand can hand a
 // handler's return value back to its caller; existing void/Promise<void>
-// handlers remain valid since void is assignable to unknown.
-export type CommandHandler = (args?: unknown) => unknown | Promise<unknown>
+// handlers remain valid since void is assignable to unknown. `event` is the
+// keydown that resolved to the command, when a key did.
+export type CommandHandler = (args?: unknown, event?: KeyboardEvent) => unknown | Promise<unknown>

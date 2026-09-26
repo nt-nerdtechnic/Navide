@@ -12,7 +12,8 @@ export interface KeyChordRecorderOptions {
   onCancel?: () => void
   /** Record a modifier pressed and released by itself ('rightalt'). Only for
    *  a key that is held (hold-to-talk): as a command key it would fire on
-   *  every combination that modifier starts. */
+   *  every combination that modifier starts. start() may override it per
+   *  recording (the Shortcuts table allows it on the hold-to-talk row). */
   allowLoneModifier?: boolean
 }
 
@@ -62,12 +63,12 @@ export function useKeyChordRecorder(options: KeyChordRecorderOptions = {}) {
     record(segment)
   }
 
-  function start(): void {
+  function start(allowLoneModifier = options.allowLoneModifier): void {
     stop()
     active.value = true
     setKeyCaptureActive(true)
     window.addEventListener('keydown', onKeydown, { capture: true })
-    if (options.allowLoneModifier) window.addEventListener('keyup', onKeyup, { capture: true })
+    if (allowLoneModifier) window.addEventListener('keyup', onKeyup, { capture: true })
   }
 
   function stop(): void {

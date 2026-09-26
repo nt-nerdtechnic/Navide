@@ -71,8 +71,8 @@ single key works too:
 | Accepted | Refused |
 |----------|---------|
 | A function key on its own (`F13`–`F19` are unused by macOS and ideal; `F1`–`F24` all work) | A key that types or edits — a letter, digit, space, punctuation, `Enter`, `Tab`, `Backspace`, `Delete`, `Escape` — with no `⌃`, `⌥` or `⌘` (`⇧` alone still types). Holding it would type into the CLI, and Enter / Esc already mean send / cancel |
-| One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`… (recorded by pressing and releasing it alone) | `⌘` in a combination while the recording mode is "Hold to talk" or "Hold, or tap to lock": macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
-| Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | `⌘` by itself, in every mode: its own key-up does arrive, but every `⌘` shortcut (`⌘C`, `⌘V`…) starts with it, so each would start a take |
+| One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`, `Left ⌘`, `Right ⌘`… (recorded by pressing and releasing it alone), in every mode | `⌘` in a combination while the recording mode is "Hold to talk" or "Hold, or tap to lock": macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
+| Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | |
 | A combination with `⌘` (`⌘⇧D`…), **only while the recording mode is "Press to start, press again to stop"**: that mode needs no key-up — the second press, a key-down, stops the take, and key repeat is ignored | A `⌘` combination another Navide command already has — the row names it. `⌘⇧D` is Open Plans by default: unbind that under Shortcuts first to use it here |
 | | A chord macOS keeps for itself — `⌘Q`, `⌘W`, `⌘H`, `⌥⌘H`, `⌘M`, `⌘Tab`, `⌘Space`, `` ⌘` ``, `⌘,`, `⇧⌘Q`, `⌃⌘Q`, `⌥⌘Esc`, `⌃⌘F`, `⌥⌘D`, `⇧⌘3`/`4`/`5`… — named with what macOS does with it, and any key the application menu takes before Navide sees it |
 
@@ -88,13 +88,24 @@ warns that it will not stop a held take and offers **Reset to default** and
 **Rebind** (or switch the mode back).
 
 A lone modifier cannot tell on key-down whether it will be held alone or used
-for a combination, so the take starts at once and is dropped quietly — nothing
-typed, no error — the moment another key goes down while it is held
-(`Right ⌥` + `E` still types `é`). In rule files a lone modifier is written
-`leftctrl`, `rightctrl`, `leftalt`, `rightalt`, `leftshift`, `rightshift`
-(`leftcmd` / `rightcmd` parse but the voice row refuses them). A key refused
-here can still be written into `keybindings.json` or the Shortcuts tab; the
-voice row then shows a warning.
+for a combination. A lone `⌥` or `⇧` starts the take at once, and drops it
+quietly — nothing typed, no error — the moment another key goes down while it
+is held (`Right ⌥` + `E` still types `é`). A lone `⌘` or `⌃` starts every
+shortcut of its own (`⌘C`, `⌘S`, `⌘K ⌘S`, `⌃C`…), so it waits: the take (and
+the mic) starts only once the modifier has been held **by itself for 300 ms**,
+and letting go of it ends the take. Any other key pressed while it is down —
+before or after those 300 ms — is left to its shortcut, untouched, and the
+take is dropped quietly; nothing starts again until the modifier is let go.
+Switching apps with `⌘Tab` while such a take runs cancels it. A quick tap of
+it (let go within 350 ms, nothing else pressed) follows the recording mode:
+"Hold, or tap to lock" locks a hands-free take, "Press to start, press again
+to stop" starts or stops one, "Hold to talk" does nothing. Binding both sides
+(two rules, `leftcmd` and `rightcmd`) makes either one work. In rule files a
+lone modifier is written `leftctrl`, `rightctrl`, `leftalt`, `rightalt`,
+`leftshift`, `rightshift`, `leftcmd`, `rightcmd`; it is recorded in the voice
+row or on the hold-to-talk row of the Shortcuts tab. A key refused here can
+still be written into `keybindings.json` or the Shortcuts tab; the voice row
+then shows a warning.
 
 #### The fn (🌐) key (macOS, optional)
 

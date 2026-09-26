@@ -35,6 +35,7 @@ import {
 } from '@navide/plugin-ui/shared'
 import type { KeybindingRule } from '@navide/plugin-ui/shared'
 import { useKeyChordRecorder } from '../composables/useKeyChordRecorder'
+import { HOLD_TO_TALK_COMMAND } from '../voice/voiceSettings'
 
 type FilterMode = 'all' | 'customized' | 'conflicts'
 
@@ -171,7 +172,8 @@ function isRecording(row: BindingRow, key: string): boolean {
 function startRecording(row: BindingRow, replacing: string | null): void {
   if (recording.value) stopRecording()
   recording.value = { rowId: row.id, replacing }
-  recorder.start()
+  // A modifier by itself (Right Option, Left ⌘) is only a key to hold.
+  recorder.start(row.command === HOLD_TO_TALK_COMMAND)
 }
 
 function stopRecording(): void {

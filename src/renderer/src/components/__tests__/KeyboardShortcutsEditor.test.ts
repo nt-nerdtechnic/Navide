@@ -270,6 +270,27 @@ describe('recording a new shortcut', () => {
     expect(rowFor(wrapper, 'editor.action.save').find('.kse-recorder-preview em').exists()).toBe(true)
   })
 
+  it('records a lone Left ⌘ (pressed and let go) on the hold-to-talk row', async () => {
+    wrapper = mountEditor('workbench.action.holdToTalk')
+    await startRecordingOn('workbench.action.holdToTalk')
+    press({ key: 'Meta', code: 'MetaLeft', metaKey: true })
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Meta', code: 'MetaLeft', bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    await rowFor(wrapper, 'workbench.action.holdToTalk').findAll('.kse-mini')[0].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(getUserRules().find((r) => !r.command.startsWith('-'))?.key).toBe('leftcmd')
+  })
+
+  it('records no lone modifier on other rows', async () => {
+    wrapper = mountEditor('editor.action.save')
+    await startRecordingOn('editor.action.save')
+    press({ key: 'Meta', code: 'MetaRight', metaKey: true })
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Meta', code: 'MetaRight', bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    expect(rowFor(wrapper, 'editor.action.save').find('.kse-recorder-preview em').exists()).toBe(true)
+  })
+
   it('writes one removal and one addition when the binding is confirmed', async () => {
     wrapper = mountEditor('editor.action.save')
     await startRecordingOn('editor.action.save')

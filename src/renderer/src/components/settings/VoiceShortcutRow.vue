@@ -59,7 +59,6 @@ function problemText(spec: string, mode: 'refused' | 'warning'): string {
   if (problem === 'meta') {
     return mode === 'refused' ? t('settings.voice.shortcut-meta-refused', { key }) : t('settings.voice.shortcut-meta-warning')
   }
-  if (problem === 'meta-alone') return t('settings.voice.shortcut-meta-alone-refused', { key })
   if (problem === 'macos-reserved') {
     return t('settings.voice.shortcut-reserved-refused', { key, action: t(`settings.voice.reserved.${reservedChordAction(spec)}`) })
   }

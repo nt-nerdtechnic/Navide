@@ -9,6 +9,7 @@ import {
   isRemovalRule,
   LONE_MODIFIER_KEYS,
   matchesEvent,
+  onKeydownSeen,
   parseKeySpec,
   registerCommand,
   removalTarget,
@@ -23,6 +24,14 @@ import type { FnKeyApi } from '../../../shared/fnKey'
 
 /** A press let go sooner than this is a tap: in hold-tap mode it locks the take hands-free. */
 export const TAP_LOCK_MS = 350
+/**
+ * How long a lone modifier that starts other shortcuts (⌘, ⌃ — see
+ * needsSoloHold) must be held by itself before its take starts: ⌘C, ⌃C and
+ * every such shortcut begin with that same keydown, and typed at speed must
+ * not open the mic.
+ */
+export const SOLO_HOLD_MS = 300
+const SOLO_HOLD_FLAGS: ReadonlySet<string> = new Set(['meta', 'ctrl'])
 const PREWARM_TIMEOUT_MS = 125_000
 const PREWARM_FOCUS_INTERVAL_MS = 60_000
 
@@ -86,6 +95,12 @@ export function isLoneModifierCombo(e: KeyboardEvent, chords: readonly ParsedKey
   const lone = chords.filter((c) => isLoneModifierKey(c.key))
   if (lone.length === 0 || e.key === 'Enter' || e.key === 'Escape') return false
   return !lone.some((c) => eventLoneModifier(e, true) === c.key)
+}
+
+/** Whether a lone-modifier key ('leftcmd', 'rightctrl'...) waits SOLO_HOLD_MS before its take starts. */
+export function needsSoloHold(key: string): boolean {
+  const lone = LONE_MODIFIER_KEYS[key]
+  return !!lone && SOLO_HOLD_FLAGS.has(lone.flag)
 }
 
 /** What the main window must hand over to wire voice input. */
@@ -170,6 +185,15 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   // held alone or used for a combination, so the take starts at once and is
   // dropped, quietly, as soon as another key goes down while it is held.
   //
+  // A lone ⌘ or ⌃ (needsSoloHold) waits instead: its keydown is left alone
+  // and only arms a solo hold. Held by itself for SOLO_HOLD_MS, it presses as
+  // above; let go sooner, it is a tap (hold-tap: lock hands-free, toggle:
+  // start / stop, hold: nothing). Any other keydown first — ⌘C, ⌘Tab, the
+  // ⌘K of a chord, a menu accelerator — or a blur drops the hold and the key
+  // goes through untouched; the next try needs a fresh press of the modifier
+  // (its repeats never start one). Once such a take runs, blur while it is
+  // held cancels it quietly rather than inserting — ⌘Tab leaves that way.
+  //
   // A hands-free take whose chord was let go is stopped by the next press.
   // Until a keyup shows that, a keydown of the chord may be key repeat or a
   // fresh press: with a ⌘ chord (allowed in toggle mode) macOS withholds the
@@ -188,6 +212,8 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   let pressedAt = 0
   let chords: ParsedKey[] = []
   let source: 'key' | 'fn' = 'key'
+  // The take was started by a solo hold (a lone ⌘ or ⌃).
+  let soloTake = false
 
   function onKeyUp(e: KeyboardEvent): void {
     if (chordUp || !isChordKeyUp(e, chords)) return
@@ -213,7 +239,8 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   function onBlur(): void {
     if (voice.state.handsFree || voice.state.phase === 'starting') return
     disarm()
-    voice.release('blur')
+    if (soloTake) voice.cancel()
+    else voice.release('blur')
   }
   function disarm(): void {
     if (!armed) return
@@ -249,8 +276,67 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     window.removeEventListener('blur', endRepeatGuard)
   }
 
+  // ── Solo hold (a lone ⌘ or ⌃) ───────────────────────────────────────────────
+  let solo: { key: ParsedKey; downAt: number; timer: ReturnType<typeof setTimeout> } | null = null
+  // Seen through the dispatcher, ahead of every command: ⌘S is consumed by
+  // Save before a window listener of ours would run. A take a solo hold
+  // started is dropped the same way (onArmedKeyDown misses consumed keys).
+  const offKeydownSeen = onKeydownSeen((e) => {
+    if (solo) {
+      // Anything but the modifier's own repeat is a shortcut: not ours.
+      if (!(e.repeat && eventLoneModifier(e, true) === solo.key.key)) endSolo()
+      return
+    }
+    if (!armed || !soloTake || chordUp || !isLoneModifierCombo(e, chords)) return
+    disarm()
+    voice.cancel()
+  })
+  function onSoloKeyUp(e: KeyboardEvent): void {
+    if (!solo || !isChordKeyUp(e, [solo.key])) return
+    endSolo()
+    // A tap. Hold mode has no use for one.
+    if (settings.voiceRecordingMode.value === 'hold') return
+    const wasArmed = armed
+    press('key', true)
+    // A new take: the key is already up (hold-tap locks it, toggle keeps it).
+    if (!wasArmed && armed) letGo('tap')
+  }
+  function startSolo(key: string, repeat: boolean): boolean {
+    if (!settings.voiceInputEnabled.value || repeat || solo || repeatGuard) return false
+    const downAt = Date.now()
+    solo = {
+      key: parseKeySpec(key)[0],
+      downAt,
+      timer: setTimeout(() => {
+        endSolo()
+        const wasArmed = armed
+        press('key', true)
+        // A tap is measured from the key going down, not from the hold.
+        if (!wasArmed && armed) pressedAt = downAt
+      }, SOLO_HOLD_MS),
+    }
+    window.addEventListener('keyup', onSoloKeyUp, true)
+    window.addEventListener('blur', endSolo)
+    // The modifier's keydown stays the page's.
+    return false
+  }
+  function endSolo(): void {
+    if (!solo) return
+    clearTimeout(solo.timer)
+    solo = null
+    window.removeEventListener('keyup', onSoloKeyUp, true)
+    window.removeEventListener('blur', endSolo)
+  }
+
+  /** The hotkey's command: `e` is the keydown that resolved to it. */
+  function onHotkey(e?: KeyboardEvent): boolean {
+    const lone = e ? eventLoneModifier(e, true) : null
+    if (lone && needsSoloHold(lone)) return startSolo(lone, e!.repeat)
+    return press('key')
+  }
+
   /** The hotkey or fn went down. False: not consumed. */
-  function press(from: 'key' | 'fn'): boolean {
+  function press(from: 'key' | 'fn', fromSolo = false): boolean {
     if (!settings.voiceInputEnabled.value) return false
     // onGuardKeyDown owns the chord's keydowns until it is let go.
     if (from === 'key' && repeatGuard) return false
@@ -271,6 +357,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       chordUp = false
       pressedAt = Date.now()
       source = from
+      soloTake = fromSolo
       chords = from === 'key' ? holdToTalkChords() : []
       if (from === 'key') {
         window.addEventListener('keyup', onKeyUp, true)
@@ -290,7 +377,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     voice.release(reason)
   }
 
-  registerCommand(HOLD_TO_TALK, () => press('key'))
+  registerCommand(HOLD_TO_TALK, (_args, e) => onHotkey(e))
 
   // ── fn (🌐) key ─────────────────────────────────────────────────────────────
   // Subscribed only while voice input and the fn setting are both on: the
@@ -346,7 +433,8 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       if (phase !== 'recording' || prev !== 'starting' || !armed || voice.state.handsFree) return
       if (document.hasFocus()) return
       disarm()
-      voice.release('blur')
+      if (soloTake) voice.cancel()
+      else voice.release('blur')
     },
   )
 
@@ -421,6 +509,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
         return
       }
       window.removeEventListener('focus', onFocus)
+      endSolo()
       disarm()
       endRepeatGuard()
       voice.disable()
@@ -432,6 +521,8 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   onScopeDispose(() => {
     offPartial()
     fnListen(false)
+    offKeydownSeen()
+    endSolo()
     disarm()
     endRepeatGuard()
     window.removeEventListener('focus', onFocus)

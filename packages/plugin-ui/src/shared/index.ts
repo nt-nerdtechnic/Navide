@@ -102,6 +102,7 @@ export {
   getUserRules,
   initKeybindingsPort,
   isKeyCaptureActive,
+  onKeydownSeen,
   onUserRulesChanged,
   saveUserRules,
   setKeyCaptureActive,

@@ -9,9 +9,6 @@ import type { VoiceRecordingMode } from './voiceSettings'
  *                    keyup of a key held with ⌘, so a held take could never
  *                    be let go of. Toggle mode needs no keyup — the second
  *                    press (a keydown) stops the take — so there it is fine.
- *   'meta-alone'     ⌘ by itself, in every mode: its own keyup does arrive,
- *                    but every ⌘ shortcut (⌘C, ⌘V...) starts with it, so each
- *                    would start a take
  *   'macos-reserved' a chord macOS itself acts on (⌘Q, ⌘Tab, ⌘Space...);
  *                    reservedChordAction names what it does
  *   'menu'           a chord the application menu takes before the renderer
@@ -22,14 +19,15 @@ import type { VoiceRecordingMode } from './voiceSettings'
  *                    Esc already mean send / cancel. ⇧ alone does not help — it
  *                    still types.
  *
- * Accepted: function keys (F1–F24), a single modifier by itself other than ⌘
- * ('rightalt'), other non-printing keys, combinations with ⌃ or ⌥, and — in
- * toggle mode — combinations with ⌘.
+ * Accepted: function keys (F1–F24), a single modifier by itself ('rightalt',
+ * 'leftcmd' — its own keyup does arrive; a lone ⌘ or ⌃ starts only once held
+ * by itself for a moment, see voiceWiring's SOLO_HOLD_MS), other non-printing
+ * keys, combinations with ⌃ or ⌥, and — in toggle mode — combinations with ⌘.
  *
  * A clash with another Navide binding is not decided here: it needs the live
  * rule table (see VoiceShortcutRow).
  */
-export type HoldToTalkKeyProblem = 'meta' | 'meta-alone' | 'macos-reserved' | 'menu' | 'typing-key'
+export type HoldToTalkKeyProblem = 'meta' | 'macos-reserved' | 'menu' | 'typing-key'
 
 const TYPING_NAMED = new Set(['space', ' ', 'enter', 'tab', 'backspace', 'delete', 'escape'])
 
@@ -70,7 +68,6 @@ export function reservedChordAction(spec: string): string | null {
 
 export function holdToTalkKeyProblem(spec: string, mode: VoiceRecordingMode): HoldToTalkKeyProblem | null {
   for (const k of parseKeySpec(spec)) {
-    if (k.key === 'leftcmd' || k.key === 'rightcmd') return 'meta-alone'
     if (k.meta && mode !== 'toggle') return 'meta'
     if (!k.ctrl && !k.alt && !k.meta && (k.key.length === 1 || TYPING_NAMED.has(k.key))) return 'typing-key'
   }

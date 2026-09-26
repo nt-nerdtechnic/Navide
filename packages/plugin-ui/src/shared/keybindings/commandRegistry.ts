@@ -14,10 +14,11 @@ export function registerCommand(id: string, handler: CommandHandler): void {
 // user is typing in a text field, and swallowing the key there would strip the
 // native behaviour and every downstream listener. Any other return value
 // (including undefined, the common case) counts as handled.
-export function executeCommand(id: string, args?: unknown): boolean {
+export function executeCommand(id: string, args?: unknown, event?: KeyboardEvent): boolean {
   const handler = _commands.get(id)
   if (!handler) return false
-  return handler(args) !== false
+  // Only a key passes the event: other callers keep the one-argument call.
+  return (event ? handler(args, event) : handler(args)) !== false
 }
 
 export function hasCommand(id: string): boolean {

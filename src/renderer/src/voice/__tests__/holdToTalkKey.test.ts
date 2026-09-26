@@ -26,10 +26,10 @@ describe('holdToTalkKeyProblem', () => {
     }
   })
 
-  it('refuses ⌘ by itself in every mode', () => {
+  it('accepts ⌘ by itself, either side, in every mode (its take waits for a solo hold)', () => {
     for (const mode of VOICE_RECORDING_MODES) {
-      expect(holdToTalkKeyProblem('rightcmd', mode)).toBe('meta-alone')
-      expect(holdToTalkKeyProblem('leftcmd', mode)).toBe('meta-alone')
+      expect(holdToTalkKeyProblem('rightcmd', mode)).toBeNull()
+      expect(holdToTalkKeyProblem('leftcmd', mode)).toBeNull()
     }
   })
 

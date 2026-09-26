@@ -53,6 +53,11 @@ describe('a modifier as a key of its own', () => {
     expect(r.resolve(down('s', { code: 'KeyS', metaKey: true }), ctx)?.command).toBe('workbench.action.openKeyboardShortcuts')
   })
 
+  it('displays a lone ⌘ with its side (the voice shortcut may be one)', () => {
+    expect(formatKeySpec('leftcmd', true)).toBe('Left ⌘')
+    expect(formatKeySpec('rightcmd', true)).toBe('Right ⌘')
+  })
+
   it('displays with its side', () => {
     expect(formatKeySpec('rightalt', true)).toBe('Right ⌥')
     expect(formatKeySpec('leftctrl', false)).toBe('Left Ctrl')

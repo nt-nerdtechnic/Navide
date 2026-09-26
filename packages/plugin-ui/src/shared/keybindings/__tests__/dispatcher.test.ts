@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
-import { useKeybindings, setUserRules, setContext } from '../useKeybindings'
+import { useKeybindings, setUserRules, setContext, onKeydownSeen, setKeyCaptureActive } from '../useKeybindings'
 import { registerCommand, _resetRegistry } from '../commandRegistry'
 
 // Central keydown dispatcher tests: the window capture-phase listener installed
@@ -260,5 +260,55 @@ describe('mod key cross-platform (audit issue 7)', () => {
     expect(spy).toHaveBeenCalledTimes(1) // ctrl no longer matches
     dispatch({ key: '9', metaKey: true })
     expect(spy).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the triggering event and keydown observers', () => {
+  it('hands the command the keydown that resolved to it', () => {
+    const spy = vi.fn()
+    registerCommand('workbench.action.toggleSidebar', spy)
+    const e = dispatch({ key: 'b', metaKey: true })
+    expect(spy).toHaveBeenCalledWith(undefined, e)
+  })
+
+  it('an observer sees every keydown, also one a command consumes, before the command runs', () => {
+    const order: string[] = []
+    registerCommand('workbench.action.toggleSidebar', () => { order.push('command') })
+    const off = onKeydownSeen((e) => order.push(`seen:${e.key}`))
+    const consumed = dispatch({ key: 'b', metaKey: true })
+    dispatch({ key: 'x' })
+    expect(consumed.defaultPrevented).toBe(true)
+    expect(order).toEqual(['seen:b', 'command', 'seen:x'])
+    off()
+    dispatch({ key: 'y' })
+    expect(order).toEqual(['seen:b', 'command', 'seen:x'])
+  })
+
+  it('a throwing observer is logged and skipped: the other observers and the command still run', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const seen: string[] = []
+    const command = vi.fn()
+    registerCommand('workbench.action.toggleSidebar', command)
+    const offBad = onKeydownSeen(() => { throw new Error('observer bug') })
+    const offGood = onKeydownSeen((e) => seen.push(e.key))
+    const e = dispatch({ key: 'b', metaKey: true })
+    expect(seen).toEqual(['b'])
+    expect(command).toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented).toBe(true)
+    expect(error).toHaveBeenCalled()
+    offBad()
+    offGood()
+    error.mockRestore()
+  })
+
+  it('observers also see IME composition keys and keys typed while the recorder captures', () => {
+    const seen: string[] = []
+    const off = onKeydownSeen((e) => seen.push(e.key))
+    dispatch({ key: 'Process', isComposing: true })
+    setKeyCaptureActive(true)
+    dispatch({ key: 'q' })
+    setKeyCaptureActive(false)
+    expect(seen).toEqual(['Process', 'q'])
+    off()
   })
 })

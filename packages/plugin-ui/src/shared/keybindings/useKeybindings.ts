@@ -29,6 +29,23 @@ let _capturing = false
 let _captureTimer: ReturnType<typeof setTimeout> | null = null
 const CAPTURE_TIMEOUT_MS = 60_000
 const _listeners = new Set<() => void>()
+const _keydownObservers = new Set<(e: KeyboardEvent) => void>()
+
+/**
+ * Hands every keydown the dispatcher sees to `listener` before it is resolved,
+ * even one a command then consumes. For a command that has to know what is
+ * pressed after its own key (hold-to-talk on a lone ⌘): a window listener
+ * added later never sees a key another command swallowed.
+ *
+ * Observers run BEFORE the dispatcher's own gates, so they also see IME
+ * composition keys (isComposing) and keys pressed while the Settings recorder
+ * holds the keyboard. A throwing observer is logged and skipped: it never
+ * stops the others or the dispatch itself.
+ */
+export function onKeydownSeen(listener: (e: KeyboardEvent) => void): () => void {
+  _keydownObservers.add(listener)
+  return () => { _keydownObservers.delete(listener) }
+}
 
 /**
  * Suspends dispatch while the Settings recorder is reading raw keystrokes.
@@ -69,6 +86,13 @@ function buildResolver(): void {
 }
 
 function handleKeydown(e: KeyboardEvent): void {
+  for (const observer of [..._keydownObservers]) {
+    try {
+      observer(e)
+    } catch (err) {
+      console.error('[keybindings] keydown observer failed:', err)
+    }
+  }
   // Mid-composition keys (zhuyin/pinyin/kana) must never match shortcuts nor
   // start chords; intercepting them breaks composition and lags typing. Don't
   // also gate on keyCode 229: non-composing IME-intercepted events ("Process")
@@ -86,7 +110,7 @@ function handleKeydown(e: KeyboardEvent): void {
     }
     return
   }
-  if (executeCommand(rule.command, rule.args)) {
+  if (executeCommand(rule.command, rule.args, e)) {
     e.stopImmediatePropagation()
     e.preventDefault()
   }

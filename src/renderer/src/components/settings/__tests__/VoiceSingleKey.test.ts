@@ -111,14 +111,25 @@ describe('single-key dictation shortcut', () => {
     expect(w.get('[data-testid="voice-shortcut-warning"]').text()).toContain('types or edits in the CLI')
   })
 
-  it('refuses Right ⌘ by itself, with its own reason', async () => {
-    const w = mountSection()
-    await record(w, [
-      ['keydown', { key: 'Meta', code: 'MetaRight', metaKey: true }],
-      ['keyup', { key: 'Meta', code: 'MetaRight' }],
-    ])
-    expect(getUserRules()).toEqual([])
-    expect(w.get('[data-testid="voice-shortcut-warning"]').text()).toContain('every ⌘ shortcut')
+  it.each([
+    ['MetaRight', 'rightcmd'],
+    ['MetaLeft', 'leftcmd'],
+  ])('accepts ⌘ (%s) pressed and released by itself, in every recording mode, and the Shortcuts tab shows it', async (code, spec) => {
+    for (const mode of ['hold-tap', 'hold', 'toggle'] as const) {
+      useVoiceSettings().setVoiceRecordingMode(mode)
+      const w = mountSection()
+      await record(w, [
+        ['keydown', { key: 'Meta', code, metaKey: true }],
+        ['keyup', { key: 'Meta', code }],
+      ])
+      expect(bound(), mode).toEqual([{ key: spec, command: HOLD_TO_TALK_COMMAND, when: WHEN }])
+      expect(shownKeys(w)).toBe(caps(spec).replace(/\s+/g, ''))
+      expect(w.find('[data-testid="voice-shortcut-warning"]').exists(), mode).toBe(false)
+    }
+    const editor = mount(KeyboardShortcutsEditor, { props: { initialQuery: HOLD_TO_TALK_COMMAND }, attachTo: document.body, global: { plugins: [i18n] } })
+    wrappers.push(editor)
+    const row = editor.findAll('tbody tr').find((r) => r.find('.kse-id').text() === HOLD_TO_TALK_COMMAND)!
+    expect(row.find('.kse-chip-keys').text().replace(/\s+/g, '')).toBe(caps(spec).replace(/\s+/g, ''))
   })
 })
 

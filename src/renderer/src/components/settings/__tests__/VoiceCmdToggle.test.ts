@@ -99,16 +99,6 @@ describe('⌘ dictation shortcut', () => {
     expect(warning(w)).toContain('cannot be used in this recording mode')
   })
 
-  it('refuses ⌘ by itself in toggle mode too', async () => {
-    const w = mountSection()
-    await record(w, [
-      ['keydown', { key: 'Meta', code: 'MetaRight', metaKey: true }],
-      ['keyup', { key: 'Meta', code: 'MetaRight' }],
-    ])
-    expect(voiceRules()).toEqual([])
-    expect(warning(w)).toContain('every ⌘ shortcut')
-  })
-
   it('refuses ⌘Q, naming what macOS does with it', async () => {
     const w = mountSection()
     await record(w, [['keydown', { key: 'q', code: 'KeyQ', metaKey: true }]])
