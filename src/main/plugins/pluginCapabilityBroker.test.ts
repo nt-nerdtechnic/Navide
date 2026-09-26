@@ -340,6 +340,30 @@ describe('Issue 03/04 public Host planner', () => {
     }))).toMatchObject({ kind: 'deny', response: { error: { code: 'CAPABILITY_DENIED' } } })
   })
 
+  it.each([
+    ['openPath', { path: 'run.command' }],
+    ['openTempFile', { name: 'x.bat', content: 'calc' }],
+    ['writeKeybindings', { content: '[]' }],
+    ['listGitAccounts', {}],
+    ['getGitAccountBinding', {}],
+    ['addGitAccount', { label: 'l', host: 'github.com', username: 'u', token: 't' }],
+    ['bindGitAccount', { accountId: 'a' }],
+    ['unbindGitAccount', {}],
+  ])('keeps ui.%s (launches files or reaches credentials) to first-party publishers', (method, args) => {
+    const uiBinding = { ...binding, pluginId: 'acme.ui' }
+    const uiPolicy = manifestV2CapabilityPolicy({ system: ['ui'] })
+    const uiCall = call({ pluginId: 'acme.ui', ns: 'ui', method, args })
+    const uiContext = (publisherEligible: boolean) => context({
+      runtimeBinding: uiBinding,
+      userGrant: { packageVersion: '1.0.0', system: ['ui'] },
+      publisherEligible,
+    })
+    expect(planPublicCapabilityCall(uiCall, uiPolicy, uiContext(true)))
+      .toMatchObject({ kind: 'allow', plan: { address: `ui.${method}` } })
+    expect(planPublicCapabilityCall(uiCall, uiPolicy, uiContext(false)))
+      .toMatchObject({ kind: 'deny', response: { error: { code: 'CAPABILITY_DENIED' } } })
+  })
+
   it('requires a Host-allowlisted AI CLI profile', () => {
     expect(
       planPublicCapabilityCall(

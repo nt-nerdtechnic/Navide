@@ -270,14 +270,25 @@ function storageMethod(
   }
 }
 
+/** Native `ui` methods a plain `ui` grant must not reach: opening a path or a
+ *  plugin-written temp file hands it to the OS default app (a `.command` or
+ *  `.bat` runs), and keybindings.json is the Host's own configuration. */
+const FIRST_PARTY_NATIVE_METHODS: ReadonlySet<string> = new Set([
+  'ui.openPath',
+  'ui.openTempFile',
+  'ui.writeKeybindings',
+])
+
 export const PUBLIC_CAPABILITY_CATALOG: Readonly<Record<string, PublicCapabilityCatalogEntry>> = {
   'ui.openFilePicker': systemMethod('ui.openFilePicker', 'ui', (value): value is Record<string, unknown> => validFilePickerRequest(value)),
   ...Object.fromEntries(EDITOR_NATIVE_METHODS.map(address => [address, {
-    address, kind: 'method', namespace: 'ui', scope: 'workspace', eligibility: 'public',
+    address, kind: 'method', namespace: 'ui', scope: 'workspace',
+    eligibility: FIRST_PARTY_NATIVE_METHODS.has(address) ? 'firstParty' : 'public',
     validateRequest: (value: unknown) => validateEditorNativeRequest(address, value),
   } as PublicSystemCapabilityCatalogEntry])),
+  // Git accounts hold hosting tokens: first-party only.
   ...Object.fromEntries(Object.keys(GIT_ACCOUNT_PUBLIC_METHODS).map(address => [address, {
-    address, kind: 'method', namespace: 'ui', scope: 'workspace', eligibility: 'public',
+    address, kind: 'method', namespace: 'ui', scope: 'workspace', eligibility: 'firstParty',
     validateRequest: (value: unknown) => validateGitAccountRequest(address, value),
   } as PublicSystemCapabilityCatalogEntry])),
   ...Object.fromEntries(PUBLIC_ISSUE_METHODS.map(address => [address, {
