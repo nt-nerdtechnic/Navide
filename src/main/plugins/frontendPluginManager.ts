@@ -6619,7 +6619,8 @@ export class FrontendPluginManager {
         operation: 'release',
         resumeKey: entry.storageIdentity!.resumeKey,
       }, canDispatch)
-    })().catch(() => undefined)
+    })().catch((error) => console.warn(
+      `[plugins] AI terminal storage clear failed for ${plugin.id} (${entry.sessionId})`, error))
   }
 
   private clearDeadAiTerminalSession(
@@ -6631,7 +6632,8 @@ export class FrontendPluginManager {
       operation: 'session',
       resumeKey: identity.resumeKey,
       ptyId: null,
-    }, () => this.publicPlanCanDispatchForPlugin(plugin)).catch(() => undefined)
+    }, () => this.publicPlanCanDispatchForPlugin(plugin)).catch((error) => console.warn(
+      `[plugins] AI terminal storage could not forget a dead session for ${plugin.id}`, error))
   }
 
   private publicPlanCanDispatchForPlugin(plugin: RunningPlugin): boolean {
@@ -6646,7 +6648,8 @@ export class FrontendPluginManager {
     void this.terminalStorageRequest(plugin, {
       operation: 'release',
       resumeKey: identity.resumeKey,
-    }, () => this.terminalStorageCanDispatch(plugin)).catch(() => undefined)
+    }, () => this.terminalStorageCanDispatch(plugin)).catch((error) => console.warn(
+      `[plugins] AI terminal storage release failed for ${plugin.id}`, error))
   }
 
   private removeAiSession(plugin: RunningPlugin, sessionId: string, clean = false): void {
@@ -6979,7 +6982,8 @@ export class FrontendPluginManager {
             operation: 'session',
             resumeKey: storageIdentity.resumeKey,
             ptyId: sessionId,
-          }, beforeDispatch).catch(() => undefined)
+          }, beforeDispatch).catch((error) => console.warn(
+            `[plugins] AI terminal storage could not bind session ${sessionId} for ${plugin.id}; it will not resume`, error))
         }
         committed = true
         this.flushEarlyAiEvents(pendingKey)
@@ -7079,7 +7083,8 @@ export class FrontendPluginManager {
           operation: 'size',
           cols: Number(args.cols),
           rows: Number(args.rows),
-        }, beforeDispatch).catch(() => undefined)
+        }, beforeDispatch).catch((error) => console.warn(
+          `[plugins] AI terminal storage could not save the size of ${sessionId} for ${plugin.id}`, error))
       }
     }
     if (type === 'terminal.kill') {
