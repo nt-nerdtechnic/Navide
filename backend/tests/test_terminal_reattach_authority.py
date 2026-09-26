@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -69,7 +70,9 @@ async def test_attested_host_adopts_matching_session_and_reports_metadata() -> N
     assert response["ok"] is True
     assert response["payload"]["alive"] == ["t1"]
     assert response["payload"]["sessions"]["t1"] == {
-        "agent_key": "claude", "workspace_path": "/ws", "origin": "editor",
+        # The backend reports the canonical cwd; on Windows "/ws" resolves to a
+        # drive-qualified path.
+        "agent_key": "claude", "workspace_path": os.path.realpath("/ws"), "origin": "editor",
     }
     assert app._PTY_OWNERS["t1"] is s
 
