@@ -9,6 +9,7 @@ from agent_team_backend.preview_log import (
     MAX_INLINE_CHARS,
     MAX_NOTE_CHARS,
     MAX_ROWS,
+    CLAIM_TTL_MS,
     MERGE_WINDOW_MS,
     PreviewLog,
 )
@@ -180,6 +181,32 @@ def test_watcher_row_is_discarded_when_an_agent_row_exists(tmp_path, clock):
     assert rows[0]["uid"] == agent_row["uid"]
     assert rows[0]["source"] == "agent"
     assert rows[0]["agent"] == "claude"
+
+
+def test_watcher_echo_folds_into_the_agent_row_however_late_it_lands(tmp_path, clock):
+    # The hook fires before the write; a permission prompt or a busy host puts
+    # the watcher's echo well past the merge window. Still one write, one row.
+    ws = str(tmp_path)
+    store = PreviewLog()
+    agent_row = store.append(ws, change="modified", rel_path="a.ts", source="agent")
+    clock.advance(MERGE_WINDOW_MS * 30)
+    assert store.append(ws, change="modified", rel_path="a.ts", source="watcher") is None
+    rows = store.tail(ws)
+    assert [r["uid"] for r in rows] == [agent_row["uid"]]
+    # The claim covers one echo: the next change nobody reported is a new row.
+    clock.advance(MERGE_WINDOW_MS + 1)
+    assert store.append(ws, change="modified", rel_path="a.ts", source="watcher") is not None
+    assert len(store.tail(ws)) == 2
+
+
+def test_an_unanswered_claim_expires(tmp_path, clock):
+    # A denied tool never writes; its claim must not swallow a later save.
+    ws = str(tmp_path)
+    store = PreviewLog()
+    store.append(ws, change="modified", rel_path="a.ts", source="agent")
+    clock.advance(CLAIM_TTL_MS + 1)
+    assert store.append(ws, change="modified", rel_path="a.ts", source="watcher") is not None
+    assert len(store.tail(ws)) == 2
 
 
 def test_prune_keeps_max_rows_and_drops_the_oldest(tmp_path, clock):

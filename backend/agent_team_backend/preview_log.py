@@ -16,7 +16,10 @@ would show every save twice. ``append`` therefore merges: a second row for the
 same path and change inside ``MERGE_WINDOW_MS`` folds into the first, and an
 attributed row (agent/user) always wins over the anonymous watcher one — it
 upgrades a watcher row already on disk, and discards a watcher row arriving
-after it.
+after it. That last case is not left to the window: a hook reports a write
+*before* it happens, so the watcher's echo lags by however long the tool takes
+to run (a permission prompt, a busy host). An attributed row therefore claims
+the next watcher event for its path and change, for up to ``CLAIM_TTL_MS``.
 
 A sqlite failure is logged and swallowed, never raised at the caller; it simply
 means the record was not persisted.
@@ -38,6 +41,10 @@ _COMPONENT = "preview_log"
 
 MAX_ROWS = 300  # rows kept per workspace
 MERGE_WINDOW_MS = 2000  # must stay above the git watcher's 0.4s debounce
+# How long an attributed row waits for the watcher's echo of its write. Bounds
+# a user answering a permission prompt, not the host's speed; a claim left by
+# a denied tool expires rather than swallowing a later save for good.
+CLAIM_TTL_MS = 10 * 60 * 1000
 MAX_NOTE_CHARS = 500
 # Characters, not bytes — matches the frontend's MAX_INLINE_CONTENT.
 MAX_INLINE_CHARS = 512 * 1024
@@ -120,6 +127,9 @@ class PreviewLog:
         self._migrated: set[str] = set()
         # Breaks the created_at ties a burst inside one millisecond produces.
         self._seq = 0
+        # (db path, rel_path, change) -> when an attributed row claimed the
+        # watcher's echo of that write; consumed by the first echo.
+        self._claims: dict[tuple[str, str, str], int] = {}
 
     # ───────────────────────── Database plumbing ─────────────────────
     def _db(self, workspace_path: str, *, create: bool) -> Database | None:
@@ -197,6 +207,14 @@ class PreviewLog:
                 )
                 return None
             now = _now_ms()
+            claim_key = (str(db.path), rel_path or "", change)
+            if rel_path is not None and change != "shown":
+                if source == "watcher":
+                    claimed_at = self._claims.pop(claim_key, None)
+                    if claimed_at is not None and now - claimed_at <= CLAIM_TTL_MS:
+                        return None  # the echo of a write already on the feed
+                else:
+                    self._claims[claim_key] = now
             try:
                 with db.transaction() as cur:
                     existing = self._merge_candidate(cur, rel_path, change, now)

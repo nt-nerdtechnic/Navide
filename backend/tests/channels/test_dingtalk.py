@@ -12,7 +12,14 @@ from agent_team_backend.channels.dingtalk import BOT_MESSAGE_TOPIC, DingTalkAdap
 from .fake_platform import FakeHttp, FakeWs, Resp
 
 
-async def wait_for(pred, timeout: float = 5.0) -> None:
+# A hang guard, not a latency budget: every wait here spans a stream open, and
+# the adapter itself gives one connections/open answer 20 s (its read timeout)
+# before counting the attempt failed. A tighter guard fails a cold, loaded
+# runner for latency the adapter treats as normal; a passing run takes ~0.05 s.
+DEADLINE_S = 30.0
+
+
+async def wait_for(pred, timeout: float = DEADLINE_S) -> None:
     loop = asyncio.get_running_loop()
     end = loop.time() + timeout
     while not pred():
@@ -100,7 +107,7 @@ async def test_connect_inbound_group_message_and_acks(http: FakeHttp) -> None:
     async with FakeWs(stream) as ws_server:
         route_open(http, ws_server.url)
         adapter = await start(http, emitted)
-        await asyncio.wait_for(done.wait(), 5)
+        await asyncio.wait_for(done.wait(), DEADLINE_S)
         await adapter.stop()
 
     open_call = http.calls_to("POST", "/v1.0/gateway/connections/open")[0]

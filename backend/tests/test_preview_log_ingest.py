@@ -20,6 +20,7 @@ from agent_team_backend import agent_messaging
 from agent_team_backend import app as app_module
 from agent_team_backend.app import app
 from agent_team_backend import hook_auth
+from agent_team_backend import preview_log as preview_log_module
 from agent_team_backend.git_watcher import _RepoHandler
 from agent_team_backend.mcp_server import server as plan_mcp, wiring as plan_mcp_wiring
 
@@ -421,8 +422,11 @@ def test_the_hook_broadcasts_the_row_it_recorded(
 
 
 def test_a_hook_write_that_merges_away_broadcasts_nothing(
-    client: TestClient, events: list[dict], ws: Path
+    client: TestClient, events: list[dict], ws: Path, monkeypatch
 ) -> None:
+    # Two hooks inside the merge window, however long a request takes on this
+    # host: which side of the window they fall on is test_preview_log's job.
+    monkeypatch.setattr(preview_log_module, "_now_ms", lambda: 1_000_000)
     _post_tool(client, "Write", str(ws / "a.ts"))
     events.clear()
     _post_tool(client, "Write", str(ws / "a.ts"))
