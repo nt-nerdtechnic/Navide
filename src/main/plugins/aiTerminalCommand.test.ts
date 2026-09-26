@@ -1,3 +1,4 @@
+import { sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { aiTerminalCommand } from './aiTerminalCommand'
 
@@ -60,7 +61,8 @@ describe('Host AI terminal command builder', () => {
       workspacePath: "/tmp/o'brien",
       resumeKey: '4d4a11fe-editor-ai-terminal',
     })).toEqual([
-      'bash', '-lc', "aider --chat-history-file '/tmp/o'\\''brien/.aider.chat.history.4d4a11fe.md' --yes-always",
+      'bash', '-lc',
+      `aider --chat-history-file '${['', 'tmp', "o'\\''brien", '.aider.chat.history.4d4a11fe.md'].join(sep)}' --yes-always`,
     ])
   })
 

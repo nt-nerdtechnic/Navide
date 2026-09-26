@@ -739,7 +739,7 @@ describe('backend Host session registration', () => {
         expect([...running.values()][0]).toMatchObject({
           carrier: 'frame',
           id: 'acme.frame.close',
-          workspacePath: '/workspace',
+          workspacePath: resolve('/workspace'),
           capabilityContext: { runtimeBinding: { packageVersion: '1.0.0' } },
         })
         const ready = ipcHandlers.get('plugin:frame:document-ready')
@@ -1914,7 +1914,7 @@ describe('registered receiver frame lifecycle', () => {
     expect(targetPayload).toEqual({
       receiverId: prepared.fixture.receiverId,
       correlation: expect.any(String),
-      target: { path: 'src/main.ts', line: 7, column: 9, sourceItem: prepared.sourceItemId },
+      target: { path: join('src', 'main.ts'), line: 7, column: 9, sourceItem: prepared.sourceItemId },
     })
     const resolve = ipcHandlers.get('plugin:receiver:resolve-editor-target')
     const hostContents = prepared.fixture.host.webContents as FakeHostContents & { id: number; mainFrame: object }
@@ -1982,7 +1982,7 @@ describe('registered receiver frame lifecycle', () => {
       const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
         message.channel === 'plugin:receiver:editor-target',
       ).at(-1)?.args[0] as { receiverId: string; correlation: string; target: { path: string } }
-      expect(target.target.path).toBe('real/main.ts')
+      expect(target.target.path).toBe(join('real', 'main.ts'))
       ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
         receiverId: target.receiverId, correlation: target.correlation, result: { opened: true },
       })
@@ -2031,7 +2031,7 @@ describe('registered receiver frame lifecycle', () => {
       const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
         message.channel === 'plugin:receiver:editor-target',
       ).at(-1)?.args[0] as { receiverId: string; correlation: string; target: { path: string } }
-      expect(target.target.path).toBe('new/ordinary.ts')
+      expect(target.target.path).toBe(join('new', 'ordinary.ts'))
       ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
         receiverId: target.receiverId, correlation: target.correlation, result: { opened: false },
       })
@@ -9473,7 +9473,7 @@ describe('first-party Git private bridge', () => {
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
     const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
     expect(request.type).toBe('git.status')
-    expect(request.payload).toEqual({ workspace_path: '/workspace' })
+    expect(request.payload).toEqual({ workspace_path: resolve('/workspace') })
     socket.receive({ id: request.id, type: request.type, ok: true, payload: { branch: 'main' }, error: null, timestamp: '' })
     await expect(operation).resolves.toEqual({ reqId: 'public-git-status', ok: true, result: { branch: 'main' } })
 
@@ -9592,7 +9592,7 @@ describe('first-party Git private bridge', () => {
       ok: true,
       result: { accountId: 'account-1' },
     })
-    expect(bind).toHaveBeenCalledWith('/workspace', 'account-1')
+    expect(bind).toHaveBeenCalledWith(resolve('/workspace'), 'account-1')
 
     await expect(publicCall(view, 'ui', 'bindGitAccount', {
       accountId: 'account-1',
@@ -9777,7 +9777,7 @@ describe('first-party Git private bridge', () => {
     }
     expect(request.type).toBe('issues.public')
     expect(request.payload).toEqual({
-      workspace_path: '/workspace',
+      workspace_path: resolve('/workspace'),
       operation: 'list',
       arguments: { limit: 5 },
       execution_policy: { mode: 'allowlist', shell: ['git', 'gh', 'glab'] },
@@ -9835,7 +9835,7 @@ describe('first-party Git private bridge', () => {
     expect(request.type).toBe('issues.public')
     expect(request.payload.execution_policy).toEqual({ mode: 'allowlist', shell: ['git', 'gh'] })
     expect(request.payload).toMatchObject({
-      workspace_path: '/workspace',
+      workspace_path: resolve('/workspace'),
       operation: 'list',
       arguments: { limit: 3 },
     })
@@ -13085,7 +13085,7 @@ describe('first-party Git private bridge', () => {
     }
     expect(request.type).toBe('terminal.reattach')
     expect(request.payload.expected_profile_ids).toEqual(plugin.capabilityContext.aiCliProfiles)
-    expect(request.payload.expected_workspace_path).toBe('/workspace')
+    expect(request.payload.expected_workspace_path).toBe(resolve('/workspace'))
     expect(request.payload.expected_origin).toBe('navide.git')
 
     socket.receive({

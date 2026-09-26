@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions, WebContents } from 'electron'
 
@@ -126,7 +127,7 @@ describe('AI terminal native resources', () => {
     const [bytes, mediaType, destination, ...extra] = h.saveClipboardImage.mock.calls[0]
     expect(bytes).toEqual(new Uint8Array([0, 128, 255]))
     expect(mediaType).toBe('image/webp')
-    expect(destination).toBe('/app/user-data/dropped-files')
+    expect(destination).toBe(join('/app/user-data', 'dropped-files'))
     expect(extra).toEqual([])
     expect(destination).not.toContain('caller')
   })
