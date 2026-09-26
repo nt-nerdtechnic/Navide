@@ -135,6 +135,20 @@ describe('navide-plugin canonical artifacts', () => {
     expect(run(['verify', archive, '--key', publicKey, '--signature', signature], directory).status).not.toBe(0)
   })
 
+  // NTFS reports 0o666 for every file, so the owner-only bits exist only on a POSIX fs.
+  it.skipIf(process.platform === 'win32')('refuses to sign with a private key other users can read', () => {
+    const directory = root()
+    packageDirectory(directory, frontendManifest(), { 'frontend/main/index.html': '<!doctype html>' })
+    const archive = join(directory, 'frontend.vsix')
+    expect(run(['package', directory, '--out', archive], directory).status).toBe(0)
+    const privateKey = join(directory, 'private.pem')
+    writeFileSync(privateKey, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+    chmodSync(privateKey, 0o644)
+    const signed = run(['sign', archive, '--key', privateKey, '--out', join(directory, 'frontend.sig')], directory)
+    expect(signed.status).not.toBe(0)
+    expect(signed.stderr).toContain('private key must have owner-only permissions')
+  })
+
   it('rejects source-only files and duplicate file-list keys', () => {
     const directory = root()
     packageDirectory(directory, frontendManifest(), {

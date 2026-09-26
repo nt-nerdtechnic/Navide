@@ -371,7 +371,8 @@ function packageDigest(path) {
 function readKey(path, label, requireOwnerOnly) {
   const stat = lstatSync(path, { bigint: true })
   if (!stat.isFile()) fail(`${label} must be a regular file`)
-  if (requireOwnerOnly && (stat.mode & 0o077n) !== 0n) {
+  // NTFS reports 0o666 for every file, so the owner-only bits describe only a POSIX fs.
+  if (requireOwnerOnly && process.platform !== 'win32' && (stat.mode & 0o077n) !== 0n) {
     fail(`${label} must have owner-only permissions`)
   }
   return readRegularFileNoFollow(path)
