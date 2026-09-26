@@ -51,6 +51,8 @@ export default defineConfig({
     // Playwright E2E lives in e2e/ and is run by `test:e2e`, not Vitest.
     exclude: ['e2e/**', 'node_modules/**'],
     globals: false,
+    // Builds and packs the public packages once for the whole run; see the file.
+    globalSetup: ['tests/support/publicPackagesSetup.ts'],
     server: {
       deps: {
         // pluginExternalWorkspace.test.ts imports the *built* plugin bundle out

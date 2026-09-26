@@ -18,6 +18,7 @@
     "src/shared/**/*.ts",
     "packages/plugin-contracts/src/**/*.ts",
     "packages/plugin-ui/src/shared/lib/uiScale.ts",
+    "tests/support/**/*.ts",
     "electron.vite.config.ts"
   ]
 }

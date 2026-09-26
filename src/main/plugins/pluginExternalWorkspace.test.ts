@@ -1,7 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, inject, it } from 'vitest'
 import {
   cpSync,
-  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -12,7 +11,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { planPublicCapabilityCall } from './pluginCapabilityBroker'
@@ -174,10 +173,8 @@ describe('third-party plugin external workspace', () => {
       // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
       // resolves inputs to the long form, so a short root puts index.html outside it.
       const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-plugin-external-')))
-      const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'example')
       try {
-        mkdirSync(artifacts)
         for (const schemaName of [
           'plugin-manifest-v2.schema.json',
           'capabilities-v1.json',
@@ -195,8 +192,6 @@ describe('third-party plugin external workspace', () => {
           expect(packageJson).not.toContain('workspace:')
           expect(packageJson).not.toContain('packages/internal')
         }
-        await runPnpmOrThrow(['run', 'build:public-packages'], repository)
-
         // The editor subpath must carry portable workers for offline/file://
         // consumers, rather than resolve them against the Host origin.
         const editorBundle = join(repository, 'packages/plugin-ui/dist/editor/index.js')
@@ -208,28 +203,11 @@ describe('third-party plugin external workspace', () => {
           expect(readFileSync(new URL(workerUrl, pathToFileURL(editorBundle))).length).toBeGreaterThan(0)
         }
 
+        // Built and packed once for the whole run by tests/support/publicPackagesSetup.ts.
+        const packedTarballs = inject('publicPackageTarballs')
         const packageTarballs: Record<string, string> = {}
-        for (const packageName of ['plugin-contracts', 'plugin-sdk', 'plugin-ui']) {
-          const packageDirectory = join(repository, 'packages', packageName)
-          const result = await runPnpmOrThrow(
-            ['pack', '--pack-destination', artifacts],
-            packageDirectory
-          )
-          const tarball = result.stdout
-            .split('\n')
-            .map((line) => line.trim())
-            .find((line) => line.endsWith('.tgz'))
-          if (!tarball) throw new Error(`pnpm pack did not report a tarball for ${packageName}`)
-          // pnpm reports the absolute path it wrote; npm reports the bare
-          // filename. Either way the tarball is in `artifacts` — that is what
-          // --pack-destination above just asked for — so a bare name resolves
-          // there, not against the directory it was packed FROM. Which packer
-          // runs depends on npm_execpath, so resolving against packageDirectory
-          // made the test pass under `pnpm test:run` and fail under any other
-          // launcher.
-          packageTarballs[`@navide/${packageName}`] = realpathSync(
-            isAbsolute(tarball) ? tarball : join(artifacts, tarball)
-          )
+        for (const packageName of ['@navide/plugin-contracts', '@navide/plugin-sdk', '@navide/plugin-ui']) {
+          packageTarballs[packageName] = packedTarballs[packageName]
         }
 
         const require = createRequire(import.meta.url)

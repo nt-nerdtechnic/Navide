@@ -72,7 +72,11 @@ const emitManifest: Plugin = {
   buildStart() {
     rmSync(legacyAssetsDir, { recursive: true, force: true })
   },
-  closeBundle() {
+  closeBundle(error) {
+    // Rollup also calls closeBundle when the build fails, before anything was
+    // written; scanning the missing outDir would replace the real build error
+    // with an ENOENT.
+    if (error) return
     const manifest = { ...sourceManifest, version: artifactVersion }
     mkdirSync(pluginDistDir, { recursive: true })
     writeFileSync(resolve(pluginDistDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)

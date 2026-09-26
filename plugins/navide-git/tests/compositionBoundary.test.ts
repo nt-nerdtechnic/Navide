@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, inject, it } from 'vitest'
 import {
   existsSync,
   lstatSync,
@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
 type CommandResult = {
@@ -23,12 +23,6 @@ type CommandResult = {
 }
 
 const repositoryRoot = resolve(import.meta.dirname, '../../..')
-const packageRoots = {
-  contracts: join(repositoryRoot, 'packages/plugin-contracts'),
-  sdk: join(repositoryRoot, 'packages/plugin-sdk'),
-  ui: join(repositoryRoot, 'packages/plugin-ui'),
-  git: join(repositoryRoot, 'plugins/navide-git'),
-}
 
 function packageManager(): { command: string; prefix: string[] } {
   const inherited = process.env.npm_execpath ?? ''
@@ -156,17 +150,6 @@ function resolveInstalledPackageBin(
   const bin = typeof packageJson.bin === 'string' ? packageJson.bin : packageJson.bin?.[binaryName]
   if (!bin) throw new Error(`Could not locate ${binaryName} in ${packageName}`)
   return join(packageDirectory, bin)
-}
-
-function packedPath(result: CommandResult, artifacts: string, packageName: string): string {
-  const reportedPath = result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.endsWith('.tgz'))
-  if (!reportedPath) throw new Error(`pnpm pack did not report a tarball for ${packageName}`)
-  const path = realpathSync(isAbsolute(reportedPath) ? reportedPath : join(artifacts, reportedPath))
-  expect(existsSync(path), packageName).toBe(true)
-  return path
 }
 
 function installedVersion(repository: string, packageName: string): string {
@@ -336,19 +319,11 @@ describe('navide.git public composition', () => {
       // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
       // resolves inputs to the long form, so a short root puts index.html outside it.
       const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-git-composition-')))
-      const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'consumer')
-      mkdirSync(artifacts)
       mkdirSync(externalProject)
       try {
-        await runPnpmOrThrow(['run', 'build:public-packages'], repositoryRoot)
-
-        const packageTarballs: Record<string, string> = {}
-        for (const [key, packageDirectory] of Object.entries(packageRoots)) {
-          const packageName = (JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as { name: string }).name
-          const result = await runPnpmOrThrow(['pack', '--pack-destination', artifacts], packageDirectory)
-          packageTarballs[packageName] = packedPath(result, artifacts, key)
-        }
+        // Built and packed once for the whole run by tests/support/publicPackagesSetup.ts.
+        const packageTarballs = inject('publicPackageTarballs')
         expect(Object.keys(packageTarballs).sort()).toEqual([
           '@navide/navide-git',
           '@navide/plugin-contracts',
