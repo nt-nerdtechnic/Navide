@@ -11,6 +11,7 @@ import { isMacPlatform, onUserRulesChanged } from '@navide/plugin-ui/shared'
 import SettingRow from './SettingRow.vue'
 import { useVoiceSettings } from '../../voice/voiceSettings'
 import { holdToTalkFnRules } from '../../voice/holdToTalkKey'
+import { fnSubscribeFailed } from '../../voice/voiceWiring'
 import type { FnKeyStatus } from '../../../../shared/fnKey'
 
 const { t } = useI18n()
@@ -35,7 +36,7 @@ watch(
     if (!api) return
     if (on && !offStatus) {
       offStatus = api.onStatus((s) => (status.value = s))
-      void api.status().then((s) => (status.value = s), () => {})
+      void api.status().then((s) => (status.value = s), (e) => console.warn('[voice] fn key status could not be read', e))
     } else if (!on) {
       offStatus?.()
       offStatus = null
@@ -49,10 +50,14 @@ onBeforeUnmount(() => {
   stopRules()
 })
 
+// Voice wiring could not subscribe: the helper is not running for it,
+// whatever the main process last reported.
+const phase = computed(() => (fnSubscribeFailed.value ? 'failed' : status.value?.phase))
+const needsAccess = computed(() => phase.value === 'no-permission' || phase.value === 'request-failed')
 const statusLine = computed(() => {
-  const phase = status.value?.phase
-  if (!phase || phase === 'off' || phase === 'unsupported') return ''
-  return t(`settings.voice.fn-status-${phase}`)
+  const p = phase.value
+  if (!p || p === 'off' || p === 'unsupported') return ''
+  return t(`settings.voice.fn-status-${p}`)
 })
 
 const usageConflict = computed(() => {
@@ -72,6 +77,7 @@ async function retry(): Promise<void> {
   if (!api) return
   await api.unsubscribe()
   status.value = await api.subscribe()
+  fnSubscribeFailed.value = false
 }
 
 function openSettings(which: 'input-monitoring' | 'keyboard'): void {
@@ -87,12 +93,12 @@ function openSettings(which: 'input-monitoring' | 'keyboard'): void {
     :description="t('settings.voice.fn-key-hint')"
   />
   <div v-if="api && fnBound && statusLine" class="fn-status" data-testid="voice-fn-status">
-    <p :class="{ 'fn-warning': status?.phase === 'no-permission' || status?.phase === 'failed' || status?.phase === 'missing' }">{{ statusLine }}</p>
-    <p v-if="status?.phase === 'no-permission'" class="fn-actions">
+    <p :class="{ 'fn-warning': needsAccess || phase === 'failed' || phase === 'missing' }">{{ statusLine }}</p>
+    <p v-if="needsAccess" class="fn-actions">
       <button type="button" class="fn-btn" @click="openSettings('input-monitoring')">{{ t('settings.voice.fn-open-input-monitoring') }}</button>
       <button type="button" class="fn-btn" data-testid="voice-fn-check" @click="requestAccess">{{ t('settings.voice.fn-check-again') }}</button>
     </p>
-    <p v-if="status?.phase === 'failed' || status?.phase === 'missing'" class="fn-actions">
+    <p v-if="phase === 'failed' || phase === 'missing'" class="fn-actions">
       <button type="button" class="fn-btn" @click="retry">{{ t('settings.voice.fn-retry') }}</button>
     </p>
     <template v-if="usageConflict">

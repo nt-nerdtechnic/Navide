@@ -11,7 +11,7 @@ import type { FnKeyApi, FnKeyEventType } from '../../../../shared/fnKey'
 const openMicCapture = vi.fn()
 vi.mock('../micCapture', () => ({ openMicCapture: (...a: unknown[]) => openMicCapture(...a) }))
 
-import { TAP_LOCK_MS, isChordKeyUp, isLoneModifierCombo, setupVoiceInput } from '../voiceWiring'
+import { TAP_LOCK_MS, fnSubscribeFailed, isChordKeyUp, isLoneModifierCombo, setupVoiceInput } from '../voiceWiring'
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve()
@@ -345,6 +345,20 @@ describe('voice wiring: single keys and the fn key', () => {
       settings.setVoiceInputEnabled(true)
       await settle()
       expect(fn.api.subscribe).toHaveBeenCalledTimes(3)
+    })
+
+    it('a subscription the relay refuses is logged and flagged, and unbinding fn clears the flag', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fn.api.subscribe.mockRejectedValueOnce(new Error('ipc down'))
+      settings.setVoiceInputEnabled(true)
+      bindFn()
+      await settle()
+      expect(fnSubscribeFailed.value).toBe(true)
+      expect(warn).toHaveBeenCalledWith('[voice] fn key relay could not subscribe', expect.any(Error))
+      setUserRules([])
+      await settle()
+      expect(fnSubscribeFailed.value).toBe(false)
+      warn.mockRestore()
     })
 
     it('a removal rule for fn unbinds it like any key', async () => {

@@ -1424,6 +1424,7 @@
       "fn-status-starting": "Starting the fn key listener…",
       "fn-status-ready": "The fn key is ready.",
       "fn-status-no-permission": "Navide needs Input Monitoring permission to see the fn key. Allow Navide under System Settings → Privacy & Security → Input Monitoring, then check again (if it still is not seen, quit and reopen Navide).",
+      "fn-status-request-failed": "Asking macOS for Input Monitoring permission failed (the fn helper did not answer). Allow Navide under System Settings → Privacy & Security → Input Monitoring yourself, then check again.",
       "fn-status-restarting": "The fn key listener stopped; restarting…",
       "fn-status-failed": "The fn key listener could not run.",
       "fn-status-missing": "The fn key helper is missing from this copy of Navide, so fn cannot be seen. In a source checkout run pnpm build:fn-key (pnpm dev does it for you), then try again.",

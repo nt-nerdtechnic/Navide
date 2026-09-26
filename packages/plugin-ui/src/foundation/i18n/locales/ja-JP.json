@@ -1424,6 +1424,7 @@
       "fn-status-starting": "fn キーの監視を開始しています…",
       "fn-status-ready": "fn キーを使用できます。",
       "fn-status-no-permission": "fn キーを検出するには「入力監視」の許可が必要です。「システム設定 → プライバシーとセキュリティ → 入力監視」で Navide を許可してから「再確認」を押してください（それでも検出されない場合は Navide を終了して開き直してください）。",
+      "fn-status-request-failed": "macOS への「入力監視」の許可リクエストに失敗しました（fn キーのヘルパーが応答しませんでした）。「システム設定 → プライバシーとセキュリティ → 入力監視」で Navide を手動で許可してから「再確認」を押してください。",
       "fn-status-restarting": "fn キーの監視が停止しました。再起動しています…",
       "fn-status-failed": "fn キーの監視を実行できませんでした。",
       "fn-status-missing": "この Navide には fn キーのヘルパーが含まれていないため、fn を検出できません。ソースから実行している場合は pnpm build:fn-key を実行してから（pnpm dev なら自動で行われます）、もう一度お試しください。",

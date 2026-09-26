@@ -43,7 +43,8 @@ export function useFnKeyRecorder(onFn: () => void, api: FnKeyApi | undefined = i
       (s) => {
         if (listening.value) status.value = s
       },
-      () => {
+      (e) => {
+        console.warn('[voice] fn key recorder could not subscribe', e)
         if (listening.value) status.value = { phase: 'failed', fnUsage: null }
       },
     )
@@ -56,7 +57,7 @@ export function useFnKeyRecorder(onFn: () => void, api: FnKeyApi | undefined = i
     offStatus?.()
     offEvent = offStatus = null
     status.value = null
-    if (api) void api.unsubscribe().catch(() => {})
+    if (api) void api.unsubscribe().catch((e) => console.warn('[voice] fn key recorder could not unsubscribe', e))
   }
 
   /** Asks macOS for Input Monitoring (its prompt shows the first time only). */

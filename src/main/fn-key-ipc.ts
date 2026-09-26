@@ -22,7 +22,11 @@ function helperPath(): string | null {
 
 function query(path: string, arg: '--check' | '--request'): Promise<FnKeyLine | null> {
   return new Promise((resolve) => {
-    execFile(path, [arg], { timeout: 60_000 }, (_err, stdout) => {
+    execFile(path, [arg], { timeout: 60_000 }, (err, stdout, stderr) => {
+      if (err) {
+        const why = err.killed ? 'timed out after 60 s' : err.message
+        logMain(`fn-key: ${arg} failed: ${why}${stderr ? ` (${String(stderr).trim()})` : ''}`)
+      }
       const line = String(stdout ?? '').split('\n').find((l) => l.trim())
       resolve(line ? parseFnKeyLine(line) : null)
     })

@@ -9,6 +9,7 @@ export type FnKeyPhase =
   | 'starting'
   | 'ready'
   | 'no-permission' // Input Monitoring not granted; waits for a retry
+  | 'request-failed' // asking for Input Monitoring gave no answer (helper failed or timed out)
   | 'restarting' // crashed; respawning after a backoff
   | 'failed' // crashed too often
   | 'missing' // the helper binary is not there (a checkout that never built it)

@@ -183,6 +183,16 @@ describe('recording fn in Settings → Voice Input → Shortcut', () => {
     expect(w.find('[data-testid="key-recorder-fn-status"]').exists()).toBe(false)
   })
 
+  it('a permission request with no answer is shown, with System Settings and a re-check', async () => {
+    onMac(true)
+    const fn = fnApi({ phase: 'request-failed', fnUsage: null })
+    vi.stubGlobal('agentTeam', { fnKey: fn.api })
+    const w = mountSection()
+    await startRecording(w)
+    expect(text(w, 'key-recorder-fn-status')).toContain('did not answer')
+    expect(w.find('[data-testid="key-recorder-fn-check"]').exists()).toBe(true)
+  })
+
   it('the helper losing access mid-recording is shown as it happens', async () => {
     onMac(true)
     const fn = fnApi({ phase: 'starting', fnUsage: null })

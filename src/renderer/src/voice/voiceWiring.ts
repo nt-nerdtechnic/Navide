@@ -32,6 +32,10 @@ export const TAP_LOCK_MS = 350
  * not open the mic.
  */
 export const SOLO_HOLD_MS = 300
+
+/** The fn relay refused the wiring's subscription (IPC failed): fn is bound
+ *  but nothing is listening. The Voice Input fn row shows it and retries. */
+export const fnSubscribeFailed = ref(false)
 const SOLO_HOLD_FLAGS: ReadonlySet<string> = new Set(['meta', 'ctrl'])
 const PREWARM_TIMEOUT_MS = 125_000
 const PREWARM_FOCUS_INTERVAL_MS = 60_000
@@ -407,12 +411,19 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     if (!api || on === (offFnEvent !== null)) return
     if (on) {
       offFnEvent = api.onEvent((e) => onFnEvent(e.type))
-      void api.subscribe().catch(() => {})
+      api.subscribe().then(
+        () => { fnSubscribeFailed.value = false },
+        (e) => {
+          console.warn('[voice] fn key relay could not subscribe', e)
+          fnSubscribeFailed.value = true
+        },
+      )
       return
     }
     offFnEvent?.()
     offFnEvent = null
-    void api.unsubscribe().catch(() => {})
+    fnSubscribeFailed.value = false
+    void api.unsubscribe().catch((e) => console.warn('[voice] fn key relay could not unsubscribe', e))
     // Its up can no longer arrive.
     if (armed && source === 'fn' && !chordUp) letGo('fn-off')
   }

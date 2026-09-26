@@ -165,6 +165,15 @@ describe('FnKeyService', () => {
     expect(t.spawn).toHaveBeenCalledTimes(1)
   })
 
+  it('asking for access that gets no answer (helper failed or timed out) says so instead of nothing', async () => {
+    const t = setup({ query: null })
+    t.service.subscribe(t.sub)
+    t.children[0].exit(EXIT_NO_PERMISSION)
+    expect((await t.service.requestPermission()).phase).toBe('request-failed')
+    expect(t.phases().at(-1)).toBe('request-failed')
+    expect(t.spawn).toHaveBeenCalledTimes(1)
+  })
+
   it('a crash respawns with backoff, and gives up after the last step', () => {
     const t = setup()
     t.service.subscribe(t.sub)

@@ -44,12 +44,13 @@ const noticeText = computed(() => {
 
 // fn phases worth a line: ready needs none (the listening line covers it) and
 // off only flashes by before the first status arrives.
-const FN_PHASES = new Set(['starting', 'no-permission', 'restarting', 'failed', 'missing'])
+const FN_PHASES = new Set(['starting', 'no-permission', 'request-failed', 'restarting', 'failed', 'missing'])
 const fnPhase = computed(() => {
   const phase = props.fn?.listening.value ? props.fn.status.value?.phase : undefined
   return phase && FN_PHASES.has(phase) ? phase : ''
 })
-const fnProblem = computed(() => fnPhase.value === 'no-permission' || fnPhase.value === 'failed' || fnPhase.value === 'missing')
+const fnNeedsAccess = computed(() => fnPhase.value === 'no-permission' || fnPhase.value === 'request-failed')
+const fnProblem = computed(() => fnNeedsAccess.value || fnPhase.value === 'failed' || fnPhase.value === 'missing')
 </script>
 
 <template>
@@ -60,7 +61,7 @@ const fnProblem = computed(() => fnPhase.value === 'no-permission' || fnPhase.va
       <p class="krf-line" :class="{ 'krf-warning': fnProblem }" data-testid="key-recorder-fn-status">
         {{ t(`settings.voice.fn-status-${fnPhase}`) }}
       </p>
-      <p v-if="fnPhase === 'no-permission'" class="krf-line krf-actions">
+      <p v-if="fnNeedsAccess" class="krf-line krf-actions">
         <button type="button" class="krf-btn" data-testid="key-recorder-fn-open" @click="fn.openSettings('input-monitoring')">
           {{ t('settings.voice.fn-open-input-monitoring') }}
         </button>

@@ -10,6 +10,7 @@ import VoiceSettingsSection from '../VoiceSettingsSection.vue'
 import KeyboardShortcutsEditor from '../../KeyboardShortcutsEditor.vue'
 import { createMockBackend } from '../../../composables/__tests__/mockBackend'
 import { HOLD_TO_TALK_COMMAND, useVoiceSettings } from '../../../voice/voiceSettings'
+import { fnSubscribeFailed } from '../../../voice/voiceWiring'
 import type { FnKeyApi, FnKeyStatus } from '../../../../../shared/fnKey'
 
 const WHEN = 'paneStage && voiceInput && !modalOpen'
@@ -199,6 +200,36 @@ describe('fn (🌐) key row', () => {
     await flushPromises()
     expect(fn.api.requestPermission).toHaveBeenCalled()
     expect(w.get('[data-testid="voice-fn-status"]').text()).toContain('ready')
+  })
+
+  it('a permission request that got no answer says so and still offers System Settings and a re-check', async () => {
+    onMac(true)
+    const fn = fnApi({ phase: 'request-failed', fnUsage: null })
+    vi.stubGlobal('agentTeam', { fnKey: fn.api })
+    setUserRules([{ key: 'fn', command: HOLD_TO_TALK_COMMAND, when: WHEN }])
+    const w = mountSection()
+    await flushPromises()
+    expect(w.get('[data-testid="voice-fn-status"]').text()).toContain('did not answer')
+    expect(w.find('[data-testid="voice-fn-check"]').exists()).toBe(true)
+  })
+
+  it('voice wiring failing to subscribe shows the helper as not running, and a retry clears it', async () => {
+    onMac(true)
+    const fn = fnApi({ phase: 'ready', fnUsage: 0 })
+    vi.stubGlobal('agentTeam', { fnKey: fn.api })
+    setUserRules([{ key: 'fn', command: HOLD_TO_TALK_COMMAND, when: WHEN }])
+    fnSubscribeFailed.value = true
+    try {
+      const w = mountSection()
+      await flushPromises()
+      expect(w.get('[data-testid="voice-fn-status"]').text()).toContain('could not run')
+      await w.get('[data-testid="voice-fn-status"] button').trigger('click')
+      await flushPromises()
+      expect(fn.api.subscribe).toHaveBeenCalled()
+      expect(w.get('[data-testid="voice-fn-status"]').text()).toContain('ready')
+    } finally {
+      fnSubscribeFailed.value = false
+    }
   })
 
   it('warns when macOS also acts on 🌐, and not when it is set to Do Nothing', async () => {

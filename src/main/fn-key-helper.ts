@@ -141,6 +141,11 @@ export class FnKeyService {
     const path = this.deps.helperPath()
     if (!this.deps.supported || !path) return this.getStatus()
     const res = await this.deps.query(path, '--request')
+    if (res?.event !== 'status') {
+      this.deps.log('fn-key: --request gave no status line')
+      this.setStatus({ phase: 'request-failed' })
+      return this.getStatus()
+    }
     const granted = res?.event === 'status' && res.granted
     if (res?.event === 'status') this.status.fnUsage = res.fnUsage
     if (granted && this.subscribers.size > 0 && !this.child) {
