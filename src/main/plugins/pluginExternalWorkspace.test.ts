@@ -381,6 +381,15 @@ export default {
         const collisionDirectory = join(validationRoot, 'portable-collision')
         cpSync(join(externalProject, 'dist', 'package'), collisionDirectory, { recursive: true })
         writeFileSync(join(collisionDirectory, 'frontend', 'MAIN.JS'), 'case collision\n')
+        // validate reads only the canonical file list, so the colliding entry
+        // must be listed to be checked at all.
+        const collisionList = JSON.parse(
+          readFileSync(join(collisionDirectory, 'artifact-files.json'), 'utf8')
+        ) as { files: string[] }
+        writeFileSync(
+          join(collisionDirectory, 'artifact-files.json'),
+          JSON.stringify({ files: [...collisionList.files, 'frontend/MAIN.JS'] })
+        )
         const collisionNames = readdirSync(join(collisionDirectory, 'frontend'))
         if (collisionNames.includes('main.js') && collisionNames.includes('MAIN.JS')) {
           const collisionResult = runExternalCli(['validate', collisionDirectory], externalProject)
