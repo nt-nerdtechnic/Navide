@@ -135,6 +135,42 @@ describe.skipIf(isWindows())('production Plans CI fixture exclusion', () => {
   })
 })
 
+// Windows packaging emits the same target-agnostic manifest entry as every
+// other platform; the Host runs `<entry>.exe` there (backendEntryOnDisk). The
+// verifier reads process.platform, so a preloaded module makes it see win32.
+describe('production Plans verifier on a Windows build', () => {
+  const asWindows = `data:text/javascript,${encodeURIComponent("Object.defineProperty(process, 'platform', { value: 'win32' })")}`
+
+  function verifyWindowsBuild(entry: string, executable: string): ReturnType<typeof spawnSync> {
+    const root = fixture()
+    file(root, 'dist-plugins/plans/index.html', '<html>Legacy</html>')
+    file(root, 'dist-plugins/navide-plans/frontend/left/index.html', '<html>Plans</html>')
+    file(root, 'dist-plugins/navide-plans/frontend/window/index.html', '<html>Plans window</html>')
+    file(root, 'dist-plugins/navide-plans/manifest.json', JSON.stringify({ backend: { entry } }))
+    file(root, `dist-plugins/navide-plans/backend/${executable}`, 'MZproduction-binary')
+    copyFileSync('scripts/verify-plans-production.mjs', join(root, 'scripts/verify-plans-production.mjs'))
+    return spawnSync(process.execPath, ['--import', asWindows, join(root, 'scripts/verify-plans-production.mjs')], {
+      cwd: root, encoding: 'utf8',
+    })
+  }
+
+  it('accepts the extension-less entry the build emits with its packaged .exe', () => {
+    const result = verifyWindowsBuild('backend/navide-plans', 'navide-plans.exe')
+    expect(result.status, String(result.stderr)).toBe(0)
+  })
+
+  it('rejects a Windows backend packaged without the .exe the Host would run', () => {
+    const result = verifyWindowsBuild('backend/navide-plans', 'navide-plans')
+    expect(result.status).not.toBe(0)
+  })
+
+  it('rejects a manifest that selects some other backend', () => {
+    const result = verifyWindowsBuild('backend/other', 'navide-plans.exe')
+    expect(result.status).not.toBe(0)
+    expect(String(result.stderr)).toContain('must select its packaged backend')
+  })
+})
+
 describe('release workflow verifies the Plans artifact it signs', () => {
   const workflow = parse(readFileSync('.github/workflows/release.yml', 'utf8'))
   const macosSteps = workflow.jobs['release-macos-arm64'].steps as Array<{ name?: string; run?: string }>

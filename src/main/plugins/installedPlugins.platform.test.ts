@@ -67,6 +67,26 @@ describe('backend entry executability by platform', () => {
       expect(loaded.activation).toBeUndefined()
     })
 
+    it('activates the factory Plans package with the .exe that Windows packaging ships', () => {
+      // The production manifest as the build emits it on every platform.
+      writeFileSync(
+        join(root, 'manifest.json'),
+        readFileSync(join(process.cwd(), 'plugins/navide-plans/manifest.json'), 'utf8')
+      )
+      for (const view of ['left', 'window']) {
+        mkdirSync(join(root, 'frontend', view), { recursive: true })
+        writeFileSync(join(root, 'frontend', view, 'index.html'), '<!doctype html>')
+      }
+      const backendPath = join(root, 'backend', 'navide-plans.exe')
+      writeFileSync(backendPath, Buffer.from('MZ'))
+      chmodSync(backendPath, 0o600)
+
+      const loaded = loadPluginDir(root)
+      expect(loaded.error).toBeUndefined()
+      expect(loaded.activation?.pluginId).toBe('navide.plans')
+      expect(loaded.activation?.backend?.entryFile).toBe(backendPath)
+    })
+
     it('still refuses a shebang script that merely carries the .exe name', () => {
       writeManifest('backend/navide-skills')
       writeFileSync(join(root, 'backend', 'navide-skills.exe'), '#!/bin/sh\n')

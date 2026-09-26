@@ -22,7 +22,9 @@ regularFile(join(repositoryRoot, 'dist-plugins/plans/index.html'))
 regularFile(join(packageDirectory, 'frontend/left/index.html'))
 regularFile(join(packageDirectory, 'frontend/window/index.html'))
 const manifest = JSON.parse(regularFile(join(packageDirectory, 'manifest.json')).toString('utf8'))
-if (manifest.backend?.entry !== `backend/${executableName}`) {
+// The manifest entry is target-agnostic; on Windows the Host runs `<entry>.exe`
+// (backendEntryOnDisk), which is the file the backend check below requires.
+if (manifest.backend?.entry !== 'backend/navide-plans') {
   throw new Error('Production Plans manifest must select its packaged backend.')
 }
 const entries = readdirSync(backendDirectory)
