@@ -4,8 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { pickText, WHATS_NEW_CHROME, type WhatsNewEntry } from '../lib/whatsNew'
 import NavideCloudMark from './NavideCloudMark.vue'
 
-const props = defineProps<{ entry: WhatsNewEntry }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{
+  entry: WhatsNewEntry
+  /** The entry's tour was already taken to the end: offer it as a replay. */
+  tourDone?: boolean
+}>()
+const emit = defineEmits<{ close: []; tour: [] }>()
 
 const { locale } = useI18n()
 
@@ -34,6 +38,32 @@ const spotlightTagline = computed(() =>
 )
 const introducing = computed(() => pickText(WHATS_NEW_CHROME.introducing, locale.value))
 const alsoIn = computed(() => pickText(WHATS_NEW_CHROME.alsoIn, locale.value))
+
+const features = computed(() =>
+  (props.entry.features ?? []).map((f) => ({
+    icon: f.icon,
+    name: pickText(f.name, locale.value),
+    tagline: pickText(f.tagline, locale.value),
+    where: pickText(f.where, locale.value),
+  })),
+)
+const details = computed(() => pickText(WHATS_NEW_CHROME.details, locale.value))
+// An entry with a tour asks a question instead of saying "Got it": take the
+// tour, or not now (with where to find it again).
+const hasTour = computed(() => !!props.entry.tour)
+const takeTour = computed(() =>
+  pickText(props.tourDone ? WHATS_NEW_CHROME.retakeTour : WHATS_NEW_CHROME.takeTour, locale.value),
+)
+const notNow = computed(() => pickText(WHATS_NEW_CHROME.notNow, locale.value))
+const reopenHint = computed(() => pickText(WHATS_NEW_CHROME.reopenHint, locale.value))
+
+// Enter on the overlay means "Got it" — but on an entry that asks a question
+// there is no single answer, and Enter on a focused button already presses it.
+function onEnter(e: KeyboardEvent): void {
+  if (hasTour.value) return
+  if (e.target instanceof HTMLButtonElement) return
+  emit('close')
+}
 </script>
 
 <template>
@@ -43,7 +73,7 @@ const alsoIn = computed(() => pickText(WHATS_NEW_CHROME.alsoIn, locale.value))
       tabindex="-1"
       @click.self="emit('close')"
       @keydown.esc="emit('close')"
-      @keydown.enter="emit('close')"
+      @keydown.enter="onEnter"
     >
       <div class="card nv-modal-shell nv-modal-shell--standard" :class="{ major }">
         <header>
@@ -69,13 +99,34 @@ const alsoIn = computed(() => pickText(WHATS_NEW_CHROME.alsoIn, locale.value))
             </ul>
           </section>
 
+          <!-- Headline features side by side, for a release with more than
+               one thing worth stopping for. -->
+          <section v-if="features.length" class="features" data-testid="whats-new-features">
+            <article v-for="(f, i) in features" :key="i" class="feature">
+              <span class="ft-icon" aria-hidden="true">{{ f.icon }}</span>
+              <p class="ft-name">{{ f.name }}</p>
+              <p class="ft-tagline">{{ f.tagline }}</p>
+              <p class="ft-where">{{ f.where }}</p>
+            </article>
+          </section>
+
           <h3 v-if="spotlight" class="also-in">{{ alsoIn }}</h3>
+          <h3 v-else-if="features.length" class="also-in">{{ details }}</h3>
           <ul class="highlights">
             <li v-for="(line, i) in highlights" :key="i">{{ line }}</li>
           </ul>
           <p v-if="note" class="note">{{ note }}</p>
         </div>
-        <footer>
+        <footer v-if="hasTour">
+          <span class="reopen-hint">{{ reopenHint }}</span>
+          <button class="nv-btn" data-testid="whats-new-not-now" @click="emit('close')">{{ notNow }}</button>
+          <button
+            class="primary nv-btn nv-btn--primary"
+            data-testid="whats-new-tour"
+            @click="emit('tour')"
+          >{{ takeTour }}</button>
+        </footer>
+        <footer v-else>
           <button class="primary nv-btn nv-btn--primary" @click="emit('close')">{{ dismiss }}</button>
         </footer>
       </div>
@@ -314,6 +365,60 @@ button.primary:hover {
   border-color: var(--accent-muted);
   background: var(--accent-subtle);
   color: var(--text-bright);
+}
+
+/* ── Feature cards ────────────────────────────────────────────────────────
+   Two (or three) headline features, each its own card, so neither reads as a
+   footnote to the other. */
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.feature {
+  border: 1px solid var(--accent-muted);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(130% 150% at 0% 0%, var(--accent-subtle) 0%, transparent 60%),
+    var(--bg-subtle);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ft-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent-muted);
+  background: var(--bg-base);
+  font-size: 18px;
+}
+.ft-name {
+  margin: 4px 0 0;
+  font-size: var(--font-lg);
+  font-weight: 700;
+  color: var(--text-bright);
+}
+.ft-tagline {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--text-bright);
+}
+.ft-where {
+  margin: auto 0 0;
+  padding-top: 6px;
+  font-size: var(--font-xs);
+  color: var(--accent-fg);
+}
+.reopen-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
 }
 
 /* A narrow window has no room for the wide panel; the content is the same. */

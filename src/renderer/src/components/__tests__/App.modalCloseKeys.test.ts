@@ -15,10 +15,11 @@ const appSource = readFileSync(
 
 // One entry per main-window modal surface: [modalOpen source, closeModal branch marker]
 const MODALS: Array<[string, string]> = [
+  ['!!activeTourId.value', 'endTour(false)'],
   ['previewLogOpen.value', 'previewLogOpen.value'],
   ['!!cliInstallRequest.value', 'closeCliInstall()'],
   ['reconnectPickerOpen.value', 'reconnectPickerOpen.value = false'],
-  ['!!whatsNewEntry.value', 'dismissWhatsNew()'],
+  ['!!whatsNewEntry.value', 'closeWhatsNew()'],
   ['showRestoreScopeModal.value', 'settleRestoreScope(null)'],
   ['showSettings.value', 'showSettings.value = false'],
   ['showAccount.value', 'showAccount.value = false'],
@@ -55,9 +56,16 @@ describe('Main-window modals: ⌘W / Escape closability', () => {
     }
   })
 
-  it('the log preview (topmost layer) closes before everything else', () => {
+  it('the guided tour (topmost layer) closes before everything else', () => {
+    // It points into an open Settings page, so it sits above every modal.
     const body = closeModalBody()
     const rest = MODALS.slice(1).map(([, b]) => body.indexOf(b))
+    for (const idx of rest) expect(body.indexOf('endTour(false)')).toBeLessThan(idx)
+  })
+
+  it('the log preview closes before every modal under it', () => {
+    const body = closeModalBody()
+    const rest = MODALS.slice(2).map(([, b]) => body.indexOf(b))
     for (const idx of rest) expect(body.indexOf('previewLogOpen.value')).toBeLessThan(idx)
   })
 
@@ -66,7 +74,7 @@ describe('Main-window modals: ⌘W / Escape closability', () => {
     // they get their own watch — dropping it silently loses ⌘W on them.
     const line = appSource
       .split('\n')
-      .find((l) => l.includes('watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry]'))
+      .find((l) => l.includes('watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourId]'))
     expect(line).toBeTruthy()
     expect(line).toContain("setContext('modalOpen', mainModalOpen())")
   })

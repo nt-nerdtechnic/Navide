@@ -9260,5 +9260,42 @@
       "generic": "發生錯誤，請再試一次。"
     },
     "cancel": "取消"
+  },
+  "tour": {
+    "progress": "第 {n} / {total} 步",
+    "next": "下一步",
+    "back": "上一步",
+    "skip": "略過導覽",
+    "done": "完成",
+    "v0_2_10": {
+      "welcome": {
+        "title": "0.2.10 的兩個新功能",
+        "body": "Channels 讓你從聊天軟體指揮 pane，語音輸入讓你用說的把字打進 pane。這趟導覽只告訴你它們在哪裡，不會更改任何設定。\n\n→ / Enter 下一步 · ← 上一步 · Esc 離開"
+      },
+      "channelsSettings": {
+        "title": "先設定一次聊天平台",
+        "body": "選一個平台——Telegram、Discord、Slack、飛書、釘釘、Matrix、Mattermost 或 iMessage——填入機器人的憑證。憑證存在這台電腦的憑證保險庫。",
+        "missing": "位置在「設定 → Channels」。"
+      },
+      "channelsPane": {
+        "title": "把 pane 接到聊天室",
+        "body": "pane 標題列上的這顆聊天按鈕，可以把 pane 綁到一個聊天位置。那個聊天室傳來的訊息會變成給 pane 的指令，回合結束時答案會送回去。",
+        "missing": "先開一個 CLI pane：聊天按鈕就在它的標題列、額度徽章旁邊。"
+      },
+      "voiceSettings": {
+        "title": "打開語音輸入",
+        "body": "語音輸入預設是關閉的。在這裡打開、下載辨識模型並選擇麥克風；快捷鍵也可以在這一頁修改。",
+        "missing": "位置在「設定 → 語音輸入」。"
+      },
+      "voiceDictate": {
+        "title": "按住快捷鍵說話",
+        "body": "點進一個 pane，按住聽寫快捷鍵（沒改過的話是 Ctrl+Alt+M）開始說話。說話時就會顯示文字，放開後打進 pane——不會送出。錄音中按 Enter 則結束並送出。",
+        "missing": "先開一個 CLI pane 並點進去，再按住聽寫快捷鍵（沒改過的話是 Ctrl+Alt+M）說話。"
+      },
+      "done": {
+        "title": "導覽結束",
+        "body": "之後隨時可從選單列「輔助說明（Help）→ 新版更新…」再打開，導覽按鈕就在那裡。"
+      }
+    }
   }
 }

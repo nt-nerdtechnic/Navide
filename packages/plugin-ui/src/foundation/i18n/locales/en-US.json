@@ -9260,5 +9260,42 @@
       "generic": "Something went wrong. Try again."
     },
     "cancel": "Cancel"
+  },
+  "tour": {
+    "progress": "Step {n} of {total}",
+    "next": "Next",
+    "back": "Back",
+    "skip": "Skip tour",
+    "done": "Done",
+    "v0_2_10": {
+      "welcome": {
+        "title": "Two new things in 0.2.10",
+        "body": "Channels lets you drive a pane from a chat app, and Voice Input lets you dictate into one. This tour shows where each lives — it only points, it changes nothing.\n\n→ / Enter next · ← back · Esc leave"
+      },
+      "channelsSettings": {
+        "title": "Set up a chat platform once",
+        "body": "Pick a platform — Telegram, Discord, Slack, Feishu/Lark, DingTalk, Matrix, Mattermost or iMessage — and fill in its bot credentials. Credentials are kept in the credential vault on this machine.",
+        "missing": "Find it under Settings → Channels."
+      },
+      "channelsPane": {
+        "title": "Connect a pane to a chat",
+        "body": "This chat button in a pane's header binds the pane to one chat location. Messages from that chat become instructions for the pane, and its answer is sent back when the turn ends.",
+        "missing": "Open a CLI pane: the chat button sits in its header, next to the quota badge."
+      },
+      "voiceSettings": {
+        "title": "Turn Voice Input on",
+        "body": "Voice Input is off by default. Switch it on here, download the speech model and choose your microphone. You can also change the shortcut on this page.",
+        "missing": "Find it under Settings → Voice Input."
+      },
+      "voiceDictate": {
+        "title": "Hold the key and talk",
+        "body": "Click into a pane, hold the dictation shortcut (Ctrl+Alt+M unless you changed it) and speak. Words appear as you talk and are typed into the pane when you let go — nothing is sent. Press Enter during a take to end it and send.",
+        "missing": "Open a CLI pane, click into it, then hold the dictation shortcut (Ctrl+Alt+M unless you changed it) and speak."
+      },
+      "done": {
+        "title": "That's the tour",
+        "body": "Reopen it any time from Help → What's New… — the tour button is there."
+      }
+    }
   }
 }

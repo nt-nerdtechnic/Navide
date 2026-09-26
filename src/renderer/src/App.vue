@@ -257,7 +257,8 @@ import SlotContainer from './layout/SlotContainer.vue'
 const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel.vue'))
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
-import { pickWhatsNew, type WhatsNewEntry } from './lib/whatsNew'
+import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/whatsNew'
+import { TOURS, tourDoneKey, type TourPrepare, type TourStep } from './lib/tours'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -332,6 +333,7 @@ import NavideCloudMark from './components/NavideCloudMark.vue'
 import { shellCommandArgv } from '../../shared/osplat'
 const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
 const WhatsNewModal = defineAsyncComponent(() => import('./components/WhatsNewModal.vue'))
+const GuidedTour = defineAsyncComponent(() => import('./components/GuidedTour.vue'))
 const CliHealthGuide = defineAsyncComponent(() => import('./components/CliHealthGuide.vue'))
 const CliInstallDialog = defineAsyncComponent(() => import('./components/CliInstallDialog.vue'))
 const SkillInstallApprovalDialog = defineAsyncComponent(() => import('./components/SkillInstallApprovalDialog.vue'))
@@ -589,6 +591,51 @@ function dismissWhatsNew(): void {
   // in the modal counts, so the user isn't told about it twice.
   if (shownVersion) announcements.markRead(releaseAnnouncementId(shownVersion))
   whatsNewEntry.value = null
+}
+// Help → What's New… reopens an entry on request. That is a re-read, not the
+// once-per-version showing, so closing it records nothing — which also keeps a
+// dev build (running the last released version while showing the next one's
+// notes) from marking a release seen that it is not running.
+const whatsNewOnDemand = ref(false)
+function showWhatsNewOnDemand(): void {
+  const entry = pickWhatsNewOnDemand(window.agentTeam?.version ?? '', import.meta.env.DEV)
+  if (!entry) return
+  whatsNewOnDemand.value = true
+  whatsNewEntry.value = entry
+}
+function closeWhatsNew(): void {
+  if (whatsNewOnDemand.value) {
+    whatsNewOnDemand.value = false
+    whatsNewEntry.value = null
+    return
+  }
+  dismissWhatsNew()
+}
+// ── Guided tour ─────────────────────────────────────────────────────────────
+// Offered by a What's New entry that names one (lib/tours.ts). Null = no tour.
+const activeTourId = ref<string | null>(null)
+const activeTourSteps = computed<TourStep[] | null>(() =>
+  activeTourId.value ? (TOURS[activeTourId.value] ?? null) : null,
+)
+const whatsNewTourDone = computed(() => {
+  const id = whatsNewEntry.value?.tour
+  return !!id && settingsGet<boolean>(tourDoneKey(id), false) === true
+})
+function startWhatsNewTour(): void {
+  const id = whatsNewEntry.value?.tour
+  closeWhatsNew()
+  if (id && TOURS[id]) activeTourId.value = id
+}
+function endTour(completed: boolean): void {
+  const id = activeTourId.value
+  activeTourId.value = null
+  if (completed && id) settingsSet(tourDoneKey(id), true)
+}
+// A step points into Settings or at the window behind it; the tour only opens
+// and closes Settings, it never changes a setting.
+function runTourPrepare(prepare: TourPrepare): void {
+  if (prepare.kind === 'settings') openSettingsAt(prepare.tab)
+  else showSettings.value = false
 }
 // Announcements centre: the status-bar feed of release notes + updater news.
 const announcements = useAnnouncements()
@@ -8248,7 +8295,7 @@ watch(currentWorkspace, (workspacePath) => {
 // alone is not enough: asking for the tab you are already on leaves the prop
 // unchanged, so the modal's watcher never fires and the request is dropped.
 const settingsTabRequest = ref(0)
-const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels'>('general')
+const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels' | 'voice'>('general')
 // Needed to retarget an already-open modal: initialTab is only honoured on mount
 // and by its own watcher, so re-issuing the same tab is a no-op without this.
 const settingsModalRef = ref<{
@@ -8536,6 +8583,10 @@ async function onMenuAction(action: string): Promise<void> {
     openAccountModal()
     return
   }
+  if (action === 'show-whats-new') {
+    showWhatsNewOnDemand()
+    return
+  }
   if (action === 'show-shortcuts') {
     // Same destination as Cmd+K Cmd+S: two entry points labelled "Keyboard
     // Shortcuts" must not show two different lists.
@@ -8764,10 +8815,12 @@ registerCommand('workbench.action.openSettingsChannels', () => openSettingsAt('c
 registerCommand('workbench.action.openPipelineManager', () => { openPipelineManager() })
 registerCommand('workbench.action.openDebug', () => { openDebugModal() })
 registerCommand('workbench.action.closeModal', () => {
-  if (previewLogOpen.value) previewLogOpen.value = false
+  // A tour sits above everything, Settings included: Esc leaves the tour only.
+  if (activeTourId.value) endTour(false)
+  else if (previewLogOpen.value) previewLogOpen.value = false
   else if (cliInstallRequest.value) closeCliInstall()
   else if (reconnectPickerOpen.value) reconnectPickerOpen.value = false
-  else if (whatsNewEntry.value) dismissWhatsNew()
+  else if (whatsNewEntry.value) closeWhatsNew()
   // Dismissing the restore prompt IS a decision (persists 'cancelled') — but
   // it is the same one the component's own footer Cancel and Esc handler make.
   else if (showRestoreScopeModal.value) settleRestoreScope(null)
@@ -9501,7 +9554,7 @@ function mainModalOpen(): boolean {
   return showSettings.value || showCompletionModal.value || showRestoreScopeModal.value ||
     showPipelineManager.value || showDebug.value || showHistory.value || previewLogOpen.value ||
     reconnectPickerOpen.value || !!cliInstallRequest.value || !!whatsNewEntry.value ||
-    showAccount.value
+    showAccount.value || !!activeTourId.value
 }
 watch([showSettings, showAccount, showCompletionModal, showRestoreScopeModal, showPipelineManager, showDebug, showHistory], () => setContext('modalOpen', mainModalOpen()))
 
@@ -13513,7 +13566,7 @@ function onCliInstalled(): void {
 // close them; pane shortcuts stay off behind them). Declared down here because
 // the watch's SOURCES must already exist — the callback itself shares
 // mainModalOpen with the sibling watches above.
-watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry], () => setContext('modalOpen', mainModalOpen()))
+watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry, activeTourId], () => setContext('modalOpen', mainModalOpen()))
 
 async function promptCliInstall(agentKey: string, agentLabel: string, paneId?: string): Promise<void> {
   if (cliInstallRequest.value) return
@@ -20405,7 +20458,19 @@ function paneIsCommander(p: ActivePane): boolean {
       />
     </div>
     <NotificationHost />
-    <WhatsNewModal v-if="whatsNewEntry" :entry="whatsNewEntry" @close="dismissWhatsNew" />
+    <WhatsNewModal
+      v-if="whatsNewEntry"
+      :entry="whatsNewEntry"
+      :tour-done="whatsNewTourDone"
+      @close="closeWhatsNew"
+      @tour="startWhatsNewTour"
+    />
+    <GuidedTour
+      v-if="activeTourSteps"
+      :steps="activeTourSteps"
+      :run-prepare="runTourPrepare"
+      @close="endTour"
+    />
     <!-- Status bar -->
     <div v-if="shellLayout.chrome.statusbar" class="statusbar">
       <div

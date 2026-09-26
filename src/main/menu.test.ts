@@ -101,6 +101,7 @@ function makeHooks(): AppMenuHooks & { calls: string[] } {
     onOpenRepo: () => calls.push('open-repo'),
     onReportIssue: () => calls.push('report-issue'),
     onShowShortcuts: () => calls.push('show-shortcuts'),
+    onShowWhatsNew: () => calls.push('show-whats-new'),
     onOpenLegal: (route) => calls.push('legal:' + route)
   }
 }
@@ -203,6 +204,16 @@ describe('installApplicationMenu', () => {
     fire(itemIn(menu, 'Report an Issue…'))
     fire(itemIn(menu, 'Keyboard Shortcuts'))
     expect(hooks.calls).toEqual(['open-repo', 'report-issue', 'show-shortcuts'])
+  })
+
+  it("Help menu has What's New… after Keyboard Shortcuts, wired to its hook", () => {
+    const help = h.template.find((i) => i.role === 'help')
+    if (!help || !Array.isArray(help.submenu)) throw new Error('no Help menu with submenu')
+    const menu = help.submenu as MenuItemConstructorOptions[]
+    const labels = menu.map((i) => i.label)
+    expect(labels.indexOf('What\u2019s New…')).toBe(labels.indexOf('Keyboard Shortcuts') + 1)
+    fire(itemIn(menu, 'What\u2019s New…'))
+    expect(hooks.calls).toEqual(['show-whats-new'])
   })
 
   it('Help menu lists every legal page, in table order, each passing its route to the hook', () => {

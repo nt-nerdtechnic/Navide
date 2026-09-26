@@ -127,3 +127,91 @@ describe('the 0.2.0 announcement', () => {
     expect(entry?.note?.['en-US']).toContain('Pair')
   })
 })
+
+describe('WhatsNewModal — feature cards and the tour question', () => {
+  const FEATURES: NonNullable<WhatsNewEntry['features']> = [
+    {
+      icon: '💬',
+      name: { 'zh-TW': '甲', 'en-US': 'Alpha' },
+      tagline: { 'zh-TW': '甲說明', 'en-US': 'Alpha line' },
+      where: { 'zh-TW': '設定 → 甲', 'en-US': 'Settings → Alpha' },
+    },
+    {
+      icon: '🎙',
+      name: { 'zh-TW': '乙', 'en-US': 'Beta' },
+      tagline: { 'zh-TW': '乙說明', 'en-US': 'Beta line' },
+      where: { 'zh-TW': '設定 → 乙', 'en-US': 'Settings → Beta' },
+    },
+  ]
+  const TOURED: WhatsNewEntry = { ...BASE, major: true, features: FEATURES, tour: 'v0.2.10' }
+
+  function renderWith(props: { entry: WhatsNewEntry; tourDone?: boolean }): HTMLElement {
+    mounted = mount(WhatsNewModal, { props, global: { plugins: [i18n] } })
+    const card = document.body.querySelector<HTMLElement>('.card')
+    if (!card) throw new Error('the modal rendered nothing into document.body')
+    return card
+  }
+  const q = (testid: string): HTMLElement | null =>
+    document.body.querySelector<HTMLElement>(`[data-testid="${testid}"]`)
+
+  it('draws one card per feature with its name, line and where-to-find-it', () => {
+    i18n.global.locale.value = 'en-US'
+    const card = renderWith({ entry: TOURED })
+    const cards = card.querySelectorAll('.feature')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].querySelector('.ft-name')?.textContent).toBe('Alpha')
+    expect(cards[1].querySelector('.ft-where')?.textContent).toBe('Settings → Beta')
+    expect(card.textContent).toContain(chrome('details'))
+  })
+
+  it('asks Take the tour / Not now instead of Got it, with the way back', () => {
+    const card = renderWith({ entry: TOURED })
+    expect(q('whats-new-tour')?.textContent).toBe(chrome('takeTour'))
+    expect(q('whats-new-not-now')?.textContent).toBe(chrome('notNow'))
+    expect(card.textContent).toContain(chrome('reopenHint'))
+    expect(card.textContent).not.toContain(chrome('dismiss'))
+  })
+
+  it('emits tour for Take the tour and close for Not now', async () => {
+    renderWith({ entry: TOURED })
+    q('whats-new-tour')!.click()
+    q('whats-new-not-now')!.click()
+    expect(mounted!.emitted('tour')).toHaveLength(1)
+    expect(mounted!.emitted('close')).toHaveLength(1)
+  })
+
+  it('offers a replay once the tour was taken', () => {
+    renderWith({ entry: TOURED, tourDone: true })
+    expect(q('whats-new-tour')?.textContent).toBe(chrome('retakeTour'))
+  })
+
+  it('does not treat Enter as an answer to the tour question', () => {
+    renderWith({ entry: TOURED })
+    const overlay = document.body.querySelector<HTMLElement>('.modal')!
+    overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(mounted!.emitted('close')).toBeUndefined()
+    expect(mounted!.emitted('tour')).toBeUndefined()
+  })
+
+  it('keeps Enter and Esc closing an entry without a tour', () => {
+    renderWith({ entry: BASE })
+    const overlay = document.body.querySelector<HTMLElement>('.modal')!
+    overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(mounted!.emitted('close')).toHaveLength(2)
+    expect(q('whats-new-tour')).toBeNull()
+  })
+
+  it('shows the real 0.2.10 entry in Japanese with both feature cards', () => {
+    i18n.global.locale.value = 'ja-JP'
+    try {
+      const card = renderWith({ entry: whatsNewFor('0.2.10')! })
+      expect(card.querySelectorAll('.feature')).toHaveLength(2)
+      expect(card.textContent).toContain('チャンネル')
+      expect(card.textContent).toContain('音声入力')
+      expect(q('whats-new-tour')?.textContent).toBe('ツアーを見る')
+    } finally {
+      i18n.global.locale.value = 'en-US'
+    }
+  })
+})

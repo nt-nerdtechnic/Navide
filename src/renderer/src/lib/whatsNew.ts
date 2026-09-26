@@ -9,12 +9,13 @@
 // no-gaps test in whatsNew.test.ts now catches.
 //
 // Content lives here (not in the i18n JSON) so an announcement is one self
-// contained edit. Each field carries both supported locales; pickText falls
-// back to the default locale (zh-TW) for anything missing.
+// contained edit. Each field carries zh-TW and en-US, and may carry ja-JP;
+// pickText falls back to the default locale (zh-TW) for anything missing.
 
 export type WhatsNewText = {
   'zh-TW': string
   'en-US': string
+  'ja-JP'?: string
 }
 
 /**
@@ -51,22 +52,138 @@ export interface WhatsNewEntry {
   major?: boolean
   /** The one feature this release is remembered for. Requires `major`. */
   spotlight?: WhatsNewSpotlight
+  /**
+   * Headline features drawn as side-by-side cards above the bullet list — for
+   * a release with more than one thing worth stopping for, where a single
+   * spotlight would have to pick one.
+   */
+  features?: WhatsNewFeature[]
+  /**
+   * Id of a guided tour in lib/tours.ts. When set, the modal asks whether to
+   * take it instead of only offering "Got it".
+   */
+  tour?: string
+}
+
+/** One headline-feature card in the What's New modal. */
+export interface WhatsNewFeature {
+  /** A single glyph drawn in the card's badge. */
+  icon: string
+  name: WhatsNewText
+  /** One or two lines saying what it lets somebody do. */
+  tagline: WhatsNewText
+  /** Where to find it, e.g. "Settings → Channels". */
+  where: WhatsNewText
 }
 
 // Chrome labels (header + dismiss button), kept here so the whole announcement
 // is editable in one place without touching the i18n JSON.
 export const WHATS_NEW_CHROME = {
-  header: { 'zh-TW': '新版更新', 'en-US': 'What’s New' } as WhatsNewText,
-  dismiss: { 'zh-TW': '知道了', 'en-US': 'Got it' } as WhatsNewText,
+  header: { 'zh-TW': '新版更新', 'en-US': 'What’s New', 'ja-JP': '新機能' } as WhatsNewText,
+  dismiss: { 'zh-TW': '知道了', 'en-US': 'Got it', 'ja-JP': 'OK' } as WhatsNewText,
   /** Replaces `header` on a release marked `major`. */
-  majorHeader: { 'zh-TW': '重大更新', 'en-US': 'Major Update' } as WhatsNewText,
+  majorHeader: { 'zh-TW': '重大更新', 'en-US': 'Major Update', 'ja-JP': 'メジャーアップデート' } as WhatsNewText,
   /** Heading over the bullet list once a spotlight sits above it. */
-  alsoIn: { 'zh-TW': '這一版還有', 'en-US': 'Also in this release' } as WhatsNewText,
+  alsoIn: { 'zh-TW': '這一版還有', 'en-US': 'Also in this release', 'ja-JP': 'このリリースのその他の変更' } as WhatsNewText,
   /** Label above the spotlight panel. */
-  introducing: { 'zh-TW': '隆重介紹', 'en-US': 'Introducing' } as WhatsNewText,
+  introducing: { 'zh-TW': '隆重介紹', 'en-US': 'Introducing', 'ja-JP': '新登場' } as WhatsNewText,
+  /** Heading over the bullet list once feature cards sit above it. */
+  details: { 'zh-TW': '細節', 'en-US': 'The details', 'ja-JP': '詳細' } as WhatsNewText,
+  /** Buttons on an entry that carries a tour. */
+  takeTour: { 'zh-TW': '帶我看一遍', 'en-US': 'Take the tour', 'ja-JP': 'ツアーを見る' } as WhatsNewText,
+  retakeTour: { 'zh-TW': '再看一次導覽', 'en-US': 'Replay the tour', 'ja-JP': 'ツアーをもう一度' } as WhatsNewText,
+  notNow: { 'zh-TW': '先不用', 'en-US': 'Not now', 'ja-JP': '今はしない' } as WhatsNewText,
+  /** Footer hint beside the buttons: where "Not now" leaves the way back. */
+  reopenHint: {
+    'zh-TW': '之後可從選單列「輔助說明（Help）→ 新版更新…」再打開',
+    'en-US': 'Reopen it any time from Help → What’s New…',
+    'ja-JP': '「ヘルプ → 新機能…」からいつでも開けます',
+  } as WhatsNewText,
 }
 
 export const WHATS_NEW: WhatsNewEntry[] = [
+  {
+    version: '0.2.10',
+    major: true,
+    tour: 'v0.2.10',
+    title: {
+      'zh-TW': '從聊天軟體指揮 CLI，還能直接用說的',
+      'en-US': 'Drive Your CLIs from a Chat App — or Just Talk to Them',
+      'ja-JP': 'チャットアプリから CLI を操作、そして声でも',
+    },
+    features: [
+      {
+        icon: '💬',
+        name: { 'zh-TW': 'Channels 聊天頻道', 'en-US': 'Channels', 'ja-JP': 'チャンネル' },
+        tagline: {
+          'zh-TW': '把 Telegram、Discord、Slack、飛書、釘釘、Matrix、Mattermost 或 iMessage 接到 pane：在聊天室下指令，回合結束時結果回到同一個對話。',
+          'en-US': 'Connect Telegram, Discord, Slack, Feishu/Lark, DingTalk, Matrix, Mattermost or iMessage to a pane: send instructions from the chat, and the answer comes back to the same conversation when the turn ends.',
+          'ja-JP': 'Telegram、Discord、Slack、Feishu/Lark、DingTalk、Matrix、Mattermost、iMessage をペインにつなぎ、チャットから指示を送ると、ターン終了時に同じ会話へ結果が返ります。',
+        },
+        where: {
+          'zh-TW': '設定 → Channels，再按 pane 標題列的聊天按鈕',
+          'en-US': 'Settings → Channels, then the chat button in a pane header',
+          'ja-JP': '設定 → チャンネル、次にペインヘッダーのチャットボタン',
+        },
+      },
+      {
+        icon: '🎙',
+        name: { 'zh-TW': '語音輸入', 'en-US': 'Voice Input', 'ja-JP': '音声入力' },
+        tagline: {
+          'zh-TW': '按住快捷鍵說話，放開後文字就打進目前的 pane。辨識完全在本機進行，語音不會離開這台電腦。',
+          'en-US': 'Hold a key and speak; let go and the words are typed into the focused pane. Transcription runs entirely on this machine — your voice never leaves it.',
+          'ja-JP': 'キーを押しながら話し、離すとフォーカス中のペインに文字が入力されます。文字起こしはすべてこのマシン上で行われ、音声は外に出ません。',
+        },
+        where: {
+          'zh-TW': '設定 → 語音輸入（預設關閉）',
+          'en-US': 'Settings → Voice Input (off by default)',
+          'ja-JP': '設定 → 音声入力（初期状態はオフ）',
+        },
+      },
+    ],
+    highlights: [
+      {
+        'zh-TW': 'Channels：平台在「設定 → Channels」設定一次，之後每個 pane 都能從標題列的聊天按鈕綁到一個聊天位置（Telegram 論壇主題、Discord/Slack 討論串…）。只有配對過的傳送者能下指令；CLI 要求權限時，會把選項送到聊天室讓你回答，但永遠不會代按「永久允許」。',
+        'en-US': 'Channels: set a platform up once in Settings → Channels, then bind any pane to one chat location (a Telegram forum topic, a Discord or Slack thread, …) from the chat button in its header. Only paired senders can give instructions; when a CLI asks for permission the options are relayed to the chat for you to answer, and a permanent-allow option is never pressed from chat.',
+        'ja-JP': 'チャンネル：プラットフォームは「設定 → チャンネル」で一度設定すれば、各ペインをヘッダーのチャットボタンから 1 つのチャット位置（Telegram フォーラムのトピック、Discord/Slack のスレッドなど）に結び付けられます。指示できるのはペアリング済みの送信者だけです。CLI が許可を求めると選択肢がチャットに届き、そこで回答できますが、「常に許可」がチャットから押されることはありません。',
+      },
+      {
+        'zh-TW': '語音輸入：在「設定 → 語音輸入」打開並下載辨識模型後，按住快捷鍵（預設 Ctrl+Alt+M，也可以改成 fn 🌐、單獨的 ⌘ 或任一單鍵）說話。說話時就會即時顯示文字；只輸入、不送出，錄音中按 Enter 則結束並送出。中文預設轉成台灣繁體。',
+        'en-US': 'Voice Input: turn it on in Settings → Voice Input and download the speech model, then hold the shortcut (Ctrl+Alt+M by default — or fn 🌐, a lone ⌘, or any single key) and speak. Words appear as you talk; they are typed, never sent — press Enter during a take to end it and send. Chinese comes out in Traditional (Taiwan) by default.',
+        'ja-JP': '音声入力：「設定 → 音声入力」でオンにして音声モデルをダウンロードし、ショートカット（既定は Ctrl+Alt+M。fn 🌐、単独の ⌘、任意の単一キーにも変更可）を押しながら話します。話しながら文字が表示され、入力されるだけで送信はされません。録音中に Enter を押すと終了して送信します。',
+      },
+    ],
+  },
+  {
+    version: '0.2.9',
+    title: {
+      'zh-TW': '排程工作、帳號命名、額度用完自動切帳號、日文介面',
+      'en-US': 'Scheduled Work, Named Accounts, Quota Failover and a Japanese Interface',
+      'ja-JP': 'スケジュール実行、アカウント名、クォータ切れ時の切り替え、日本語 UI',
+    },
+    highlights: [
+      {
+        'zh-TW': '「排程」分頁可以替 CLI pane 排工作：指定時間跑一次，或每 N 分鐘、每天、每週重複，時間到了就喚醒該 pane 並送出指令。',
+        'en-US': 'Schedule work for a CLI pane from the Schedule tab: once at a set time, or every N minutes, daily or weekly — when due it wakes the pane and sends it the instruction.',
+        'ja-JP': '「スケジュール」タブから CLI ペインの作業を予約できます。指定時刻に 1 回、または N 分ごと・毎日・毎週に繰り返し、時刻になるとペインを起こして指示を送ります。',
+      },
+      {
+        'zh-TW': '每個 CLI 帳號都能命名，名稱會出現在 pane 標題列的額度徽章、帳號清單與切換通知。',
+        'en-US': 'Name every CLI account; the name leads in the pane header’s quota badge, the account list and switch notices.',
+        'ja-JP': 'CLI アカウントごとに名前を付けられ、ペインヘッダーのクォータバッジ、アカウント一覧、切り替え通知に表示されます。',
+      },
+      {
+        'zh-TW': '帳號額度用完時，可以選擇關閉、只通知，或自動切到另一個帳號並接續對話。',
+        'en-US': 'When an account runs out of quota, choose Off, Notify, or Auto — which switches to another account and resumes the conversation.',
+        'ja-JP': 'アカウントのクォータが尽きたとき、オフ・通知のみ・自動（別のアカウントに切り替えて会話を再開）から選べます。',
+      },
+      {
+        'zh-TW': '新增日文介面，可在「設定 → 語言」切換。',
+        'en-US': 'A Japanese interface, chosen from Settings → Language.',
+        'ja-JP': '日本語インターフェースを追加しました。「設定 → 言語」で切り替えられます。',
+      },
+    ],
+  },
   {
     version: '0.2.8',
     title: {
@@ -1307,6 +1424,17 @@ export function pickWhatsNew(
   return unseen.reduce((newest, entry) =>
     cmpSemver(entry.version, newest.version) > 0 ? entry : newest,
   )
+}
+
+/**
+ * The entry Help → What's New reopens. A shipped build reopens the newest one
+ * it is running (seen or not); a dev build runs the last released version
+ * from package.json while the notes for the next one are being written, so
+ * it reopens the newest entry authored — that is the one being tried out.
+ */
+export function pickWhatsNewOnDemand(currentVersion: string, dev: boolean): WhatsNewEntry | null {
+  if (dev) return pickWhatsNew('999999.0.0', '')
+  return pickWhatsNew(currentVersion, '')
 }
 
 /** Resolve localized text, falling back to the default locale then en-US. */

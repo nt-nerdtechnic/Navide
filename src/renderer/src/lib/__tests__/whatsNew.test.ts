@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   WHATS_NEW,
   pickWhatsNew,
+  pickWhatsNewOnDemand,
   pickText,
   whatsNewFor,
   cmpSemver,
   type WhatsNewText,
 } from '../whatsNew'
+import { TOURS } from '../tours'
 
 describe('cmpSemver', () => {
   it('orders X.Y.Z versions', () => {
@@ -89,5 +91,70 @@ describe('pickText', () => {
 
   it('falls back to zh-TW for an unknown locale', () => {
     expect(pickText(text, 'ja-JP')).toBe('你好')
+  })
+})
+
+describe('0.2.10 — Channels and Voice Input', () => {
+  const entry = whatsNewFor('0.2.10')
+
+  it('is authored, major, with a card for each headline feature and a tour', () => {
+    expect(entry).toBeDefined()
+    expect(entry?.major).toBe(true)
+    expect(entry?.features?.map((f) => f.name['en-US'])).toEqual(['Channels', 'Voice Input'])
+    expect(entry?.tour).toBe('v0.2.10')
+  })
+
+  it('carries ja-JP for every line, so a Japanese UI is not shown Chinese', () => {
+    const texts: WhatsNewText[] = [
+      entry!.title,
+      ...entry!.highlights,
+      ...entry!.features!.flatMap((f) => [f.name, f.tagline, f.where]),
+    ]
+    for (const text of texts) expect(text['ja-JP'], text['en-US']).toBeTruthy()
+    expect(pickText(entry!.title, 'ja-JP')).toBe(entry!.title['ja-JP'])
+  })
+
+  it('shows once to someone updating from 0.2.9, and not again after dismissal', () => {
+    // App.vue's evaluateWhatsNew: show pickWhatsNew(current, seen); dismissing
+    // writes seen = current.
+    expect(pickWhatsNew('0.2.10', '0.2.9')?.version).toBe('0.2.10')
+    expect(pickWhatsNew('0.2.10', '0.2.10')).toBeNull()
+  })
+
+  it('shows 0.2.10, not 0.2.9, to someone jumping from 0.2.8', () => {
+    expect(pickWhatsNew('0.2.10', '0.2.8')?.version).toBe('0.2.10')
+  })
+
+  it('is not shown to a build still running 0.2.9', () => {
+    expect(pickWhatsNew('0.2.9', '0.2.8')?.version).toBe('0.2.9')
+    expect(pickWhatsNew('0.2.9', '0.2.9')).toBeNull()
+  })
+})
+
+describe('every entry tour', () => {
+  it('names a tour that exists', () => {
+    for (const entry of WHATS_NEW) {
+      if (entry.tour) expect(TOURS[entry.tour], entry.version).toBeDefined()
+    }
+  })
+})
+
+describe('pickWhatsNewOnDemand (Help → What’s New…)', () => {
+  it('reopens the running version’s entry even after it was seen', () => {
+    expect(pickWhatsNewOnDemand('0.2.10', false)?.version).toBe('0.2.10')
+  })
+
+  it('never shows a shipped build notes for a version it is not running', () => {
+    expect(pickWhatsNewOnDemand('0.2.9', false)?.version).toBe('0.2.9')
+  })
+
+  it('shows a dev build the newest authored entry, whatever package.json says', () => {
+    const newest = WHATS_NEW.reduce((a, b) => (cmpSemver(b.version, a.version) > 0 ? b : a))
+    expect(pickWhatsNewOnDemand('0.2.9', true)?.version).toBe(newest.version)
+    expect(pickWhatsNewOnDemand('', true)?.version).toBe(newest.version)
+  })
+
+  it('has nothing to show a shipped build with no version', () => {
+    expect(pickWhatsNewOnDemand('', false)).toBeNull()
   })
 })
