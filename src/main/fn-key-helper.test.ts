@@ -13,6 +13,7 @@ class FakeChild extends EventEmitter {
   stdout = new PassThrough()
   stderr = new PassThrough()
   stdin = new PassThrough()
+  pid: number | undefined = 4242
   exitCode: number | null = null
   signalCode: NodeJS.Signals | null = null
   killed: NodeJS.Signals[] = []
@@ -180,6 +181,21 @@ describe('FnKeyService', () => {
     expect(t.timers).toEqual([])
     // A crash sends an up, so no take is left waiting for one.
     expect(t.events().every((e) => e === 'up')).toBe(true)
+  })
+
+  it('a helper that cannot be started (not executable) is a crash, not a start that never ends', () => {
+    const t = setup()
+    t.service.subscribe(t.sub)
+    // What Node does for EACCES / ENOENT: no pid, 'error' then 'close', never 'exit'.
+    const c = t.children[0]
+    c.pid = undefined
+    c.emit('error', Object.assign(new Error('spawn EACCES'), { code: 'EACCES' }))
+    c.emit('close', -13, null)
+    expect(t.service.isRunning()).toBe(false)
+    expect(t.service.getStatus().phase).toBe('restarting')
+    expect(t.timers).toHaveLength(1)
+    t.timers.shift()!.fn()
+    expect(t.spawn).toHaveBeenCalledTimes(2)
   })
 
   it('a helper that ran a while before crashing starts the backoff over', () => {

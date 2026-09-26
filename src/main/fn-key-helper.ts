@@ -189,7 +189,14 @@ export class FnKeyService {
       }
     })
     child.stderr?.on('data', (chunk: Buffer | string) => this.deps.log(`fn-key: ${String(chunk).trim()}`))
-    child.on('error', (e) => this.deps.log(`fn-key: ${String(e)}`))
+    child.on('error', (e) => {
+      this.deps.log(`fn-key: ${String(e)}`)
+      // A helper that never started (EACCES, ENOENT) gets 'error' and 'close'
+      // but no 'exit': count it as a crash so it does not stay 'starting'.
+      if (child.pid !== undefined || this.child !== child) return
+      this.child = null
+      this.onExit(null, null)
+    })
     child.on('exit', (code, signal) => {
       if (this.child !== child) return // stopped on purpose
       this.child = null
