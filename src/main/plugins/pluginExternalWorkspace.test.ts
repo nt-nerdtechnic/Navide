@@ -171,7 +171,9 @@ describe('third-party plugin external workspace', () => {
     'installs public packages, validates/types/builds/packages the example, and enforces Host capability denial',
     async () => {
       const repository = process.cwd()
-      const temporaryRoot = mkdtempSync(join(tmpdir(), 'navide-plugin-external-'))
+      // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
+      // resolves inputs to the long form, so a short root puts index.html outside it.
+      const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-plugin-external-')))
       const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'example')
       try {

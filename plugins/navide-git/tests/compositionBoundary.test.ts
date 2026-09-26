@@ -333,7 +333,9 @@ describe('navide.git public composition', () => {
   it(
     'packs all public packages and builds an external Vue consumer from packed artifacts',
     async () => {
-      const temporaryRoot = mkdtempSync(join(tmpdir(), 'navide-git-composition-'))
+      // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
+      // resolves inputs to the long form, so a short root puts index.html outside it.
+      const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-git-composition-')))
       const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'consumer')
       mkdirSync(artifacts)

@@ -185,7 +185,9 @@ describe('navide Mini-IDE public package boundary', () => {
   it(
     'builds a copied Mini-IDE against packed public packages with portable Monaco workers',
     () => {
-      const temporaryRoot = mkdtempSync(join(tmpdir(), 'navide-mini-ide-external-'))
+      // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
+      // resolves inputs to the long form, so a short root puts index.html outside it.
+      const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-mini-ide-external-')))
       const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'consumer')
       mkdirSync(artifacts)
