@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -203,7 +204,10 @@ describe('navide.plans production package boundary', () => {
       ? { mtimeMs: statSync(realDistBackend).mtimeMs, size: statSync(realDistBackend).size }
       : null
 
-    const tempDistPlans = mkdtempSync(join(tmpdir(), 'navide-plans-boundary-'))
+    // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
+    // resolves paths to the long form, and the manifest step's closeBundle scan of
+    // the short outDir failed with ENOENT on the Windows runner.
+    const tempDistPlans = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-plans-boundary-')))
     const backendDir = join(tempDistPlans, 'backend')
     const backendExecutable = join(backendDir, 'navide-plans')
     const legacyAssetsDir = join(tempDistPlans, 'assets')
