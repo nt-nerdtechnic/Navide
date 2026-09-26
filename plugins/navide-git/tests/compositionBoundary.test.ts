@@ -14,7 +14,7 @@ import {
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 
 type CommandResult = {
   status: number | null
@@ -53,44 +53,69 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
   }
 }
 
-function run(command: string, args: string[], cwd: string): CommandResult {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: 'utf8',
-    env: subprocessEnvironment(),
-    maxBuffer: 16 * 1024 * 1024,
+const maxOutputBytes = 16 * 1024 * 1024
+
+// Asynchronous on purpose: these subprocesses run for a minute or more, and a
+// synchronous spawn blocks the vitest worker's event loop for that long, so its
+// onTaskUpdate RPC to the main process times out (60 s) and fails the run.
+function run(command: string, args: string[], cwd: string): Promise<CommandResult> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, { cwd, env: subprocessEnvironment() })
+    const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+    const sizes = { stdout: 0, stderr: 0 }
+    let settled = false
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      child.kill()
+      rejectPromise(error)
+    }
+    for (const stream of ['stdout', 'stderr'] as const) {
+      child[stream].on('data', (chunk: Buffer) => {
+        sizes[stream] += chunk.length
+        if (sizes[stream] > maxOutputBytes) {
+          fail(new Error(`${command} ${stream} exceeded maxBuffer (${maxOutputBytes} bytes)`))
+          return
+        }
+        output[stream].push(chunk)
+      })
+    }
+    child.on('error', fail)
+    child.on('close', (status) => {
+      if (settled) return
+      settled = true
+      resolvePromise({
+        status,
+        stdout: Buffer.concat(output.stdout).toString('utf8'),
+        stderr: Buffer.concat(output.stderr).toString('utf8'),
+      })
+    })
   })
-  if (result.error) throw result.error
-  return {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  }
 }
 
-function runPnpm(args: string[], cwd: string): CommandResult {
+function runPnpm(args: string[], cwd: string): Promise<CommandResult> {
   const invocation = packageManager()
   return run(invocation.command, [...invocation.prefix, ...args], cwd)
 }
 
-function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
-  const result = runPnpm(args, cwd)
+async function runPnpmOrThrow(args: string[], cwd: string): Promise<CommandResult> {
+  const result = await runPnpm(args, cwd)
   if (result.status !== 0) {
     throw new Error(`pnpm ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
   }
   return result
 }
 
-function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): CommandResult {
-  const result = run(process.execPath, [entry, ...args], cwd)
+async function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): Promise<CommandResult> {
+  const result = await run(process.execPath, [entry, ...args], cwd)
   if (result.status !== 0) {
     throw new Error(`node ${entry} ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
   }
   return result
 }
 
-function runCommandOrThrow(command: string, args: string[], cwd: string): CommandResult {
-  const result = run(command, args, cwd)
+async function runCommandOrThrow(command: string, args: string[], cwd: string): Promise<CommandResult> {
+  const result = await run(command, args, cwd)
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
   }
@@ -283,9 +308,9 @@ export default defineConfig({
   )
 }
 
-function extractPackageTarball(tarball: string, packageDirectory: string, cwd: string): void {
+async function extractPackageTarball(tarball: string, packageDirectory: string, cwd: string): Promise<void> {
   mkdirSync(packageDirectory, { recursive: true })
-  runCommandOrThrow(
+  await runCommandOrThrow(
     'tar',
     ['-xzf', tarball, '--strip-components=1', '-C', packageDirectory],
     cwd,
@@ -307,19 +332,19 @@ function linkThirdPartyPackage(repository: string, consumer: string, packageName
 describe('navide.git public composition', () => {
   it(
     'packs all public packages and builds an external Vue consumer from packed artifacts',
-    () => {
+    async () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'navide-git-composition-'))
       const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'consumer')
       mkdirSync(artifacts)
       mkdirSync(externalProject)
       try {
-        runPnpmOrThrow(['run', 'build:public-packages'], repositoryRoot)
+        await runPnpmOrThrow(['run', 'build:public-packages'], repositoryRoot)
 
         const packageTarballs: Record<string, string> = {}
         for (const [key, packageDirectory] of Object.entries(packageRoots)) {
           const packageName = (JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as { name: string }).name
-          const result = runPnpmOrThrow(['pack', '--pack-destination', artifacts], packageDirectory)
+          const result = await runPnpmOrThrow(['pack', '--pack-destination', artifacts], packageDirectory)
           packageTarballs[packageName] = packedPath(result, artifacts, key)
         }
         expect(Object.keys(packageTarballs).sort()).toEqual([
@@ -343,7 +368,7 @@ describe('navide.git public composition', () => {
 
         for (const packageName of Object.keys(packageTarballs)) {
           const installedPackage = join(externalProject, 'node_modules', packageName)
-          extractPackageTarball(packageTarballs[packageName], installedPackage, externalProject)
+          await extractPackageTarball(packageTarballs[packageName], installedPackage, externalProject)
           expect(lstatSync(installedPackage).isSymbolicLink(), packageName).toBe(false)
           expect(readFileSync(join(installedPackage, 'package.json'), 'utf8')).toContain(`"name": "${packageName}"`)
           expect(realpathSync(installedPackage), packageName).not.toContain(repositoryRoot)
@@ -363,11 +388,11 @@ describe('navide.git public composition', () => {
         const externalRequire = createRequire(join(externalProject, 'package.json'))
         if (versions['vue-tsc']) {
           const vueTscCli = resolveInstalledPackageBin(externalProject, 'vue-tsc', 'vue-tsc', externalRequire)
-          runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject)
+          await runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject)
         }
 
         const viteCli = resolveInstalledPackageBin(externalProject, 'vite', 'vite', externalRequire)
-        runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject)
+        await runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject)
 
         const builtJavaScript = readdirSync(join(externalProject, 'dist', 'assets'))
           .filter((entry) => entry.endsWith('.js'))

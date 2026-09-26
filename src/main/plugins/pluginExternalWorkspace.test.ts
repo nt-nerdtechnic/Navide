@@ -14,7 +14,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { planPublicCapabilityCall } from './pluginCapabilityBroker'
 import { readManifestFromEntries, readZipEntries } from './pluginPackage'
 import { manifestV2CapabilityPolicy } from './pluginPermissions'
@@ -55,24 +55,53 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
   }
 }
 
-function runPnpm(args: string[], cwd: string): CommandResult {
-  const invocation = packageManager()
-  const result = spawnSync(invocation.command, [...invocation.prefix, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: subprocessEnvironment(),
-    maxBuffer: 16 * 1024 * 1024,
+const maxOutputBytes = 16 * 1024 * 1024
+
+// Asynchronous on purpose: these subprocesses run for a minute or more, and a
+// synchronous spawn blocks the vitest worker's event loop for that long, so its
+// onTaskUpdate RPC to the main process times out (60 s) and fails the run.
+function run(command: string, args: string[], cwd: string): Promise<CommandResult> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, { cwd, env: subprocessEnvironment() })
+    const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+    const sizes = { stdout: 0, stderr: 0 }
+    let settled = false
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      child.kill()
+      rejectPromise(error)
+    }
+    for (const stream of ['stdout', 'stderr'] as const) {
+      child[stream].on('data', (chunk: Buffer) => {
+        sizes[stream] += chunk.length
+        if (sizes[stream] > maxOutputBytes) {
+          fail(new Error(`${command} ${stream} exceeded maxBuffer (${maxOutputBytes} bytes)`))
+          return
+        }
+        output[stream].push(chunk)
+      })
+    }
+    child.on('error', fail)
+    child.on('close', (status) => {
+      if (settled) return
+      settled = true
+      resolvePromise({
+        status,
+        stdout: Buffer.concat(output.stdout).toString('utf8'),
+        stderr: Buffer.concat(output.stderr).toString('utf8'),
+      })
+    })
   })
-  if (result.error) throw result.error
-  return {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  }
 }
 
-function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
-  const result = runPnpm(args, cwd)
+function runPnpm(args: string[], cwd: string): Promise<CommandResult> {
+  const invocation = packageManager()
+  return run(invocation.command, [...invocation.prefix, ...args], cwd)
+}
+
+async function runPnpmOrThrow(args: string[], cwd: string): Promise<CommandResult> {
+  const result = await runPnpm(args, cwd)
   if (result.status !== 0) {
     throw new Error(
       `pnpm ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`
@@ -81,7 +110,7 @@ function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
   return result
 }
 
-function runExternalCli(args: string[], cwd: string): CommandResult {
+function runExternalCli(args: string[], cwd: string): Promise<CommandResult> {
   // pnpm links the bin as a shell script on POSIX and as `.cmd`/`.ps1` shims
   // on Windows; `pnpm exec` resolves whichever it wrote, as `pnpm run` does.
   return runPnpm(['exec', 'navide-plugin', ...args], cwd)
@@ -127,19 +156,8 @@ function resolveInstalledPackageBin(
   return join(packageDirectory, bin)
 }
 
-function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): CommandResult {
-  const result = spawnSync(process.execPath, [entry, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: subprocessEnvironment(),
-    maxBuffer: 16 * 1024 * 1024,
-  })
-  if (result.error) throw result.error
-  const commandResult = {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  }
+async function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): Promise<CommandResult> {
+  const commandResult = await run(process.execPath, [entry, ...args], cwd)
   if (commandResult.status !== 0) {
     throw new Error(
       `node ${entry} ${args.join(' ')} failed in ${cwd}\n${commandResult.stdout}\n${commandResult.stderr}`
@@ -175,7 +193,7 @@ describe('third-party plugin external workspace', () => {
           expect(packageJson).not.toContain('workspace:')
           expect(packageJson).not.toContain('packages/internal')
         }
-        runPnpmOrThrow(['run', 'build:public-packages'], repository)
+        await runPnpmOrThrow(['run', 'build:public-packages'], repository)
 
         // The editor subpath must carry portable workers for offline/file://
         // consumers, rather than resolve them against the Host origin.
@@ -191,7 +209,7 @@ describe('third-party plugin external workspace', () => {
         const packageTarballs: Record<string, string> = {}
         for (const packageName of ['plugin-contracts', 'plugin-sdk', 'plugin-ui']) {
           const packageDirectory = join(repository, 'packages', packageName)
-          const result = runPnpmOrThrow(
+          const result = await runPnpmOrThrow(
             ['pack', '--pack-destination', artifacts],
             packageDirectory
           )
@@ -215,7 +233,7 @@ describe('third-party plugin external workspace', () => {
         const require = createRequire(import.meta.url)
         const typescriptCli = resolveInstalledPackageBin(repository, 'typescript', 'tsc', require)
         const viteCli = resolveInstalledPackageBin(repository, 'vite', 'vite', require)
-        const pnpmStorePath = runPnpmOrThrow(['store', 'path'], repository).stdout.trim()
+        const pnpmStorePath = (await runPnpmOrThrow(['store', 'path'], repository)).stdout.trim()
 
         cpSync(join(repository, 'examples', 'third-party-files'), externalProject, {
           recursive: true,
@@ -249,7 +267,7 @@ describe('third-party plugin external workspace', () => {
         expect(externalPackageJson.devDependencies.typescript).toBeUndefined()
         expect(externalPackageJson.devDependencies.vite).toBeUndefined()
 
-        runPnpmOrThrow(
+        await runPnpmOrThrow(
           [
             'install',
             '--offline',
@@ -275,12 +293,12 @@ export { EditorPane }
 export const port: EditorPort = createPreflightEditorPort()
 export function save(editor: InstanceType<typeof EditorPane>): Promise<void> { return editor.save() }
 `)
-        runNodeEntryOrThrow(
+        await runNodeEntryOrThrow(
           typescriptCli,
           ['--noEmit', '--project', join(externalProject, 'tsconfig.json')],
           externalProject
         )
-        runNodeEntryOrThrow(
+        await runNodeEntryOrThrow(
           viteCli,
           ['build', '--config', join(externalProject, 'vite.config.ts')],
           externalProject
@@ -295,15 +313,15 @@ export default {
   },
 }
 `)
-        runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'editor.vite.config.mjs')], externalProject)
+        await runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'editor.vite.config.mjs')], externalProject)
         expect(readFileSync(join(externalProject, 'editor-probe/editor.js'), 'utf8')).not.toContain('src/renderer')
-        runNodeEntryOrThrow(join(externalProject, 'scripts', 'stage-package.mjs'), [], externalProject)
-        runPnpmOrThrow(['run', 'check'], externalProject)
-        runPnpmOrThrow(['run', 'package'], externalProject)
+        await runNodeEntryOrThrow(join(externalProject, 'scripts', 'stage-package.mjs'), [], externalProject)
+        await runPnpmOrThrow(['run', 'check'], externalProject)
+        await runPnpmOrThrow(['run', 'package'], externalProject)
 
         const archivePath = join(externalProject, 'dist', 'acme-files.vsix')
         const secondArchivePath = join(externalProject, 'dist', 'acme-files-second.vsix')
-        const secondPackageResult = runExternalCli(
+        const secondPackageResult = await runExternalCli(
           ['package', join(externalProject, 'dist', 'package'), '--out', secondArchivePath],
           externalProject
         )
@@ -348,7 +366,7 @@ export default {
           join(duplicateDirectory, 'manifest.json'),
           '{"schemaVersion":2,"permissions":{},"permissions":{}}\n'
         )
-        const duplicateResult = runExternalCli(['validate', duplicateDirectory], externalProject)
+        const duplicateResult = await runExternalCli(['validate', duplicateDirectory], externalProject)
         expect(duplicateResult.status).not.toBe(0)
         expect(`${duplicateResult.stdout}\n${duplicateResult.stderr}`).toContain(
           'duplicate JSON object key'
@@ -361,7 +379,7 @@ export default {
         ) as Record<string, unknown>
         unknownManifest.unknownField = true
         writeManifest(unknownDirectory, unknownManifest)
-        const unknownResult = runExternalCli(['validate', unknownDirectory], externalProject)
+        const unknownResult = await runExternalCli(['validate', unknownDirectory], externalProject)
         expect(unknownResult.status).not.toBe(0)
         expect(`${unknownResult.stdout}\n${unknownResult.stderr}`).toContain('unknown field')
 
@@ -372,7 +390,7 @@ export default {
         ) as Record<string, unknown>
         publisherManifest.publisher = 'other'
         writeManifest(publisherDirectory, publisherManifest)
-        const publisherResult = runExternalCli(['validate', publisherDirectory], externalProject)
+        const publisherResult = await runExternalCli(['validate', publisherDirectory], externalProject)
         expect(publisherResult.status).not.toBe(0)
         expect(`${publisherResult.stdout}\n${publisherResult.stderr}`).toContain(
           'publisher must match id namespace'
@@ -392,7 +410,7 @@ export default {
         )
         const collisionNames = readdirSync(join(collisionDirectory, 'frontend'))
         if (collisionNames.includes('main.js') && collisionNames.includes('MAIN.JS')) {
-          const collisionResult = runExternalCli(['validate', collisionDirectory], externalProject)
+          const collisionResult = await runExternalCli(['validate', collisionDirectory], externalProject)
           expect(collisionResult.status).not.toBe(0)
           expect(`${collisionResult.stdout}\n${collisionResult.stderr}`).toContain(
             'portable archive collision'
@@ -407,7 +425,7 @@ export default {
           join(aliasDirectory, 'artifact-files.json'),
           JSON.stringify({ files: ['manifest.json', 'frontend/index.html', 'frontend/main.js', 'frontend/alias', 'frontend/alias.'] })
         )
-        const aliasResult = runExternalCli(['validate', aliasDirectory], externalProject)
+        const aliasResult = await runExternalCli(['validate', aliasDirectory], externalProject)
         expect(aliasResult.status).not.toBe(0)
         expect(`${aliasResult.stdout}\n${aliasResult.stderr}`).toContain('portable archive collision')
 
@@ -418,14 +436,14 @@ export default {
         ) as { contributes: { views: Array<Record<string, unknown>> } }
         unsafeManifest.contributes.views[0].entry = '../outside.html'
         writeManifest(unsafeDirectory, unsafeManifest)
-        const unsafeResult = runExternalCli(['validate', unsafeDirectory], externalProject)
+        const unsafeResult = await runExternalCli(['validate', unsafeDirectory], externalProject)
         expect(unsafeResult.status).not.toBe(0)
         expect(`${unsafeResult.stdout}\n${unsafeResult.stderr}`).toContain('safe package-relative')
 
         const missingDirectory = join(validationRoot, 'missing')
         cpSync(join(externalProject, 'dist', 'package'), missingDirectory, { recursive: true })
         rmSync(join(missingDirectory, 'frontend', 'index.html'))
-        const missingResult = runExternalCli(['validate', missingDirectory], externalProject)
+        const missingResult = await runExternalCli(['validate', missingDirectory], externalProject)
         expect(missingResult.status).not.toBe(0)
         expect(`${missingResult.stdout}\n${missingResult.stderr}`).toContain('does not exist')
 
