@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { sha256Hex } from './pluginVerify'
 import { registryRootFingerprint } from './pluginRegistryRootApproval'
 import {
@@ -2640,7 +2640,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
         ...TEST_PREFLIGHT_OPTIONS,
         verifyCommittedInstall: (pluginDir): InstalledTrustDecision => {
-          const candidate = pluginDir.includes('1.0.1/')
+          const candidate = pluginDir.includes(`1.0.1${sep}`)
           if (rejectCandidate && candidate) {
             return { action: 'quarantine', reason: 'candidate verification failure' }
           }
