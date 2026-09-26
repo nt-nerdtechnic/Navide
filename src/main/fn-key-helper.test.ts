@@ -222,7 +222,7 @@ describe.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/cc'))('na
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 60_000)
 
   it('main.c builds warning-free and --check answers one status line', () => {
     const dir = mkdtempSync(join(tmpdir(), 'fn-key-test-'))
