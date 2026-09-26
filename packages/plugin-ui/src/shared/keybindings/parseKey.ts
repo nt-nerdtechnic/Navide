@@ -96,6 +96,18 @@ export function eventLoneModifier(e: KeyboardEvent, own: boolean): string | null
   return null
 }
 
+// ── The fn (🌐) key ────────────────────────────────────────────────────────────
+// 'fn' is fn pressed and released by itself. Browsers never deliver fn, so no
+// KeyboardEvent ever matches it: on macOS a native helper watches it and the
+// hold-to-talk wiring presses from that helper's events. Like a lone
+// modifier it is the whole key — never combined, never part of a chord.
+
+export const FN_KEY = 'fn'
+
+export function isFnKey(key: string): boolean {
+  return key === FN_KEY
+}
+
 function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
   if (e.key.toLowerCase() === expectedKey) return true
 
@@ -207,12 +219,12 @@ export function validateKeySpec(spec: string): { ok: true } | KeySpecError {
     // A base key is a single character, a known named key, or f1..f24. Anything
     // else is a typo like 'cmmd+s', which would parse into a key nothing emits.
     const named = /^(escape|enter|tab|backspace|delete|space|home|end|pageup|pagedown|arrow(up|down|left|right)|f([1-9]|1[0-9]|2[0-4]))$/
-    if (parsed.key.length !== 1 && !named.test(parsed.key) && parsed.key !== ' ' && !isLoneModifierKey(parsed.key)) {
+    if (parsed.key.length !== 1 && !named.test(parsed.key) && parsed.key !== ' ' && !isLoneModifierKey(parsed.key) && !isFnKey(parsed.key)) {
       return { ok: false, reason: 'unknown-key', detail: parsed.key }
     }
-    // A lone modifier is the whole key: 'ctrl+rightalt' or a chord ending in
-    // one would never match.
-    if (isLoneModifierKey(parsed.key) && (segments.length > 1 || parsed.meta || parsed.ctrl || parsed.alt || parsed.shift)) {
+    // A lone modifier (or fn) is the whole key: 'ctrl+rightalt' or a chord
+    // ending in one would never match.
+    if ((isLoneModifierKey(parsed.key) || isFnKey(parsed.key)) && (segments.length > 1 || parsed.meta || parsed.ctrl || parsed.alt || parsed.shift)) {
       return { ok: false, reason: 'unknown-key', detail: segment }
     }
   }
@@ -234,6 +246,8 @@ export function eventToKeyString(e: KeyboardEvent): string | null {
 }
 
 export function matchesEvent(parsed: ParsedKey, e: KeyboardEvent): boolean {
+  // Only the fn helper presses fn; no page event stands for it.
+  if (isFnKey(parsed.key)) return false
   if (isLoneModifierKey(parsed.key)) {
     return !parsed.meta && !parsed.ctrl && !parsed.alt && !parsed.shift && eventLoneModifier(e, true) === parsed.key
   }

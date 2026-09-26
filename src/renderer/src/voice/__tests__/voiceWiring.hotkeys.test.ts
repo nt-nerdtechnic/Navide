@@ -3,7 +3,7 @@
 // fn (🌐) key relay, driven through the real key resolver and voiceWiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
-import { defaults, executeCommand, getContext, getUserRules, KeyResolver, parseKeySpec, setUserRules } from '@navide/plugin-ui/shared'
+import { defaults, executeCommand, getContext, getUserRules, KeyResolver, parseKeySpec, setContext, setKeyCaptureActive, setUserRules } from '@navide/plugin-ui/shared'
 import { RELEASE_TAIL_MS } from '../../composables/useVoiceInput'
 import { useVoiceSettings, HOLD_TO_TALK_COMMAND } from '../voiceSettings'
 import type { FnKeyApi, FnKeyEventType } from '../../../../shared/fnKey'
@@ -300,39 +300,79 @@ describe('voice wiring: single keys and the fn key', () => {
   })
 
   describe('the fn (🌐) key', () => {
-    it('setting OFF (or voice input off): no subscription, no helper, no listener', async () => {
+    /** Binds fn next to the default ⌃⌥M. */
+    function bindFn(): void {
+      setUserRules([{ key: 'fn', command: HOLD_TO_TALK_COMMAND, when: 'paneStage && voiceInput && !modalOpen' }])
+    }
+
+    beforeEach(() => {
+      setContext('paneStage', true)
+      setContext('modalOpen', false)
+    })
+    afterEach(() => {
+      setContext('paneStage', false)
+      setContext('modalOpen', false)
+    })
+
+    it('not bound to fn (or voice input off): no subscription, no helper, no listener', async () => {
       settings.setVoiceInputEnabled(true)
       await settle()
       expect(fn.api.subscribe).not.toHaveBeenCalled()
       expect(fn.listening()).toBe(false)
       settings.setVoiceInputEnabled(false)
-      settings.setVoiceFnKeyEnabled(true)
+      bindFn()
       await settle()
       expect(fn.api.subscribe).not.toHaveBeenCalled()
       expect(fn.listening()).toBe(false)
     })
 
-    it('subscribes while both are on and unsubscribes when either goes off', async () => {
+    it('binding fn subscribes while voice input is on; unbinding it or voice going off unsubscribes', async () => {
+      settings.setVoiceInputEnabled(true)
+      bindFn()
+      await settle()
+      expect(fn.api.subscribe).toHaveBeenCalledTimes(1)
+      expect(fn.listening()).toBe(true)
+      setUserRules([])
+      await settle()
+      expect(fn.api.unsubscribe).toHaveBeenCalledTimes(1)
+      expect(fn.listening()).toBe(false)
+      bindFn()
+      await settle()
+      expect(fn.api.subscribe).toHaveBeenCalledTimes(2)
+      settings.setVoiceInputEnabled(false)
+      await settle()
+      expect(fn.api.unsubscribe).toHaveBeenCalledTimes(2)
+      settings.setVoiceInputEnabled(true)
+      await settle()
+      expect(fn.api.subscribe).toHaveBeenCalledTimes(3)
+    })
+
+    it('a removal rule for fn unbinds it like any key', async () => {
+      settings.setVoiceInputEnabled(true)
+      setUserRules([
+        { key: 'fn', command: HOLD_TO_TALK_COMMAND, when: 'paneStage && voiceInput && !modalOpen' },
+        { key: 'fn', command: `-${HOLD_TO_TALK_COMMAND}` },
+      ])
+      await settle()
+      expect(fn.api.subscribe).not.toHaveBeenCalled()
+    })
+
+    it('the old "Use the fn key" switch, not yet migrated, counts as fn bound', async () => {
       settings.setVoiceInputEnabled(true)
       settings.setVoiceFnKeyEnabled(true)
       await settle()
       expect(fn.api.subscribe).toHaveBeenCalledTimes(1)
-      expect(fn.listening()).toBe(true)
-      settings.setVoiceFnKeyEnabled(false)
+      const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+      fn.emit('down')
       await settle()
-      expect(fn.api.unsubscribe).toHaveBeenCalledTimes(1)
-      expect(fn.listening()).toBe(false)
-      settings.setVoiceFnKeyEnabled(true)
-      await settle()
-      settings.setVoiceInputEnabled(false)
-      await settle()
-      expect(fn.api.unsubscribe).toHaveBeenCalledTimes(2)
+      expect(voice.state.phase).toBe('recording')
+      focus.mockRestore()
     })
 
-    describe('with the setting on', () => {
+    describe('with fn bound', () => {
       beforeEach(async () => {
         settings.setVoiceInputEnabled(true)
-        settings.setVoiceFnKeyEnabled(true)
+        bindFn()
         await settle()
       })
 
@@ -350,6 +390,12 @@ describe('voice wiring: single keys and the fn key', () => {
         await settle()
         expect(inserted).toEqual(['hello'])
         focus.mockRestore()
+      })
+
+      it('the default ⌃⌥M keeps working next to fn', async () => {
+        expect(press('µ', { code: 'KeyM', ctrlKey: true, altKey: true }).consumed).toBe(true)
+        await settle()
+        expect(voice.state.phase).toBe('recording')
       })
 
       it('hold-tap: a quick tap locks hands-free; the next fn press stops it', async () => {
@@ -385,12 +431,12 @@ describe('voice wiring: single keys and the fn key', () => {
         focus.mockRestore()
       })
 
-      it('switching the fn setting off mid-take ends the take (its up can no longer arrive)', async () => {
+      it('unbinding fn mid-take ends the take (its up can no longer arrive)', async () => {
         const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
         fn.emit('down')
         await settle()
         vi.advanceTimersByTime(TAP_LOCK_MS + 100)
-        settings.setVoiceFnKeyEnabled(false)
+        setUserRules([])
         await settle()
         vi.advanceTimersByTime(RELEASE_TAIL_MS)
         await settle()
@@ -402,6 +448,27 @@ describe('voice wiring: single keys and the fn key', () => {
         const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
         fn.emit('down')
         await settle()
+        expect(voice.state.phase).toBe('idle')
+        expect(sent).not.toContain('voice.start')
+        focus.mockRestore()
+      })
+
+      it("a press is ignored where its rule's when does not hold (a dialog is open)", async () => {
+        const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+        setContext('modalOpen', true)
+        fn.emit('down')
+        await settle()
+        expect(voice.state.phase).toBe('idle')
+        expect(sent).not.toContain('voice.start')
+        focus.mockRestore()
+      })
+
+      it('a press is ignored while a shortcut recorder listens (it is recording fn, not dictating)', async () => {
+        const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+        setKeyCaptureActive(true)
+        fn.emit('down')
+        await settle()
+        setKeyCaptureActive(false)
         expect(voice.state.phase).toBe('idle')
         expect(sent).not.toContain('voice.start')
         focus.mockRestore()
@@ -421,7 +488,7 @@ describe('voice wiring: single keys and the fn key', () => {
 
     it('the scope going away unsubscribes', async () => {
       settings.setVoiceInputEnabled(true)
-      settings.setVoiceFnKeyEnabled(true)
+      bindFn()
       await settle()
       scope.stop()
       expect(fn.api.unsubscribe).toHaveBeenCalledTimes(1)

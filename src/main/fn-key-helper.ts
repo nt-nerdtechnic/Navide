@@ -3,9 +3,12 @@
 // and prints JSON Lines; this module runs that helper and relays its events to
 // the renderers that asked for them.
 //
-// The helper runs only while at least one main-window renderer is subscribed,
-// and a renderer subscribes only while voice input and the "Use the fn key"
-// setting are both on — with the setting off nothing is spawned. The child is
+// The helper runs only while at least one main-window renderer is subscribed.
+// A renderer subscribes while voice input is on and hold-to-talk is bound to
+// fn, and while a shortcut recorder listens for a new hold-to-talk key — with
+// neither, nothing is spawned. One renderer may hold several subscriptions (the
+// wiring and a recorder); it counts as gone once it has released them all or
+// is destroyed. The child is
 // ours alone: it is stopped by its own PID (never a pattern), when the last
 // subscriber leaves and when the app quits, and it also exits by itself when
 // its stdin closes.
@@ -76,6 +79,8 @@ export interface FnKeyServiceDeps {
 
 export class FnKeyService {
   private readonly subscribers = new Map<number, FnKeySubscriber>()
+  // Subscriptions each renderer holds: its wiring and a recorder share an id.
+  private readonly counts = new Map<number, number>()
   private child: ChildProcess | null = null
   private status: FnKeyStatus
   private crashes = 0
@@ -104,6 +109,7 @@ export class FnKeyService {
   subscribe(sub: FnKeySubscriber): FnKeyStatus {
     if (!this.deps.supported) return this.getStatus()
     this.subscribers.set(sub.id, sub)
+    this.counts.set(sub.id, (this.counts.get(sub.id) ?? 0) + 1)
     if (!this.child && !this.respawnTimer && this.status.phase !== 'no-permission') {
       this.crashes = 0
       this.start()
@@ -111,7 +117,19 @@ export class FnKeyService {
     return this.getStatus()
   }
 
+  /** Releases one of `id`'s subscriptions; its last one leaving counts as drop(). */
   unsubscribe(id: number): void {
+    const left = (this.counts.get(id) ?? 0) - 1
+    if (left > 0) {
+      this.counts.set(id, left)
+      return
+    }
+    this.drop(id)
+  }
+
+  /** Forgets `id` whatever it holds (its renderer is gone or reloaded). */
+  drop(id: number): void {
+    this.counts.delete(id)
     if (!this.subscribers.delete(id) || this.subscribers.size > 0) return
     this.stop()
     this.setStatus({ phase: 'off' })
@@ -137,6 +155,7 @@ export class FnKeyService {
   /** App quit: stop our own helper, for good. */
   dispose(): void {
     this.subscribers.clear()
+    this.counts.clear()
     this.stop()
   }
 
@@ -144,7 +163,7 @@ export class FnKeyService {
     const path = this.deps.helperPath()
     if (!path) {
       this.deps.log('fn-key: helper binary not found')
-      this.setStatus({ phase: 'failed' })
+      this.setStatus({ phase: 'missing' })
       return
     }
     this.setStatus({ phase: 'starting' })

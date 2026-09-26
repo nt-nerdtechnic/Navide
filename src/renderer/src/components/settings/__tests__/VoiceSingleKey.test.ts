@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 // Settings ▸ Voice Input: a single key as the dictation key (a function key,
-// one modifier by itself), the keys it refuses, and the optional fn (🌐) row.
+// one modifier by itself), the keys it refuses, and the fn (🌐) status row.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { getUserRules, keySpecToTokens, initKeybindingsPort } from '@navide/plugin-ui/shared'
+import { getUserRules, keySpecToTokens, initKeybindingsPort, setUserRules } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest, _resetKeybindingsState } from '@navide/plugin-ui/shared/testing'
 import VoiceSettingsSection from '../VoiceSettingsSection.vue'
 import KeyboardShortcutsEditor from '../../KeyboardShortcutsEditor.vue'
@@ -162,19 +162,29 @@ describe('fn (🌐) key row', () => {
     expect(w.find('[data-settings-section="voice-fn-key"]').exists()).toBe(false)
   })
 
-  it('on macOS: off by default; turning it on saves the setting and shows the helper state', async () => {
+  it('on macOS: hidden until the dictation shortcut is fn, then shows the helper state', async () => {
     onMac(true)
     const fn = fnApi({ phase: 'starting', fnUsage: null })
     vi.stubGlobal('agentTeam', { fnKey: fn.api })
     const w = mountSection()
     await flushPromises()
-    expect(w.find('[data-settings-section="voice-fn-key"]').exists()).toBe(true)
-    expect(useVoiceSettings().voiceFnKeyEnabled.value).toBe(false)
-    expect(fn.api.status).not.toHaveBeenCalled()
-    await w.get('[data-settings-section="voice-fn-key"] [role="switch"]').trigger('click')
+    expect(w.find('[data-settings-section="voice-fn-key"]').exists()).toBe(false)
+    expect(w.find('[data-settings-section="voice-fn-key"] [role="switch"]').exists()).toBe(false)
+    setUserRules([{ key: 'fn', command: HOLD_TO_TALK_COMMAND, when: WHEN }])
     await flushPromises()
-    expect(useVoiceSettings().voiceFnKeyEnabled.value).toBe(true)
+    expect(w.find('[data-settings-section="voice-fn-key"]').exists()).toBe(true)
     expect(w.get('[data-testid="voice-fn-status"]').text()).toContain('Starting')
+  })
+
+  it('a missing helper says so and offers a retry', async () => {
+    onMac(true)
+    const fn = fnApi({ phase: 'missing', fnUsage: null })
+    vi.stubGlobal('agentTeam', { fnKey: fn.api })
+    setUserRules([{ key: 'fn', command: HOLD_TO_TALK_COMMAND, when: WHEN }])
+    const w = mountSection()
+    await flushPromises()
+    expect(w.get('[data-testid="voice-fn-status"]').text()).toContain('pnpm build:fn-key')
+    expect(w.get('[data-testid="voice-fn-status"] button').text()).toBe('Try again')
   })
 
   it('no permission: explains and offers System Settings and a re-check', async () => {

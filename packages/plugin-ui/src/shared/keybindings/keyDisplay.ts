@@ -38,6 +38,8 @@ const LONE_MODIFIER_LABELS: Record<string, [side: 'left' | 'right', mod: 'meta' 
 function displayKey(key: string, mac: boolean): string {
   const lone = LONE_MODIFIER_LABELS[key]
   if (lone) return `${lone[0] === 'left' ? 'Left' : 'Right'} ${(mac ? MAC_MODIFIERS : PC_MODIFIERS)[lone[1]]}`
+  // The key cap says "fn" on every Mac; newer ones also print the globe.
+  if (key === 'fn') return mac ? 'fn 🌐' : 'Fn'
   const glyph = KEY_GLYPHS[key]
   if (glyph) return glyph
   if (/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) return key.toUpperCase()

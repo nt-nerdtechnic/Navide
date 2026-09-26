@@ -54,7 +54,11 @@ export function registerFnKeyIpc(isMainRenderer: (wc: WebContents) => boolean): 
       subscribedIds.add(id)
       wc.once('destroyed', () => {
         subscribedIds.delete(id)
-        service.unsubscribe(id)
+        service.drop(id)
+      })
+      // A reload starts the renderer over without releasing what it held.
+      wc.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) service.drop(id)
       })
     }
     return service.subscribe({

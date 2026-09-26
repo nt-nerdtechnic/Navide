@@ -72,6 +72,7 @@ single key works too:
 |----------|---------|
 | A function key on its own (`F13`–`F19` are unused by macOS and ideal; `F1`–`F24` all work) | A key that types or edits — a letter, digit, space, punctuation, `Enter`, `Tab`, `Backspace`, `Delete`, `Escape` — with no `⌃`, `⌥` or `⌘` (`⇧` alone still types). Holding it would type into the CLI, and Enter / Esc already mean send / cancel |
 | One modifier by itself, left or right side told apart: `Right ⌥`, `Left ⌃`, `Right ⇧`, `Left ⌘`, `Right ⌘`… (recorded by pressing and releasing it alone), in every mode | `⌘` in a combination while the recording mode is "Hold to talk" or "Hold, or tap to lock": macOS drops the key-up of a key held with Cmd, so the take could never be let go of |
+| `fn` (🌐) by itself, on a Mac (recorded by pressing and releasing it alone; see below) | |
 | Other non-printing keys (`Home`, `PageDown`, arrows…) and any combination with `⌃` or `⌥` | |
 | A combination with `⌘` (`⌘⇧D`…), **only while the recording mode is "Press to start, press again to stop"**: that mode needs no key-up — the second press, a key-down, stops the take, and key repeat is ignored | A `⌘` combination another Navide command already has — the row names it. `⌘⇧D` is Open Plans by default: unbind that under Shortcuts first to use it here |
 | | A chord macOS keeps for itself — `⌘Q`, `⌘W`, `⌘H`, `⌥⌘H`, `⌘M`, `⌘Tab`, `⌘Space`, `` ⌘` ``, `⌘,`, `⇧⌘Q`, `⌃⌘Q`, `⌥⌘Esc`, `⌃⌘F`, `⌥⌘D`, `⇧⌘3`/`4`/`5`… — named with what macOS does with it, and any key the application menu takes before Navide sees it |
@@ -107,25 +108,54 @@ row or on the hold-to-talk row of the Shortcuts tab. A key refused here can
 still be written into `keybindings.json` or the Shortcuts tab; the voice row
 then shows a warning.
 
-#### The fn (🌐) key (macOS, optional)
+#### The fn (🌐) key (macOS)
 
-**Settings → Voice Input → Use the fn (🌐) key** (off by default, hidden off
-macOS) makes fn behave exactly like the shortcut: hold to talk, and a quick
-tap follows the recording mode. The browser never receives fn, so while this
-is on — and only then — Navide runs a small native helper
-(`Contents/Resources/bin/navide-fn-key`) with a listen-only event tap; turning
-the setting (or voice input) off, or quitting, stops it.
+fn is an ordinary dictation key: record it in **Settings → Voice Input →
+Shortcut → Change** (or on the hold-to-talk row of the Shortcuts tab) by
+pressing and releasing fn by itself. It is saved as the rule key `fn`, shown
+as `fn 🌐`, and behaves exactly like any other key: hold to talk, and a quick
+tap follows the recording mode. It can sit next to another key (`⌃⌥M` and
+`fn` both bound) or replace it.
+
+The browser never receives fn, so Navide runs a small native helper
+(`Contents/Resources/bin/navide-fn-key`) with a listen-only event tap — only
+while voice input is on and hold-to-talk is bound to fn, and while a
+hold-to-talk recorder is listening for a new key. Unbinding fn, turning voice
+input off, or quitting stops it.
 
 - Only a **lone** fn press counts: fn pressed with another key or modifier
-  (fn+arrow, fn+Delete, ⌃fn…) drops the take and starts nothing.
-- A press is taken only while a Navide window has focus; fn's own release ends
-  it (window blur does not).
+  (fn+arrow, fn+Delete, ⌃fn…) drops the take and starts nothing. In the
+  recorder the same press records the key fn produced (`Home`, `Delete`…),
+  never fn.
+- A press is taken only while a Navide window has focus and the rule's `when`
+  holds (not while a dialog such as Settings is open, and never while a
+  shortcut recorder is listening); fn's own release ends it (window blur does
+  not). `fn` never matches a key event, so it cannot be a command key.
 - It needs **Input Monitoring** (System Settings → Privacy & Security → Input
-  Monitoring). Without it the row says so and offers the settings pane and a
-  re-check.
+  Monitoring). Without it, both the recorder (as soon as it starts listening)
+  and the fn status row below the shortcut say so and offer the settings pane
+  and a re-check.
 - If **System Settings → Keyboard → "Press 🌐 key to"** is anything but
   **Do Nothing**, macOS also switches the input source / opens Emoji /
-  starts Dictation on every press; the row points this out.
+  starts Dictation on every press; the fn status row points this out.
+- Off macOS fn cannot be detected at all; the recorder says so.
+- The helper is built by `pnpm build` and, in a source checkout, by `pnpm dev`
+  (`node scripts/build-fn-key-helper.mjs --if-needed`: rebuilt when missing or
+  older than `native/fn-key/`; a failed build only warns). A copy without the
+  helper says the helper is missing instead of ignoring fn.
+- The old **Use the fn (🌐) key** switch is gone. If it was on, fn counts as
+  bound until Settings → Voice Input is next opened, which adds `fn` next to
+  the current shortcut and turns the old setting off.
+
+#### While recording a shortcut
+
+Every key press while a recorder listens gets an answer: the key is recorded,
+or a line under the recorder says why it was not — a key the dictation row
+refuses (with the reason and free alternatives, at once rather than on Save),
+an input method composing, a key with no usable name, a modifier still held
+(add a key, or let go to use it alone where that is allowed), or a lone
+modifier on a row that cannot take one. Keys the system keeps for itself
+(`⌘Tab`, `⌘Space`…) never reach Navide; the recorder says that up front.
 
 ### Quick Open
 

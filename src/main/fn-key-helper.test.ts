@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -201,10 +201,73 @@ describe('FnKeyService', () => {
     expect(t.service.getStatus().phase).toBe('off')
   })
 
-  it('a missing helper binary fails without spawning', () => {
-    const t = setup({ path: null })
-    expect(t.service.subscribe(t.sub).phase).toBe('failed')
+  it('a missing helper binary says missing (not a crash) without spawning, and a later subscribe looks again', () => {
+    let path: string | null = null
+    const t = setup()
+    const service = new FnKeyService({
+      supported: true,
+      helperPath: () => path,
+      spawn: t.spawn,
+      query: t.query,
+      log: () => {},
+    })
+    const seen: string[] = []
+    expect(service.subscribe({ id: 1, send: (c, p) => c === FN_KEY_STATUS_CHANNEL && seen.push((p as { phase: string }).phase) }).phase).toBe('missing')
+    expect(seen).toEqual(['missing'])
     expect(t.spawn).not.toHaveBeenCalled()
+    // Built meanwhile (pnpm build:fn-key): the next subscribe (Try again) starts it.
+    path = '/bin/navide-fn-key'
+    service.unsubscribe(1)
+    expect(service.subscribe({ id: 1, send: () => {} }).phase).toBe('starting')
+    expect(t.spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('one renderer holding two subscriptions (voice wiring and a recorder) keeps the helper until both let go', () => {
+    const t = setup()
+    t.service.subscribe(t.sub) // the wiring: fn is bound
+    t.service.subscribe(t.sub) // a recorder in the same window
+    expect(t.spawn).toHaveBeenCalledTimes(1)
+    t.service.unsubscribe(1) // the recorder is done
+    expect(t.service.isRunning()).toBe(true)
+    expect(t.children[0].killed).toEqual([])
+    t.service.unsubscribe(1)
+    expect(t.children[0].killed).toEqual(['SIGTERM'])
+    expect(t.service.getStatus().phase).toBe('off')
+  })
+
+  it('a renderer that is destroyed or reloads drops every subscription it held', () => {
+    const t = setup()
+    t.service.subscribe(t.sub)
+    t.service.subscribe(t.sub)
+    t.service.drop(1)
+    expect(t.children[0].killed).toEqual(['SIGTERM'])
+    expect(t.service.isRunning()).toBe(false)
+    // Counted from zero again afterwards.
+    t.service.subscribe(t.sub)
+    t.service.unsubscribe(1)
+    expect(t.children[1].killed).toEqual(['SIGTERM'])
+  })
+
+  it('a stale unsubscribe from a renderer that holds nothing changes nothing', () => {
+    const t = setup()
+    t.service.subscribe(t.sub)
+    t.service.unsubscribe(2)
+    expect(t.service.isRunning()).toBe(true)
+  })
+})
+
+// `pnpm dev` never ran `pnpm build`, so a checkout's fn toggle once had no
+// helper at all and nothing said so.
+describe('fn-key helper in a dev checkout', () => {
+  const root = resolve(__dirname, '..', '..')
+
+  it('pnpm dev builds the helper when it is missing or stale, and a failure does not stop dev', () => {
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+    const dev = pkg.scripts.dev
+    expect(dev).toContain('node scripts/build-fn-key-helper.mjs --if-needed')
+    expect(dev.indexOf('build-fn-key-helper.mjs')).toBeLessThan(dev.indexOf('electron-vite dev'))
+    const script = readFileSync(join(root, 'scripts', 'build-fn-key-helper.mjs'), 'utf8')
+    expect(script).toMatch(/if \(ifNeeded\) \{\s*try \{\s*build\(\)\s*\} catch/)
   })
 })
 

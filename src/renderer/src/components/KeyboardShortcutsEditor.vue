@@ -27,7 +27,7 @@ import {
   splitKeyTokens,
   type ExternalKeyRow,
 } from '@navide/plugin-ui/shared'
-import { validateKeySpec } from '@navide/plugin-ui/shared'
+import { FN_KEY, validateKeySpec } from '@navide/plugin-ui/shared'
 import {
   getUserRules,
   onUserRulesChanged,
@@ -35,7 +35,9 @@ import {
 } from '@navide/plugin-ui/shared'
 import type { KeybindingRule } from '@navide/plugin-ui/shared'
 import { useKeyChordRecorder } from '../composables/useKeyChordRecorder'
+import { useFnKeyRecorder } from '../voice/fnKeyRecorder'
 import { HOLD_TO_TALK_COMMAND } from '../voice/voiceSettings'
+import KeyRecorderFeedback from './settings/KeyRecorderFeedback.vue'
 
 type FilterMode = 'all' | 'customized' | 'conflicts'
 
@@ -158,7 +160,9 @@ interface Recording {
 }
 
 const recording = ref<Recording | null>(null)
-const recorder = useKeyChordRecorder({ onCancel: () => { recording.value = null } })
+const recorder = useKeyChordRecorder({ onCancel: () => stopRecording() })
+// fn (🌐) is only ever a key to hold: listened for on the hold-to-talk row.
+const fnRecorder = useFnKeyRecorder(() => recorder.recordKey(FN_KEY))
 
 function isRecordingRow(row: BindingRow): boolean {
   return recording.value?.rowId === row.id
@@ -172,12 +176,15 @@ function isRecording(row: BindingRow, key: string): boolean {
 function startRecording(row: BindingRow, replacing: string | null): void {
   if (recording.value) stopRecording()
   recording.value = { rowId: row.id, replacing }
-  // A modifier by itself (Right Option, Left ⌘) is only a key to hold.
-  recorder.start(row.command === HOLD_TO_TALK_COMMAND)
+  // A modifier by itself (Right Option, Left ⌘) or fn is only a key to hold.
+  const hold = row.command === HOLD_TO_TALK_COMMAND
+  recorder.start(hold)
+  if (hold) fnRecorder.start()
 }
 
 function stopRecording(): void {
   recorder.stop()
+  fnRecorder.stop()
   recording.value = null
 }
 
@@ -438,6 +445,12 @@ const visibleReference = computed(() => {
                     :title="$t('settings.keybindings.add-binding')"
                     @click="startRecording(row, null)"
                   >+</button>
+                  <KeyRecorderFeedback
+                    v-if="isRecordingRow(row)"
+                    class="kse-recorder-feedback"
+                    :notice="recorder.notice.value"
+                    :fn="row.command === HOLD_TO_TALK_COMMAND ? fnRecorder : undefined"
+                  />
 
                   <span v-if="!row.keys.length && !isRecordingRow(row)" class="kse-unbound">
                     {{ $t('settings.keybindings.unbound') }}
@@ -849,6 +862,12 @@ const visibleReference = computed(() => {
   font-style: normal;
   font-size: var(--font-2xs);
   color: var(--accent-fg);
+}
+.kse-recorder-feedback {
+  flex-basis: 100%;
+}
+.kse-recorder-feedback :deep(.krf-line) {
+  padding: 2px 0 0;
 }
 
 .kse-locked {

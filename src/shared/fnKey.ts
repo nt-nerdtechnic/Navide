@@ -10,7 +10,8 @@ export type FnKeyPhase =
   | 'ready'
   | 'no-permission' // Input Monitoring not granted; waits for a retry
   | 'restarting' // crashed; respawning after a backoff
-  | 'failed' // crashed too often, or the helper binary is missing
+  | 'failed' // crashed too often
+  | 'missing' // the helper binary is not there (a checkout that never built it)
   | 'unsupported' // not macOS
 
 export interface FnKeyStatus {

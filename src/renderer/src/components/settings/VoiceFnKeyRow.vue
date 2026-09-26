@@ -1,27 +1,36 @@
 <script setup lang="ts">
-// Settings → Voice Input → "Use the fn (🌐) key" (macOS only, default off).
-// The switch is all this row changes; voiceWiring subscribes to the fn relay
-// while it is on, and the main process runs its helper only then. The row
-// shows that helper's state and the two things a user may have to fix by
-// hand: Input Monitoring access, and macOS's own "Press 🌐 key to" action.
+// Settings → Voice Input → the fn (🌐) key (macOS only). Shown while the
+// dictation shortcut is fn (recorded in the Shortcut row above): voiceWiring
+// subscribes to the fn relay then, and the main process runs its helper only
+// while someone is subscribed. The row shows that helper's state and the two
+// things a user may have to fix by hand: Input Monitoring access, and macOS's
+// own "Press 🌐 key to" action.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { isMacPlatform } from '@navide/plugin-ui/shared'
+import { isMacPlatform, onUserRulesChanged } from '@navide/plugin-ui/shared'
 import SettingRow from './SettingRow.vue'
-import ToggleSwitch from './ToggleSwitch.vue'
 import { useVoiceSettings } from '../../voice/voiceSettings'
+import { holdToTalkFnRules } from '../../voice/holdToTalkKey'
 import type { FnKeyStatus } from '../../../../shared/fnKey'
 
 const { t } = useI18n()
-const { voiceFnKeyEnabled, setVoiceFnKeyEnabled } = useVoiceSettings()
+const { voiceFnKeyEnabled } = useVoiceSettings()
 // Hidden off macOS: there is no fn helper there.
 const api = isMacPlatform() ? window.agentTeam?.fnKey : undefined
+
+// Re-read whenever the rules change (this row or the Shortcuts tab).
+const rulesTick = ref(0)
+const stopRules = onUserRulesChanged(() => rulesTick.value++)
+const fnBound = computed(() => {
+  void rulesTick.value
+  return holdToTalkFnRules(voiceFnKeyEnabled.value).length > 0
+})
 
 const status = ref<FnKeyStatus | null>(null)
 let offStatus: (() => void) | null = null
 
 watch(
-  voiceFnKeyEnabled,
+  fnBound,
   (on) => {
     if (!api) return
     if (on && !offStatus) {
@@ -35,7 +44,10 @@ watch(
   },
   { immediate: true },
 )
-onBeforeUnmount(() => offStatus?.())
+onBeforeUnmount(() => {
+  offStatus?.()
+  stopRules()
+})
 
 const statusLine = computed(() => {
   const phase = status.value?.phase
@@ -69,26 +81,18 @@ function openSettings(which: 'input-monitoring' | 'keyboard'): void {
 
 <template>
   <SettingRow
-    v-if="api"
+    v-if="api && fnBound"
     data-settings-section="voice-fn-key"
     :title="t('settings.voice.fn-key')"
     :description="t('settings.voice.fn-key-hint')"
-  >
-    <template #control>
-      <ToggleSwitch
-        :model-value="voiceFnKeyEnabled"
-        :aria-label="t('settings.voice.fn-key')"
-        @update:model-value="(v: boolean) => setVoiceFnKeyEnabled(v)"
-      />
-    </template>
-  </SettingRow>
-  <div v-if="api && voiceFnKeyEnabled && statusLine" class="fn-status" data-testid="voice-fn-status">
-    <p :class="{ 'fn-warning': status?.phase === 'no-permission' || status?.phase === 'failed' }">{{ statusLine }}</p>
+  />
+  <div v-if="api && fnBound && statusLine" class="fn-status" data-testid="voice-fn-status">
+    <p :class="{ 'fn-warning': status?.phase === 'no-permission' || status?.phase === 'failed' || status?.phase === 'missing' }">{{ statusLine }}</p>
     <p v-if="status?.phase === 'no-permission'" class="fn-actions">
       <button type="button" class="fn-btn" @click="openSettings('input-monitoring')">{{ t('settings.voice.fn-open-input-monitoring') }}</button>
       <button type="button" class="fn-btn" data-testid="voice-fn-check" @click="requestAccess">{{ t('settings.voice.fn-check-again') }}</button>
     </p>
-    <p v-if="status?.phase === 'failed'" class="fn-actions">
+    <p v-if="status?.phase === 'failed' || status?.phase === 'missing'" class="fn-actions">
       <button type="button" class="fn-btn" @click="retry">{{ t('settings.voice.fn-retry') }}</button>
     </p>
     <template v-if="usageConflict">

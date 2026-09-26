@@ -17,22 +17,54 @@ export interface KeyChordRecorderOptions {
   allowLoneModifier?: boolean
 }
 
+/**
+ * Why the last key press recorded nothing, so the recorder never looks dead:
+ *   'composing'     an input method is composing; its keys are its own
+ *   'unidentified'  the key reports no usable name or code
+ *   'modifier-held' a modifier is down: add a key, or (where a modifier by
+ *                   itself is allowed) let go to record it alone
+ *   'modifier-only' a modifier was pressed and released by itself where that
+ *                   is not a key (every command row but hold-to-talk)
+ */
+export type KeyRecorderNoticeReason = 'composing' | 'unidentified' | 'modifier-held' | 'modifier-only'
+
+export interface KeyRecorderNotice {
+  reason: KeyRecorderNoticeReason
+  /** The rule spelling of the key concerned ('rightalt'), when there is one. */
+  key?: string
+  /** Whether a modifier by itself can be recorded in this recording. */
+  loneAllowed: boolean
+}
+
 export function useKeyChordRecorder(options: KeyChordRecorderOptions = {}) {
   const maxSegments = options.maxSegments ?? 2
   const active = ref(false)
   const segments = ref<string[]>([])
+  const notice = ref<KeyRecorderNotice | null>(null)
   // The modifier that went down by itself and has not been combined yet.
   let loneDown: string | null = null
+  let loneAllowed = false
 
   function record(segment: string): void {
+    notice.value = null
     // Past the segment limit a chord would parse but never match, so cycle
     // back to a fresh single key instead of silently dead-ending.
     segments.value = segments.value.length >= maxSegments ? [segment] : [...segments.value, segment]
   }
 
+  function note(reason: KeyRecorderNoticeReason, key?: string | null): void {
+    notice.value = { reason, loneAllowed, ...(key ? { key } : {}) }
+  }
+
   function onKeyup(e: KeyboardEvent): void {
     const key = eventLoneModifier(e, false)
-    if (key && key === loneDown) record(key)
+    if (key && key === loneDown) {
+      if (loneAllowed) record(key)
+      else note('modifier-only', key)
+    } else if (notice.value?.reason === 'modifier-held') {
+      // Let go after a combination (or a second modifier): nothing is pending.
+      notice.value = null
+    }
     loneDown = null
   }
 
@@ -41,7 +73,10 @@ export function useKeyChordRecorder(options: KeyChordRecorderOptions = {}) {
     // see it, so nothing it captures can fire a command mid-recording.
     e.preventDefault()
     e.stopImmediatePropagation()
-    if (e.isComposing) return
+    if (e.isComposing) {
+      note('composing')
+      return
+    }
     // Bare Escape abandons the recording — the convention every editor follows.
     // Without it the recorder has no keyboard exit at all: Escape, Tab and Enter
     // are all swallowed, leaving keyboard-only users stuck until they reach for
@@ -55,20 +90,35 @@ export function useKeyChordRecorder(options: KeyChordRecorderOptions = {}) {
     if (MODIFIER_KEYS.has(e.key)) {
       // Recorded on its keyup, if nothing is combined with it before then.
       loneDown = e.repeat ? loneDown : eventLoneModifier(e, true)
+      if (!e.repeat) note('modifier-held', loneDown)
       return
     }
     loneDown = null
     const segment = eventToKeyString(e)
-    if (!segment) return // no identifiable key: keep waiting
+    if (!segment) {
+      // No identifiable key: keep waiting, but say so.
+      note('unidentified')
+      return
+    }
     record(segment)
   }
 
   function start(allowLoneModifier = options.allowLoneModifier): void {
     stop()
     active.value = true
+    loneAllowed = !!allowLoneModifier
     setKeyCaptureActive(true)
     window.addEventListener('keydown', onKeydown, { capture: true })
-    if (allowLoneModifier) window.addEventListener('keyup', onKeyup, { capture: true })
+    // Followed either way: a lone modifier that cannot be recorded still says why.
+    window.addEventListener('keyup', onKeyup, { capture: true })
+  }
+
+  /** Records a key no KeyboardEvent carries (fn, from the native helper) as the whole chord. */
+  function recordKey(spec: string): void {
+    if (!active.value) return
+    loneDown = null
+    notice.value = null
+    segments.value = [spec]
   }
 
   function stop(): void {
@@ -79,10 +129,12 @@ export function useKeyChordRecorder(options: KeyChordRecorderOptions = {}) {
     setKeyCaptureActive(false)
     active.value = false
     segments.value = []
+    notice.value = null
   }
 
   function clear(): void {
     segments.value = []
+    notice.value = null
   }
 
   onScopeDispose(stop)
@@ -91,7 +143,10 @@ export function useKeyChordRecorder(options: KeyChordRecorderOptions = {}) {
     active,
     /** The chord recorded so far ('' before the first key). */
     spec: computed(() => segments.value.join(' ')),
+    /** Why the last press recorded nothing (null once a key is recorded). */
+    notice,
     start,
+    recordKey,
     stop,
     clear,
   }

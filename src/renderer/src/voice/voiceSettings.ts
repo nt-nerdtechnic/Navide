@@ -26,8 +26,10 @@ export type VoiceRecordingMode = (typeof VOICE_RECORDING_MODES)[number]
 export const VOICE_SCRIPT_KEY = 'agentTeam.voiceChineseScript'
 export const VOICE_SCRIPTS = ['hant-tw', 'hans', 'none'] as const
 export type VoiceScript = (typeof VOICE_SCRIPTS)[number]
-// macOS: the fn (🌐) key also works as the dictation key, through a native
-// helper that runs only while this is on (default off).
+// The old "Use the fn (🌐) key" switch (macOS, default off). fn is now an
+// ordinary hold-to-talk binding ('fn'); a switch left on counts as fn bound
+// (voiceWiring.holdToTalkFnRules) until the Voice Input shortcut row writes
+// that binding and turns the switch off. Nothing turns it on any more.
 export const VOICE_FN_KEY_KEY = 'agentTeam.voiceFnKeyEnabled'
 
 function read(key: string): boolean {

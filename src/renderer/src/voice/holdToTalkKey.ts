@@ -1,5 +1,17 @@
-import { canonicalizeKeySpec, isLoneModifierKey, MENU_OWNED_SPECS, parseKeySpec, validateKeySpec } from '@navide/plugin-ui/shared'
-import type { VoiceRecordingMode } from './voiceSettings'
+import {
+  canonicalizeKeySpec,
+  defaults,
+  getUserRules,
+  isFnKey,
+  isLoneModifierKey,
+  isRemovalRule,
+  MENU_OWNED_SPECS,
+  parseKeySpec,
+  removalTarget,
+  validateKeySpec,
+  type KeybindingRule,
+} from '@navide/plugin-ui/shared'
+import { HOLD_TO_TALK_COMMAND, type VoiceRecordingMode } from './voiceSettings'
 
 /**
  * Why a key cannot be the hold-to-talk key in a recording mode, or null when
@@ -104,4 +116,25 @@ export function suggestHoldToTalkKeys(spec: string, mode: VoiceRecordingMode, ta
     if (out.length >= count) break
   }
   return out
+}
+
+/** The rules currently binding hold-to-talk (defaults and user rules, removals applied). */
+export function holdToTalkRules(): KeybindingRule[] {
+  const rules = [...defaults, ...getUserRules()]
+  const removed = new Set(
+    rules.filter((r) => isRemovalRule(r) && removalTarget(r) === HOLD_TO_TALK_COMMAND).map((r) => canonicalizeKeySpec(r.key)),
+  )
+  return rules.filter((r) => r.command === HOLD_TO_TALK_COMMAND && !removed.has(canonicalizeKeySpec(r.key)))
+}
+
+/**
+ * The hold-to-talk rules bound to fn. The old "Use the fn key" switch counts
+ * as fn bound under the default rule's `when` until the Voice Input shortcut
+ * row turns it into a real binding (see VoiceShortcutRow).
+ */
+export function holdToTalkFnRules(legacyFnSwitch: boolean): KeybindingRule[] {
+  const bound = holdToTalkRules().filter((r) => isFnKey(canonicalizeKeySpec(r.key)))
+  if (bound.length || !legacyFnSwitch) return bound
+  const base = defaults.find((r) => r.command === HOLD_TO_TALK_COMMAND)
+  return [{ key: 'fn', command: HOLD_TO_TALK_COMMAND, ...(base?.when ? { when: base.when } : {}) }]
 }

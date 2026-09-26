@@ -1,18 +1,18 @@
-import { onScopeDispose, watch } from 'vue'
+import { onScopeDispose, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import {
-  canonicalizeKeySpec,
-  defaults,
+  evaluateWhen,
   eventLoneModifier,
-  getUserRules,
+  getContext,
+  isFnKey,
+  isKeyCaptureActive,
   isLoneModifierKey,
-  isRemovalRule,
   LONE_MODIFIER_KEYS,
   matchesEvent,
   onKeydownSeen,
+  onUserRulesChanged,
   parseKeySpec,
   registerCommand,
-  removalTarget,
   setContext,
   type ParsedKey,
 } from '@navide/plugin-ui/shared'
@@ -20,6 +20,7 @@ import type { useBackend } from '../composables/useBackend'
 import { useVoiceInput, voiceErrorI18nKey, type VoiceDeps, type VoicePartial, type VoiceTarget } from '../composables/useVoiceInput'
 import { openMicCapture } from './micCapture'
 import { HOLD_TO_TALK_COMMAND as HOLD_TO_TALK, useVoiceSettings } from './voiceSettings'
+import { holdToTalkFnRules, holdToTalkRules } from './holdToTalkKey'
 import type { FnKeyApi } from '../../../shared/fnKey'
 
 /** A press let go sooner than this is a tap: in hold-tap mode it locks the take hands-free. */
@@ -35,15 +36,11 @@ const SOLO_HOLD_FLAGS: ReadonlySet<string> = new Set(['meta', 'ctrl'])
 const PREWARM_TIMEOUT_MS = 125_000
 const PREWARM_FOCUS_INTERVAL_MS = 60_000
 
-/** The keys (last chord segment) currently bound to hold-to-talk. */
+/** The keyboard keys (last chord segment) currently bound to hold-to-talk. */
 function holdToTalkChords(): ParsedKey[] {
-  const rules = [...defaults, ...getUserRules()]
-  const removed = new Set(
-    rules.filter((r) => isRemovalRule(r) && removalTarget(r) === HOLD_TO_TALK).map((r) => canonicalizeKeySpec(r.key)),
-  )
-  return rules
-    .filter((r) => r.command === HOLD_TO_TALK && !removed.has(canonicalizeKeySpec(r.key)))
+  return holdToTalkRules()
     .map((r) => parseKeySpec(r.key).at(-1)!)
+    .filter((k) => !isFnKey(k.key))
 }
 
 const MODIFIER_OF: Record<string, 'ctrl' | 'alt' | 'shift' | 'meta'> = {
@@ -203,10 +200,12 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   // press. That chord is still held after the stop, so a repeat guard keeps
   // its repeats from starting the next take until a key of it is let go.
   //
-  // The fn key (optional, macOS) presses and releases the same way, but its
-  // events come from the main process, which sees fn system-wide: a press is
-  // taken only while this window has focus, and its release is fn's own up
-  // (keyups and blur are not followed). A CHORD (fn+arrow...) drops the take.
+  // fn (macOS), when hold-to-talk is bound to it, presses and releases the
+  // same way, but its events come from the main process, which sees fn
+  // system-wide: a press is taken only while this window has focus, its rule's
+  // `when` holds (no dialog open) and no shortcut recorder is listening, and
+  // its release is fn's own up (keyups and blur are not followed). A CHORD
+  // (fn+arrow...) drops the take.
   let armed = false
   let chordUp = false
   let pressedAt = 0
@@ -380,12 +379,19 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   registerCommand(HOLD_TO_TALK, (_args, e) => onHotkey(e))
 
   // ── fn (🌐) key ─────────────────────────────────────────────────────────────
-  // Subscribed only while voice input and the fn setting are both on: the
-  // main process runs its helper only while someone is subscribed.
+  // Subscribed only while voice input is on and hold-to-talk is bound to fn:
+  // the main process runs its helper only while someone is subscribed.
+  const rulesTick = ref(0)
+  const offRulesChanged = onUserRulesChanged(() => rulesTick.value++)
+  function fnPressAllowed(): boolean {
+    if (!document.hasFocus() || isKeyCaptureActive()) return false
+    const ctx = getContext()
+    return holdToTalkFnRules(settings.voiceFnKeyEnabled.value).some((r) => !r.when || evaluateWhen(r.when, ctx))
+  }
   let offFnEvent: (() => void) | null = null
   function onFnEvent(type: 'down' | 'up' | 'chord'): void {
     if (type === 'down') {
-      if (document.hasFocus()) press('fn')
+      if (fnPressAllowed()) press('fn')
       return
     }
     if (!armed || source !== 'fn' || chordUp) return
@@ -411,7 +417,10 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     if (armed && source === 'fn' && !chordUp) letGo('fn-off')
   }
   watch(
-    () => settings.voiceInputEnabled.value && settings.voiceFnKeyEnabled.value,
+    () => {
+      void rulesTick.value
+      return settings.voiceInputEnabled.value && holdToTalkFnRules(settings.voiceFnKeyEnabled.value).length > 0
+    },
     (on) => fnListen(on),
     { immediate: true },
   )
@@ -520,6 +529,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
 
   onScopeDispose(() => {
     offPartial()
+    offRulesChanged()
     fnListen(false)
     offKeydownSeen()
     endSolo()

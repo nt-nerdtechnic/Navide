@@ -3,7 +3,11 @@
 // look for it. It edits the same user rules as Settings → Shortcuts
 // (buildRows / setRowKeys / resetRow over getUserRules / saveUserRules), so
 // both views always show one binding.
-import { computed, onUnmounted, ref, watch } from 'vue'
+//
+// While it records it also takes fn (🌐) on macOS, through the native helper
+// (useFnKeyRecorder), and every press gets an answer: recorded, or refused
+// with the reason (KeyRecorderFeedback and the live check below).
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   buildRows,
@@ -13,6 +17,7 @@ import {
   getUserRules,
   keySpecToTokens,
   formatKeySpec,
+  FN_KEY,
   onUserRulesChanged,
   parseKeySpec,
   resetRow,
@@ -23,7 +28,9 @@ import {
   type KeybindingRule,
 } from '@navide/plugin-ui/shared'
 import SettingRow from './SettingRow.vue'
+import KeyRecorderFeedback from './KeyRecorderFeedback.vue'
 import { useKeyChordRecorder } from '../../composables/useKeyChordRecorder'
+import { useFnKeyRecorder } from '../../voice/fnKeyRecorder'
 import { HOLD_TO_TALK_COMMAND, useVoiceSettings } from '../../voice/voiceSettings'
 import { holdToTalkKeyProblem, reservedChordAction, suggestHoldToTalkKeys } from '../../voice/holdToTalkKey'
 
@@ -42,15 +49,33 @@ const error = ref('')
 // Free keys offered after a chord was refused.
 const suggestions = ref<string[]>([])
 // Keys are judged against the recording mode: a ⌘ chord is fine only in toggle.
-const { voiceRecordingMode } = useVoiceSettings()
+const { voiceRecordingMode, voiceFnKeyEnabled, setVoiceFnKeyEnabled } = useVoiceSettings()
 watch(voiceRecordingMode, () => {
   error.value = ''
   suggestions.value = []
 })
 
 // Hold-to-talk is held down, so it is one key combination, never a sequence;
-// it may be a single modifier on its own (Right Option).
+// it may be a single modifier on its own (Right Option), or fn.
 const recorder = useKeyChordRecorder({ maxSegments: 1, allowLoneModifier: true })
+const fnRecorder = useFnKeyRecorder(() => recorder.recordKey(FN_KEY))
+watch(recorder.active, (on) => {
+  if (!on) fnRecorder.stop()
+})
+
+// The old "Use the fn (🌐) key" switch becomes what it meant: fn bound next to
+// the current key. Done here, where the user's rules are long loaded, never at
+// startup, where a save could overwrite a keybindings.json not read yet; until
+// then voiceWiring counts the switch as fn bound.
+onMounted(async () => {
+  if (!voiceFnKeyEnabled.value) return
+  const r = row.value
+  if (r && !r.keys.some((k) => k.key === FN_KEY)) {
+    await commit(setRowKeys(userRules.value, r, [...r.keys.map((k) => k.key), FN_KEY]))
+    if (error.value) return
+  }
+  setVoiceFnKeyEnabled(false)
+})
 
 /** Why `spec` cannot be the dictation key in the current mode (see holdToTalkKey.ts), or ''. */
 function problemText(spec: string, mode: 'refused' | 'warning'): string {
@@ -112,6 +137,34 @@ function startRecording(): void {
   error.value = ''
   suggestions.value = []
   recorder.start()
+  fnRecorder.start()
+}
+
+// A refused key is answered the moment it is pressed, not on Save.
+watch(recorder.spec, (spec) => {
+  if (!recorder.active.value) return
+  error.value = ''
+  suggestions.value = []
+  if (!spec) return
+  const refused = refusal(spec)
+  if (refused) refuse(spec, refused)
+})
+
+/** Why `spec` cannot be saved as the dictation key right now, or ''. */
+function refusal(spec: string): string {
+  const refused = problemText(spec, 'refused')
+  if (refused) return refused
+  if (!validateKeySpec(spec).ok) return t('settings.keybindings.invalid-key', { key: formatKeySpec(spec) })
+  // A ⌘ chord (toggle mode) must not take a key another command already has:
+  // most of them are Navide's own everyday shortcuts.
+  const r = row.value
+  if (r && parseKeySpec(spec).some((k) => k.meta)) {
+    const next = setRowKeys(userRules.value, r, [spec])
+    const nextRow = buildRows(next).find((x) => x.id === r.id)
+    const names = nextRow ? rivalNames(buildRows(next), nextRow) : []
+    if (names.length) return t('settings.voice.shortcut-taken-refused', { key: formatKeySpec(spec), commands: names.join(', ') })
+  }
+  return ''
 }
 
 function refuse(spec: string, message: string): void {
@@ -125,28 +178,13 @@ async function save(): Promise<void> {
   recorder.stop()
   if (!r || !spec) return
   suggestions.value = []
-  const refused = problemText(spec, 'refused')
+  // setRowKeys drops a key validateKeySpec rejects; say why instead.
+  const refused = refusal(spec)
   if (refused) {
     refuse(spec, refused)
     return
   }
-  // setRowKeys drops a key validateKeySpec rejects; say why instead.
-  if (!validateKeySpec(spec).ok) {
-    error.value = t('settings.keybindings.invalid-key', { key: formatKeySpec(spec) })
-    return
-  }
-  const next = setRowKeys(userRules.value, r, [spec])
-  // A ⌘ chord (toggle mode) must not take a key another command already has:
-  // most of them are Navide's own everyday shortcuts.
-  if (parseKeySpec(spec).some((k) => k.meta)) {
-    const nextRow = buildRows(next).find((x) => x.id === r.id)
-    const names = nextRow ? rivalNames(buildRows(next), nextRow) : []
-    if (names.length) {
-      refuse(spec, t('settings.voice.shortcut-taken-refused', { key: formatKeySpec(spec), commands: names.join(', ') }))
-      return
-    }
-  }
-  await commit(next)
+  await commit(setRowKeys(userRules.value, r, [spec]))
 }
 
 async function useSuggestion(spec: string): Promise<void> {
@@ -208,6 +246,7 @@ async function reset(): Promise<void> {
       >{{ t('settings.voice.shortcut-reset') }}</button>
     </template>
   </SettingRow>
+  <KeyRecorderFeedback v-if="recorder.active.value" :notice="recorder.notice.value" :fn="fnRecorder" />
   <p v-if="warning" class="vs-message vs-message--warning" data-testid="voice-shortcut-warning">
     {{ warning }}
     <template v-if="boundMetaInHold">
