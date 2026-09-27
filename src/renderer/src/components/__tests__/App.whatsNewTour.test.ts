@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -25,6 +25,26 @@ describe('Help → What’s New… (menu action show-whats-new)', () => {
     expect(functionBody('showWhatsNewOnDemand')).toContain(
       'pickWhatsNewOnDemand(window.agentTeam?.version ?? \'\', import.meta.env.DEV)',
     )
+  })
+
+  it('says so with a toast when there are no release notes to show', () => {
+    const body = functionBody('showWhatsNewOnDemand')
+    const empty = body.slice(body.indexOf('if (!entry)'), body.indexOf('whatsNewOnDemand.value = true'))
+    expect(empty).toContain("notifyRestore.toast(i18n.global.t('announce.whats-new-none'), { type: 'info' })")
+    expect(empty).toContain('return')
+  })
+
+  it('translates the no-release-notes message in every shipped locale', () => {
+    const localesDir = resolve(process.cwd(), 'packages/plugin-ui/src/foundation/i18n/locales')
+    const message = (locale: string): unknown =>
+      JSON.parse(readFileSync(resolve(localesDir, `${locale}.json`), 'utf8')).announce?.['whats-new-none']
+    const locales = readdirSync(localesDir).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''))
+    expect(locales.sort()).toEqual(['en-US', 'ja-JP', 'zh-TW'])
+    expect(message('en-US')).toBe('No release notes are available for this version.')
+    for (const locale of ['zh-TW', 'ja-JP']) {
+      expect(typeof message(locale)).toBe('string')
+      expect(message(locale)).not.toBe(message('en-US'))
+    }
   })
 
   it('records nothing when an on-demand showing is closed', () => {

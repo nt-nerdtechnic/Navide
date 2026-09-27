@@ -600,7 +600,11 @@ function dismissWhatsNew(): void {
 const whatsNewOnDemand = ref(false)
 function showWhatsNewOnDemand(): void {
   const entry = pickWhatsNewOnDemand(window.agentTeam?.version ?? '', import.meta.env.DEV)
-  if (!entry) return
+  if (!entry) {
+    // The menu item was chosen on purpose; say why nothing opens.
+    notifyRestore.toast(i18n.global.t('announce.whats-new-none'), { type: 'info' })
+    return
+  }
   whatsNewOnDemand.value = true
   whatsNewEntry.value = entry
 }
