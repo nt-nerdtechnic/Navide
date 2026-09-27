@@ -1283,7 +1283,8 @@ export function registerPluginIpc(
     if (!currentGrant) throw new Error(`active package grant is unavailable for ${id}`)
     activeTransactions.add(id)
     let restartTransaction: PluginPackageRestartTransaction | undefined
-    let demoted = false
+    let journaled = false
+    let factoryLoaded = false
     let factorySelected = false
     // Nothing replaces the drained package until the factory package loads, so
     // every failure before that has to select the displaced package again.
@@ -1291,10 +1292,12 @@ export function registerPluginIpc(
     // already revoked, and without this its selector would keep calling a
     // version active that no longer runs.
     const reselectDisplacedPackage = (): void => {
-      if (demoted) {
-        lifecycleSelector.activateCandidate(id)
-        demoted = false
+      if (journaled) {
+        lifecycleSelector.recoverInterruptedActivation(id)
+        journaled = false
       }
+      // The factory package loaded but could not be made the durable selection.
+      if (factoryLoaded) manager.removeInstalledPlugin(id, { restoreBuiltin: false })
       capabilityGrants.set(id, currentGrant)
       const activeDir = lifecycleSelector.packageDir(id, active)
       const activeScanned = loadPluginDir(activeDir)
@@ -1326,18 +1329,23 @@ export function registerPluginIpc(
       }
     }
     try {
+      // Journaled like the previous-version rollback, so a crash before the
+      // factory package is durably selected recovers to the displaced package.
+      lifecycleSelector.beginFactoryRollback(id)
+      journaled = true
       if (currentDescriptor) {
         restartTransaction = await manager.beginPackageRestart(id, currentVersion)
       } else {
         await manager.revokePackageVersion(id, currentVersion)
       }
-      lifecycleSelector.demoteActiveToCandidate(id)
-      demoted = true
       manager.removeInstalledPlugin(id, { restoreBuiltin: false })
       const restored = loadFactoryPackage(id)
       if (!restored.loaded) {
         throw new Error(`Factory package restoration failed: ${restored.reason}`)
       }
+      factoryLoaded = true
+      lifecycleSelector.demoteActiveToCandidate(id)
+      journaled = false
       factorySelected = true
       manager.setPluginStorageSnapshotSelection(id, { activeVersion: restored.packageVersion })
       options.onActivationChange?.({ pluginId: id, activation: restored.activation })

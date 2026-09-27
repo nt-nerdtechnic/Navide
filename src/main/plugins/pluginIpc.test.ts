@@ -1874,6 +1874,63 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('leaves a factory rollback journal that cold start recovers to the displaced package', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-rollback-crash-'))
+    const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-bundle-crash-'))
+    const manager = new FrontendPluginManager()
+    try {
+      for (const entry of readZipEntries(buildPkg('acme.demo', 'acme', {}, '1.0.0').bytes)) {
+        if (entry.kind !== 'file') continue
+        const output = join(factoryDir, entry.path)
+        mkdirSync(join(output, '..'), { recursive: true })
+        writeFileSync(output, entry.data)
+      }
+      expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
+      new PluginCapabilityGrantStore(root).set('acme.demo', { packageVersion: '1.0.0', system: [], storage: true })
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        factoryPackageIds: ['acme.demo'],
+        loadFactoryPackage: () => {
+          throw new Error('process died while loading the factory package')
+        },
+      })
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+      const secondSelection = { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest }
+      const secondGrant = { packageVersion: '1.0.1', system: [], storage: true }
+      // A dead process runs none of its in-process recovery.
+      vi.spyOn(PluginActivationSelector.prototype, 'recoverInterruptedActivation').mockImplementationOnce(() => {
+        throw new Error('process is gone')
+      })
+
+      await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' })).rejects.toThrow()
+
+      // What the next start finds on disk says a factory rollback was in flight.
+      const onDisk = new PluginActivationSelector(root)
+      expect(onDisk.read('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        active: secondSelection,
+        activeGrant: secondGrant,
+        activation: { kind: 'factory-rollback', phase: 'prepared' },
+      })
+      vi.restoreAllMocks()
+      expect(onDisk.recoverInterruptedActivation('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        active: secondSelection,
+        activeGrant: secondGrant,
+      })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+      rmSync(factoryDir, { recursive: true, force: true })
+    }
+  })
+
   it('offers no rollback for a retained package with no grant to restore', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')

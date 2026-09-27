@@ -36,7 +36,9 @@ export interface PluginSelectionGrant {
 /** Durable activation progress. It distinguishes an intentional staged
  * candidate from a restart that was interrupted after the old runtime drained. */
 export interface PluginActivationProgress {
-  kind: 'candidate' | 'rollback'
+  /** `factory-rollback` is only ever `prepared`: its one durable cutover
+   * writes the finished record, so an interrupted one keeps its active package. */
+  kind: 'candidate' | 'rollback' | 'factory-rollback'
   phase: 'prepared' | 'promoted'
 }
 
@@ -117,7 +119,7 @@ function validateActivation(value: unknown): PluginActivationProgress | undefine
   if (value === undefined) return undefined
   if (
     !isObject(value) ||
-    (value.kind !== 'candidate' && value.kind !== 'rollback') ||
+    (value.kind !== 'candidate' && value.kind !== 'rollback' && value.kind !== 'factory-rollback') ||
     (value.phase !== 'prepared' && value.phase !== 'promoted')
   ) throw new Error('invalid plugin lifecycle activation progress')
   return { kind: value.kind, phase: value.phase }
@@ -195,7 +197,9 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
     (activation?.kind === 'rollback' && activation.phase === 'prepared' &&
       (active === undefined || previous === undefined || candidate !== undefined)) ||
     (activation?.kind === 'rollback' && activation.phase === 'promoted' &&
-      (active === undefined || candidate === undefined || previous !== undefined || sameSelection(active, candidate)))
+      (active === undefined || candidate === undefined || previous !== undefined || sameSelection(active, candidate))) ||
+    (activation?.kind === 'factory-rollback' &&
+      (activation.phase !== 'prepared' || active === undefined || candidate !== undefined || previous !== undefined))
   ) throw new Error('invalid plugin lifecycle selector')
   return {
     schemaVersion: 1,
@@ -421,7 +425,7 @@ export class PluginActivationSelector {
           schemaVersion: 1,
           pluginId,
           ...(current.active ? { active: current.active } : {}),
-          candidate: current.candidate!,
+          ...(current.candidate ? { candidate: current.candidate } : {}),
           ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
           ...(current.candidateGrant ? { candidateGrant: current.candidateGrant } : {}),
           ...(current.previous ? { previous: current.previous } : {}),
@@ -532,11 +536,10 @@ export class PluginActivationSelector {
     return next
   }
 
-  /** Hand the plugin id back to its App-bundled factory package. A factory
-   * package has no selection of its own, so the displaced active package is
-   * retained as the next explicit candidate, exactly as when it was first
-   * staged over the factory package; no package bytes are removed. */
-  demoteActiveToCandidate(pluginId: string): PluginActivationSelectorRecord {
+  /** Persist a factory rollback before the active runtime is drained. The
+   * active package stays selected until the factory package has loaded, so a
+   * crash before {@link demoteActiveToCandidate} recovers to it. */
+  beginFactoryRollback(pluginId: string): PluginActivationSelectorRecord {
     const current = this.read(pluginId)
     if (!current?.active || current.active.layout) {
       throw new Error(`plugin ${pluginId} has no active package to return to its factory package`)
@@ -546,6 +549,26 @@ export class PluginActivationSelector {
     }
     if (current.previous) {
       throw new Error(`plugin ${pluginId} retains a previous package to roll back to`)
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      active: current.active,
+      ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
+      activation: { kind: 'factory-rollback', phase: 'prepared' },
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
+  /** Hand the plugin id back to its App-bundled factory package once it has
+   * loaded. A factory package has no selection of its own, so the displaced
+   * active package is retained as the next explicit candidate, exactly as when
+   * it was first staged over the factory package; no package bytes are removed. */
+  demoteActiveToCandidate(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (current?.activation?.kind !== 'factory-rollback' || !current.active) {
+      throw new Error(`plugin ${pluginId} has no prepared factory rollback`)
     }
     const next: PluginActivationSelectorRecord = {
       schemaVersion: 1,

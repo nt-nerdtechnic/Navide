@@ -235,6 +235,7 @@ describe('PluginActivationSelector', () => {
     selector.completeActivation('acme.demo', { activeGrant: grant })
 
     const expected = { schemaVersion: 1, pluginId: 'acme.demo', candidate: first, candidateGrant: grant }
+    selector.beginFactoryRollback('acme.demo')
     expect(selector.demoteActiveToCandidate('acme.demo')).toEqual(expected)
     expect(new PluginActivationSelector(root).read('acme.demo')).toEqual(expected)
     // The retained candidate re-activates through the ordinary restart path.
@@ -248,14 +249,66 @@ describe('PluginActivationSelector', () => {
 
   it('refuses factory rollback while a previous package or another transition is retained', () => {
     const { selector } = fixture()
-    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/no active package/)
+    expect(() => selector.beginFactoryRollback('acme.demo')).toThrow(/no active package/)
     selector.stageCandidate('acme.demo', first)
-    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/no active package/)
+    expect(() => selector.beginFactoryRollback('acme.demo')).toThrow(/no active package/)
     selector.activateCandidate('acme.demo')
     selector.stageCandidate('acme.demo', second)
-    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/another lifecycle transition/)
+    expect(() => selector.beginFactoryRollback('acme.demo')).toThrow(/another lifecycle transition/)
     selector.activateCandidate('acme.demo')
-    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/retains a previous package/)
+    expect(() => selector.beginFactoryRollback('acme.demo')).toThrow(/retains a previous package/)
+    // Only a journaled factory rollback may hand the id back to the factory package.
+    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/no prepared factory rollback/)
+  })
+
+  it('journals a factory rollback so a crash before the factory package is selected keeps the active package', () => {
+    const { root, selector } = fixture()
+    const grant = { packageVersion: first.packageVersion, system: [], storage: true as const }
+    selector.stageCandidate('acme.demo', first, { candidateGrant: { selection: first, grant } })
+    selector.activateCandidate('acme.demo')
+    const selected = { schemaVersion: 1, pluginId: 'acme.demo', active: first, activeGrant: grant }
+    expect(selector.read('acme.demo')).toEqual(selected)
+
+    // The drain and factory load happen between these two writes; the process
+    // dies there, so demoteActiveToCandidate never runs.
+    selector.beginFactoryRollback('acme.demo')
+
+    const restarted = new PluginActivationSelector(root)
+    expect(restarted.read('acme.demo')).toEqual({
+      ...selected,
+      activation: { kind: 'factory-rollback', phase: 'prepared' },
+    })
+    // An interrupted rollback is not an ordinary state other transitions build on.
+    expect(() => restarted.beginFactoryRollback('acme.demo')).toThrow(/another lifecycle transition/)
+  })
+
+  it('recovers an interrupted factory rollback to the package it was displacing', () => {
+    const { root, selector } = fixture()
+    const grant = { packageVersion: first.packageVersion, system: [], storage: true as const }
+    selector.stageCandidate('acme.demo', first, { candidateGrant: { selection: first, grant } })
+    selector.activateCandidate('acme.demo')
+    selector.beginFactoryRollback('acme.demo')
+
+    const restarted = new PluginActivationSelector(root)
+    const recovered = { schemaVersion: 1, pluginId: 'acme.demo', active: first, activeGrant: grant }
+    expect(restarted.recoverInterruptedActivation('acme.demo')).toEqual(recovered)
+    expect(new PluginActivationSelector(root).read('acme.demo')).toEqual(recovered)
+    // Recovery leaves an ordinary selection a later factory rollback can start from.
+    expect(() => new PluginActivationSelector(root).beginFactoryRollback('acme.demo')).not.toThrow()
+  })
+
+  it('rejects a factory rollback journal that does not keep its active package', () => {
+    const { root, selector } = fixture()
+    selector.stageCandidate('acme.demo', first)
+    selector.activateCandidate('acme.demo')
+    selector.beginFactoryRollback('acme.demo')
+    const file = join(root, '.navide-lifecycle', 'acme.demo.json')
+    const record = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...record, activation: { kind: 'factory-rollback', phase: 'promoted' } }))
+    expect(() => selector.read('acme.demo')).toThrow(/invalid plugin lifecycle selector/)
+    const { active: _active, ...withoutActive } = record
+    writeFileSync(file, JSON.stringify({ ...withoutActive, candidate: first }))
+    expect(() => selector.read('acme.demo')).toThrow(/invalid plugin lifecycle selector/)
   })
 
   it('rejects a second candidate instead of overwriting a staged package', () => {
