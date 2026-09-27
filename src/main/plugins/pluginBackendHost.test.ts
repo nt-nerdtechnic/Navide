@@ -439,6 +439,44 @@ describe('PluginBackendHost', () => {
       .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
   })
 
+  it('rejects every call and subscription of a generic package before any child spawn', async () => {
+    const spawnProcess = vi.fn(() => {
+      throw new Error('a generic package with no approved surface must never spawn')
+    })
+    const startSpies: Array<ReturnType<typeof vi.spyOn>> = []
+    const host = new PluginBackendHost({
+      createSupervisor: (nextActivation, options) => {
+        const supervisor = new PluginBackendSupervisor(nextActivation, { ...options, spawnProcess })
+        startSpies.push(vi.spyOn(supervisor, 'start'))
+        return supervisor
+      },
+    })
+    hosts.push(host)
+    // Mirrors the generic third-party tuple the main process registers.
+    const genericActivation: BackendPluginLaunchSpec = {
+      ...activation,
+      pluginId: 'example.third-party',
+      approvedMethods: [],
+      approvedEvents: [],
+      approvedBridgePorts: [],
+    }
+    host.register(genericActivation)
+    await host.bindView({
+      ...runtime,
+      pluginId: genericActivation.pluginId,
+      contributionKey: 'example.third-party.window',
+    }, genericActivation.packageDir, process.cwd())
+
+    await expect(host.call('view-1', 'fixture.echo', null))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await expect(host.subscribe('view-1', 'fixture.changed', vi.fn()))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+
+    expect(startSpies).toHaveLength(1)
+    expect(startSpies[0]).toHaveBeenCalledTimes(0)
+    expect(spawnProcess).toHaveBeenCalledTimes(0)
+  })
+
   it('requires an exact package version for activation lookup', () => {
     const host = makeHost()
     hosts.push(host)
