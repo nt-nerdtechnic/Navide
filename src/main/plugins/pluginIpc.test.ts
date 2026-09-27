@@ -2269,6 +2269,133 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it.each(['factory', 'previous'] as const)(
+    'remounts the displaced version views when a %s rollback fails before selecting its target',
+    async (kind) => {
+      const root = mkdtempSync(join(tmpdir(), `navide-plugin-rollback-remount-${kind}-`))
+      const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-remount-'))
+      const manager = new FrontendPluginManager()
+      try {
+        const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+        const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+        if (kind === 'factory') {
+          for (const entry of readZipEntries(first.bytes)) {
+            if (entry.kind !== 'file') continue
+            const output = join(factoryDir, entry.path)
+            mkdirSync(join(output, '..'), { recursive: true })
+            writeFileSync(output, entry.data)
+          }
+          expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
+          new PluginCapabilityGrantStore(root).set('acme.demo', { packageVersion: '1.0.0', system: [], storage: true })
+        }
+        registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+          ...TEST_PREFLIGHT_OPTIONS,
+          ...(kind === 'factory'
+            ? {
+                factoryPackageIds: ['acme.demo'],
+                loadFactoryPackage: () => ({ loaded: false as const, reason: 'injected factory failure' }),
+              }
+            : {}),
+        })
+        const prepare = handlers.get('plugins:prepareInstall')!
+        const commit = handlers.get('plugins:commitInstall')!
+        const restart = handlers.get('plugins:restart')!
+        if (kind === 'previous') {
+          installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+          await prepare(null, { namespace: 'acme', name: 'demo' })
+          await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+          await restart(null, { id: 'acme.demo' })
+        }
+        installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+        await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+        await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+        await restart(null, { id: 'acme.demo' })
+        if (kind === 'previous') {
+          vi.spyOn(PluginActivationSelector.prototype, 'activatePrevious').mockImplementationOnce(() => {
+            throw new Error('injected selection failure')
+          })
+        }
+
+        // Views resolve their grant the way the App wires it.
+        manager.setCapabilityGrantResolver((pluginId, packageVersion) =>
+          new PluginCapabilityGrantStore(root).get(pluginId, packageVersion))
+        // One open view of 1.0.1 captured by the drain.
+        const hostWindow = { isDestroyed: () => false, close: vi.fn() }
+        const internals = manager as unknown as {
+          snapshotPackageRestart: () => unknown
+          mountView: (...args: unknown[]) => unknown
+          waitForBackendBinding: () => Promise<void>
+          waitForPluginReady: () => Promise<void>
+          contributionInstances: Map<string, unknown>
+          restartingPluginIds: Set<string>
+        }
+        vi.spyOn(internals, 'snapshotPackageRestart').mockReturnValueOnce([{
+          pluginId: 'acme.demo', packageVersion: '1.0.1', contributionKey: 'acme.demo.left',
+          hostWindow, bounds: 'fill', query: '', closeHostOnHide: false, mirrorTitle: false,
+          initiallyVisible: true, contributionRegistered: true, carrier: 'native',
+        }])
+        const handle = { instanceId: 'restored-instance' }
+        const mountView = vi.spyOn(internals, 'mountView').mockReturnValue(handle)
+        vi.spyOn(internals, 'waitForBackendBinding').mockResolvedValue(undefined)
+        vi.spyOn(internals, 'waitForPluginReady').mockResolvedValue(undefined)
+
+        await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }))
+          .rejects.toThrow(kind === 'factory' ? 'injected factory failure' : 'injected selection failure')
+        expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.1')
+        expect(mountView).toHaveBeenCalledTimes(1)
+        expect(mountView.mock.calls[0][0]).toBe(hostWindow)
+        expect(mountView.mock.calls[0][1]).toMatchObject({ packageVersion: '1.0.1' })
+        expect([...internals.contributionInstances.values()]).toContain(handle)
+        expect(hostWindow.close).not.toHaveBeenCalled()
+        expect(internals.restartingPluginIds.has('acme.demo')).toBe(false)
+        expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+          active: { packageVersion: '1.0.1' },
+        })
+      } finally {
+        await manager.closeBackendPlugins()
+        rmSync(root, { recursive: true, force: true })
+        rmSync(factoryDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('names both causes when the displaced views cannot be remounted after a failed rollback', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-rollback-remount-fails-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      vi.spyOn(PluginActivationSelector.prototype, 'activatePrevious').mockImplementationOnce(() => {
+        throw new Error('injected selection failure')
+      })
+      vi.spyOn(manager, 'restorePackageRestart').mockRejectedValueOnce(new Error('injected remount failure'))
+
+      const rejection = await Promise.resolve(
+        handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }),
+      ).catch((error: unknown) => error)
+      expect(rejection).toBeInstanceOf(AggregateError)
+      expect((rejection as AggregateError).message).toContain('injected selection failure')
+      expect((rejection as AggregateError).message).toContain('injected remount failure')
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
+      expect(new PluginActivationSelector(root).read('acme.demo')?.active?.packageVersion).toBe('1.0.1')
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('persists the confirmed Manifest v2 grant only after a successful commit and removes it on uninstall', async () => {
     const { bytes, digest } = buildPkg('acme.demo', 'acme', {
       system: ['fs', 'ui'],

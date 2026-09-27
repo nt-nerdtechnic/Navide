@@ -1249,6 +1249,26 @@ export function registerPluginIpc(
     return { ok: true }
   })
 
+  // A rollback that fails before selecting its target leaves the drained
+  // version selected again; remount its views instead of leaving it closed.
+  async function restoreDrainedViews(
+    transaction: PluginPackageRestartTransaction,
+    packageVersion: string,
+    cause: unknown,
+  ): Promise<void> {
+    try {
+      await manager.restorePackageRestart(transaction, packageVersion)
+      manager.completePackageRestart(transaction)
+    } catch (restoreError) {
+      manager.cancelPackageRestart(transaction)
+      // IPC carries only the message, so it names both causes itself.
+      throw new AggregateError(
+        [cause, restoreError],
+        `Plugin rollback failed and its views could not be restored: ${errorText(cause)}; ${errorText(restoreError)}`,
+      )
+    }
+  }
+
   // A factory package has no selection to retain as `previous`, so rolling
   // back the package that replaced it returns the id to the App bundle. The
   // displaced package stays staged as a candidate plugins:restart re-activates.
@@ -1329,8 +1349,9 @@ export function registerPluginIpc(
       }
       return { id, packageVersion: restored.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
     } catch (error) {
+      if (factorySelected) throw error
       try {
-        if (!factorySelected) reselectDisplacedPackage()
+        reselectDisplacedPackage()
       } catch (recoveryError) {
         if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
         restartTransaction = undefined
@@ -1339,6 +1360,11 @@ export function registerPluginIpc(
           [error, recoveryError],
           `Factory package rollback recovery failed: ${errorText(error)}; ${errorText(recoveryError)}`,
         )
+      }
+      if (restartTransaction) {
+        const transaction = restartTransaction
+        restartTransaction = undefined
+        await restoreDrainedViews(transaction, currentVersion, error)
       }
       throw error
     } finally {
@@ -1457,7 +1483,6 @@ export function registerPluginIpc(
       try {
         if (!promoted) {
           lifecycleSelector.recoverInterruptedActivation(id)
-          if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
           if (drainedBackendOnly) {
             const currentDir = lifecycleSelector.packageDir(id, selectedBeforeRollback.active)
             const currentScanned = loadPluginDir(currentDir)
@@ -1476,6 +1501,11 @@ export function registerPluginIpc(
       } catch (recoveryError) {
         if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
         throw new AggregateError([error, recoveryError], 'Plugin rollback recovery failed.')
+      }
+      if (!promoted && restartTransaction) {
+        const transaction = restartTransaction
+        restartTransaction = undefined
+        await restoreDrainedViews(transaction, currentVersion, error)
       }
       throw error
     } finally {
