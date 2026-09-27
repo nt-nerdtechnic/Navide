@@ -1435,9 +1435,51 @@ const pluginTrustRefresh = registerPluginIpc(
         }
       }
     },
+    // Rollback hands an id back to the same bundled bytes restoreFactoryPackage
+    // serves, so it owes the same guard and the same recovery-state reset. It
+    // cannot reuse that function: the displaced package is still on disk as the
+    // next candidate, which its "already owns this plugin id" guard refuses.
     loadFactoryPackage: (pluginId) => {
-      if (pluginId === MINI_IDE_PLUGIN_ID) return loadFactoryMiniIdePackage()
-      if (pluginId === 'navide.git') return loadFactoryGitPackage()
+      if (pluginId === MINI_IDE_PLUGIN_ID) {
+        if (miniIdeRecoveryEnabled) {
+          const recovered = frontendPluginManager.restoreFactoryAfterRecovery(
+            bundledMiniIdeV2Dir(miniIdeSource),
+            MINI_IDE_PLUGIN_ID,
+          )
+          if (!recovered.restored) return { loaded: false as const, reason: recovered.reason }
+          miniIdeRecoveryEnabled = false
+          clearMiniIdeLegacyPreferenceOverlay()
+          pluginFactoryOptOuts.remove(pluginId)
+          const descriptor = frontendPluginManager.getDescriptor(pluginId)
+          return {
+            loaded: true as const,
+            pluginId,
+            packageVersion: recovered.activation.packageVersion,
+            activation: recovered.activation,
+            ...(descriptor ? { descriptor } : {}),
+          }
+        }
+        const loaded = loadFactoryMiniIdePackage()
+        if (loaded.loaded) {
+          clearMiniIdeLegacyPreferenceOverlay()
+          pluginFactoryOptOuts.remove(pluginId)
+        }
+        return loaded
+      }
+      if (pluginId === 'navide.git') {
+        // Refuses while Git is pinned to legacy, the same way a restore does.
+        assertFactoryGitRestoreAllowed({ forcedLegacy: gitRecoveryForced })
+        const loaded = loadFactoryGitPackage()
+        if (!loaded.loaded) return loaded
+        gitRecoveryEnabled = false
+        pluginFactoryOptOuts.remove(pluginId)
+        for (const hostWindow of mainWindows) {
+          if (!hostWindow.isDestroyed() && !detachedWindowIds.has(hostWindow.id)) {
+            hostWindow.webContents.send('git:recoveryChanged', { legacy: false })
+          }
+        }
+        return loaded
+      }
       return { loaded: false, reason: 'unknown factory package' }
     },
     onFactoryPackageRemoved: (pluginId) => {
