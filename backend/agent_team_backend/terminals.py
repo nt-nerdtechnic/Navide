@@ -620,7 +620,7 @@ class TerminalService:
         except RuntimeError:
             # No running loop (non-async caller) — fall back to inline.
             try:
-                pty_registry.register(proc.pid, argv)
+                in_data_dir(self._data_dir, pty_registry.register, proc.pid, argv)()
             except BaseException:
                 self._abort_failed_create(handle, registry_future=None)
                 raise
@@ -725,7 +725,7 @@ class TerminalService:
                 )
             )
         else:
-            unregister()
+            in_data_dir(self._data_dir, unregister)()
 
     def get(self, session_id: str) -> TerminalSession | None:
         """The session for ``session_id``, or None when unknown."""
