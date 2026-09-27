@@ -9,6 +9,12 @@ import {
   ExecutionPolicySourceStore,
 } from './executionPolicySourceStore'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
 }))

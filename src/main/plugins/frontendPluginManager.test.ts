@@ -6,6 +6,12 @@ import { tmpdir } from 'node:os'
 import { platformId, setPlatformId } from '../../shared/osplat'
 import { backendEntryOnDisk } from './installedPlugins'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 // A frame on a non-special scheme reports its real origin (`scheme://host`);
 // `new URL(url).origin` is opaque ("null") for such schemes, so the fixture
 // derives the origin the way Electron does.

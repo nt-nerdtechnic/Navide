@@ -2,10 +2,16 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HostStorageSnapshotIdentity, StorageExecution } from './pluginStorage'
 import { MissingStorageSnapshotError, PluginStorageStore } from './pluginStorage'
 import { createMiniIdeLegacyPreferences } from './miniIdeLegacyPreferences'
+
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
 
 const pluginId = 'navide.mini-ide'
 const snapshot: HostStorageSnapshotIdentity = { pluginId, packageVersion: '1.0.0', tier: 'active' }

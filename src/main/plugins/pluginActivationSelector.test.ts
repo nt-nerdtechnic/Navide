@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,6 +7,12 @@ import {
   PluginActivationSelector,
 } from './pluginActivationSelector'
 import { currentPluginHostTarget } from './pluginTarget'
+
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
 
 const roots: string[] = []
 

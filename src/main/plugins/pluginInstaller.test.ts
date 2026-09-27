@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { platformId, setPlatformId } from '../../shared/osplat'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto'
@@ -35,6 +35,12 @@ import { REGISTRY_TRUST_SNAPSHOT_NAME } from './pluginInstalledTrust'
 import { PLUGIN_QUARANTINE_DIR } from './pluginInstallPaths'
 import { PluginActivationSelector, immutablePluginPackageDir } from './pluginActivationSelector'
 import { makeZip, type ZipFile } from './zipFixture'
+
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
 
 // The platform to restore after a test that switched it: whatever this file
 // saw when it loaded — the host, or an injection from a vitest setup file.

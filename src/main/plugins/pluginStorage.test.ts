@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MAX_PARTITION_FILE_BYTES,
   NodePluginStorageFileSystem,
@@ -11,6 +11,12 @@ import {
   STORAGE_LIMITS,
   type StorageExecution,
 } from './pluginStorage'
+
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
 
 const directories: string[] = []
 const pluginId = 'acme.plugin'

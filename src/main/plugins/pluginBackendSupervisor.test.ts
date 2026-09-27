@@ -40,6 +40,12 @@ import { canonicalTrustJson, type RegistryPackageEnvelope, type RegistryTrustMet
 import { sha256Hex } from './pluginVerify'
 import { makeZip } from './zipFixture'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 const fixture = fileURLToPath(new URL('./test-fixtures/backend-wire-child.mjs', import.meta.url))
 const packagedFixtureEnabled = process.env.NAVIDE_TEST_PACKAGED_PLANS === '1'
 const packagedFixtures = [

@@ -6,6 +6,12 @@ import type { StorageExecution } from './pluginStorage'
 import { PluginStorageStore } from './pluginStorage'
 import { migrateBundledGitPreferences } from './gitStorageMigration'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 const version = '0.1.86'
 const previousVersion = '0.1.85'
 const pluginId = 'navide.git'

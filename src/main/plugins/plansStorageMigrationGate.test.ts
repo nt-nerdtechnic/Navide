@@ -9,6 +9,12 @@ import { migratePlansStorage, projectLegacyPlansPreferences, runPlansLegacyRecov
 import { createPlansStorageMigrationGate } from './plansStorageMigrationGate'
 import { retainedPlansLegacyAdapter } from './plansLegacyAdapter'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 const pluginId = 'navide.plans'
 const previousVersion = '1.0.0'
 const packageVersion = '2.0.0'

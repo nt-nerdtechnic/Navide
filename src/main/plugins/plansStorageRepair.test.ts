@@ -8,6 +8,12 @@ import { migratePlansStorage } from './plansStorageMigration'
 import { createPlansStorageMigrationGate } from './plansStorageMigrationGate'
 import { repairPlansStorageRecord } from './plansStorageRepair'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 const previousVersion = '1.0.0'
 const packageVersion = '2.0.0'
 const roots: string[] = []

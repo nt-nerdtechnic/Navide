@@ -6,6 +6,12 @@ import { PluginStorageStore } from './pluginStorage'
 import { MiniIdeStorageLifecycleSelector } from './miniIdeStorageLifecycle'
 import { createMiniIdeStorageMigrationGate } from './miniIdeStorageMigrationGate'
 
+// Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutFsyncSync(await importOriginal()))
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../tests/support/noFsync')).withoutHandleSync(await importOriginal()))
+
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 

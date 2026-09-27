@@ -57,6 +57,8 @@ function testFiles(): string[] {
 
 /** Files whose fake filesystem is a `vi.mock('node:fs…')` factory. */
 const MOCKS_FS_RE = /vi\.mock\(\s*['"]node:fs(?:\/promises)?['"]/
+/** A tests/support/noFsync.ts factory only stubs the flush: the filesystem stays real. */
+const FLUSH_ONLY_MOCK_RE = /\.without(?:FsyncSync|HandleSync)\(/g
 
 const POSIX_ROOTS = '(?:tmp|usr|bin|etc|opt|var|home|Users|private|Applications)'
 /**
@@ -82,6 +84,8 @@ function offenders(files: string[]): Set<string> {
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
     if (!MOCKS_FS_RE.test(text)) continue
+    const fsMocks = text.match(new RegExp(MOCKS_FS_RE.source, 'g'))?.length ?? 0
+    if (fsMocks === (text.match(FLUSH_ONLY_MOCK_RE)?.length ?? 0)) continue
     if (FAKE_FS_LITERAL_KEY_RE.test(text)) out.add(relative(REPO_ROOT, file).split('\\').join('/'))
   }
   return out
