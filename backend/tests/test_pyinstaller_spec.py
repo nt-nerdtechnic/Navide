@@ -70,6 +70,53 @@ def test_every_chat_channel_adapter_is_a_hidden_import():
     assert not missing, f"chat channel adapters missing from hiddenimports: {missing}"
 
 
+def test_every_lazy_log_reader_vendor_is_a_hidden_import():
+    # log_readers/__init__.py resolves each migrated reader through a PEP 562
+    # __getattr__ that calls importlib.import_module, which the graph walk
+    # cannot see. Today cli_vendors.registry imports every one statically, but
+    # a vendor dropped from the registry would then vanish from the packaged
+    # app while `from log_readers import XLogReader` still works in dev.
+    from agent_team_backend.log_readers import _MIGRATED_READERS
+
+    listed = set(_keyword("hiddenimports"))
+    missing = sorted(
+        {f"agent_team_backend.cli_vendors.{m}" for m in _MIGRATED_READERS.values()} - listed
+    )
+    assert not missing, f"lazily imported log-reader vendors missing from hiddenimports: {missing}"
+
+
+def test_uvicorn_auto_targets_are_hidden_imports():
+    # __main__.py leaves http/ws/loop/lifespan at "auto", and uvicorn.Config
+    # resolves each through import_from_string on a "module:attr" string. The
+    # auto modules then import the concrete implementation statically.
+    from uvicorn.config import HTTP_PROTOCOLS, LIFESPAN, LOOP_FACTORIES, WS_PROTOCOLS
+
+    listed = set(_keyword("hiddenimports"))
+    targets = (HTTP_PROTOCOLS["auto"], WS_PROTOCOLS["auto"], LIFESPAN["auto"], LOOP_FACTORIES["auto"])
+    missing = sorted({t.split(":")[0] for t in targets} - listed)
+    assert not missing, f"uvicorn auto targets missing from hiddenimports: {missing}"
+
+
+def test_anyio_asyncio_backend_is_a_hidden_import():
+    # anyio loads its event-loop backend with import_module(f"anyio._backends._{name}")
+    # (starlette and the MCP SDK run on it); asyncio is the only one we use.
+    assert "anyio._backends._asyncio" in set(_keyword("hiddenimports"))
+
+
+def test_declared_tzdata_is_a_hidden_import():
+    # Windows has no system tz database, so pyproject declares tzdata there.
+    # zoneinfo reaches it only through importlib.resources, never an import
+    # statement, so without a hidden import the package (and its tz files,
+    # collected by its hook) never reaches the build and every ZoneInfo()
+    # call in scheduler.py raises, including its ZoneInfo("UTC") fallback.
+    import tomllib
+
+    deps = tomllib.loads((BACKEND_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = any(d.split(";")[0].strip().startswith("tzdata") for d in deps["project"]["dependencies"])
+    assert declared, "pyproject no longer declares tzdata; update this test"
+    assert "tzdata" in set(_keyword("hiddenimports")), "tzdata missing from hiddenimports"
+
+
 def _builtin_plugin_dirs() -> list[Path]:
     # The same rule plugins/wiring.py discovers with: a direct child dir
     # holding both files. A dir the spec does not ship is simply not there in

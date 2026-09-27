@@ -82,7 +82,31 @@ a = Analysis(
         'agent_team_backend.channels.matrix',
         'agent_team_backend.channels.mattermost',
         'agent_team_backend.channels.imessage',
+        # Vendor modules behind log_readers/__init__.py's PEP 562 __getattr__
+        # (importlib.import_module). cli_vendors.registry imports them all
+        # statically today; pinned so dropping one from the registry cannot
+        # silently drop its reader from the packaged app.
+        # test_pyinstaller_spec.py holds this list to log_readers._MIGRATED_READERS.
+        'agent_team_backend.cli_vendors.aider',
+        'agent_team_backend.cli_vendors.antigravity',
+        'agent_team_backend.cli_vendors.claude',
+        'agent_team_backend.cli_vendors.codex',
+        'agent_team_backend.cli_vendors.copilot',
+        'agent_team_backend.cli_vendors.cursor',
+        'agent_team_backend.cli_vendors.droid',
+        'agent_team_backend.cli_vendors.grok',
+        'agent_team_backend.cli_vendors.kilo',
+        'agent_team_backend.cli_vendors.kimi',
+        'agent_team_backend.cli_vendors.muse',
+        'agent_team_backend.cli_vendors.opencode',
+        'agent_team_backend.cli_vendors.pi',
+        'agent_team_backend.cli_vendors.qwen',
         # uvicorn internals that are resolved at runtime, not import-time.
+        # __main__.py leaves http/ws/loop/lifespan at "auto": uvicorn.Config
+        # imports these by string, and they import the implementation.
+        'uvicorn.protocols.http.auto',
+        'uvicorn.protocols.websockets.auto',
+        'uvicorn.loops.auto',
         'uvicorn.main',
         'uvicorn.lifespan.on',
         'uvicorn.protocols.websockets.websockets_impl',
@@ -114,6 +138,14 @@ a = Analysis(
         'watchdog.observers.read_directory_changes',  # Windows
         'watchdog.observers.winapi',
         'watchdog.observers.polling',               # fallback, every platform
+        # anyio imports its event-loop backend by name (starlette and the MCP
+        # SDK run on it).
+        'anyio._backends._asyncio',
+        # zoneinfo reaches tzdata only through importlib.resources. Windows has
+        # no system tz database, so without it every ZoneInfo() in scheduler.py
+        # raises. Its hook collects the tz files. Not installed on macOS/Linux,
+        # where PyInstaller logs "Hidden import 'tzdata' not found" and goes on.
+        'tzdata',
         # anthropic SDK uses lazy internal imports.
         'anthropic',
         'anthropic._streaming',
