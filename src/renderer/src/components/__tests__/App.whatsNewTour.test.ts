@@ -78,9 +78,25 @@ describe('the tour question and the tour', () => {
 
   it('only opens or closes Settings to prepare a step', () => {
     const body = functionBody('runTourPrepare')
-    expect(body).toContain("if (prepare.kind === 'settings') openSettingsAt(prepare.tab)")
-    expect(body).toContain('else showSettings.value = false')
+    expect(body).toMatch(/if \(prepare\.kind === 'settings'\) \{[\s\S]*?openSettingsAt\(prepare\.tab\)[\s\S]*?\} else \{[\s\S]*?showSettings\.value = false/)
     expect(body).not.toContain('settingsSet')
+  })
+
+  it('closes Settings the tour opened when the tour ends before its close-settings step', () => {
+    const prepare = functionBody('runTourPrepare')
+    const opening = prepare.slice(0, prepare.indexOf('} else {'))
+    const closing = prepare.slice(prepare.indexOf('} else {'))
+    // Only a Settings the tour itself opened is recorded — one the user had
+    // open before the tour stays open.
+    expect(opening).toContain('if (!showSettings.value) tourOpenedSettings = true')
+    expect(opening.indexOf('tourOpenedSettings = true')).toBeLessThan(opening.indexOf('openSettingsAt(prepare.tab)'))
+    // The close-settings step clears the record.
+    expect(closing).toContain('tourOpenedSettings = false')
+
+    const end = functionBody('endTour')
+    expect(end).toContain('if (tourOpenedSettings) showSettings.value = false')
+    expect(end).toContain('tourOpenedSettings = false')
+    expect(end.indexOf('tourOpenedSettings = false')).toBeLessThan(end.indexOf('releaseTour.end(completed)'))
   })
 
   it('mounts GuidedTour with the steps, the prepare hook and the end handler', () => {

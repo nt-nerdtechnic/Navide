@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { findTourAnchor, type TourPrepare, type TourStep } from '../lib/tours'
 
@@ -153,7 +153,12 @@ function onKeydown(e: KeyboardEvent): void {
   e.stopImmediatePropagation()
 }
 
+// The tour moves focus to its own card; when it goes away, focus goes back to
+// wherever it was when the tour began, not to <body>.
+let focusBefore: HTMLElement | null = null
+
 onMounted(() => {
+  focusBefore = document.activeElement instanceof HTMLElement ? document.activeElement : null
   window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('resize', measure)
   void enterStep()
@@ -163,6 +168,10 @@ onBeforeUnmount(() => {
   clearPoll()
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('resize', measure)
+})
+onUnmounted(() => {
+  if (focusBefore?.isConnected) focusBefore.focus()
+  focusBefore = null
 })
 
 const PAD = 6

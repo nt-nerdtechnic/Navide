@@ -635,14 +635,25 @@ function startAnnouncementTour(version: string): void {
   announcements.markRead(releaseAnnouncementId(version))
   releaseTour.start(version)
 }
+// Whether Settings is open because the running tour opened it. A tour ended
+// early (Skip, Esc) never reaches its close-settings step, so endTour closes
+// it; Settings the user already had open is left as it was.
+let tourOpenedSettings = false
 function endTour(completed: boolean): void {
+  if (tourOpenedSettings) showSettings.value = false
+  tourOpenedSettings = false
   releaseTour.end(completed)
 }
 // A step points into Settings or at the window behind it; the tour only opens
 // and closes Settings, it never changes a setting.
 function runTourPrepare(prepare: TourPrepare): void {
-  if (prepare.kind === 'settings') openSettingsAt(prepare.tab)
-  else showSettings.value = false
+  if (prepare.kind === 'settings') {
+    if (!showSettings.value) tourOpenedSettings = true
+    openSettingsAt(prepare.tab)
+  } else {
+    tourOpenedSettings = false
+    showSettings.value = false
+  }
 }
 // Announcements centre: the status-bar feed of release notes + updater news.
 const announcements = useAnnouncements()

@@ -244,6 +244,31 @@ describe('GuidedTour', () => {
     expect(document.activeElement).toBe(next)
   })
 
+  it('gives focus back to where it was once the tour unmounts', async () => {
+    const before = document.createElement('button')
+    document.body.append(before)
+    before.focus()
+    const w = start(STEPS)
+    await settle()
+    expect(document.activeElement).toBe(document.body.querySelector('[data-testid="tour-next"]'))
+    w.unmount()
+    wrapper = null
+    expect(document.activeElement).toBe(before)
+  })
+
+  it('leaves focus alone on unmount when the element focused before is gone', async () => {
+    const before = document.createElement('button')
+    document.body.append(before)
+    before.focus()
+    const w = start(STEPS)
+    await settle()
+    before.remove()
+    const focus = vi.spyOn(before, 'focus')
+    w.unmount()
+    wrapper = null
+    expect(focus).not.toHaveBeenCalled()
+  })
+
   it('walks the real 0.2.10 tour to the end with no anchors present', async () => {
     const steps = whatsNewFor('0.2.10')!.tour!
     const prepares: TourPrepare[] = []
