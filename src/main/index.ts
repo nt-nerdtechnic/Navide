@@ -1372,6 +1372,17 @@ const pluginTrustRefresh = registerPluginIpc(
       }
     },
     factoryPackageIds: ['navide.git', MINI_IDE_PLUGIN_ID],
+    // loadFactoryPackage refuses the same way, but only after the open Git
+    // views were drained; asking first keeps the button hidden instead.
+    factoryRollbackRefusal: (pluginId) => {
+      if (pluginId !== 'navide.git') return undefined
+      try {
+        assertFactoryGitRestoreAllowed({ forcedLegacy: gitRecoveryForced })
+        return undefined
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    },
     listFactoryPackages: () => {
       const descriptor = frontendPluginManager.getDescriptor('navide.git')
       const factoryActive = frontendPluginManager

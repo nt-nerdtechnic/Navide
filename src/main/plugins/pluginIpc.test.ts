@@ -1773,6 +1773,41 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('neither offers nor starts a factory rollback the Host already refuses', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-rollback-refused-'))
+    const manager = new FrontendPluginManager()
+    const loadFactoryPackage = vi.fn(() => ({ loaded: false as const, reason: 'unreachable' }))
+    const beginPackageRestart = vi.spyOn(manager, 'beginPackageRestart')
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        factoryPackageIds: ['acme.demo'],
+        factoryRollbackRefusal: (pluginId) =>
+          pluginId === 'acme.demo' ? 'bundled acme.demo is pinned to legacy recovery' : undefined,
+        loadFactoryPackage,
+      })
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+      beginPackageRestart.mockClear()
+
+      const [row] = handlers.get('plugins:listInstalled')!(null) as Array<Record<string, unknown>>
+      expect(row).toMatchObject({ id: 'acme.demo' })
+      expect(row.rollbackKind).toBeUndefined()
+      // Refused before the open views are drained, not after.
+      await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow('bundled acme.demo is pinned to legacy recovery')
+      expect(beginPackageRestart).not.toHaveBeenCalled()
+      expect(loadFactoryPackage).not.toHaveBeenCalled()
+      expect(new PluginActivationSelector(root).read('acme.demo')?.active?.packageVersion).toBe('1.0.1')
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('re-selects the displaced package when the factory load throws mid-rollback', async () => {
     const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-rollback-throw-'))
     const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-bundle-throw-'))

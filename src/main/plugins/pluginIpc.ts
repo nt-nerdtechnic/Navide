@@ -204,6 +204,10 @@ export interface PluginIpcOptions {
   /** Actual uninstall boundary; rollback/quarantine paths deliberately do not call this. */
   cleanupPluginStorage?: (pluginId: string) => Promise<void>
   factoryPackageIds?: readonly string[]
+  /** Why rolling this id back to its factory package is refused right now, or
+   *  undefined when it is allowed. Checked before a rollback is offered or its
+   *  views are drained. */
+  factoryRollbackRefusal?: (pluginId: string) => string | undefined
   listFactoryPackages?: () => FactoryPackageSummary[]
   restoreFactoryPackage?: (pluginId: string) => Promise<void> | void
   onFactoryPackageRemoved?: (pluginId: string) => void
@@ -343,7 +347,9 @@ export function registerPluginIpc(
     const selected = lifecycleSelector.read(id)
     if (!selected?.active || selected.candidate || selected.activation) return null
     if (!selected.previous) {
-      return options.factoryPackageIds?.includes(id) ? { kind: 'factory' } : null
+      return options.factoryPackageIds?.includes(id) && !options.factoryRollbackRefusal?.(id)
+        ? { kind: 'factory' }
+        : null
     }
     // The handler also refuses a retained package with no grant to restore.
     // What stays unprojected is everything that needs the package on disk:
@@ -1245,6 +1251,8 @@ export function registerPluginIpc(
   async function rollbackToFactoryPackage(id: string, active: PluginPackageSelection) {
     const loadFactoryPackage = options.loadFactoryPackage
     if (!loadFactoryPackage) throw new Error('factory package rollback is unavailable')
+    const refusal = options.factoryRollbackRefusal?.(id)
+    if (refusal) throw new Error(refusal)
     const currentDescriptor = manager.getDescriptor(id)
     const currentVersion = currentDescriptor?.packageVersion ?? active.packageVersion
     const currentGrant = capabilityGrants.get(id, currentVersion)
