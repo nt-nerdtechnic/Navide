@@ -71,6 +71,17 @@ a = Analysis(
         'agent_team_backend.plugins.builtin.navide_plans.plan_tools',
         'agent_team_backend.plugins.builtin.navide_skills.skills_wiring',
         'agent_team_backend.plugins.builtin.navide_skills.skills_tools',
+        # Chat channel adapters: channels/manager.py imports each platform by
+        # name (importlib.import_module), so the graph walk never sees them.
+        # test_pyinstaller_spec.py holds this list to channels.manager.PLATFORMS.
+        'agent_team_backend.channels.telegram',
+        'agent_team_backend.channels.discord',
+        'agent_team_backend.channels.slack',
+        'agent_team_backend.channels.feishu',
+        'agent_team_backend.channels.dingtalk',
+        'agent_team_backend.channels.matrix',
+        'agent_team_backend.channels.mattermost',
+        'agent_team_backend.channels.imessage',
         # uvicorn internals that are resolved at runtime, not import-time.
         'uvicorn.main',
         'uvicorn.lifespan.on',

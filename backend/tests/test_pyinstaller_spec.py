@@ -59,6 +59,17 @@ def test_own_hidden_imports_resolve():
     assert not missing, f"hiddenimports name modules that no longer exist: {missing}"
 
 
+def test_every_chat_channel_adapter_is_a_hidden_import():
+    # channels/manager.py loads each platform with importlib.import_module, which
+    # PyInstaller's graph walk cannot see: a platform missing here is absent from
+    # the packaged app and configuring it fails with "not available in this build".
+    from agent_team_backend.channels.manager import PLATFORMS
+
+    listed = set(_keyword("hiddenimports"))
+    missing = [p for p in PLATFORMS if f"agent_team_backend.channels.{p}" not in listed]
+    assert not missing, f"chat channel adapters missing from hiddenimports: {missing}"
+
+
 def _builtin_plugin_dirs() -> list[Path]:
     # The same rule plugins/wiring.py discovers with: a direct child dir
     # holding both files. A dir the spec does not ship is simply not there in
