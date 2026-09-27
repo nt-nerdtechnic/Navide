@@ -1831,6 +1831,87 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('offers no rollback for a retained package with no grant to restore', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-rollback-no-grant-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+
+      // The schema allows `previous` without `previousGrant` and the handler
+      // refuses that shape, so the row must not offer it either.
+      const selectorFile = join(root, '.navide-lifecycle', 'acme.demo.json')
+      const record = JSON.parse(readFileSync(selectorFile, 'utf8'))
+      expect(record.previousGrant).toBeTruthy()
+      delete record.previousGrant
+      writeFileSync(selectorFile, JSON.stringify(record))
+
+      expect((handlers.get('plugins:listInstalled')!(null) as Array<{ rollbackKind?: string }>)[0].rollbackKind)
+        .toBeUndefined()
+      await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow('previous package is unavailable for rollback')
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports both causes when the displaced package can no longer be read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-rollback-unreadable-'))
+    const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-unreadable-'))
+    const manager = new FrontendPluginManager()
+    const activationChanges: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
+    try {
+      for (const entry of readZipEntries(buildPkg('acme.demo', 'acme', {}, '1.0.0').bytes)) {
+        if (entry.kind !== 'file') continue
+        const output = join(factoryDir, entry.path)
+        mkdirSync(join(output, '..'), { recursive: true })
+        writeFileSync(output, entry.data)
+      }
+      const grants = new PluginCapabilityGrantStore(root)
+      expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
+      grants.set('acme.demo', { packageVersion: '1.0.0', system: [], storage: true as const })
+
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: (change) => activationChanges.push(change),
+        factoryPackageIds: ['acme.demo'],
+        loadFactoryPackage: () => ({ loaded: false as const, reason: 'injected factory failure' }),
+      })
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+
+      // Nothing can re-register a package whose manifest is gone.
+      rmSync(join(root, 'acme.demo', '1.0.1', 'universal', 'package', 'manifest.json'), { force: true })
+      const rejection = await Promise.resolve(
+        handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }),
+      ).catch((error: unknown) => error)
+      expect(rejection).toBeInstanceOf(AggregateError)
+      const causes = (rejection as AggregateError).errors.map((error) => String(error))
+      expect(causes.join(' | ')).toContain('injected factory failure')
+      expect(causes.join(' | ')).toContain('displaced package is no longer readable')
+      // The renderer is told the id carries no activation rather than being left
+      // with contributions that no longer resolve.
+      expect(activationChanges.at(-1)).toEqual({ pluginId: 'acme.demo' })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+      rmSync(factoryDir, { recursive: true, force: true })
+    }
+  })
+
   it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')

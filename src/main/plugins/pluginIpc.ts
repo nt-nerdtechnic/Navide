@@ -345,6 +345,12 @@ export function registerPluginIpc(
     if (!selected.previous) {
       return options.factoryPackageIds?.includes(id) ? { kind: 'factory' } : null
     }
+    // The handler also refuses a retained package with no grant to restore.
+    // What stays unprojected is everything that needs the package on disk:
+    // trust re-verification, the artifact digest, and a readable manifest. Those
+    // can change after the row is drawn, so a refusal is still reachable and its
+    // message is shown to the user rather than swallowed.
+    if (!selected.previousGrant) return null
     return { kind: 'previous', version: selected.previous.packageVersion }
   }
 
@@ -1260,15 +1266,22 @@ export function registerPluginIpc(
       capabilityGrants.set(id, currentGrant)
       const activeDir = lifecycleSelector.packageDir(id, active)
       const activeScanned = loadPluginDir(activeDir)
-      if (activeScanned.packageSummary) {
-        manager.registerInstalledPackage(
-          { ...activeScanned.packageSummary, provenance: 'official-registry' },
-          activeScanned.descriptor,
-          { official: true },
-          activeDir,
+      if (!activeScanned.packageSummary) {
+        // Its descriptor is already gone and nothing can re-register it, so say
+        // so instead of leaving the renderer holding contributions that no
+        // longer resolve. The caller reports this alongside the original cause.
+        options.onActivationChange?.({ pluginId: id })
+        throw new Error(
+          `displaced package is no longer readable${activeScanned.error ? `: ${activeScanned.error}` : ''}`,
         )
-        manager.setPluginStorageSnapshotSelection(id, { activeVersion: active.packageVersion })
       }
+      manager.registerInstalledPackage(
+        { ...activeScanned.packageSummary, provenance: 'official-registry' },
+        activeScanned.descriptor,
+        { official: true },
+        activeDir,
+      )
+      manager.setPluginStorageSnapshotSelection(id, { activeVersion: active.packageVersion })
       if (activeScanned.activation) {
         options.onActivationChange?.({
           pluginId: id,
