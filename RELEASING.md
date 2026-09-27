@@ -68,24 +68,48 @@ stall (#102). Walk this list before `./release.sh`; nothing here is automated.
    and shows SmartScreen's "Unknown publisher" prompt. Do not describe a Windows
    build as signed anywhere until that changes.
 
-After the tag push: watch all four release jobs, then confirm the Release
-carries every asset listed under "Rollback" below plus a single `latest.yml`
-whose `files` list names both `win-x64` and `win-arm64`. The fifth job,
-`mirror-release` (shown as *Mirror vX.Y.Z to dl.navide.dev*), runs once those
-four have published; when it is green, run
+### After the tag push
+
+The GitHub Release is a **draft** until the very last job. The macOS job
+creates it; the Linux x64, Windows x64 and Windows arm64 jobs upload into it;
+`mirror-release` (shown as *Mirror vX.Y.Z to dl.navide.dev*) copies it to the
+mirror once those four have passed; and `publish-release` (*Publish the GitHub
+Release*) runs only when all five are green, turning the draft into the public,
+Latest release. Until then neither the website nor the updater's GitHub
+fallback can see it — though the mirror's `releases/latest/` already names the
+new version in the seconds between the mirror and publish jobs. Confirm the
+Release carries every asset listed under "Rollback" below plus a single
+`latest.yml` whose `files` list names both `win-x64` and `win-arm64`; when the
+publish job is green, run
 
 ```bash
 scripts/verify-release-mirror.sh vX.Y.Z
 ```
 
 which checks every asset's sha256 against GitHub's own `digest` and confirms
-`releases/latest/` now names the new version. If the mirror job failed or was
-skipped, nothing is broken for users — the website and the updater fall back to
-GitHub on their own — but re-run it once the cause is fixed:
+`releases/latest/` now names the new version (it reads the published
+release, so run it after the publish job, not before).
 
-```bash
-gh workflow run mirror.yml -R nt-nerdtechnic/Navide --ref main -f tag=vX.Y.Z -f refresh_latest=true
-```
+**If a job fails**, nothing reaches users: a platform or mirror failure skips
+`publish-release`, and the release stays a draft (visible only to maintainers
+on the Releases page). Everyone stays on the previous version, the same as
+before the tag push, except in the one case below.
+
+- **Finish it**: fix the cause, then use **Re-run failed jobs** on the Release
+  run. The failed job re-uploads with `--clobber` into the same draft, and the
+  jobs it skipped — the mirror and publish jobs — run after it. A fix that
+  needs new code needs a new patch version, not a moved tag.
+- **Mirror fixed separately**: if you re-ran the mirror by hand
+  (`gh workflow run mirror.yml -R nt-nerdtechnic/Navide --ref main -f
+  tag=vX.Y.Z -f refresh_latest=true`, which can read the draft), publish with
+  `gh release edit vX.Y.Z -R nt-nerdtechnic/Navide --draft=false --latest`.
+- **Abandon it**: `gh release delete vX.Y.Z -R nt-nerdtechnic/Navide --yes`
+  removes the draft and its assets and keeps the tag; add `--cleanup-tag` to
+  delete the tag as well. If the mirror job had already passed, also re-point
+  the mirror's `releases/latest/` at the previous release (see "Rollback").
+- **Only the publish job failed** (the mirror already passed): the updater
+  already offers the new version from the mirror while GitHub still shows the
+  old one. Re-run that job, or run the `gh release edit` command above.
 
 ## Pre-release step: Update What's New announcement
 
@@ -100,11 +124,12 @@ Before running `./release.sh`, add a new entry to `src/renderer/src/lib/whatsNew
 `release.sh` bumps the version across all version files, runs the gates
 (typecheck + frontend + backend tests), builds locally, commits, tags, and
 (after you confirm) pushes `main` + the tag. The tag push triggers the
-**Release** CI workflow: its macOS job signs, notarizes, and publishes the
-GitHub Release, then the Linux x64 and Windows x64 jobs add their installers,
-and the Windows arm64 job adds its installer and merges both Windows entries
-into one `latest.yml`. Last, the mirror job copies the finished Release to
-`dl.navide.dev`.
+**Release** CI workflow: its macOS job signs, notarizes, and creates the
+GitHub Release as a draft, then the Linux x64 and Windows x64 jobs add their
+installers, and the Windows arm64 job adds its installer and merges both
+Windows entries into one `latest.yml`. The mirror job then copies the finished
+draft to `dl.navide.dev`, and only after that does the last job publish the
+release. A failure anywhere leaves it a draft (see "After the tag push").
 Existing users' apps auto-check (startup + every 30 min), download the
 update in the background, and prompt "Restart to update".
 
@@ -143,8 +168,9 @@ also served from `https://dl.navide.dev`, a CloudFront distribution in front of
 the private S3 bucket `navide-releases` (AWS account NT-網域, which also holds
 the `navide.dev` zone).
 
-- **Who writes it**: `.github/workflows/mirror.yml`, called by `release.yml` as
-  its last job. It downloads the finished GitHub Release on the runner, uploads
+- **Who writes it**: `.github/workflows/mirror.yml`, called by `release.yml`
+  just before the job that publishes the release. It downloads the finished
+  (still draft) GitHub Release on the runner, uploads
   it to `releases/<tag>/` (permanent) plus a `SHA256SUMS`, replaces
   `releases/latest/` wholesale, invalidates CloudFront, then downloads every
   file back from `dl.navide.dev` and fails on any sha256 mismatch. A release

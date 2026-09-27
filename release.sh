@@ -165,8 +165,11 @@ read -r publish || publish=""
 if [[ "$publish" =~ ^[Yy]$ ]]; then
   git push origin main
   git push origin "$TAG"
-  echo "Published source and tag. GitHub Actions will create the signed release:"
+  echo "Pushed source and tag. GitHub Actions builds every platform into a draft"
+  echo "release, mirrors it to dl.navide.dev, and only then publishes it:"
   echo "https://github.com/nt-nerdtechnic/Navide/actions"
+  echo "If a job fails, $TAG stays a draft: fix the cause and use \"Re-run failed jobs\""
+  echo "(RELEASING.md, \"After the tag push\")."
 else
   echo "Release remains local. Publish later with:"
   echo "  git push origin main"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish assets to a GitHub release, one upload call per file.
+# Upload assets to a (draft) GitHub release, one upload call per file.
 #
 # v0.2.5's Linux job failed twice on a single `gh release upload` carrying the
 # AppImage (222 MB) and the .deb (198 MB) together, and a manual retry of the
@@ -13,9 +13,9 @@
 #
 # Every asset is attempted even after one fails, and the names that did not
 # make it are listed together at the end. That list is what somebody reads
-# when a release publishes half-finished — the manifests are up, the binaries
-# they name are not, and clients are already finding an update they cannot
-# download. Stopping at the first failure would mean rerunning the job just to
+# when a job fails halfway — the manifests are up on the draft, the binaries
+# they name are not, and the release cannot be published until they are.
+# Stopping at the first failure would mean rerunning the job just to
 # learn what else is missing.
 #
 # Usage: publish-release-assets.sh <tag> <asset>...
@@ -33,10 +33,15 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-# The release is created empty; assets join it one at a time below. A rerun
-# finds it already there and goes straight to uploading.
+# The release is created empty and as a draft; assets join it one at a time
+# below. It stays invisible to the public — and to the updater's GitHub
+# fallback — until release.yml's final job publishes it, after every platform
+# has uploaded and the mirror is live. A rerun finds it already there and goes
+# straight to uploading. `gh release view`/`upload` resolve a draft by tag
+# through the releases listing, which only shows drafts to a token with write
+# access to contents (the release workflow's GITHUB_TOKEN has it).
 if ! gh release view "${tag}" >/dev/null 2>&1; then
-  gh release create "${tag}" --verify-tag --generate-notes --title "Navide ${tag}"
+  gh release create "${tag}" --draft --verify-tag --generate-notes --title "Navide ${tag}"
 fi
 
 # A plain string, not an array: the macOS runner's /bin/bash is 3.2, where

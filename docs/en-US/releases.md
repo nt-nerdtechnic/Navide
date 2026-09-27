@@ -49,7 +49,8 @@ arm64 Linux build, when published, adds `latest-linux-arm64.yml`.
 Every asset above is also served from `https://dl.navide.dev/releases/<tag>/`,
 with `releases/latest/` holding the newest release's files and manifests. The
 release workflow's final job writes it and fails unless the mirrored bytes
-match GitHub's. The updater reads the mirror's `releases/latest/` as its feed
+match GitHub's; the GitHub Release is published only after that job passes.
+The updater reads the mirror's `releases/latest/` as its feed
 and switches to GitHub only after a network failure on the mirror (a 404 or a
 checksum failure is reported as before); the website likewise prefers the
 mirror when a HEAD probe answers. `RELEASING.md` covers re-running the mirror job, verifying
@@ -120,8 +121,13 @@ local development and must never be committed.
 5. Watch the **Release** Actions workflow. Its macOS job installs locked
    dependencies, verifies versions, runs frontend/backend tests, builds the
    backend, signs and notarizes Navide, validates every update asset, and only
-   then creates the public GitHub Release; the Linux x64 and Windows x64 jobs
-   run after it and add their installers and update manifests to that release.
+   then creates the GitHub Release — as a **draft**, invisible to users and to
+   the updater. The Linux x64, Windows x64 and Windows arm64 jobs add their
+   installers and update manifests to that draft, the mirror job copies it to
+   `dl.navide.dev`, and the final **Publish the GitHub Release** job makes it
+   public and Latest only after all of them passed. If any job fails, the
+   release stays a draft; `RELEASING.md` ("After the tag push") covers
+   finishing or deleting it.
 6. Install the release DMG on a test Mac and the installers on a test Windows
    and Linux machine. Publish a newer patch release and use the in-app flow to
    verify check, download, restart, and the resulting app version.

@@ -1,7 +1,8 @@
 name: Mirror release
 
 # Copies one GitHub Release, byte for byte, to the S3 bucket behind
-# dl.navide.dev. release.yml calls this after every platform has published;
+# dl.navide.dev. release.yml calls this after every platform has uploaded to
+# the draft release, and publishes the release only once this has passed;
 # the manual trigger backfills a release that shipped before the mirror
 # existed, or re-runs one whose mirror job failed.
 #
@@ -30,8 +31,13 @@ on:
         type: boolean
         default: false
 
+# write, although this workflow only reads: release.yml calls it while the
+# release is still a draft, and GitHub lists draft releases (which is how
+# `gh release download` resolves one by tag) only to a token that can push.
+# A reusable workflow's own permissions cap the caller's, so `read` here would
+# hide the draft and fail the download.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   mirror:
@@ -56,7 +62,7 @@ jobs:
           aws s3api list-objects-v2 --bucket "${MIRROR_BUCKET}" --prefix releases/ \
             --max-keys 50 --query 'Contents[].Key' --output text
 
-      - name: Download the published release
+      - name: Download the release (a draft when called by release.yml)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
