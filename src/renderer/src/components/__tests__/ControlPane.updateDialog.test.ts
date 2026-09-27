@@ -81,17 +81,12 @@ describe('ControlPane – update toast vs decision dialog', () => {
     expect(notify.dialog.value!.message).toContain('Big rewrite')
   })
 
-  it('shows GitHub-generated release notes as formatted text in the decision dialog', async () => {
+  it('passes main-normalized release notes into the decision dialog', async () => {
     const notify = useNotify()
-    await announce({
-      availableVersion: '2.0.0',
-      severity: 'major',
-      releaseNotes: '<h2>What&#39;s Changed</h2><ul><li>Fix <a class="issue-link" data-id="133" href="https://github.com/nt-nerdtechnic/Navide/pull/133">#133</a></li></ul>',
-    })
+    const releaseNotes = "What's Changed\n\n• Fix #133"
+    await announce({ availableVersion: '2.0.0', severity: 'major', releaseNotes })
 
-    expect(notify.dialog.value!.message).toContain("What's Changed\n\n• Fix #133")
-    expect(notify.dialog.value!.message).not.toContain('<h2>')
-    expect(notify.dialog.value!.message).not.toContain('data-id')
+    expect(notify.dialog.value!.message).toContain(releaseNotes)
   })
 
   it('does not re-prompt for the same version after Later', async () => {

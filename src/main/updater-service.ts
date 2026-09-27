@@ -1,3 +1,4 @@
+import { compile as compileHtmlToText, type DomNode } from 'html-to-text'
 import type { UpdateActionResult, UpdateCheckFailure, UpdateSeverity, UpdateState } from '../shared/updater'
 
 // How long quitAndInstall gets to actually take the process over. Squirrel.Mac
@@ -78,14 +79,44 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+const RELEASE_NOTE_HTML_TAG = /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*?)?\s*\/?>/i
+
+function htmlTextContent(node: DomNode): string {
+  if (node.type === 'text') return node.data ?? ''
+  return node.children.map(htmlTextContent).join('')
+}
+
+// Generic HTML layout belongs to html-to-text; these overrides define the
+// release-notes presentation (heading case, link labels, bullets, and code).
+const convertHtmlReleaseNote = compileHtmlToText({
+  wordwrap: false,
+  formatters: {
+    codeWithWhitespace: (node, _walk, builder) => builder.addLiteral(htmlTextContent(node)),
+  },
+  selectors: [
+    ...['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].map((selector) => ({ selector, options: { uppercase: false } })),
+    { selector: 'a', options: { ignoreHref: true } },
+    { selector: 'ul', options: { itemPrefix: '• ' } },
+    { selector: 'code', format: 'codeWithWhitespace' },
+    { selector: 'img', format: 'skip' },
+  ],
+})
+
+function toReadableReleaseNote(note: string): string {
+  return RELEASE_NOTE_HTML_TAG.test(note) ? convertHtmlReleaseNote(note).trim() : note
+}
+
 // electron-updater's UpdateInfo.releaseNotes may be a string, an array of
-// { version, note } entries, or null. Normalize to a single string (or
-// undefined when there is nothing meaningful to show).
+// { version, note } entries, or null. Normalize to readable text before it
+// crosses IPC.
 function normalizeReleaseNotes(notes: UpdateInfoLike['releaseNotes']): string | undefined {
-  if (typeof notes === 'string') return notes.trim() ? notes : undefined
+  if (typeof notes === 'string') {
+    const readable = toReadableReleaseNote(notes)
+    return readable.trim() ? readable : undefined
+  }
   if (Array.isArray(notes)) {
     const joined = notes
-      .map((entry) => (typeof entry?.note === 'string' ? entry.note : ''))
+      .map((entry) => (typeof entry?.note === 'string' ? toReadableReleaseNote(entry.note) : ''))
       .filter((note) => note.trim().length > 0)
       .join('\n\n')
     return joined.length > 0 ? joined : undefined

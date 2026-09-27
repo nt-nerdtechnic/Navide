@@ -51,16 +51,15 @@ describe('useUpdater', () => {
     expect(dispose).toHaveBeenCalledOnce()
   })
 
-  it('converts GitHub HTML release notes to readable text on every state path', async () => {
-    const htmlNotes = '<h2>What&#39;s Changed</h2><ul><li>feat(plugins): compose Mini-IDE surfaces by <a class="user-mention notranslate" data-hovercard-url="/users/example" href="https://github.com/example">@example</a> in <a class="issue-link" data-id="133" href="https://github.com/nt-nerdtechnic/Navide/pull/133">#133</a></li></ul><p><strong>Full Changelog:</strong> <a href="https://github.com/nt-nerdtechnic/Navide/compare/v0.2.9...v0.2.10">v0.2.9...v0.2.10</a></p>'
-    const plainNotes = "What's Changed\n\n• feat(plugins): compose Mini-IDE surfaces by @example in #133\n\nFull Changelog: v0.2.9...v0.2.10"
+  it('passes main-process release notes through every state path unchanged', async () => {
+    const releaseNotes = "What's Changed\n\n• Fixed updater notes\n\npnpm test:run\n  pnpm typecheck"
     let listener!: (state: RendererUpdateState) => void
     const getState = vi.fn().mockResolvedValue({
-      status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes: htmlNotes,
+      status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes,
     })
     const check = vi.fn().mockResolvedValue({
       ok: true,
-      state: { status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes: htmlNotes },
+      state: { status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes },
     })
     window.agentTeam = {
       version: '0.1.93',
@@ -74,16 +73,16 @@ describe('useUpdater', () => {
     const updater = mountUpdater()
     await nextTick()
     await nextTick()
-    expect(updater.state.value.releaseNotes).toBe(plainNotes)
+    expect(updater.state.value.releaseNotes).toBe(releaseNotes)
 
     listener({
-      status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes: 'Plain notes\n- unchanged',
+      status: 'downloading', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes,
     })
-    expect(updater.state.value.releaseNotes).toBe('Plain notes\n- unchanged')
+    expect(updater.state.value.releaseNotes).toBe(releaseNotes)
 
     await updater.checkForUpdates()
     expect(check).toHaveBeenCalledOnce()
-    expect(updater.state.value.releaseNotes).toBe(plainNotes)
+    expect(updater.state.value.releaseNotes).toBe(releaseNotes)
   })
 
   it('runs actions and adopts their returned state', async () => {

@@ -8,49 +8,6 @@ import {
 
 export type RendererUpdateState = UpdateState
 
-const BLOCK_NOTE_ELEMENTS = new Set([
-  'address', 'article', 'blockquote', 'dd', 'div', 'dl', 'dt', 'fieldset', 'figcaption',
-  'figure', 'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'main',
-  'nav', 'ol', 'p', 'pre', 'section', 'table', 'tr', 'ul',
-])
-const OMIT_NOTE_ELEMENTS = new Set(['script', 'style', 'template', 'noscript'])
-
-function htmlNoteNodeText(node: Node): string {
-  if (node.nodeType === 3) return (node.textContent ?? '').replace(/\s+/g, ' ')
-  if (node.nodeType !== 1) return ''
-
-  const element = node as Element
-  const tag = element.tagName.toLowerCase()
-  if (OMIT_NOTE_ELEMENTS.has(tag)) return ''
-  if (tag === 'br') return '\n'
-
-  const content = Array.from(element.childNodes, htmlNoteNodeText).join('')
-  if (tag === 'li') return `\n• ${content.trim()}\n`
-  if (BLOCK_NOTE_ELEMENTS.has(tag)) return `\n${content.trim()}\n`
-  return content
-}
-
-/**
- * GitHub release feeds can provide rendered HTML instead of Markdown. Convert
- * it to readable text for the UI; release metadata is never rendered as HTML.
- */
-function normalizeReleaseNotes(notes: string | undefined): string | undefined {
-  if (!notes || !/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*?)?\s*\/?>/i.test(notes)) return notes
-
-  const parsed = new DOMParser().parseFromString(notes, 'text/html')
-  return Array.from(parsed.body.childNodes, htmlNoteNodeText)
-    .join('')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/ *\n */g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function normalizeUpdateState(state: RendererUpdateState): RendererUpdateState {
-  if (state.releaseNotes === undefined) return state
-  return { ...state, releaseNotes: normalizeReleaseNotes(state.releaseNotes) }
-}
-
 const DEFAULT_SETTINGS: UpdaterSettings = {
   autoCheck: true,
   autoDownload: true,
@@ -95,8 +52,8 @@ export function useUpdater() {
   onMounted(() => {
     const api = window.agentTeam?.updater
     if (!api) return
-    dispose = api.onStateChanged((next) => { state.value = normalizeUpdateState(next) })
-    void api.getState().then((next) => { state.value = normalizeUpdateState(next) }).catch((error: unknown) => {
+    dispose = api.onStateChanged((next) => { state.value = next })
+    void api.getState().then((next) => { state.value = next }).catch((error: unknown) => {
       state.value = {
         ...state.value,
         status: 'error',
@@ -113,7 +70,7 @@ export function useUpdater() {
     if (!api) return
     try {
       const result = await api[action]()
-      state.value = normalizeUpdateState(result.state)
+      state.value = result.state
     } catch (error) {
       state.value = {
         ...state.value,
