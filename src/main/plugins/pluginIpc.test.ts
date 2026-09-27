@@ -1945,6 +1945,9 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       const causes = (rejection as AggregateError).errors.map((error) => String(error))
       expect(causes.join(' | ')).toContain('injected factory failure')
       expect(causes.join(' | ')).toContain('displaced package is no longer readable')
+      // IPC carries only the message, so it has to name both causes itself.
+      expect((rejection as AggregateError).message).toContain('injected factory failure')
+      expect((rejection as AggregateError).message).toContain('displaced package is no longer readable')
       // The renderer is told the id carries no activation rather than being left
       // with contributions that no longer resolve.
       expect(activationChanges.at(-1)).toEqual({ pluginId: 'acme.demo' })

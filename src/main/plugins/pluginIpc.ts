@@ -223,6 +223,10 @@ export interface PluginIpcOptions {
   preflightCandidateBackend?: (activation: PluginActivationCatalogEntry) => Promise<void>
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 function assertPluginRemovalTarget(pluginsRoot: string, value: unknown): string {
   if (!isValidManifestV2PluginId(value)) throw new Error('invalid plugin id')
   const root = resolve(pluginsRoot)
@@ -1330,9 +1334,10 @@ export function registerPluginIpc(
       } catch (recoveryError) {
         if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
         restartTransaction = undefined
+        // IPC carries only the message, so it names both causes itself.
         throw new AggregateError(
           [error, recoveryError],
-          'Factory package rollback recovery failed.',
+          `Factory package rollback recovery failed: ${errorText(error)}; ${errorText(recoveryError)}`,
         )
       }
       throw error
