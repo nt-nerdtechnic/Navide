@@ -72,6 +72,32 @@ function formatPackageGrant(grant: PackageVersionGrantSummary | null | undefined
   return parts.join('; ')
 }
 
+// The main process keeps its refusals in English for its logs; the known ones
+// are shown translated, matched by their stable wording. Anything else is shown
+// as the Host wrote it.
+const HOST_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^plugin transaction already in progress for (?<id>.+)$/, 'transactionInProgress'],
+  [/^plugin (?<id>\S+) has no completed activation to roll back$/, 'noCompletedActivation'],
+  [/^previous package is unavailable for rollback(?:: (?<detail>.+))?$/s, 'previousUnavailable'],
+  [/^previous package artifact identity changed before rollback$/, 'previousChanged'],
+  [/^active package grant is unavailable for (?<id>.+)$/, 'grantUnavailable'],
+  [/^factory package rollback is unavailable$/, 'factoryUnavailable'],
+  [/^Bundled Git cannot be restored while NAVIDE_GIT_RECOVERY=legacy is forcing legacy recovery$/, 'gitLegacyRecovery'],
+  [/^Factory package restoration failed: (?<detail>.+)$/s, 'factoryRestoreFailed'],
+]
+
+function pluginErrorMessage(err: unknown): string {
+  const message = ipcErrorMessage(err)
+  for (const [pattern, key] of HOST_REFUSALS) {
+    const match = pattern.exec(message)
+    if (!match) continue
+    const groups = match.groups
+    const text = t(`settings.extensions.rollback.errors.${key}`, { id: groups?.id ?? '' })
+    return groups?.detail ? `${text} (${groups.detail})` : text
+  }
+  return message
+}
+
 async function remove(id: string): Promise<void> {
   const api = pluginsApi()
   if (!api) return
@@ -89,9 +115,16 @@ async function rollback(id: string, kind: 'factory' | 'previous', version?: stri
   if (!api) return
   const confirmed = await notify.confirm(
     kind === 'factory'
-      ? `Return ${id} to the version bundled with Navide? The package you installed stays staged, so you can restart back into it.`
-      : `Roll ${id} back to ${version ?? 'the previous version'}? The current version stays staged, so you can restart back into it.`,
-    { title: 'Roll back extension', confirmText: 'Roll back', danger: true },
+      ? t('settings.extensions.rollback.confirmFactory', { id })
+      : t('settings.extensions.rollback.confirmPrevious', {
+          id,
+          version: version ?? t('settings.extensions.rollback.previousVersion'),
+        }),
+    {
+      title: t('settings.extensions.rollback.title'),
+      confirmText: t('settings.extensions.rollback.confirm'),
+      danger: true,
+    },
   )
   if (!confirmed) return
   busy.value = true
@@ -101,7 +134,7 @@ async function rollback(id: string, kind: 'factory' | 'previous', version?: stri
     await refreshInstalled()
     void pluginUpdates.refresh()
   } catch (err) {
-    error.value = ipcErrorMessage(err)
+    error.value = pluginErrorMessage(err)
     // A rollback can fail after the Host already switched packages, so the
     // row is redrawn from the Host rather than left offering a stale action.
     await refreshInstalled().catch((refreshErr: unknown) => {
@@ -122,7 +155,7 @@ async function restartPlugin(id: string): Promise<void> {
     await refreshInstalled()
     void pluginUpdates.refresh()
   } catch (err) {
-    error.value = ipcErrorMessage(err)
+    error.value = pluginErrorMessage(err)
   } finally {
     busy.value = false
   }
@@ -137,7 +170,7 @@ async function restoreFactoryPackage(id: string): Promise<void> {
     await api.restoreFactoryPackage(id)
     await refreshInstalled()
   } catch (err) {
-    error.value = ipcErrorMessage(err)
+    error.value = pluginErrorMessage(err)
   } finally {
     busy.value = false
   }
@@ -189,7 +222,7 @@ onMounted(() => {
             </span>
           </div>
           <span v-if="p.installed?.pendingCandidateVersion" class="ext-badge ext-candidate">
-            Update {{ p.installed.pendingCandidateVersion }} is ready
+            {{ $t('settings.extensions.candidateReady', { version: p.installed.pendingCandidateVersion }) }}
           </span>
           <button
             v-if="p.optedOut"
@@ -207,7 +240,7 @@ onMounted(() => {
             :disabled="busy || updateFlow.busy.value"
             @click="restartPlugin(p.id)"
           >
-            Restart Plugin
+            {{ $t('settings.extensions.restartPlugin') }}
           </button>
         </li>
       </ul>
@@ -228,7 +261,7 @@ onMounted(() => {
           <span class="ext-requires">{{ p.requires.join(', ') }}</span>
           <span v-if="p.warning" class="ext-badge ext-dev-warning">{{ p.warning }}</span>
           <span v-if="p.pendingCandidateVersion" class="ext-badge ext-candidate">
-            Update {{ p.pendingCandidateVersion }} is ready
+            {{ $t('settings.extensions.candidateReady', { version: p.pendingCandidateVersion }) }}
           </span>
           <span v-else-if="updatesById.get(p.id)" class="ext-badge ext-update-badge">
             {{ $t('settings.extensions.marketplace.updateAvailableVersion', { version: updatesById.get(p.id)?.latestVersion ?? '' }) }}
@@ -248,7 +281,7 @@ onMounted(() => {
             :disabled="busy || updateFlow.busy.value"
             @click="restartPlugin(p.id)"
           >
-            Restart Plugin
+            {{ $t('settings.extensions.restartPlugin') }}
           </button>
           <button
             v-if="p.rollbackKind"
@@ -256,7 +289,11 @@ onMounted(() => {
             :disabled="busy || updateFlow.busy.value"
             @click="rollback(p.id, p.rollbackKind, p.rollbackToVersion)"
           >
-            {{ p.rollbackKind === 'factory' ? 'Roll back to bundled' : `Roll back to ${p.rollbackToVersion}` }}
+            {{
+              p.rollbackKind === 'factory'
+                ? $t('settings.extensions.rollback.toBundled')
+                : $t('settings.extensions.rollback.toVersion', { version: p.rollbackToVersion })
+            }}
           </button>
           <button class="ext-remove nv-btn nv-btn--sm" :disabled="busy || updateFlow.busy.value" @click="remove(p.id)">
             {{ $t('settings.extensions.marketplace.uninstall') }}

@@ -1286,6 +1286,27 @@
         "unavailable": "無法使用"
       },
       "restore": "還原",
+      "candidateReady": "更新 {version} 已就緒",
+      "restartPlugin": "重新啟動擴充功能",
+      "rollback": {
+        "toBundled": "回復為內建版本",
+        "toVersion": "回復到 {version}",
+        "title": "回復擴充功能",
+        "confirm": "回復",
+        "confirmFactory": "要將 {id} 回復為 Navide 內建的版本嗎？你安裝的套件會保留為待啟用版本，之後可以重新啟動切回。",
+        "confirmPrevious": "要將 {id} 回復到 {version} 嗎？目前的版本會保留為待啟用版本，之後可以重新啟動切回。",
+        "previousVersion": "上一個版本",
+        "errors": {
+          "transactionInProgress": "{id} 正在安裝、更新或回復中，請等它完成後再試。",
+          "noCompletedActivation": "{id} 沒有已完成啟用的版本可以回復。",
+          "previousUnavailable": "上一個版本已無法使用，無法回復。",
+          "previousChanged": "上一個版本的套件檔案已被變更，因此沒有回復。",
+          "grantUnavailable": "找不到 {id} 已核准的權限，因此沒有回復。",
+          "factoryUnavailable": "目前無法回復為內建版本。",
+          "gitLegacyRecovery": "NAVIDE_GIT_RECOVERY=legacy 強制使用舊版復原模式時，無法還原內建 Git。",
+          "factoryRestoreFailed": "無法載入內建版本。"
+        }
+      },
       "installed": "已安裝",
       "sensitive": "敏感權限",
       "empty": "尚未安裝任何擴充功能。",

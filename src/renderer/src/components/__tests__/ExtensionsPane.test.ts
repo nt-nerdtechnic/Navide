@@ -291,7 +291,7 @@ describe('ExtensionsPane', () => {
     await flushPromises()
 
     const shown = wrapper.get('.ext-error').text()
-    expect(shown).toBe('previous package is unavailable for rollback')
+    expect(shown).toBe('The previous version is no longer available to roll back to.')
     expect(shown).not.toContain('Error invoking remote method')
   })
 
@@ -329,6 +329,72 @@ describe('ExtensionsPane', () => {
     await flushPromises()
 
     expect(wrapper.get('.ext-error').text()).toBe('an installed package already owns this plugin id')
+  })
+
+  describe('in zh-TW', () => {
+    const original = i18n.global.locale.value
+    beforeEach(() => {
+      i18n.global.locale.value = 'zh-TW'
+    })
+    afterEach(() => {
+      i18n.global.locale.value = original
+    })
+
+    it('labels the rollback, staged update and restart from the locale', async () => {
+      mockPlugins({
+        listInstalled: vi.fn().mockResolvedValue([
+          { id: 'acme.prev', requires: [], sensitive: [], packageVersion: '1.0.1', rollbackKind: 'previous', rollbackToVersion: '1.0.0' },
+          { id: 'acme.fact', requires: [], sensitive: [], packageVersion: '2.0.0', rollbackKind: 'factory' },
+          { id: 'acme.staged', requires: [], sensitive: [], packageVersion: '3.0.0', pendingCandidateVersion: '3.1.0' },
+        ]),
+      })
+      wrapper = mountExtensions()
+      await flushPromises()
+
+      expect(wrapper.get('[data-id="acme.prev"] .ext-rollback').text()).toBe('回復到 1.0.0')
+      expect(wrapper.get('[data-id="acme.fact"] .ext-rollback').text()).toBe('回復為內建版本')
+      expect(wrapper.get('[data-id="acme.staged"] .ext-candidate').text()).toBe('更新 3.1.0 已就緒')
+      expect(wrapper.get('[data-id="acme.staged"] .ext-restart').text()).toBe('重新啟動擴充功能')
+
+      await wrapper.get('[data-id="acme.prev"] .ext-rollback').trigger('click')
+      await flushPromises()
+      const dialog = useNotify().dialog.value as { message?: string; title?: string; confirmText?: string }
+      expect(dialog.title).toBe('回復擴充功能')
+      expect(dialog.confirmText).toBe('回復')
+      expect(dialog.message).toContain('要將 acme.prev 回復到 1.0.0 嗎')
+      useNotify().resolveDialog(false)
+      await flushPromises()
+    })
+
+    it('shows a known Host refusal translated and an unknown one as written', async () => {
+      const rollback = vi.fn()
+        .mockRejectedValueOnce(
+          new Error("Error invoking remote method 'plugins:rollback': Error: plugin transaction already in progress for acme.demo"),
+        )
+        .mockRejectedValueOnce(
+          new Error("Error invoking remote method 'plugins:rollback': Error: Factory package restoration failed: bundle unreadable"),
+        )
+        .mockRejectedValueOnce(new Error('something unforeseen'))
+      mockPlugins({
+        listInstalled: vi.fn().mockResolvedValue([
+          { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.1', rollbackKind: 'factory' },
+        ]),
+        rollback,
+      })
+      wrapper = mountExtensions()
+      await flushPromises()
+
+      const attempt = async (): Promise<string> => {
+        await wrapper!.get('[data-id="acme.demo"] .ext-rollback').trigger('click')
+        await flushPromises()
+        useNotify().resolveDialog(true)
+        await flushPromises()
+        return wrapper!.get('.ext-error').text()
+      }
+      expect(await attempt()).toBe('acme.demo 正在安裝、更新或回復中，請等它完成後再試。')
+      expect(await attempt()).toBe('無法載入內建版本。 (bundle unreadable)')
+      expect(await attempt()).toBe('something unforeseen')
+    })
   })
 
   it('redraws from the Host after a rollback that failed once the package was switched', async () => {

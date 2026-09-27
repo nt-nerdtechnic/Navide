@@ -1286,6 +1286,27 @@
         "unavailable": "利用不可"
       },
       "restore": "復元",
+      "candidateReady": "アップデート {version} の準備ができました",
+      "restartPlugin": "拡張機能を再起動",
+      "rollback": {
+        "toBundled": "同梱版に戻す",
+        "toVersion": "{version} に戻す",
+        "title": "拡張機能を以前のバージョンに戻す",
+        "confirm": "戻す",
+        "confirmFactory": "{id} を Navide 同梱のバージョンに戻しますか？インストールしたパッケージは待機中のまま保持されるため、再起動して元に戻せます。",
+        "confirmPrevious": "{id} を {version} に戻しますか？現在のバージョンは待機中のまま保持されるため、再起動して元に戻せます。",
+        "previousVersion": "以前のバージョン",
+        "errors": {
+          "transactionInProgress": "{id} はインストール、更新、またはロールバックの処理中です。完了してから再試行してください。",
+          "noCompletedActivation": "{id} には戻せる有効化済みのバージョンがありません。",
+          "previousUnavailable": "以前のバージョンは利用できなくなったため、戻せません。",
+          "previousChanged": "以前のバージョンのパッケージがディスク上で変更されたため、戻しませんでした。",
+          "grantUnavailable": "{id} に付与された権限が見つからないため、戻しませんでした。",
+          "factoryUnavailable": "同梱版に戻す操作は現在利用できません。",
+          "gitLegacyRecovery": "NAVIDE_GIT_RECOVERY=legacy でレガシー復旧が強制されている間は、同梱の Git を復元できません。",
+          "factoryRestoreFailed": "同梱版を読み込めませんでした。"
+        }
+      },
       "installed": "インストール済み",
       "sensitive": "機密性の高い権限",
       "empty": "プラグインはインストールされていません。",

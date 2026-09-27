@@ -1286,6 +1286,27 @@
         "unavailable": "Unavailable"
       },
       "restore": "Restore",
+      "candidateReady": "Update {version} is ready",
+      "restartPlugin": "Restart Plugin",
+      "rollback": {
+        "toBundled": "Roll back to bundled",
+        "toVersion": "Roll back to {version}",
+        "title": "Roll back extension",
+        "confirm": "Roll back",
+        "confirmFactory": "Return {id} to the version bundled with Navide? The package you installed stays staged, so you can restart back into it.",
+        "confirmPrevious": "Roll {id} back to {version}? The current version stays staged, so you can restart back into it.",
+        "previousVersion": "the previous version",
+        "errors": {
+          "transactionInProgress": "{id} is already being installed, updated or rolled back. Try again when that finishes.",
+          "noCompletedActivation": "{id} has no completed version to roll back from.",
+          "previousUnavailable": "The previous version is no longer available to roll back to.",
+          "previousChanged": "The previous version's package changed on disk, so it was not rolled back to.",
+          "grantUnavailable": "The permissions granted to {id} could not be found, so it was not rolled back.",
+          "factoryUnavailable": "Rolling back to the bundled version is not available.",
+          "gitLegacyRecovery": "Bundled Git cannot be restored while NAVIDE_GIT_RECOVERY=legacy is forcing legacy recovery.",
+          "factoryRestoreFailed": "The bundled version could not be loaded."
+        }
+      },
       "installed": "Installed",
       "sensitive": "sensitive",
       "empty": "No plugins installed.",
