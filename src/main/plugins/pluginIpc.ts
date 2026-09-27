@@ -1245,6 +1245,41 @@ export function registerPluginIpc(
     if (!currentGrant) throw new Error(`active package grant is unavailable for ${id}`)
     activeTransactions.add(id)
     let restartTransaction: PluginPackageRestartTransaction | undefined
+    let demoted = false
+    let factorySelected = false
+    // Nothing replaces the drained package until the factory package loads, so
+    // every failure before that has to select the displaced package again.
+    // A backend-only plugin is the case that cannot be left alone: its child is
+    // already revoked, and without this its selector would keep calling a
+    // version active that no longer runs.
+    const reselectDisplacedPackage = (): void => {
+      if (demoted) {
+        lifecycleSelector.activateCandidate(id)
+        demoted = false
+      }
+      capabilityGrants.set(id, currentGrant)
+      const activeDir = lifecycleSelector.packageDir(id, active)
+      const activeScanned = loadPluginDir(activeDir)
+      if (activeScanned.packageSummary) {
+        manager.registerInstalledPackage(
+          { ...activeScanned.packageSummary, provenance: 'official-registry' },
+          activeScanned.descriptor,
+          { official: true },
+          activeDir,
+        )
+        manager.setPluginStorageSnapshotSelection(id, { activeVersion: active.packageVersion })
+      }
+      if (activeScanned.activation) {
+        options.onActivationChange?.({
+          pluginId: id,
+          activation: {
+            ...activeScanned.activation,
+            provenance: 'official-registry',
+            artifactDigest: active.artifactDigest,
+          },
+        })
+      }
+    }
     try {
       if (currentDescriptor) {
         restartTransaction = await manager.beginPackageRestart(id, currentVersion)
@@ -1252,35 +1287,13 @@ export function registerPluginIpc(
         await manager.revokePackageVersion(id, currentVersion)
       }
       lifecycleSelector.demoteActiveToCandidate(id)
+      demoted = true
       manager.removeInstalledPlugin(id, { restoreBuiltin: false })
       const restored = loadFactoryPackage(id)
       if (!restored.loaded) {
-        // Nothing replaced the drained package yet: select it again.
-        lifecycleSelector.activateCandidate(id)
-        capabilityGrants.set(id, currentGrant)
-        const activeDir = lifecycleSelector.packageDir(id, active)
-        const activeScanned = loadPluginDir(activeDir)
-        if (activeScanned.packageSummary) {
-          manager.registerInstalledPackage(
-            { ...activeScanned.packageSummary, provenance: 'official-registry' },
-            activeScanned.descriptor,
-            { official: true },
-            activeDir,
-          )
-          manager.setPluginStorageSnapshotSelection(id, { activeVersion: active.packageVersion })
-        }
-        if (activeScanned.activation) {
-          options.onActivationChange?.({
-            pluginId: id,
-            activation: {
-              ...activeScanned.activation,
-              provenance: 'official-registry',
-              artifactDigest: active.artifactDigest,
-            },
-          })
-        }
         throw new Error(`Factory package restoration failed: ${restored.reason}`)
       }
+      factorySelected = true
       manager.setPluginStorageSnapshotSelection(id, { activeVersion: restored.packageVersion })
       options.onActivationChange?.({ pluginId: id, activation: restored.activation })
       if (restartTransaction) {
@@ -1290,6 +1303,18 @@ export function registerPluginIpc(
         return { id, packageVersion: restored.packageVersion, ...report }
       }
       return { id, packageVersion: restored.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
+    } catch (error) {
+      try {
+        if (!factorySelected) reselectDisplacedPackage()
+      } catch (recoveryError) {
+        if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+        restartTransaction = undefined
+        throw new AggregateError(
+          [error, recoveryError],
+          'Factory package rollback recovery failed.',
+        )
+      }
+      throw error
     } finally {
       if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
       activeTransactions.delete(id)

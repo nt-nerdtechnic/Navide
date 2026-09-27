@@ -1765,6 +1765,72 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('re-selects the displaced package when the factory load throws mid-rollback', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-rollback-throw-'))
+    const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-bundle-throw-'))
+    const manager = new FrontendPluginManager()
+    const activationChanges: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
+    try {
+      for (const entry of readZipEntries(buildPkg('acme.demo', 'acme', {}, '1.0.0').bytes)) {
+        if (entry.kind !== 'file') continue
+        const output = join(factoryDir, entry.path)
+        mkdirSync(join(output, '..'), { recursive: true })
+        writeFileSync(output, entry.data)
+      }
+      const grants = new PluginCapabilityGrantStore(root)
+      const factoryGrant = { packageVersion: '1.0.0', system: [], storage: true as const }
+      expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
+      grants.set('acme.demo', factoryGrant)
+
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: (change) => activationChanges.push(change),
+        factoryPackageIds: ['acme.demo'],
+        // A guard that refuses (legacy-pinned Git) or a bundle that cannot be
+        // read throws rather than reporting `loaded: false`.
+        loadFactoryPackage: () => {
+          throw new Error('injected factory crash')
+        },
+      })
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+      const secondSelection = { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest }
+      const secondGrant = { packageVersion: '1.0.1', system: [], storage: true }
+      const secondDir = join(root, 'acme.demo', '1.0.1', 'universal', 'package')
+
+      await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow('injected factory crash')
+
+      // The displaced package is selected, granted and registered again, and the
+      // row stops offering a rollback only because it is offering one that works.
+      expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        active: secondSelection,
+        activeGrant: secondGrant,
+      })
+      expect(grants.get('acme.demo', '1.0.1')).toEqual(secondGrant)
+      expect(manager.getDescriptor('acme.demo')).toMatchObject({
+        packageVersion: '1.0.1',
+        packageDir: secondDir,
+      })
+      expect(activationChanges.at(-1)).toMatchObject({
+        pluginId: 'acme.demo',
+        activation: { packageVersion: '1.0.1', provenance: 'official-registry' },
+      })
+      expect(handlers.get('plugins:listInstalled')!(null)).toMatchObject([
+        { id: 'acme.demo', rollbackKind: 'factory' },
+      ])
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+      rmSync(factoryDir, { recursive: true, force: true })
+    }
+  })
+
   it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
