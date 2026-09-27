@@ -105,7 +105,7 @@ jobs:
           # It runs before releases/latest/ is replaced, so a failed check
           # never reaches the updater's feed either.
           mkdir -p check && cd check
-          while read -r sum name; do
+          while read -r _ name; do
             curl -fsSL --retry 3 -o "${name}" "https://dl.navide.dev/releases/${TAG}/${name}"
           done < "../${TAG}.sha256"
           sha256sum -c "../${TAG}.sha256"
