@@ -4,6 +4,13 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.11] — 2026-09-27 — signed release
+
+### Fixed
+
+- **Channels works in the installed app.** 0.2.10 left every chat adapter (Telegram, Discord, Slack, Feishu, DingTalk, Matrix, Mattermost, iMessage) out of the packaged backend, so setting up any chat failed with "adapter is not available in this build"; development builds were not affected. The packaged backend now includes them, and a test keeps the packaging list in step with the supported platforms.
+- The other modules the backend loads by name (the CLI log readers, the web server's auto-selected protocols, the async backend and the Windows time-zone data) are now listed explicitly in the packaging spec with tests, so they can no longer drop out of a build unnoticed. They were already included in 0.2.10.
+
 ## [0.2.10] — 2026-09-27 — signed release
 
 ### Highlights
