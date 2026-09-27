@@ -227,6 +227,50 @@ describe('ExtensionsPane', () => {
     expect(api.rollback).not.toHaveBeenCalled()
   })
 
+  it('offers the promote-back restart on the bundled row a rollback staged a candidate on', async () => {
+    const api = mockPlugins({
+      // After a rollback the id is factory-bundled again, so it is listed only
+      // under Bundled while the package it displaced waits as the candidate.
+      listInstalled: vi.fn().mockResolvedValue([
+        {
+          id: 'navide.mini-ide',
+          requires: [],
+          sensitive: [],
+          packageVersion: '0.2.11',
+          provenance: 'factory-bundled',
+          pendingCandidateVersion: '0.3.0',
+        },
+      ]),
+      listFactoryPackages: vi.fn().mockResolvedValue([
+        { id: 'navide.mini-ide', version: '0.2.11', active: true, optedOut: false },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    const row = wrapper.get('[data-factory-id="navide.mini-ide"]')
+    expect(row.text()).toContain('0.3.0')
+    await row.get('.ext-restart').trigger('click')
+    await flushPromises()
+
+    expect(api.restart).toHaveBeenCalledWith('navide.mini-ide')
+  })
+
+  it('keeps Restore, not the promote-back restart, on an opted-out bundled row', async () => {
+    mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([]),
+      listFactoryPackages: vi.fn().mockResolvedValue([
+        { id: 'navide.mini-ide', version: '0.2.11', active: false, optedOut: true },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    const row = wrapper.get('[data-factory-id="navide.mini-ide"]')
+    expect(row.find('.ext-restore').exists()).toBe(true)
+    expect(row.find('.ext-restart').exists()).toBe(false)
+  })
+
   it('keeps the Developer Mode local-unpacked warning visible in inventory', async () => {
     mockPlugins({
       listInstalled: vi.fn().mockResolvedValue([

@@ -183,6 +183,9 @@ onMounted(() => {
               {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.packageVersionGrant'), value: formatPackageGrant(p.installed.packageVersionGrant) }) }}
             </span>
           </div>
+          <span v-if="p.installed?.pendingCandidateVersion" class="ext-badge ext-candidate">
+            Update {{ p.installed.pendingCandidateVersion }} is ready
+          </span>
           <button
             v-if="p.optedOut"
             class="ext-restore"
@@ -190,6 +193,16 @@ onMounted(() => {
             @click="restoreFactoryPackage(p.id)"
           >
             {{ $t('settings.extensions.restore') }}
+          </button>
+          <!-- A rollback leaves the displaced package staged over the bundled
+               one, and this row is the only place it is still listed. -->
+          <button
+            v-else-if="p.installed?.pendingCandidateVersion"
+            class="ext-restart nv-btn nv-btn--sm"
+            :disabled="busy || updateFlow.busy.value"
+            @click="restartPlugin(p.id)"
+          >
+            Restart Plugin
           </button>
         </li>
       </ul>
