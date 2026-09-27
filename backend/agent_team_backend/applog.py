@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
+from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TypeVar
 
 from . import osplat
+
+_T = TypeVar("_T")
+
+# Set only while a job bound by in_data_dir runs; see there.
+_BOUND_DATA_DIR: ContextVar[Path | None] = ContextVar("agent_team_bound_data_dir", default=None)
 
 
 def default_app_data_dir() -> Path:
@@ -28,10 +36,33 @@ def app_data_dir() -> Path:
     (sessions, settings, backend-port) separate from a packaged app running at
     the same time — otherwise two backends fight over one state dir.
     """
+    bound = _BOUND_DATA_DIR.get()
+    if bound is not None:
+        return bound
     override = os.environ.get("AGENT_TEAM_DATA_DIR")
     if override:
         return Path(os.path.expanduser(override))
     return default_app_data_dir()
+
+
+def in_data_dir(data_dir: Path, fn: Callable[..., _T], /, *args: object) -> Callable[[], _T]:
+    """``fn(*args)`` as a zero-argument job that sees ``app_data_dir()`` as
+    ``data_dir`` while it runs.
+
+    For work handed to a thread pool: it runs later, and resolving the data
+    dir then would pick whatever the process points at by that time instead
+    of the dir the work belongs to — in tests, the next test's dir, whose
+    navide.db the late job would open a second connection on and write into.
+    """
+
+    def run() -> _T:
+        token = _BOUND_DATA_DIR.set(data_dir)
+        try:
+            return fn(*args)
+        finally:
+            _BOUND_DATA_DIR.reset(token)
+
+    return run
 
 
 def log_dir() -> Path:

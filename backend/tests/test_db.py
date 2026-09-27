@@ -100,6 +100,40 @@ def test_no_implicit_open_transaction_after_write(db):
     assert not db._conn.in_transaction
 
 
+def test_failed_commit_releases_the_write_lock(db, tmp_path):
+    # A COMMIT that fails (here SQLITE_BUSY: another connection still holds
+    # a read lock) leaves SQLite's transaction open. Unless it is rolled
+    # back, this handle keeps the write lock forever: every later write
+    # joins the dead transaction and is never committed, and every other
+    # connection — e.g. a second Database opened on the same file — gets
+    # "database is locked".
+    from agent_team_backend.log_readers.attribution import Attribution
+
+    db.kv_set("a", 1, now=1)
+    db.kv_set("b", 2, now=1)
+    db._conn.execute("PRAGMA busy_timeout = 100")
+    reader = sqlite3.connect(tmp_path / "navide.db")
+    rows = reader.execute("SELECT key FROM kv")
+    rows.fetchone()  # statement left mid-step: holds SHARED
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        db.kv_set("c", 3, now=1)
+    rows.close()
+    reader.close()
+
+    assert not db._conn.in_transaction
+    # The CI failure: a second Database on the same file (Attribution opens
+    # its own when not handed one) can take the write lock again.
+    Attribution([], workspaces_path=tmp_path / "known-workspaces.json")
+    db.kv_set("d", 4, now=1)
+    other = sqlite3.connect(tmp_path / "navide.db", timeout=0.2)
+    try:
+        keys = {row[0] for row in other.execute("SELECT key FROM kv")}
+    finally:
+        other.close()
+    assert "c" not in keys
+    assert "d" in keys
+
+
 # ── schema migrations ────────────────────────────────────────────────
 
 

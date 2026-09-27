@@ -103,7 +103,16 @@ class Database:
                 raise
             else:
                 if outer and self._conn.in_transaction:
-                    self._conn.commit()
+                    try:
+                        self._conn.commit()
+                    except BaseException:
+                        # A failed COMMIT (SQLITE_BUSY, I/O error) leaves the
+                        # transaction open and the write lock held: later
+                        # writes would join it and never commit, and every
+                        # other connection would see "database is locked".
+                        if self._conn.in_transaction:
+                            self._conn.rollback()
+                        raise
             finally:
                 cur.close()
 

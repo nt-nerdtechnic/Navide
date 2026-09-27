@@ -48,6 +48,7 @@ from .cli_vendors.registry import VENDORS as CLI_VENDORS
 from .cli_vendors.registry import vendor as cli_vendor
 from .ipc import make_error, make_event, make_response
 from .log_readers.claude import ClaudeLogReader, first_user_prompts
+from .applog import app_data_dir, in_data_dir
 from .credential_vault import DEFAULT_SLOT_ID, vault_to_thread
 from .host_shell import parse_public_allowlisted_command, run_public_allowlisted_text
 from .mcp_settings import (
@@ -2776,7 +2777,7 @@ async def agent_orphan_scan(session: "Session", msg_id: str, msg_type: str, payl
     from . import app
 
     # Read-only leftover count (dead-backend PTY children still alive).
-    orphans = await asyncio.to_thread(app.pty_registry.scan_orphans)
+    orphans = await asyncio.to_thread(in_data_dir(app_data_dir(), app.pty_registry.scan_orphans))
     await session.send_json(
         make_response(msg_id, msg_type, {"orphans": orphans, "count": len(orphans)})
     )
@@ -2787,7 +2788,7 @@ async def agent_reap_orphans(session: "Session", msg_id: str, msg_type: str, pay
     from . import app
 
     # Manual cleanup: kill the leftover process groups reap_stale finds.
-    reaped = await asyncio.to_thread(app.pty_registry.reap_stale)
+    reaped = await asyncio.to_thread(in_data_dir(app_data_dir(), app.pty_registry.reap_stale))
     await session.send_json(
         make_response(msg_id, msg_type, {"reaped": reaped, "count": len(reaped)})
     )
@@ -6252,7 +6253,8 @@ async def onboarding_status(session: "Session", msg_id: str, msg_type: str, payl
     fresh = bool(payload.get("fresh"))
     loop = asyncio.get_running_loop()
     status = await loop.run_in_executor(
-        _ONBOARDING_EXECUTOR, lambda: app.onboarding_deps.get_status(fresh=fresh)
+        _ONBOARDING_EXECUTOR,
+        in_data_dir(app_data_dir(), lambda: app.onboarding_deps.get_status(fresh=fresh)),
     )
     status["complete"] = app.onboarding_deps.is_complete()
     await session.send_json(make_response(msg_id, msg_type, status))
@@ -6298,7 +6300,9 @@ async def onboarding_run(session: "Session", msg_id: str, msg_type: str, payload
         ))
         return
     # Offloaded: pull_model's reachability check shells out to `ollama list`.
-    resolved = await asyncio.to_thread(app.onboarding_deps.resolve_run, payload)
+    resolved = await asyncio.to_thread(
+        in_data_dir(app_data_dir(), app.onboarding_deps.resolve_run, payload)
+    )
     if not resolved.get("ok"):
         await session.send_json(make_response(msg_id, msg_type, resolved))
         return

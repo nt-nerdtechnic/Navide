@@ -57,7 +57,7 @@ from .analyzer_ollama import (
 )
 from .analyzer_settings import AnalyzerSettingsStore
 from .ai_chat_settings import AIChatSettingsStore
-from .applog import app_data_dir, backend_log_path, backend_port_file
+from .applog import app_data_dir, backend_log_path, backend_port_file, in_data_dir
 from .cli_vendors.registry import VENDORS as _CLI_VENDORS
 from .cli_vendors.registry import vendor as cli_vendor
 from .codex_home import CodexHomeManager
@@ -2108,7 +2108,7 @@ async def _start_log_watcher() -> None:
     # Reap PTY children left behind by a previous run that died without its
     # shutdown sweep (SIGKILL, crash). Blocking ps/sleep — off the loop.
     try:
-        await asyncio.to_thread(pty_registry.reap_stale)
+        await asyncio.to_thread(in_data_dir(app_data_dir(), pty_registry.reap_stale))
     except Exception as err:  # noqa: BLE001
         log.warning("pty orphan reap failed: %s", err)
 
