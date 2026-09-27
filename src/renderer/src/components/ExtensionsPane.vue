@@ -15,7 +15,7 @@ import type {
 } from '../../../shared/executionPolicy'
 import { usePluginInventory } from '../composables/usePluginInventory'
 import { usePluginUpdates } from '../composables/usePluginUpdates'
-import { confirmUninstall, usePluginInstallFlow } from '../composables/usePluginInstallFlow'
+import { confirmUninstall, ipcErrorMessage, usePluginInstallFlow } from '../composables/usePluginInstallFlow'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import PluginTrustDialog from './PluginTrustDialog.vue'
 
@@ -101,7 +101,7 @@ async function rollback(id: string, kind: 'factory' | 'previous', version?: stri
     await refreshInstalled()
     void pluginUpdates.refresh()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = ipcErrorMessage(err)
   } finally {
     busy.value = false
   }

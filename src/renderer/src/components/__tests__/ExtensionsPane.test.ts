@@ -271,6 +271,30 @@ describe('ExtensionsPane', () => {
     expect(row.find('.ext-restart').exists()).toBe(false)
   })
 
+  it('shows the main process message for a failed rollback, not the IPC wrapper', async () => {
+    mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.1', rollbackKind: 'factory' },
+      ]),
+      rollback: vi.fn().mockRejectedValue(
+        new Error(
+          "Error invoking remote method 'plugins:rollback': Error: previous package is unavailable for rollback",
+        ),
+      ),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    await wrapper.get('[data-id="acme.demo"] .ext-rollback').trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(true)
+    await flushPromises()
+
+    const shown = wrapper.get('.ext-error').text()
+    expect(shown).toBe('previous package is unavailable for rollback')
+    expect(shown).not.toContain('Error invoking remote method')
+  })
+
   it('keeps the Developer Mode local-unpacked warning visible in inventory', async () => {
     mockPlugins({
       listInstalled: vi.fn().mockResolvedValue([
