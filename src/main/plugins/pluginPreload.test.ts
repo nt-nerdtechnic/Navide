@@ -1,5 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
+import capabilitiesV1 from '../../../packages/plugin-contracts/src/schemas/capabilities-v1.json'
+import { USER_GESTURE_CAPABILITY_ADDRESSES } from '../../../packages/plugin-contracts/src/userGesture'
+import { PUBLIC_CAPABILITY_CATALOG } from './pluginCapabilityCatalog'
 
 const state = vi.hoisted(() => ({
   exposed: null as Record<string, unknown> | null,
@@ -188,6 +191,17 @@ describe('plugin preload Host channels', () => {
       now.mockRestore()
       addEventListener.mockRestore()
     }
+  })
+  it('gates exactly the capability addresses the catalog declares as gesture-required', () => {
+    const declared = (capabilitiesV1.methods as Array<{ address: string; requiresUserGesture?: boolean }>)
+      .filter((entry) => entry.requiresUserGesture === true)
+      .map((entry) => entry.address)
+    const hostEnforced = Object.values(PUBLIC_CAPABILITY_CATALOG)
+      .filter((entry) => entry.requiresUserGesture === true)
+      .map((entry) => entry.address)
+    expect([...USER_GESTURE_CAPABILITY_ADDRESSES].sort()).toEqual([...declared].sort())
+    expect([...USER_GESTURE_CAPABILITY_ADDRESSES].sort()).toEqual([...hostEnforced].sort())
+    expect(USER_GESTURE_CAPABILITY_ADDRESSES).toContain('ui.openExternal')
   })
   it('forwards an all-or-none receiver close transaction and preserves its result union', async () => {
     const nav = await loadPreload(true)

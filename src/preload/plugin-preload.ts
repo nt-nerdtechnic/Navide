@@ -8,6 +8,7 @@
 // `sandbox: true`.
 
 import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from 'electron'
+import { USER_GESTURE_CAPABILITY_ADDRESSES } from '../../packages/plugin-contracts/src/userGesture'
 
 // The manager injects `--plugin-id=<id>` via webPreferences.additionalArguments,
 // so the id is authoritative (main also verifies by sender) and not spoofable
@@ -261,9 +262,9 @@ const nav = {
       method,
       args,
       reqId: globalThis.crypto.randomUUID(),
-      // The Host owns the catalog gate; only its gesture-gated link operation
-      // consumes this one-shot preload observation.
-      userGesture: ns === 'ui' && method === 'openExternal' && consumeFreshUserGesture(),
+      // The Host owns the catalog gate; only its gesture-gated operations
+      // consume this one-shot preload observation.
+      userGesture: USER_GESTURE_CAPABILITY_ADDRESSES.includes(`${ns}.${method}`) && consumeFreshUserGesture(),
     })
   },
   /** Fixed Host-owned first-party action bridge used by the bundled Git
