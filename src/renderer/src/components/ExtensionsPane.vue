@@ -102,6 +102,11 @@ async function rollback(id: string, kind: 'factory' | 'previous', version?: stri
     void pluginUpdates.refresh()
   } catch (err) {
     error.value = ipcErrorMessage(err)
+    // A rollback can fail after the Host already switched packages, so the
+    // row is redrawn from the Host rather than left offering a stale action.
+    await refreshInstalled().catch((refreshErr: unknown) => {
+      console.warn('[extensions] inventory refresh after a failed rollback failed:', refreshErr)
+    })
   } finally {
     busy.value = false
   }

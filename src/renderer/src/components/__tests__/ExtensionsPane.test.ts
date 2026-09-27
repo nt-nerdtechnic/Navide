@@ -295,6 +295,31 @@ describe('ExtensionsPane', () => {
     expect(shown).not.toContain('Error invoking remote method')
   })
 
+  it('redraws from the Host after a rollback that failed once the package was switched', async () => {
+    // The factory package became active before view restoration threw, so the
+    // Host no longer lists the installed row or its rollback.
+    const listInstalled = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.1', rollbackKind: 'factory' },
+      ])
+      .mockResolvedValue([])
+    mockPlugins({
+      listInstalled,
+      rollback: vi.fn().mockRejectedValue(new Error('plugin views did not become ready')),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    await wrapper.get('[data-id="acme.demo"] .ext-rollback').trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(true)
+    await flushPromises()
+
+    expect(wrapper.get('.ext-error').text()).toBe('plugin views did not become ready')
+    expect(wrapper.find('[data-id="acme.demo"]').exists()).toBe(false)
+  })
+
   it('keeps the Developer Mode local-unpacked warning visible in inventory', async () => {
     mockPlugins({
       listInstalled: vi.fn().mockResolvedValue([
