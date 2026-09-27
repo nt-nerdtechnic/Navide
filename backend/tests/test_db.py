@@ -134,6 +134,61 @@ def test_failed_commit_releases_the_write_lock(db, tmp_path):
     assert "d" in keys
 
 
+class _BrokenRollbackConn:
+    """A sqlite3 connection whose ROLLBACK (and optionally COMMIT) fails.
+
+    sqlite3.Connection attributes are read-only, so the failure is injected
+    through a delegating proxy swapped in for Database._conn.
+    """
+
+    def __init__(self, real, *, fail_commit=False):
+        self._real = real
+        self._fail_commit = fail_commit
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def commit(self):
+        if self._fail_commit:
+            raise sqlite3.OperationalError("commit boom")
+        self._real.commit()
+
+    def rollback(self):
+        raise sqlite3.OperationalError("rollback boom")
+
+
+def _committed_keys(path):
+    other = sqlite3.connect(path, timeout=0.2)
+    try:
+        return {row[0] for row in other.execute("SELECT key FROM kv")}
+    finally:
+        other.close()
+
+
+def test_failed_rollback_after_body_error_keeps_original_error(db, tmp_path):
+    db._conn = _BrokenRollbackConn(db._conn)
+    with pytest.raises(ValueError, match="body boom"):
+        with db.transaction() as cur:
+            cur.execute(
+                "INSERT INTO kv (key, value, updated_at) VALUES ('lost', '1', 1)"
+            )
+            raise ValueError("body boom")
+
+    assert not db._conn.in_transaction
+    db.kv_set("after", 1, now=1)
+    assert _committed_keys(tmp_path / "navide.db") == {"after"}
+
+
+def test_failed_rollback_after_commit_error_keeps_commit_error(db, tmp_path):
+    db._conn = _BrokenRollbackConn(db._conn, fail_commit=True)
+    with pytest.raises(sqlite3.OperationalError, match="commit boom"):
+        db.kv_set("lost", 1, now=1)
+
+    assert not db._conn.in_transaction
+    db.kv_set("after", 1, now=1)
+    assert _committed_keys(tmp_path / "navide.db") == {"after"}
+
+
 # ── schema migrations ────────────────────────────────────────────────
 
 

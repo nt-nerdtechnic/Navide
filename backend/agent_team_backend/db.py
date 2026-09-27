@@ -60,10 +60,7 @@ class Database:
         self._path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
-        self._conn = sqlite3.connect(
-            str(path), isolation_level=None, check_same_thread=False
-        )
-        self._conn.row_factory = sqlite3.Row
+        self._conn = self._connect()
         with self.transaction() as cur:
             cur.execute(
                 "CREATE TABLE IF NOT EXISTS schema_meta ("
@@ -79,6 +76,13 @@ class Database:
     def path(self) -> Path:
         return self._path
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            str(self._path), isolation_level=None, check_same_thread=False
+        )
+        conn.row_factory = sqlite3.Row
+        return conn
+
     # ── Transactions ─────────────────────────────────────────────────
 
     @contextmanager
@@ -91,7 +95,8 @@ class Database:
         (SQLite has no nested BEGIN; the RLock makes this safe).
         """
         with self._lock:
-            cur = self._conn.cursor()
+            conn = self._conn
+            cur = conn.cursor()
             outer = not self._conn.in_transaction
             if outer:
                 cur.execute("BEGIN IMMEDIATE")
@@ -99,7 +104,7 @@ class Database:
                 yield cur
             except BaseException:
                 if outer and self._conn.in_transaction:
-                    self._conn.rollback()
+                    self._rollback_after_failure()
                 raise
             else:
                 if outer and self._conn.in_transaction:
@@ -111,10 +116,34 @@ class Database:
                         # writes would join it and never commit, and every
                         # other connection would see "database is locked".
                         if self._conn.in_transaction:
-                            self._conn.rollback()
+                            self._rollback_after_failure()
                         raise
             finally:
-                cur.close()
+                # A connection replaced by _rollback_after_failure is closed,
+                # and closing a cursor on it raises.
+                if conn is self._conn:
+                    cur.close()
+
+    def _rollback_after_failure(self) -> None:
+        """Roll back after a failed body or COMMIT without masking its error.
+
+        Called from inside the ``except`` that re-raises the original
+        exception, so a failing ROLLBACK is logged, never raised. If the
+        transaction is still open afterwards, the connection is replaced:
+        closing it discards the transaction and releases the write lock, so
+        later writes don't join a transaction that can never commit.
+        """
+        try:
+            self._conn.rollback()
+        except sqlite3.Error as err:
+            log.warning("rollback failed on %s: %s", self._path, err)
+        if not self._conn.in_transaction:
+            return
+        try:
+            self._conn.close()
+        except sqlite3.Error as err:
+            log.warning("closing a connection stuck in a transaction failed on %s: %s", self._path, err)
+        self._conn = self._connect()
 
     # ── kv (document-class stores) ───────────────────────────────────
 
