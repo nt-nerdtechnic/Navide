@@ -226,6 +226,38 @@ describe('PluginActivationSelector', () => {
     expect(reloaded.read('acme.demo')).not.toHaveProperty('candidateFullShellConfirmed')
   })
 
+  it('returns a factory-replacing package to a retained candidate on factory rollback', () => {
+    const { root, selector } = fixture()
+    const grant = { packageVersion: first.packageVersion, system: [], storage: true as const }
+    selector.stageCandidate('acme.demo', first, { candidateGrant: { selection: first, grant } })
+    selector.beginActivation('acme.demo')
+    selector.activateCandidate('acme.demo')
+    selector.completeActivation('acme.demo', { activeGrant: grant })
+
+    const expected = { schemaVersion: 1, pluginId: 'acme.demo', candidate: first, candidateGrant: grant }
+    expect(selector.demoteActiveToCandidate('acme.demo')).toEqual(expected)
+    expect(new PluginActivationSelector(root).read('acme.demo')).toEqual(expected)
+    // The retained candidate re-activates through the ordinary restart path.
+    expect(selector.activateCandidate('acme.demo')).toEqual({
+      schemaVersion: 1,
+      pluginId: 'acme.demo',
+      active: first,
+      activeGrant: grant,
+    })
+  })
+
+  it('refuses factory rollback while a previous package or another transition is retained', () => {
+    const { selector } = fixture()
+    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/no active package/)
+    selector.stageCandidate('acme.demo', first)
+    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/no active package/)
+    selector.activateCandidate('acme.demo')
+    selector.stageCandidate('acme.demo', second)
+    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/another lifecycle transition/)
+    selector.activateCandidate('acme.demo')
+    expect(() => selector.demoteActiveToCandidate('acme.demo')).toThrow(/retains a previous package/)
+  })
+
   it('rejects a second candidate instead of overwriting a staged package', () => {
     const { selector } = fixture()
     selector.stageCandidate('acme.demo', first)

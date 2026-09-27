@@ -1668,6 +1668,103 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it.each([true, false])('rolls a package that replaced a factory package back to the factory package (factory loads: %s)', async (factoryLoads) => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-rollback-'))
+    const factoryDir = mkdtempSync(join(tmpdir(), 'navide-plugin-factory-bundle-'))
+    const manager = new FrontendPluginManager()
+    const activationChanges: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
+    try {
+      for (const entry of readZipEntries(buildPkg('acme.demo', 'acme', {}, '1.0.0').bytes)) {
+        if (entry.kind !== 'file') continue
+        const output = join(factoryDir, entry.path)
+        mkdirSync(join(output, '..'), { recursive: true })
+        writeFileSync(output, entry.data)
+      }
+      const grants = new PluginCapabilityGrantStore(root)
+      const factoryGrant = { packageVersion: '1.0.0', system: [], storage: true as const }
+      expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
+      grants.set('acme.demo', factoryGrant)
+
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: (change) => activationChanges.push(change),
+        factoryPackageIds: ['acme.demo'],
+        loadFactoryPackage: (pluginId) => {
+          if (!factoryLoads) return { loaded: false, reason: 'injected factory failure' }
+          const restored = manager.loadFactoryPlugin(factoryDir, pluginId)
+          if (restored.loaded) grants.set(pluginId, factoryGrant)
+          return restored
+        },
+      })
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+      await handlers.get('plugins:restart')!(null, { id: 'acme.demo' })
+      const secondSelection = { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest }
+      const secondGrant = { packageVersion: '1.0.1', system: [], storage: true }
+      const secondDir = join(root, 'acme.demo', '1.0.1', 'universal', 'package')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        active: secondSelection,
+        activeGrant: secondGrant,
+      })
+
+      // The Extensions row offers exactly the rollback the handler accepts.
+      expect(handlers.get('plugins:listInstalled')!(null)).toMatchObject([
+        { id: 'acme.demo', rollbackKind: 'factory' },
+      ])
+      const rollback = handlers.get('plugins:rollback')!(null, { id: 'acme.demo' })
+      if (!factoryLoads) {
+        await expect(rollback).rejects.toThrow('injected factory failure')
+        expect(manager.getDescriptor('acme.demo')).toMatchObject({ packageVersion: '1.0.1', packageDir: secondDir })
+        expect(grants.get('acme.demo', '1.0.1')).toEqual(secondGrant)
+        expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
+          schemaVersion: 1,
+          pluginId: 'acme.demo',
+          active: secondSelection,
+          activeGrant: secondGrant,
+        })
+        return
+      }
+      await expect(rollback).resolves.toMatchObject({ id: 'acme.demo', packageVersion: '1.0.0' })
+      expect(manager.getDescriptor('acme.demo')).toMatchObject({ packageVersion: '1.0.0', packageDir: factoryDir })
+      expect(manager.listInstalledPackages()).toMatchObject([{ id: 'acme.demo', provenance: 'factory-bundled' }])
+      expect(grants.get('acme.demo', '1.0.0')).toEqual(factoryGrant)
+      expect(activationChanges.at(-1)).toMatchObject({
+        pluginId: 'acme.demo',
+        activation: { packageVersion: '1.0.0', provenance: 'factory-bundled' },
+      })
+      // The displaced package bytes are retained as the next candidate.
+      expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        candidate: secondSelection,
+        candidateGrant: secondGrant,
+      })
+      expect(existsSync(join(secondDir, 'manifest.json'))).toBe(true)
+      // A staged candidate is the one shape the handler refuses, so the row
+      // stops offering a rollback rather than showing a button that throws.
+      expect(handlers.get('plugins:listInstalled')!(null)).toMatchObject([
+        { id: 'acme.demo', pendingCandidateVersion: '1.0.1' },
+      ])
+      expect((handlers.get('plugins:listInstalled')!(null) as Array<{ rollbackKind?: string }>)[0].rollbackKind)
+        .toBeUndefined()
+      await expect(handlers.get('plugins:rollback')!(null, { id: 'acme.demo' }))
+        .rejects.toThrow('has no completed activation to roll back')
+      expect((manager as unknown as { restartingPluginIds: Set<string> }).restartingPluginIds.has('acme.demo')).toBe(false)
+
+      await expect(handlers.get('plugins:restart')!(null, { id: 'acme.demo' }))
+        .resolves.toMatchObject({ packageVersion: '1.0.1' })
+      expect(manager.getDescriptor('acme.demo')).toMatchObject({ packageVersion: '1.0.1', packageDir: secondDir })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+      rmSync(factoryDir, { recursive: true, force: true })
+    }
+  })
+
   it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
@@ -1727,6 +1824,9 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
       await restart(null, { id: 'acme.demo' })
 
+      expect(handlers.get('plugins:listInstalled')!(null)).toMatchObject([
+        { id: 'acme.demo', rollbackKind: 'previous', rollbackToVersion: '1.0.0' },
+      ])
       await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({
         id: 'acme.demo',
         packageVersion: '1.0.0',

@@ -119,6 +119,8 @@ export interface InstalledPluginSummary {
   provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
   warning?: string
   pendingCandidateVersion?: string
+  rollbackKind?: 'factory' | 'previous'
+  rollbackToVersion?: string
 }
 
 export interface FactoryPluginSummary {
@@ -920,6 +922,12 @@ contextBridge.exposeInMainWorld('agentTeam', {
       restoredInstances: number
       skippedDestroyedHostWindows: number
     }> => ipcRenderer.invoke('plugins:restart', { id }),
+    rollback: (id: string): Promise<{
+      id: string
+      packageVersion: string
+      restoredInstances: number
+      skippedDestroyedHostWindows: number
+    }> => ipcRenderer.invoke('plugins:rollback', { id }),
     remove: (id: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('plugins:remove', { id }),
     restoreFactoryPackage: (id: string): Promise<{ ok: boolean }> =>

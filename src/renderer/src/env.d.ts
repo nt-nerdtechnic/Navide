@@ -409,6 +409,12 @@ declare global {
           restoredInstances: number
           skippedDestroyedHostWindows: number
         }>
+        rollback: (id: string) => Promise<{
+          id: string
+          packageVersion: string
+          restoredInstances: number
+          skippedDestroyedHostWindows: number
+        }>
         remove: (id: string) => Promise<{ ok: boolean }>
         restoreFactoryPackage: (id: string) => Promise<{ ok: boolean }>
       }
@@ -425,6 +431,8 @@ declare global {
     provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
     warning?: string
     pendingCandidateVersion?: string
+    rollbackKind?: 'factory' | 'previous'
+    rollbackToVersion?: string
   }
 
   interface FactoryPluginSummary {

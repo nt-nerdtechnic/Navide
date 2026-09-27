@@ -80,6 +80,33 @@ async function remove(id: string): Promise<void> {
   await refreshInstalled()
 }
 
+// Returning an installed package to what it displaced: the previous version, or
+// the App-bundled factory package for the ids that ship with Navide. The Host
+// decides which of the two applies; the row only offers the button when the Host
+// says a rollback is available.
+async function rollback(id: string, kind: 'factory' | 'previous', version?: string): Promise<void> {
+  const api = pluginsApi()
+  if (!api) return
+  const confirmed = await notify.confirm(
+    kind === 'factory'
+      ? `Return ${id} to the version bundled with Navide? The package you installed stays staged, so you can restart back into it.`
+      : `Roll ${id} back to ${version ?? 'the previous version'}? The current version stays staged, so you can restart back into it.`,
+    { title: 'Roll back extension', confirmText: 'Roll back', danger: true },
+  )
+  if (!confirmed) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.rollback(id)
+    await refreshInstalled()
+    void pluginUpdates.refresh()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function restartPlugin(id: string): Promise<void> {
   const api = pluginsApi()
   if (!api) return
@@ -205,6 +232,14 @@ onMounted(() => {
           >
             Restart Plugin
           </button>
+          <button
+            v-if="p.rollbackKind"
+            class="ext-rollback nv-btn nv-btn--sm"
+            :disabled="busy || updateFlow.busy.value"
+            @click="rollback(p.id, p.rollbackKind, p.rollbackToVersion)"
+          >
+            {{ p.rollbackKind === 'factory' ? 'Roll back to bundled' : `Roll back to ${p.rollbackToVersion}` }}
+          </button>
           <button class="ext-remove nv-btn nv-btn--sm" :disabled="busy || updateFlow.busy.value" @click="remove(p.id)">
             {{ $t('settings.extensions.marketplace.uninstall') }}
           </button>
@@ -325,10 +360,13 @@ onMounted(() => {
 .ext-update,
 .ext-remove,
 .ext-restore,
+.ext-rollback,
 .ext-restart {
   margin-left: auto;
 }
 .ext-update + .ext-remove,
+.ext-rollback + .ext-remove,
+.ext-restart + .ext-rollback,
 .ext-restart + .ext-remove {
   margin-left: 0;
 }

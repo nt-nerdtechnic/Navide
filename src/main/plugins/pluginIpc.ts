@@ -132,6 +132,8 @@ interface InstalledSummary {
   provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
   warning?: string
   pendingCandidateVersion?: string
+  rollbackKind?: 'factory' | 'previous'
+  rollbackToVersion?: string
 }
 
 export interface FactoryPackageSummary {
@@ -205,6 +207,11 @@ export interface PluginIpcOptions {
   listFactoryPackages?: () => FactoryPackageSummary[]
   restoreFactoryPackage?: (pluginId: string) => Promise<void> | void
   onFactoryPackageRemoved?: (pluginId: string) => void
+  /** Load the App-bundled package and its grant after an installed package
+   *  that replaced it was unregistered; the rollback path back to the factory. */
+  loadFactoryPackage?: (pluginId: string) =>
+    | { loaded: true; packageVersion: string; activation: PluginActivationCatalogEntry }
+    | { loaded: false; reason: string }
   onPackageInstalled?: (pluginId: string) => void
   /** Host-only hidden-window preflight. The candidate must not enter catalog state. */
   preflightCandidateFrontend?: (descriptor: PluginLaunchDescriptor) => Promise<void>
@@ -326,6 +333,21 @@ export function registerPluginIpc(
     if (!authorizeSender(event)) throw new Error('unauthorized plugin management request')
   }
 
+  // The rollback the Extensions page may offer, derived from the same selector
+  // preconditions `plugins:rollback` enforces so a visible button can never
+  // reach a refusal; a parity test pins the two together. `factory` returns the
+  // id to the App bundle, which keeps no selector record of its own.
+  function rollbackTargetFor(
+    id: string,
+  ): { kind: 'factory' } | { kind: 'previous'; version: string } | null {
+    const selected = lifecycleSelector.read(id)
+    if (!selected?.active || selected.candidate || selected.activation) return null
+    if (!selected.previous) {
+      return options.factoryPackageIds?.includes(id) ? { kind: 'factory' } : null
+    }
+    return { kind: 'previous', version: selected.previous.packageVersion }
+  }
+
   ipcMain.handle('plugins:listInstalled', (event): InstalledSummary[] => {
     assertAuthorized(event)
     const summaries = new Map<
@@ -406,6 +428,13 @@ export function registerPluginIpc(
       ...(summary.provenance ? { provenance: summary.provenance } : {}),
       ...(summary.warning ? { warning: summary.warning } : {}),
       ...(candidate ? { pendingCandidateVersion: candidate.packageVersion } : {}),
+      ...(() => {
+        const rollback = rollbackTargetFor(summary.id)
+        if (!rollback) return {}
+        return rollback.kind === 'factory'
+          ? { rollbackKind: 'factory' as const }
+          : { rollbackKind: 'previous' as const, rollbackToVersion: rollback.version }
+      })(),
     }
     })
   })
@@ -1204,6 +1233,69 @@ export function registerPluginIpc(
     return { ok: true }
   })
 
+  // A factory package has no selection to retain as `previous`, so rolling
+  // back the package that replaced it returns the id to the App bundle. The
+  // displaced package stays staged as a candidate plugins:restart re-activates.
+  async function rollbackToFactoryPackage(id: string, active: PluginPackageSelection) {
+    const loadFactoryPackage = options.loadFactoryPackage
+    if (!loadFactoryPackage) throw new Error('factory package rollback is unavailable')
+    const currentDescriptor = manager.getDescriptor(id)
+    const currentVersion = currentDescriptor?.packageVersion ?? active.packageVersion
+    const currentGrant = capabilityGrants.get(id, currentVersion)
+    if (!currentGrant) throw new Error(`active package grant is unavailable for ${id}`)
+    activeTransactions.add(id)
+    let restartTransaction: PluginPackageRestartTransaction | undefined
+    try {
+      if (currentDescriptor) {
+        restartTransaction = await manager.beginPackageRestart(id, currentVersion)
+      } else {
+        await manager.revokePackageVersion(id, currentVersion)
+      }
+      lifecycleSelector.demoteActiveToCandidate(id)
+      manager.removeInstalledPlugin(id, { restoreBuiltin: false })
+      const restored = loadFactoryPackage(id)
+      if (!restored.loaded) {
+        // Nothing replaced the drained package yet: select it again.
+        lifecycleSelector.activateCandidate(id)
+        capabilityGrants.set(id, currentGrant)
+        const activeDir = lifecycleSelector.packageDir(id, active)
+        const activeScanned = loadPluginDir(activeDir)
+        if (activeScanned.packageSummary) {
+          manager.registerInstalledPackage(
+            { ...activeScanned.packageSummary, provenance: 'official-registry' },
+            activeScanned.descriptor,
+            { official: true },
+            activeDir,
+          )
+          manager.setPluginStorageSnapshotSelection(id, { activeVersion: active.packageVersion })
+        }
+        if (activeScanned.activation) {
+          options.onActivationChange?.({
+            pluginId: id,
+            activation: {
+              ...activeScanned.activation,
+              provenance: 'official-registry',
+              artifactDigest: active.artifactDigest,
+            },
+          })
+        }
+        throw new Error(`Factory package restoration failed: ${restored.reason}`)
+      }
+      manager.setPluginStorageSnapshotSelection(id, { activeVersion: restored.packageVersion })
+      options.onActivationChange?.({ pluginId: id, activation: restored.activation })
+      if (restartTransaction) {
+        const report = await manager.restorePackageRestart(restartTransaction, restored.packageVersion)
+        manager.completePackageRestart(restartTransaction)
+        restartTransaction = undefined
+        return { id, packageVersion: restored.packageVersion, ...report }
+      }
+      return { id, packageVersion: restored.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
+    } finally {
+      if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+      activeTransactions.delete(id)
+    }
+  }
+
   ipcMain.handle('plugins:rollback', async (event, args: { id?: unknown } | null) => {
     assertAuthorized(event)
     const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
@@ -1211,6 +1303,15 @@ export function registerPluginIpc(
       throw new Error(`plugin transaction already in progress for ${id}`)
     }
     const selectedBeforeRollback = lifecycleSelector.read(id)
+    if (
+      selectedBeforeRollback?.active &&
+      !selectedBeforeRollback.previous &&
+      !selectedBeforeRollback.candidate &&
+      !selectedBeforeRollback.activation &&
+      options.factoryPackageIds?.includes(id)
+    ) {
+      return rollbackToFactoryPackage(id, selectedBeforeRollback.active)
+    }
     if (
       !selectedBeforeRollback?.active ||
       !selectedBeforeRollback.previous ||

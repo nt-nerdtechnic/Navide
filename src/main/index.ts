@@ -1435,6 +1435,11 @@ const pluginTrustRefresh = registerPluginIpc(
         }
       }
     },
+    loadFactoryPackage: (pluginId) => {
+      if (pluginId === MINI_IDE_PLUGIN_ID) return loadFactoryMiniIdePackage()
+      if (pluginId === 'navide.git') return loadFactoryGitPackage()
+      return { loaded: false, reason: 'unknown factory package' }
+    },
     onFactoryPackageRemoved: (pluginId) => {
       if (pluginId === MINI_IDE_PLUGIN_ID) {
         pluginFactoryOptOuts.add(pluginId)

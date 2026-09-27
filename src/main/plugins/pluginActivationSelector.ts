@@ -532,6 +532,31 @@ export class PluginActivationSelector {
     return next
   }
 
+  /** Hand the plugin id back to its App-bundled factory package. A factory
+   * package has no selection of its own, so the displaced active package is
+   * retained as the next explicit candidate, exactly as when it was first
+   * staged over the factory package; no package bytes are removed. */
+  demoteActiveToCandidate(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (!current?.active || current.active.layout) {
+      throw new Error(`plugin ${pluginId} has no active package to return to its factory package`)
+    }
+    if (current.candidate || current.activation) {
+      throw new Error(`plugin ${pluginId} cannot roll back while another lifecycle transition is pending`)
+    }
+    if (current.previous) {
+      throw new Error(`plugin ${pluginId} retains a previous package to roll back to`)
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      candidate: current.active,
+      ...(current.activeGrant ? { candidateGrant: current.activeGrant } : {}),
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
   /** Drop a staged candidate that is not mid-activation. The selected package
    * is untouched; unreferenced candidate bytes are quarantined by the next
    * stage of the same identity. */

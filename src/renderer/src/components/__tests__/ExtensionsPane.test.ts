@@ -16,6 +16,7 @@ function mockPlugins(overrides: Record<string, unknown> = {}) {
     listFactoryPackages: vi.fn().mockResolvedValue([]),
     restoreFactoryPackage: vi.fn().mockResolvedValue({ ok: true }),
     restart: vi.fn().mockResolvedValue({ ok: true }),
+    rollback: vi.fn().mockResolvedValue({ id: '', packageVersion: '', restoredInstances: 0, skippedDestroyedHostWindows: 0 }),
     checkUpdates: vi.fn().mockResolvedValue([]),
     remove: vi.fn().mockResolvedValue({ ok: true }),
     ...overrides,
@@ -167,6 +168,64 @@ describe('ExtensionsPane', () => {
 
 
 
+
+  it('offers a rollback only when the Host reports one, behind a danger confirm', async () => {
+    const listInstalled = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.1', rollbackKind: 'previous', rollbackToVersion: '1.0.0' },
+        { id: 'acme.staged', requires: [], sensitive: [], packageVersion: '2.0.0', pendingCandidateVersion: '2.1.0' },
+      ])
+      .mockResolvedValue([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.0' },
+        { id: 'acme.staged', requires: [], sensitive: [], packageVersion: '2.0.0', pendingCandidateVersion: '2.1.0' },
+      ])
+    const rollback = vi.fn().mockResolvedValue({
+      id: 'acme.demo',
+      packageVersion: '1.0.0',
+      restoredInstances: 0,
+      skippedDestroyedHostWindows: 0,
+    })
+    const api = mockPlugins({ listInstalled, rollback })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    // A row the Host reports no rollback for never shows the button.
+    expect(wrapper.find('[data-id="acme.staged"] .ext-rollback').exists()).toBe(false)
+    const button = wrapper.get('[data-id="acme.demo"] .ext-rollback')
+    expect(button.text()).toContain('1.0.0')
+
+    await button.trigger('click')
+    await flushPromises()
+    expect(useNotify().dialog.value?.kind).toBe('confirm')
+    expect(api.rollback).not.toHaveBeenCalled()
+    useNotify().resolveDialog(true)
+    await flushPromises()
+
+    expect(api.rollback).toHaveBeenCalledWith('acme.demo')
+    // The reloaded inventory no longer reports a rollback, so the button goes.
+    expect(wrapper.find('[data-id="acme.demo"] .ext-rollback').exists()).toBe(false)
+  })
+
+  it('leaves the package alone when the rollback confirmation is declined', async () => {
+    const api = mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.1', rollbackKind: 'factory' },
+      ]),
+      rollback: vi.fn().mockResolvedValue({}),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    const button = wrapper.get('[data-id="acme.demo"] .ext-rollback')
+    expect(button.text()).toContain('bundled')
+    await button.trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(false)
+    await flushPromises()
+
+    expect(api.rollback).not.toHaveBeenCalled()
+  })
 
   it('keeps the Developer Mode local-unpacked warning visible in inventory', async () => {
     mockPlugins({
