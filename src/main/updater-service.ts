@@ -83,7 +83,8 @@ const RELEASE_NOTE_HTML_TAG = /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*?)?\s*\/?>/i
 
 function htmlTextContent(node: DomNode): string {
   if (node.type === 'text') return node.data ?? ''
-  return node.children.map(htmlTextContent).join('')
+  // A comment node has no children; it contributes no text.
+  return node.children?.map(htmlTextContent).join('') ?? ''
 }
 
 // Generic HTML layout belongs to html-to-text; these overrides define the

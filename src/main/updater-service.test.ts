@@ -177,6 +177,16 @@ describe('createUpdaterService', () => {
     expect(service.getState().releaseNotes).toBe('First version\n\nFixed issue.\n\n• Older fix')
   })
 
+  it('still finishes the download when a code span in the notes holds a comment', () => {
+    const { client, emit } = fakeClient()
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+
+    emit('update-downloaded', { version: '1.1.0', releaseNotes: '<p>Run <code>a<!-- c -->b</code></p>' })
+
+    expect(service.getState().status).toBe('downloaded')
+    expect(service.getState().releaseNotes).toBe('Run ab')
+  })
+
   it('does not surface a provider error during a silent check', async () => {
     const { client, raw } = fakeClient()
     raw.checkForUpdates.mockRejectedValue(new Error('feed unavailable'))
