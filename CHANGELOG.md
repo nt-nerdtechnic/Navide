@@ -4,6 +4,10 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Fixed
+
+- Display GitHub-generated release notes as readable text in the updater instead of exposing their HTML markup.
+
 ## [0.2.11] — 2026-09-27 — signed release
 
 ### Fixed
