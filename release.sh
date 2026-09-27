@@ -16,6 +16,9 @@ fail() {
 warn_missing_announcement() {
   local version="$1"
   local file="${2:-src/renderer/src/lib/whatsNew.ts}"
+  # Checked first: grep on a missing file exits 2, which would read as "no
+  # entry" and bury a moved or renamed file under a warning.
+  [[ -f "$file" ]] || fail "What's New file not found: ${file}"
   if ! grep -Eq "^[[:space:]]*version: '${version//./\\.}',[[:space:]]*$" "$file"; then
     echo "WARNING: no What's New entry for ${version} in ${file}; users updating will see no announcement or tour."
     echo "         See docs/en-US/release-announcements.md."
