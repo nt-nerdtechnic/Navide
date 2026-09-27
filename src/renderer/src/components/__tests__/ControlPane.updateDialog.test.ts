@@ -81,6 +81,14 @@ describe('ControlPane – update toast vs decision dialog', () => {
     expect(notify.dialog.value!.message).toContain('Big rewrite')
   })
 
+  it('passes main-normalized release notes into the decision dialog', async () => {
+    const notify = useNotify()
+    const releaseNotes = "What's Changed\n\n• Fix #133"
+    await announce({ availableVersion: '2.0.0', severity: 'major', releaseNotes })
+
+    expect(notify.dialog.value!.message).toContain(releaseNotes)
+  })
+
   it('does not re-prompt for the same version after Later', async () => {
     const notify = useNotify()
     await announce({ availableVersion: '2.0.0', severity: 'major' })

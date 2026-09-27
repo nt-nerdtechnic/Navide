@@ -51,6 +51,40 @@ describe('useUpdater', () => {
     expect(dispose).toHaveBeenCalledOnce()
   })
 
+  it('passes main-process release notes through every state path unchanged', async () => {
+    const releaseNotes = "What's Changed\n\n• Fixed updater notes\n\npnpm test:run\n  pnpm typecheck"
+    let listener!: (state: RendererUpdateState) => void
+    const getState = vi.fn().mockResolvedValue({
+      status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes,
+    })
+    const check = vi.fn().mockResolvedValue({
+      ok: true,
+      state: { status: 'available', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes },
+    })
+    window.agentTeam = {
+      version: '0.1.93',
+      updater: {
+        getState,
+        onStateChanged: vi.fn((cb) => { listener = cb; return vi.fn() }),
+        check,
+      },
+    } as unknown as typeof window.agentTeam
+
+    const updater = mountUpdater()
+    await nextTick()
+    await nextTick()
+    expect(updater.state.value.releaseNotes).toBe(releaseNotes)
+
+    listener({
+      status: 'downloading', currentVersion: '0.1.93', availableVersion: '0.2.10', releaseNotes,
+    })
+    expect(updater.state.value.releaseNotes).toBe(releaseNotes)
+
+    await updater.checkForUpdates()
+    expect(check).toHaveBeenCalledOnce()
+    expect(updater.state.value.releaseNotes).toBe(releaseNotes)
+  })
+
   it('runs actions and adopts their returned state', async () => {
     const downloaded: RendererUpdateState = {
       status: 'downloaded', currentVersion: '1.0.0', availableVersion: '1.1.0', percent: 100,

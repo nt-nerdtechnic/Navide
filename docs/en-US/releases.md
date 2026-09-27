@@ -27,7 +27,8 @@ flow into three toggles — automatic checks (on by default), automatic download
 of patch releases (on by default), and install-on-quit (off by default, because
 installing restarts the app and every CLI pane with it). The main process owns
 the updater state, so every open window sees the same result and a window
-opened later receives the current snapshot.
+opened later receives the current snapshot. Release notes supplied as HTML are
+displayed as readable text, not rendered as markup.
 
 GitHub Releases must contain all of these assets from the same build:
 

@@ -142,6 +142,41 @@ describe('createUpdaterService', () => {
     expect(service.getState().releaseNotes).toBe('Line A\n\nLine B')
   })
 
+  it('converts provider HTML release notes to readable text before publishing state', () => {
+    const { client, emit } = fakeClient()
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+    const htmlNotes = [
+      '<h2>What&#39;s Changed</h2>',
+      '<ul>',
+      '<li>feat(plugins): compose Mini-IDE surfaces by <a class="user-mention notranslate" data-hovercard-url="/users/example" href="https://github.com/example">@example</a> in <a class="issue-link" data-id="133" href="https://github.com/nt-nerdtechnic/Navide/pull/133">#133</a></li>',
+      '<li>Run <code>pnpm  --filter</code>.</li>',
+      '</ul>',
+      '<pre><code>pnpm test:run\n  pnpm typecheck</code></pre>',
+      '<p><strong>Full Changelog:</strong> <a href="https://github.com/nt-nerdtechnic/Navide/compare/v0.2.9...v0.2.10">v0.2.9...v0.2.10</a></p>',
+    ].join('')
+
+    emit('update-available', { version: '1.1.0', releaseNotes: htmlNotes })
+    expect(service.getState().releaseNotes).toBe([
+      "What's Changed",
+      '',
+      '• feat(plugins): compose Mini-IDE surfaces by @example in #133',
+      '• Run pnpm  --filter.',
+      '',
+      'pnpm test:run\n  pnpm typecheck',
+      '',
+      'Full Changelog: v0.2.9...v0.2.10',
+    ].join('\n'))
+
+    emit('update-downloaded', {
+      version: '1.1.0',
+      releaseNotes: [
+        { version: '1.1.0', note: '<h3>First version</h3><p>Fixed issue.</p>' },
+        { version: '1.0.9', note: '<ul><li>Older fix</li></ul>' },
+      ],
+    })
+    expect(service.getState().releaseNotes).toBe('First version\n\nFixed issue.\n\n• Older fix')
+  })
+
   it('does not surface a provider error during a silent check', async () => {
     const { client, raw } = fakeClient()
     raw.checkForUpdates.mockRejectedValue(new Error('feed unavailable'))
