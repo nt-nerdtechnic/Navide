@@ -906,6 +906,7 @@ jobs:
           test "${#assets[@]}" -ge 2
           # --clobber replaces the x64 job's latest.yml with the merged one it
           # was built from; this job runs after that one, so there is no race.
+          # Once the release is published, the script keeps its latest.yml.
           scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
   mirror-release:

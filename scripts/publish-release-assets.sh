@@ -44,12 +44,30 @@ if ! gh release view "${tag}" >/dev/null 2>&1; then
   gh release create "${tag}" --draft --verify-tag --generate-notes --title "Navide ${tag}"
 fi
 
+# Once the release is published, its latest*.yml are what users' updaters
+# read (and what the mirror copied). A "Re-run all jobs" would otherwise
+# replace the merged Windows latest.yml with the x64 job's x64-only copy until
+# the arm64 job merged itself back in. So a published release keeps its
+# manifests; the other assets are still refreshed as before.
+published=false
+if [ "$(gh release view "${tag}" --json isDraft --jq .isDraft)" = false ]; then
+  published=true
+fi
+
 # A plain string, not an array: the macOS runner's /bin/bash is 3.2, where
 # expanding an empty array under `set -u` is itself an error.
 failed=""
 
 for asset in "$@"; do
   name="$(basename "${asset}")"
+  case "${name}" in
+    latest*.yml)
+      if [ "${published}" = true ]; then
+        echo "::warning::${tag} is already published; keeping its ${name} instead of replacing it" >&2
+        continue
+      fi
+      ;;
+  esac
   attempt=1
   while : ; do
     # --clobber replaces an asset of the same name, so a rerun of this job
