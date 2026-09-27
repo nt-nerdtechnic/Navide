@@ -295,6 +295,42 @@ describe('ExtensionsPane', () => {
     expect(shown).not.toContain('Error invoking remote method')
   })
 
+  it('shows the main process message for a failed restart, not the IPC wrapper', async () => {
+    mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.0.0', pendingCandidateVersion: '1.0.1' },
+      ]),
+      restart: vi.fn().mockRejectedValue(
+        new Error("Error invoking remote method 'plugins:restart': Error: candidate package failed verification"),
+      ),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    await wrapper.get('[data-id="acme.demo"] .ext-restart').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.ext-error').text()).toBe('candidate package failed verification')
+  })
+
+  it('shows the main process message for a failed bundled restore, not the IPC wrapper', async () => {
+    mockPlugins({
+      listFactoryPackages: vi.fn().mockResolvedValue([
+        { id: 'navide.mini-ide', version: '0.2.11', active: false, optedOut: true },
+      ]),
+      restoreFactoryPackage: vi.fn().mockRejectedValue(
+        new Error("Error invoking remote method 'plugins:restoreFactoryPackage': Error: an installed package already owns this plugin id"),
+      ),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    await wrapper.get('[data-factory-id="navide.mini-ide"] .ext-restore').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.ext-error').text()).toBe('an installed package already owns this plugin id')
+  })
+
   it('redraws from the Host after a rollback that failed once the package was switched', async () => {
     // The factory package became active before view restoration threw, so the
     // Host no longer lists the installed row or its rollback.

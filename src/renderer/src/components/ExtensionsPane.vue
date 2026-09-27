@@ -122,7 +122,7 @@ async function restartPlugin(id: string): Promise<void> {
     await refreshInstalled()
     void pluginUpdates.refresh()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = ipcErrorMessage(err)
   } finally {
     busy.value = false
   }
@@ -137,7 +137,7 @@ async function restoreFactoryPackage(id: string): Promise<void> {
     await api.restoreFactoryPackage(id)
     await refreshInstalled()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = ipcErrorMessage(err)
   } finally {
     busy.value = false
   }
