@@ -177,6 +177,16 @@ describe('createUpdaterService', () => {
     expect(service.getState().releaseNotes).toBe('First version\n\nFixed issue.\n\n• Older fix')
   })
 
+  it('passes plain or Markdown notes that mention inline tags through unchanged', () => {
+    const { client, emit } = fakeClient()
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+    const markdownNotes = '## Fixes\n- Paste of <br> tags no longer breaks\n\nUse Array<string>'
+
+    emit('update-available', { version: '1.1.0', releaseNotes: markdownNotes })
+
+    expect(service.getState().releaseNotes).toBe(markdownNotes)
+  })
+
   it('still finishes the download when a code span in the notes holds a comment', () => {
     const { client, emit } = fakeClient()
     const service = createUpdaterService(client, '1.0.0', true, vi.fn())

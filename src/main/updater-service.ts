@@ -79,7 +79,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-const RELEASE_NOTE_HTML_TAG = /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*?)?\s*\/?>/i
+// Only block-level markup marks a note as HTML. Plain or Markdown notes can
+// mention inline tags (`<br>`, `Array<string>`) as text, and treating those as
+// HTML would collapse their line breaks and drop the angle-bracketed words.
+const RELEASE_NOTE_HTML_BLOCK_TAG = /<\/?(?:p|ul|ol|li|h[1-6]|pre|blockquote|table|div)(?:\s[^<>]*)?\s*\/?>/i
 
 function htmlTextContent(node: DomNode): string {
   if (node.type === 'text') return node.data ?? ''
@@ -104,7 +107,7 @@ const convertHtmlReleaseNote = compileHtmlToText({
 })
 
 function toReadableReleaseNote(note: string): string {
-  return RELEASE_NOTE_HTML_TAG.test(note) ? convertHtmlReleaseNote(note).trim() : note
+  return RELEASE_NOTE_HTML_BLOCK_TAG.test(note) ? convertHtmlReleaseNote(note).trim() : note
 }
 
 // electron-updater's UpdateInfo.releaseNotes may be a string, an array of
