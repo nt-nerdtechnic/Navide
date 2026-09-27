@@ -19,6 +19,7 @@ from typing import IO, Any, Awaitable, Callable
 from uuid import uuid4
 
 from . import osplat, pty_registry
+from .applog import app_data_dir, in_data_dir
 from .cli_vendors.base import VendorRuntimeContext
 from .cli_vendors.registry import risk_runtime_context
 from .osplat import spec
@@ -479,6 +480,11 @@ class TerminalService:
         self._emit = emit
         self._token_event_sink = token_event_sink
         self._loop = asyncio.get_event_loop()
+        # The crash-recovery registry lives in the data dir this service was
+        # started under. Registry jobs run on worker threads and can still be
+        # in flight after the process points elsewhere; bound to this dir they
+        # never write another dir's navide.db.
+        self._data_dir = app_data_dir()
         # Per-session output batching state — raw PTY bytes, shipped verbatim
         # in binary WS frames (xterm.js decodes UTF-8 itself).
         self._out_buffers: dict[str, list[bytes]] = {}  # session_id -> pending chunks
@@ -608,7 +614,8 @@ class TerminalService:
         registry_future: asyncio.Future[Any] | None = None
         try:
             registry_future = asyncio.get_running_loop().run_in_executor(
-                _LIFECYCLE_EXECUTOR, pty_registry.register, proc.pid, argv
+                _LIFECYCLE_EXECUTOR,
+                in_data_dir(self._data_dir, pty_registry.register, proc.pid, argv),
             )
         except RuntimeError:
             # No running loop (non-async caller) — fall back to inline.
@@ -714,7 +721,7 @@ class TerminalService:
         if registry_future is not None:
             registry_future.add_done_callback(
                 lambda future: self._loop.run_in_executor(
-                    _LIFECYCLE_EXECUTOR, unregister, future
+                    _LIFECYCLE_EXECUTOR, in_data_dir(self._data_dir, unregister, future)
                 )
             )
         else:
@@ -1379,7 +1386,8 @@ class TerminalService:
         await asyncio.to_thread(_kill_breakaway, descendants or {})
         if session.proc.poll() is not None:
             await self._loop.run_in_executor(
-                _LIFECYCLE_EXECUTOR, pty_registry.unregister, session.proc.pid
+                _LIFECYCLE_EXECUTOR,
+                in_data_dir(self._data_dir, pty_registry.unregister, session.proc.pid),
             )
 
     async def _snapshot_loop(self) -> None:
@@ -1405,7 +1413,7 @@ class TerminalService:
                 # (steady state) — no lock, no file read.
                 if payload and payload != self._last_persisted:
                     await asyncio.to_thread(
-                        pty_registry.update_descendants, payload
+                        in_data_dir(self._data_dir, pty_registry.update_descendants, payload)
                     )
                     self._last_persisted = payload
             except Exception as err:  # noqa: BLE001 — the loop must survive
@@ -1983,5 +1991,6 @@ class TerminalService:
         # and kill_all() unregister the survivors they put down.
         if session.proc.poll() is not None:
             self._loop.run_in_executor(
-                _LIFECYCLE_EXECUTOR, pty_registry.unregister, session.proc.pid
+                _LIFECYCLE_EXECUTOR,
+                in_data_dir(self._data_dir, pty_registry.unregister, session.proc.pid),
             )
