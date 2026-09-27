@@ -89,6 +89,19 @@ jobs:
           aws s3 cp "${TAG}.sha256" "s3://${MIRROR_BUCKET}/releases/${TAG}/SHA256SUMS" \
             --content-type 'text/plain' --no-progress
 
+      - name: Verify the mirror serves what GitHub serves
+        run: |
+          # Compare the mirrored bytes against the sha256 taken from the GitHub
+          # download above; a mismatch fails the job and leaves GitHub as the
+          # website's only working link (the site probes before it links).
+          # It runs before releases/latest/ is replaced, so a failed check
+          # never reaches the updater's feed either.
+          mkdir -p check && cd check
+          while read -r sum name; do
+            curl -fsSL --retry 3 -o "${name}" "https://dl.navide.dev/releases/${TAG}/${name}"
+          done < "../${TAG}.sha256"
+          sha256sum -c "../${TAG}.sha256"
+
       - name: Replace releases/latest/
         if: env.REFRESH_LATEST == 'true'
         run: |
@@ -100,14 +113,3 @@ jobs:
             --exclude '*.yml' --content-type 'application/octet-stream' --no-progress
           aws cloudfront create-invalidation --distribution-id "${MIRROR_DISTRIBUTION}" \
             --paths '/releases/latest/*' --query Invalidation.Id --output text
-
-      - name: Verify the mirror serves what GitHub serves
-        run: |
-          # Compare the mirrored bytes against the sha256 taken from the GitHub
-          # download above; a mismatch fails the job and leaves GitHub as the
-          # website's only working link (the site probes before it links).
-          mkdir -p check && cd check
-          while read -r sum name; do
-            curl -fsSL --retry 3 -o "${name}" "https://dl.navide.dev/releases/${TAG}/${name}"
-          done < "../${TAG}.sha256"
-          sha256sum -c "../${TAG}.sha256"
