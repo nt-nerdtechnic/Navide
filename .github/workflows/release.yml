@@ -936,12 +936,26 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
+      - name: Check out the release scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+
       - name: Publish the draft as the latest release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Idempotent: publishing an already-published release only re-marks
-          # it Latest, so a rerun of this job is harmless.
-          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
+          # it Latest. A rerun of an old tag's run after a newer version
+          # shipped publishes without taking Latest back from that version
+          # (the mirror job left releases/latest/ alone for the same reason).
+          is_latest="$(scripts/release-latest-guard.sh "${GITHUB_REF_NAME}")"
+          if [ "${is_latest}" = true ]; then
+            latest_flag=--latest
+          else
+            echo "::notice::${GITHUB_REF_NAME} is published but not marked Latest; a newer release already is"
+            latest_flag=--latest=false
+          fi
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false "${latest_flag}"
           gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json url --jq .url
           test "$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = false

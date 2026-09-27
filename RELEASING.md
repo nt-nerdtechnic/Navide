@@ -110,6 +110,12 @@ before the tag push, except in the one case below.
 - **Only the publish job failed** (the mirror already passed): the updater
   already offers the new version from the mirror while GitHub still shows the
   old one. Re-run that job, or run the `gh release edit` command above.
+- **Re-running an older tag's run** after a newer version shipped publishes
+  that tag but leaves both GitHub's Latest and the mirror's `releases/latest/`
+  on the newer version (`scripts/release-latest-guard.sh`; the job logs a
+  notice). An equal tag is a plain rerun and is marked Latest as before. Only
+  a manual mirror run with `refresh_latest=true` moves `releases/latest/`
+  back — that is the rollback path.
 
 ## Pre-release step: Update What's New announcement
 

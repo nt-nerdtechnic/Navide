@@ -8,7 +8,8 @@ name: Mirror release
 #
 # releases/<tag>/ is the permanent, immutable copy the website links to;
 # releases/latest/ is overwritten every release so electron-updater's generic
-# provider can read latest*.yml (and the files they name) from one fixed URL.
+# provider can read latest*.yml (and the files they name) from one fixed URL
+# — unless a newer release is already Latest (a rerun of an old tag's run).
 # The CloudFront behavior for releases/latest/* caches for 60 s; the
 # invalidation just makes the switch immediate.
 
@@ -54,6 +55,13 @@ jobs:
       # A release run always refreshes latest/; a manual run only when asked.
       REFRESH_LATEST: ${{ github.event_name == 'workflow_call' || github.event_name == 'push' || inputs.refresh_latest == true }}
     steps:
+      # First: checkout empties a workspace that is not yet a repository, so
+      # it cannot run after mirror/ has been downloaded.
+      - name: Check out the release scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+
       - name: Verify mirror credentials
         run: |
           aws sts get-caller-identity --query Arn --output text
@@ -102,8 +110,24 @@ jobs:
           done < "../${TAG}.sha256"
           sha256sum -c "../${TAG}.sha256"
 
+      - name: Refuse to move releases/latest/ back to an older release
+        id: latest_guard
+        # Re-running an old tag's release run after a newer version shipped
+        # must not hand the updater's feed back to the old version. A manual
+        # run with refresh_latest=true skips this check: that is the rollback
+        # path (see RELEASING.md "Rollback"), where going back is the point.
+        if: env.REFRESH_LATEST == 'true' && github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          is_latest="$(scripts/release-latest-guard.sh "${TAG}")"
+          echo "is_latest=${is_latest}" >> "${GITHUB_OUTPUT}"
+          if [ "${is_latest}" != true ]; then
+            echo "::notice::releases/latest/ is left as it is; ${TAG} is older than the current Latest release"
+          fi
+
       - name: Replace releases/latest/
-        if: env.REFRESH_LATEST == 'true'
+        if: env.REFRESH_LATEST == 'true' && steps.latest_guard.outputs.is_latest != 'false'
         run: |
           # latest/ is replaced wholesale: --delete drops the previous
           # version's binaries so the prefix never mixes two releases.
