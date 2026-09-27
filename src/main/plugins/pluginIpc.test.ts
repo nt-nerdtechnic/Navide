@@ -58,6 +58,14 @@ vi.mock('node:fs', async (importOriginal) => ({
   fsyncSync: () => {},
 }))
 
+// With the flush stubbed, the lifecycle tests still make up to ~235 real
+// mutating filesystem calls each (mkdir, write, rename, rm, open/close), with
+// no timers, spawns or other waits: <=650ms locally, <=503ms on a green
+// Windows run. On a stalled Windows runner disk those calls have run at up to
+// ~62ms each (97 calls took 6038ms), which puts the heaviest test near 15s.
+// A hung transaction still fails at 30s.
+vi.setConfig({ testTimeout: 30_000 })
+
 import { app as electronApp } from 'electron'
 import {
   OFFICIAL_MARKETPLACE_URL,
