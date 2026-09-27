@@ -11742,6 +11742,51 @@ function pipelineLog(line: string): void {
   }
 }
 
+/** Look-ahead pre-spawns still in flight, keyed by stage index.
+ *
+ *  A run used to pre-spawn every stage the moment Start was pressed, so a
+ *  5-stage × 3-slot pipeline held 15 CLIs alive from that instant — and a claude
+ *  process never gives back its ~190MB floor while it lives. Pre-spawning one
+ *  stage ahead keeps what the pre-spawn was for (a hand-off does not wait 20-30s
+ *  for a CLI to boot) at a peak of two stages instead of all of them.
+ *
+ *  The promise has to be recorded because the hand-off can beat it: a stage that
+ *  finishes fast reaches activateStage(i) while stage i's pre-spawn is still
+ *  running, and activateStage would then find no pane for any slot and spawn the
+ *  whole stage a second time through its fallback. */
+const stagePrewarms = new Map<number, Promise<void>>()
+
+/** Pre-warm the stage after `index`, in the background.
+ *
+ *  Deliberately not awaited by its caller: the pre-warm is an optimisation for
+ *  the NEXT hand-off, and charging this stage 20-30s of CLI boot time for it
+ *  would trade the memory win for the latency the pre-spawn exists to avoid. */
+function prewarmNextStage(index: number): void {
+  const next = index + 1
+  if (next >= stagesApi.stages.value.length) return
+  if (stagePrewarms.has(next)) return
+  const prewarm = preSpawnStage(next)
+    // Fire-and-forget, so a rejection here has no caller to reach: without this
+    // it surfaces as an unhandled rejection and the run says nothing about the
+    // stage it failed to warm.
+    .catch((err) => {
+      pipelineLog(`Stage ${next + 1} ✕ look-ahead pre-spawn failed — ${String(err)}`)
+    })
+    .finally(() => {
+      // Identity-checked: a teardown may have cleared the map and a later run
+      // may already own this index.
+      if (stagePrewarms.get(next) === prewarm) stagePrewarms.delete(next)
+    })
+  stagePrewarms.set(next, prewarm)
+}
+
+/** Wait for this stage's look-ahead pre-spawn, if one is still running. */
+async function awaitStagePrewarm(index: number): Promise<void> {
+  const pending = stagePrewarms.get(index)
+  if (!pending) return
+  await pending
+}
+
 /** Spawn all slots for one stage WITHOUT injecting kickoffs.
  *  Each slot gets its role prompt (via watchPaneStartup) then waits at the
  *  interactive prompt. Call activateStage() later to inject the kickoff. */
@@ -11852,6 +11897,12 @@ async function activateStage(index: number): Promise<void> {
     if (pipeline.state === 'running') pipeline.state = 'aborted'
     return
   }
+
+  // Before anything reads this stage's panes: its look-ahead pre-spawn may still
+  // be running (a fast stage hands off in less time than a CLI takes to boot),
+  // and every branch below treats a missing pane as "never pre-spawned" and
+  // spawns the slot again.
+  await awaitStagePrewarm(index)
 
   // Cross-stage context is now built per-slot inside the loop below (doc-driven:
   // summaries + file paths for workers, full file roster for the Manager).
@@ -12106,6 +12157,10 @@ async function activateStage(index: number): Promise<void> {
     startRouterPoll(index)
     pipelineLog(`Stage ${stage.id} 🎯 Manager router poll started`)
   }
+
+  // Warm the next stage only now that this one is running, so at most two
+  // stages' CLIs are alive at once. Not awaited — see prewarmNextStage.
+  prewarmNextStage(index)
 }
 
 async function spawnPipelineStage(index: number): Promise<void> {
@@ -12257,8 +12312,10 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   }
   // Clear any stale Resume banner since we just overwrote project state.
   existingProject.value = null
-  // Pre-spawn all stage slots simultaneously (role prompt only, no kickoff).
-  await Promise.all(stagesApi.stages.value.map((_, i) => preSpawnStage(i)))
+  // Pre-spawn stage 01 only (role prompt, no kickoff). Every later stage is
+  // warmed one ahead from activateStage — see stagePrewarms for why the whole
+  // pipeline is no longer spawned here.
+  await preSpawnStage(0)
   // Pre-spawn can end the run before it starts: when every slot of stage 01
   // fails to spawn (an agentKey that no longer ships, e.g. gemini),
   // releaseStageSlot's `expected === 0` branch sets state='aborted'. Without
@@ -12377,6 +12434,11 @@ async function onPipelineNext(): Promise<void> {
     applyProjectPaths(resp ?? undefined)
     return
   }
+  // Only on the way to another stage, and only after disposeStageRouter above:
+  // that router is what held these panes ('manager-routing'), so they read as
+  // free just here. The final stage is deliberately left running — the user is
+  // about to read its result. See reclaimCompletedStagePanes.
+  await reclaimCompletedStagePanes(currentIndex)
   pipeline.stageIndex = nextIndex
   await activateStage(nextIndex)
 }
@@ -12393,6 +12455,11 @@ function tearDownPipelineOrchestration(): void {
   stopGlobalManagerRouter()
   cancelAllWatchers()
   stageCompletions.clear()
+  // Forget the look-ahead pre-spawns, not the CLIs they started: an abort is a
+  // pause and leaves the panes alive, so a pre-spawn in flight finishes into a
+  // pane the resumed run will find. Keeping the promises would make the next
+  // run's activateStage await a warm-up belonging to this one.
+  stagePrewarms.clear()
   for (const k of Array.from(stageRouters.keys())) disposeStageRouter(k)
   questionQueue.length = 0
   if (activeQuestion.value) activeQuestion.value = null
@@ -12428,6 +12495,10 @@ async function onPipelineReset(paneIds?: readonly string[]): Promise<void> {
   stopGlobalManagerRouter()
   cancelAllWatchers()
   stageCompletions.clear()
+  // Reset kills the panes, so any pre-spawn still in flight is warming a stage
+  // that no longer has a run behind it. Dropping the promises here stops the
+  // next run from awaiting this one's warm-up.
+  stagePrewarms.clear()
   for (const k of Array.from(stageRouters.keys())) disposeStageRouter(k)
   questionQueue.length = 0
   activeQuestion.value = null
@@ -15544,6 +15615,46 @@ async function reclaimIdlePane(paneId: string): Promise<boolean> {
   }
   syncViews()
   return true
+}
+
+/** Reclaim the panes of a stage that has just handed off.
+ *
+ *  A run used to leave every finished stage's CLIs alive until the whole
+ *  pipeline ended or the idle sweep caught them 30 minutes later, so a long
+ *  pipeline went on paying the ~190MB-per-CLI floor for stages nobody was
+ *  reading any more. Reclaiming at the hand-off turns them into the same
+ *  cold-restore placeholders the idle sweep produces: the conversation is one
+ *  click away, the process is not.
+ *
+ *  Guarded on the "reclaim now" terms rather than the idle threshold — a stage
+ *  that has handed off is idle by definition, but a pane the user is reading,
+ *  typing into, or still holding mail for is not ours to take. */
+async function reclaimCompletedStagePanes(stageIndex: number): Promise<void> {
+  const stage = stagesApi.stages.value[stageIndex]
+  if (!stage) return
+  // The global Manager listens across every stage; its own 'globalManagerRouting'
+  // guard would refuse it anyway, and naming it here says why rather than
+  // leaving a reader to find out from a log line.
+  const globalManager = globalManagerPaneId()
+  const candidateIds = panes.value
+    .filter((p) => p.origin === 'pipeline' && p.stageId === stage.id && p.id !== globalManager)
+    .map((p) => p.id)
+  for (const paneId of candidateIds) {
+    // Re-read and re-judge per pane: each reclaim awaits a kill, and in that gap
+    // the user can focus one of the panes still on this list or start typing in
+    // it. Judging the whole list up front would reclaim it out from under them.
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (!pane) continue
+    const label = pane.slotLabel || paneId.slice(0, 8)
+    const blocked = reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now())
+    if (blocked) {
+      pipelineLog(`Stage ${stage.id} ♻ kept ${label} — ${blocked}`)
+      continue
+    }
+    if (await reclaimIdlePane(paneId)) {
+      pipelineLog(`Stage ${stage.id} ♻ reclaimed ${label} — CLI stopped, conversation kept`)
+    }
+  }
 }
 
 let _idleReclaimTimer: number | null = null
