@@ -1171,8 +1171,11 @@ side effect. Plans has no public `plans` permission.
 Plans documents remain workspace files. Filter, sort, and collapse preferences
 use the approved workspace storage partition with idempotent migration from
 the legacy local preference keys. Backend subscriptions, workspace binding,
-timeouts, cancellation, child restart, Grant revocation, and crash cleanup
-remain Host-owned and settle through the same Backend Wire lifecycle. If the
+timeouts, cancellation, Grant revocation, and crash cleanup remain Host-owned
+and settle through the same Backend Wire lifecycle. Host-owned child restart
+is not implemented yet: the supervisor's restart path has no caller. Today a
+backend failure moves Plans to the legacy recovery adapter, and the user can
+retry v2 from the Plans panel at most twice per session. If the
 combined package cannot be selected or activated, the retained legacy Plans
 adapter remains available without converting or deleting workspace documents.
 

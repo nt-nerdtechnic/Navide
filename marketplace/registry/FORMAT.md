@@ -1,8 +1,12 @@
 # Navide plugin package format (`.vsix`-style)
 
-> **Status: current manifest v1 implementation.** This file documents the
-> existing registry reader and includes legacy fields such as `requires` and
-> `activationEvents`. It is not the target Manifest v2 author contract. The v2
+> **Status: manifest v1 reader; the registry also accepts Manifest v2.** This
+> file documents the legacy (v1) registry reader and includes legacy fields such
+> as `requires` and `activationEvents`. `parse_manifest` routes any manifest
+> with a `schemaVersion`, `permissions`, or `marketplace` key to the v2 model
+> (`registry/manifest_v2.py`), and each published artifact is keyed by
+> `(extension_id, version, target)`. This file is not the Manifest v2 author
+> contract. The v2
 > target archive layout, path safety, target-specific backend artifact, and
 > signing requirements are defined in
 > [`docs/en-US/plugin-development-v2.md`](../../docs/en-US/plugin-development-v2.md).

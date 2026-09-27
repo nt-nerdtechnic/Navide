@@ -1,8 +1,10 @@
 # Plugin development guide
 
-> **Current runtime (manifest v1).** This guide documents the implementation
-> available today. The proposed public manifest v2, SDK, permissions, and
-> compatibility policy are specified separately in the
+> **Current runtime (manifest v1 and v2).** This guide documents the manifest
+> v1 runtime. v1 and v2 coexist today: the three bundled packages
+> (`navide.git`, `navide.plans`, `navide.mini-ide`) ship as Manifest v2
+> packages, and v1 remains only as their recovery path. The public manifest
+> v2, SDK, permissions, and compatibility policy are specified separately in the
 > [Plugin Developer Spec v2 draft](plugin-development-v2.md). Do not use the v2
 > examples until the migration plan marks that contract as implemented.
 
