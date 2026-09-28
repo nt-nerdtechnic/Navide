@@ -408,23 +408,27 @@ class TestIdentity:
 
     def test_snapshot_uses_pid_as_group_and_orphans_stale_parents(self, monkeypatch):
         rows = {
-            10: {"ppid": 4, "create_time": 5.0},   # parent gone
-            20: {"ppid": 10, "create_time": 6.0},  # real child
-            30: {"ppid": 99, "create_time": 7.0},  # parent gone
-            40: {"ppid": 10, "create_time": 4.0},  # recycled ppid
-            50: {"ppid": 20, "create_time": None},  # access denied
+            10: (4, 5.0),    # parent gone
+            20: (10, 6.0),   # real child
+            30: (99, 7.0),   # parent gone
+            40: (10, 4.0),   # recycled ppid
+            50: (20, None),  # access denied
         }
 
         class Proc:
             def __init__(self, pid):
                 if pid not in rows:
-                    raise psutil.NoSuchProcess(pid)  # exited since pids()
+                    raise psutil.NoSuchProcess(pid)  # exited since the table read
                 self.pid = pid
 
-            def as_dict(self, attrs):
-                return rows[self.pid]
+            def create_time(self):
+                created = rows[self.pid][1]
+                if created is None:
+                    raise psutil.AccessDenied(self.pid)
+                return created
 
-        monkeypatch.setattr(_windows.psutil, "pids", lambda: [*rows, 60])
+        ppid_map = {pid: ppid for pid, (ppid, _) in rows.items()} | {60: 4}
+        monkeypatch.setattr(_windows.psutil, "_ppid_map", lambda: ppid_map)
         monkeypatch.setattr(_windows.psutil, "Process", Proc)
         snap = _windows.process_tree.snapshot()
         assert snap == {
@@ -435,6 +439,35 @@ class TestIdentity:
             50: ProcInfo(20, 50, ""),
         }
         assert sorted(_windows.process_tree.descendants(10)) == [20, 50]
+
+    def test_snapshot_reads_the_ppid_table_once_not_once_per_process(self, monkeypatch):
+        # Process.ppid() on Windows re-reads the whole process table on every
+        # call, so asking each process for its parent made snapshot()
+        # quadratic — 9-19s at 300 processes, longer than the whole 8s window
+        # the graceful-kill tests gave the breakaway sweep that follows a reap.
+        reads = []
+
+        def ppid_map():
+            reads.append(1)
+            return {pid: 4 for pid in range(100, 400)}
+
+        class Proc:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def create_time(self):
+                return 1.0
+
+            def ppid(self):
+                raise AssertionError("per-process ppid() read the whole table again")
+
+            def as_dict(self, attrs):
+                raise AssertionError("as_dict(['ppid', ...]) read the whole table again")
+
+        monkeypatch.setattr(_windows.psutil, "_ppid_map", ppid_map)
+        monkeypatch.setattr(_windows.psutil, "Process", Proc)
+        assert len(_windows.process_tree.snapshot()) == 300
+        assert reads == [1]
 
     def test_snapshot_ignores_process_iter_cache_of_a_recycled_pid(self):
         # Windows recycles pids fast. process_iter() caches one Process per pid

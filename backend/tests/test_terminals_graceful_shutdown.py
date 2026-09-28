@@ -598,7 +598,17 @@ async def test_group_of_raising_does_not_strand_the_session() -> None:
     osplat.process_tree.group_of = raises_once  # type: ignore[assignment]
     try:
         await svc.kill(session.id, force=True)
-        assert await _wait_for(lambda: not svc._graceful_kills, 8.0), (
+        tasks = set(svc._kill_tasks)
+        # The reap is the promise: a poisoned id never sets its event, so this
+        # is False at the ceiling rather than True.
+        assert await svc.wait_until_reaped(session.id) is True
+        # The entry itself is popped only when the task ends, and the task
+        # runs the breakaway sweep (a full process-table read, unbounded on a
+        # loaded Windows runner) after the reap. Wait for the task, not a
+        # fixed window, then check it released the id rather than raising
+        # past the finally.
+        await asyncio.wait(tasks)
+        assert not svc._graceful_kills, (
             "the id stayed in _graceful_kills — kill() is now a no-op for it"
         )
         assert await _wait_for(lambda: session.closed)

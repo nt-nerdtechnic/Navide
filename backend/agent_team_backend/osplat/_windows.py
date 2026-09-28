@@ -352,17 +352,24 @@ class WindowsProcessTree:
         # per pid module-wide, and when Windows recycles a pid between two
         # snapshots the cached instance notices the reuse mid-read and the
         # pid's new, live process is dropped from this snapshot altogether.
+        # And every ppid from ONE table read. `Process.ppid()` on Windows is
+        # `ppid_map()[pid]` — a fresh toolhelp snapshot of the whole table per
+        # call — so asking each process made this loop quadratic: measured at
+        # 2.3-3.5s for 151 processes, 9-19s for 305 under load, on a path
+        # kill() awaits and the breakaway sweep runs after every reap.
         try:
-            for pid in psutil.pids():
+            for pid, raw_ppid in psutil._ppid_map().items():
                 try:
-                    info = psutil.Process(pid).as_dict(["ppid", "create_time"])
+                    created = psutil.Process(pid).create_time()
                 except psutil.NoSuchProcess:
                     continue
+                except psutil.AccessDenied:
+                    created = None
                 try:
-                    ppid = int(info.get("ppid") or 0)
+                    ppid = int(raw_ppid or 0)
                 except (TypeError, ValueError):
                     ppid = 0
-                rows[pid] = (ppid, info.get("create_time"))
+                rows[pid] = (ppid, created)
         except psutil.Error:
             return {}
         snap: dict[int, ProcInfo] = {}
