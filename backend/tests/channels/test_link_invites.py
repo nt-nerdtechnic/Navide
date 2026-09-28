@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from agent_team_backend.channels import pairing
 from agent_team_backend.channels.base import Location
-from agent_team_backend.channels.manager import MSG_LINKED
+from agent_team_backend.channels.base import InboundMessage
+from agent_team_backend.channels.manager import MSG_LINK_FAILED, MSG_LINKED
 from agent_team_backend.channels.pairing import CODE_ALPHABET, LinkInvites, parse_link_code
 from agent_team_backend.channels.telegram import TelegramAdapter
 
@@ -67,11 +70,12 @@ def test_telegram_link_url_uses_the_bot_username() -> None:
     assert ad.link_url("ABCD2345", "group") == "https://t.me/navide_bot?startgroup=ABCD2345"
 
 
-async def test_link_create_answers_code_url_and_instructions(env: Env) -> None:
+async def test_link_create_answers_code_and_url(env: Env) -> None:
     env.tg.link_url = lambda code, target: f"https://t.me/bot?{target}={code}"
     res = env.m.link_create("telegram", "group")
     assert res["ok"] and res["url"] == f"https://t.me/bot?group={res['code']}"
-    assert res["code"] in res["instructions"] and res["expires_at"] > 0
+    assert res["expires_at"] > 0
+    assert "instructions" not in res  # the UI builds its own, localized
     assert env.m.link_create("telegram", "sideways")["ok"] is False
     assert env.m.link_create("discord", "direct") == {"ok": False, "error": "discord is not connected"}
     with pytest.raises(ValueError):
@@ -84,8 +88,8 @@ async def test_start_code_from_a_stranger_links_their_dm(env: Env) -> None:
     assert env.store.is_allowed("telegram", "99")
     assert env.store.list_pairing("telegram") == []
     assert env.tg.texts()[-1] == MSG_LINKED
-    assert ("channels.linked", {"platform": "telegram", "chat_id": "99", "title": "alice",
-                                "kind": "direct"}) in env.fake.events
+    assert ("channels.linked", {"platform": "telegram", "code": code, "chat_id": "99", "title": "alice",
+                                "kind": "direct", "confirmed": True}) in env.fake.events
     assert ("channels.changed", {}) in env.fake.events
     locs = env.m.locations("telegram")["locations"]
     assert {"chat_id": "99", "kind": "direct"}.items() <= next(c for c in locs if c["chat_id"] == "99").items()
@@ -100,8 +104,8 @@ async def test_startgroup_code_links_a_group_with_its_title(env: Env) -> None:
     code = env.m.link_create("telegram", "group")["code"]
     await env.inbound(f"/start@navide_bot {code}", sender="42", chat="-500", thread="")
     assert env.store.is_allowed("telegram", "42")
-    assert ("channels.linked", {"platform": "telegram", "chat_id": "-500", "title": "Team room",
-                                "kind": "group"}) in env.fake.events
+    assert ("channels.linked", {"platform": "telegram", "code": code, "chat_id": "-500",
+                                "title": "Team room", "kind": "group", "confirmed": True}) in env.fake.events
     chats = {c["chat_id"]: c for c in env.store.chats("telegram", env.tg.token_fingerprint()[:16])}
     assert chats["-500"]["kind"] == "group"
 
@@ -131,16 +135,52 @@ async def test_expired_or_unknown_code_falls_back_to_pairing(env: Env, monkeypat
 async def test_other_platform_link_code_from_a_group_mention(env: Env) -> None:
     assert (await env.m.configure("slack", {}, {"token": "tok-S"}))["ok"]
     res = env.m.link_create("slack", "direct")
-    assert res["url"] is None and f"link {res['code']}" in res["instructions"]
+    assert res["url"] is None
     await env.inbound(f"<@U0BOT> link {res['code'].lower()}", sender="U9", chat="C1", thread="",
                       platform="slack")
     assert env.store.is_allowed("slack", "U9")
     assert env.adapters["slack"].texts()[-1] == MSG_LINKED
-    assert ("channels.linked", {"platform": "slack", "chat_id": "C1", "title": "C1",
-                                "kind": "group"}) in env.fake.events
+    assert ("channels.linked", {"platform": "slack", "code": res["code"], "chat_id": "C1", "title": "C1",
+                                "kind": "group", "confirmed": True}) in env.fake.events
 
 
 async def test_an_allowed_senders_plain_start_keeps_todays_reply(env: Env) -> None:
     await env.inbound("/start", sender="7", chat="-900", thread="")
     assert not any(e == "channels.linked" for e, _ in env.fake.events)
     assert env.tg.texts()[-1] != MSG_LINKED
+
+
+async def test_a_failed_allowlist_write_tells_the_sender_and_the_ui(env: Env, monkeypatch) -> None:
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(env.store, "add_allow", boom)
+    code = env.m.link_create("telegram", "direct")["code"]
+    await env.inbound(f"/start {code}", sender="99", chat="99", thread="", direct=True)
+    assert not env.store.is_allowed("telegram", "99")
+    assert env.tg.texts()[-1] == MSG_LINK_FAILED
+    assert ("channels.link_failed", {"platform": "telegram", "code": code,
+                                     "error": "database is locked"}) in env.fake.events
+    assert not any(e == "channels.linked" for e, _ in env.fake.events)
+
+
+async def test_a_link_whose_platform_went_away_is_reported_failed(env: Env) -> None:
+    code = env.m.link_create("telegram", "direct")["code"]
+    env.m.invites.consume("telegram", code)
+    del env.m._adapters["telegram"]
+    msg = InboundMessage(platform="telegram", account="default", chat_id="99", thread_id="",
+                         sender_id="99", sender_name="alice", text=f"/start {code}", message_id="x",
+                         is_direct=True, ts=0.0)
+    await env.m._link_chat(msg, code)
+    assert ("channels.link_failed", {"platform": "telegram", "code": code,
+                                     "error": "telegram is not connected"}) in env.fake.events
+
+
+async def test_an_unsent_confirmation_still_links_and_says_so(env: Env) -> None:
+    async def failing(loc, text, **kw):
+        raise RuntimeError("429 Too Many Requests")
+    code = env.m.link_create("telegram", "direct")["code"]
+    env.tg.send_text = failing
+    await env.inbound(f"/start {code}", sender="99", chat="99", thread="", direct=True)
+    assert env.store.is_allowed("telegram", "99")
+    assert ("channels.linked", {"platform": "telegram", "code": code, "chat_id": "99", "title": "alice",
+                                "kind": "direct", "confirmed": False}) in env.fake.events

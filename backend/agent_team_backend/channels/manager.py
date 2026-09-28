@@ -71,6 +71,7 @@ MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
 MSG_LINKED = "✅ 已連結 Navide。回到 Navide 在 pane 的聊天按鈕選這個聊天室即可。"
+MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
 
 
@@ -533,8 +534,7 @@ class ChannelManager:
         link_url = getattr(adapter, "link_url", None)
         url = link_url(invite.code, target) if callable(link_url) else ""
         return {"ok": True, "platform": platform, "code": invite.code, "target": target,
-                "expires_at": invite.expires_at, "url": url or None,
-                "instructions": _link_instructions(platform, invite.code)}
+                "expires_at": invite.expires_at, "url": url or None}
 
     def allow_list(self, platform: str | None) -> dict[str, Any]:
         return {"ok": True, "entries": self.store.list_allow(platform or None)}
@@ -749,7 +749,7 @@ class ChannelManager:
         code = parse_link_code(msg.text) if msg.text and not msg.callback_data else ""
         invite = self.invites.consume(msg.platform, code) if code else None
         if invite is not None:
-            self._enqueue(msg.location_key(), lambda: self._link_chat(msg))
+            self._enqueue(msg.location_key(), lambda: self._link_chat(msg, invite.code))
             return
         if not msg.is_direct and not self.gate.is_allowed(msg.platform, msg.sender_id):
             return  # group strangers are dropped silently
@@ -869,12 +869,20 @@ class ChannelManager:
         )
         return decision.action != "allow"
 
-    async def _link_chat(self, msg: InboundMessage) -> None:
+    async def _link_chat(self, msg: InboundMessage, code: str) -> None:
+        # The invite is already spent, so every way out must reach the waiting UI.
         adapter = self._adapters.get(msg.platform)
         if adapter is None:
+            await self._link_failed(msg.platform, code, f"{msg.platform} is not connected")
             return
-        if not self.gate.is_allowed(msg.platform, msg.sender_id):
-            self.store.add_allow(msg.platform, msg.sender_id, msg.sender_name, int(time.time()))
+        try:
+            if not self.gate.is_allowed(msg.platform, msg.sender_id):
+                self.store.add_allow(msg.platform, msg.sender_id, msg.sender_name, int(time.time()))
+        except Exception as exc:  # noqa: BLE001 — reported to the sender and the UI below
+            log.warning("channels: allowlisting linked sender on %s failed: %s", msg.platform, exc)
+            await self._reply(msg, MSG_LINK_FAILED)
+            await self._link_failed(msg.platform, code, str(exc))
+            return
         kind = "direct" if msg.is_direct else "group"
         title = msg.sender_name
         if not msg.is_direct:
@@ -886,11 +894,21 @@ class ChannelManager:
                                      bool(msg.thread_id), int(time.time()))
         except Exception as exc:  # noqa: BLE001 — the sender is linked; only the picker list misses it
             log.warning("channels: remembering linked chat %s failed: %s", msg.chat_id, exc)
-        await self._reply(msg, MSG_LINKED)
+        # Not _reply: it cannot tell a failed send from one that returned no id.
+        confirmed = True
+        try:
+            await adapter.send_text(Location(msg.platform, msg.account, msg.chat_id, msg.thread_id), MSG_LINKED)
+        except Exception as exc:  # noqa: BLE001 — the link stands; the UI says the bot stayed silent
+            log.warning("channels: link confirmation on %s failed: %s", msg.platform, exc)
+            confirmed = False
         await self._changed()
         await self._seams.broadcast("channels.linked", {
-            "platform": msg.platform, "chat_id": msg.chat_id, "title": title, "kind": kind,
+            "platform": msg.platform, "code": code, "chat_id": msg.chat_id, "title": title, "kind": kind,
+            "confirmed": confirmed,
         })
+
+    async def _link_failed(self, platform: str, code: str, error: str) -> None:
+        await self._seams.broadcast("channels.link_failed", {"platform": platform, "code": code, "error": error})
 
     async def _pairing_reply(self, msg: InboundMessage) -> None:
         outcome = self.gate.request_pairing(msg.platform, msg.sender_id, msg.sender_name, msg.chat_id)
@@ -1104,11 +1122,3 @@ def _mask_secret(secret: dict[str, Any]) -> str:
         if isinstance(value, str) and value:
             return f"{value[:4]}…{value[-4:]}" if len(value) > 12 else "••••"
     return ""
-
-
-def _link_instructions(platform: str, code: str) -> str:
-    if platform == "telegram":
-        return f"在 Telegram 按下「開始」；或在與 bot 的私訊傳送：/start {code}"
-    if platform == "imessage":
-        return f"在「訊息」傳給你自己（同一個 Apple ID）或請聯絡人傳送：link {code}"
-    return f"在與 bot 的私訊（或群組中 @bot）傳送：link {code}"
