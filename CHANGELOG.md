@@ -4,9 +4,26 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.12] — 2026-09-28 — signed release
+
+### Added
+
+- **Channels one-click account linking**: once a bot is connected, a guide under each platform links your own chat account without a pairing code to approve — open a Telegram DM, add the bot to a group or server, open a Slack DM, or get a one-time code to send to the bot (iMessage included). The code works once within 10 minutes; when it expires, when the link fails to save, or when the backend connection drops, the guide ends the wait and says why, and the bot replies in the chat if the link could not be saved. Each guide only reacts to its own code, so two guides open on the same platform no longer both report "linked".
+- **Sidebar Workspace / Free modes**: Workspace groups agents under their workspace as before; Free lists every agent in one flat list, shows every pane on the stage, and focusing a pane from the sidebar no longer switches workspace. The choice is stored per user and windows that are already open follow it live (detached windows stay in Workspace). In Free mode, closing, rebuilding or reclaiming a tab still only acts on the current workspace's panes and now says how many panes from other workspaces were left alone. The header ＋ sits at the far right and, with no workspace open, opens the workspace picker.
+- **Extension rollback**: Settings → Extensions can roll an installed extension back to the package it displaced, offer the restart that finishes it, and show the host's own message, translated, when a rollback is refused or fails; a failed rollback restores the views it drained.
+
+### Changed
+
+- A pipeline run keeps at most two stages of CLIs alive at a time, so long pipelines use less memory.
+
 ### Fixed
 
-- Display GitHub-generated release notes as readable text in the updater instead of exposing their HTML markup.
+- Display GitHub-generated release notes as readable text in the updater instead of exposing their HTML markup, including notes whose code spans contain comments.
+- Closing a pane on Windows no longer reads the whole process table once per process, which could take several seconds with many processes running.
+- A database write whose COMMIT fails now rolls back and releases the write lock, and keeps the original error if the rollback also fails.
+- Background jobs started from worker threads write to the right data directory.
+- The What's New tour closes the Settings window it opened and returns focus when it ends, and Help → What's New says so when there are no notes to show.
+- Release workflow: the mirror is verified before the updater feed points at it, and re-running an old tag's release no longer moves Latest or replaces a published release's update files.
 
 ## [0.2.11] — 2026-09-27 — signed release
 

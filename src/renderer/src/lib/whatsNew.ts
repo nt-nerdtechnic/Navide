@@ -111,6 +111,51 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.12',
+    title: {
+      'zh-TW': 'Channels 一鍵連結、側欄 Free 模式、擴充套件可回滾',
+      'en-US': 'One-Click Channel Linking, a Free Sidebar Mode and Extension Rollback',
+      'ja-JP': 'Channels のワンクリック連携、サイドバーの Free モード、拡張機能のロールバック',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Channels 連上 bot 之後，按一下就能連結你自己的聊天帳號：Telegram 私訊、加進群組或伺服器、Slack 私訊，或取得一次性代碼傳給 bot，不必再核准配對碼。代碼過期或連結失敗時，畫面會直接說明並讓你重新取得。',
+        'en-US': 'Once a Channels bot is connected, link your own chat account in one click — a Telegram DM, adding the bot to a group or server, a Slack DM, or a one-time code sent to the bot — with no pairing code to approve. If the code expires or the link fails, the guide says so and lets you get a new one.',
+        'ja-JP': 'Channels でボットを接続したら、ワンクリックで自分のチャットアカウントを連携できます。Telegram の DM、グループやサーバーへの追加、Slack の DM、またはボットに送るワンタイムコードに対応し、ペアリングコードの承認は不要です。コードの期限切れや連携失敗時は画面に理由が表示され、新しいコードを取得できます。',
+      },
+      {
+        'zh-TW': '側欄新增 Workspace／Free 兩種模式：Workspace 照工作區分組，Free 把所有 agent 列成一張清單、主區顯示全部 pane。選擇會記住，已開的視窗也會即時跟著切換。',
+        'en-US': 'The sidebar has two modes: Workspace groups agents by workspace, and Free lists every agent in one flat list with every pane on the stage. The choice is remembered, and windows that are already open follow it live.',
+        'ja-JP': 'サイドバーに Workspace／Free の 2 つのモードを追加しました。Workspace はワークスペースごとにグループ化し、Free はすべてのエージェントを 1 つのリストにまとめ、すべてのペインを表示します。選択は保存され、開いている他のウィンドウにもすぐ反映されます。',
+      },
+      {
+        'zh-TW': '「設定 → 擴充套件」可以把已安裝的擴充套件回滾到它取代的版本，失敗時會說明原因並還原畫面。',
+        'en-US': 'Settings → Extensions can roll an installed extension back to the package it replaced; a failed rollback explains why and restores the view.',
+        'ja-JP': '「設定 → 拡張機能」で、インストールした拡張機能を置き換え前のパッケージにロールバックできます。失敗した場合は理由が表示され、表示も元に戻ります。',
+      },
+      {
+        'zh-TW': 'Pipeline 執行時最多只保留兩個階段的 CLI，減少記憶體占用；更新視窗的版本說明改為可讀的文字；Windows 上關閉 pane 更快。',
+        'en-US': 'A pipeline run keeps at most two stages of CLIs alive, using less memory; the updater shows release notes as readable text; and closing a pane is faster on Windows.',
+        'ja-JP': 'パイプライン実行中に保持する CLI は最大 2 ステージ分になり、メモリ使用量が減りました。アップデーターのリリースノートは読みやすいテキストで表示され、Windows ではペインを閉じる処理が速くなりました。',
+      },
+    ],
+  },
+  {
+    version: '0.2.11',
+    title: {
+      'zh-TW': 'Channels 在安裝版可以正常使用',
+      'en-US': 'Channels Works in the Installed App',
+      'ja-JP': 'インストール版で Channels が使えるようになりました',
+    },
+    highlights: [
+      {
+        'zh-TW': '0.2.10 的安裝版漏掉了所有聊天平台的連接元件，設定任何聊天都會失敗；現在已補齊。',
+        'en-US': 'The 0.2.10 installed app left out every chat platform’s adapter, so setting up any chat failed; they are now included.',
+        'ja-JP': '0.2.10 のインストール版ではすべてのチャットプラットフォームのアダプターが欠けていたため、チャットの設定が失敗していました。現在は含まれています。',
+      },
+    ],
+  },
+  {
     version: '0.2.10',
     major: true,
     tour: [
