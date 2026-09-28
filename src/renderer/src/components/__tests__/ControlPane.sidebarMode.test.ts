@@ -177,19 +177,36 @@ describe('ControlPane – sidebar mode switch', () => {
     expect(wrapper.find('.lbl').text()).toBe('label.workspace')
   })
 
-  it('tags only the panes that come from another workspace', () => {
+  it('tags every pane with parent/name, the workspace on screen included', () => {
+    // An untagged row would mean both "this project" and "no path at all", and
+    // reading it would need the reader to know which workspace is current.
     wrapper = mountPane({
       workspaces: [workspaceRow(HERE, ['p-here'])],
       sidebarMode: 'free'
     })
-    const tags = wrapper.findAll('.ws-tag')
-    expect(tags.length).toBe(1)
-    expect(tags[0].text()).toBe('there')
+    const tags = wrapper.findAll('.pane-ws-line')
+    expect(tags.map((t) => t.text())).toEqual(['tmp/here', 'tmp/there'])
+    // The full path stays one hover away.
+    expect(tags[1].attributes('title')).toBe(THERE)
+  })
+
+  it('names a workspace by its alias but keeps the real parent beside it', () => {
+    // Aliases are display-only and may repeat, so the parent segment is what
+    // actually tells two same-named projects apart.
+    wrapper = mountPane({
+      workspaces: [workspaceRow(HERE, ['p-here'])],
+      sidebarMode: 'free',
+      workspaceAliases: { [THERE]: 'Dealpilot' }
+    })
+    expect(wrapper.findAll('.pane-ws-line').map((t) => t.text())).toEqual([
+      'tmp/here',
+      'tmp/Dealpilot'
+    ])
   })
 
   it('carries no tags in workspace mode, where the heading says it already', () => {
     wrapper = mountPane({ workspaces: [workspaceRow(HERE, ['p-here'])] })
-    expect(wrapper.findAll('.ws-tag').length).toBe(0)
+    expect(wrapper.findAll('.pane-ws-line').length).toBe(0)
   })
 
   it('turns the header ＋ into "open an agent here" in free mode', async () => {

@@ -10,7 +10,7 @@ import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
 import { subtreeSignals } from '../lib/paneSubtreeStatus'
-import { workspaceAliasOf, workspaceDisplayName } from '../lib/workspaceAlias'
+import { workspaceAliasKey, workspaceAliasOf, workspaceBasename, workspaceDisplayName } from '../lib/workspaceAlias'
 import type { SidebarMode } from '../lib/sidebarMode'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
@@ -1000,17 +1000,29 @@ function panesOf(
   return out
 }
 
-/** The folder tag a row carries in free mode, or '' when it needs none.
+/** The workspace tag a row carries in free mode — `parent/name` — or '' outside
+ *  it.
  *
  *  A flat list of every workspace's panes loses the one thing that told two
- *  same-named panes apart — the heading they sat under. Only the panes from
- *  elsewhere are tagged: tagging the workspace on screen too would label almost
- *  every row with the same word. */
-function foreignWorkspaceTag(pane: ActivePaneView): string {
+ *  same-named panes apart: the heading they sat under. EVERY row is tagged,
+ *  including the workspace on screen — tagging only the foreign ones makes an
+ *  untagged row mean two things at once ("this project" and "no path"), and the
+ *  reader has to know which workspace is current to decode it.
+ *
+ *  The parent segment is there because the name alone cannot be trusted to be
+ *  unique: an alias is display-only and is deliberately allowed to repeat (see
+ *  lib/workspaceAlias), and two checkouts of the same project share a folder
+ *  name. The full path stays in the row's title for the rest. */
+function workspaceTag(pane: ActivePaneView): string {
   if (!freeMode.value) return ''
   const path = pane.workspacePath
-  if (!path || path === workspacePath.value) return ''
-  return workspaceDisplayName(path, props.workspaceAliases)
+  if (!path) return ''
+  const name = workspaceDisplayName(path, props.workspaceAliases)
+  // The parent of the workspace folder, by the same spelling rules the alias
+  // key uses (backslashes folded, trailing slashes dropped) so a Windows path
+  // reads the same as a POSIX one.
+  const parent = workspaceBasename(workspaceAliasKey(path).replace(/\/[^/]*$/, ''))
+  return parent ? `${parent}/${name}` : name
 }
 
 // Build tag injected at build time (electron.vite.config.ts) so the header
@@ -3865,11 +3877,6 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
               Docked
             </span>
-            <span
-              v-if="foreignWorkspaceTag(p)"
-              class="ws-tag"
-              :title="p.workspacePath"
-            >{{ foreignWorkspaceTag(p) }}</span>
             <span class="expand-caret" aria-hidden="true">▶</span>
             <span class="agent-line-actions">
               <button
@@ -3885,6 +3892,14 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               <button class="icon-btn agent-minimize-btn" :title="$t('pane.terminal.minimize-tooltip')" @click.stop="emit('minimize', p.id)">⊟</button>
             </span>
           </div>
+          <!-- Which project this pane belongs to, on its own line.
+               It shared the main line at first and won: the tag cannot shrink,
+               so at the sidebar's real width (220px by default) it left the
+               pane's name one character and an ellipsis. A second line costs
+               about 14px per row and keeps the name, the vendor and the
+               workspace all readable. Free mode only — in workspace mode the
+               heading above the row already says this. -->
+          <div v-if="workspaceTag(p)" class="pane-ws-line" :title="p.workspacePath">{{ workspaceTag(p) }}</div>
           <template v-if="isRowExpanded(p.id)">
             <div class="agent-role-line">
               <span class="agent-role-main">{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></span>
@@ -6603,15 +6618,17 @@ button.icon-btn.muted:hover {
      expanded card anyway. */
   flex-shrink: 4;
 }
-/* Free mode's "this pane is from another project" mark. Capped and unshrinkable
-   so a long folder name ellipses instead of eating the pane's own name, which
-   is the row's identity. */
-.ws-tag {
-  margin-left: auto;
-  flex-shrink: 0;
-  max-width: 72px;
+/* Free mode's "which project is this" line, `parent/name`, under the row.
+   Indented to the badge's left edge so the eye reads it as belonging to the
+   name above it rather than to the row below. The full path is in its title.
+   Named for the pane, not the workspace: `.ws-line` is already the heading
+   row's own class further up this file. */
+.pane-ws-line {
+  padding-left: 24px;
+  margin-top: -2px;
   font-size: var(--font-3xs);
   color: var(--text-muted);
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6638,6 +6655,18 @@ button.icon-btn.muted:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  /* The name does not give ground to the vendor line beside it. Measured at the
+     sidebar's real widths: a four-character name missed its box by 1–5px and
+     came out as two characters and an ellipsis, because both were shrinking
+     together and the ellipsis itself eats a character's worth of room. The
+     subtitle yields instead — it is already truncated by then, and it repeats
+     on the expanded card. The cap keeps a very long name from pushing the
+     status icons and the ▶ off the row: past it the name ellipses as before.
+     The badge is content-box, so 62% bounds the TEXT; the drawn pill is that
+     plus 12px of padding — about 68% of the row at the sidebar's real widths,
+     measured, with the ▶ and the status dot still inside the line. */
+  flex-shrink: 0;
+  max-width: 62%;
 }
 .agent-role-line {
   display: flex;
