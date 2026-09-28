@@ -9057,7 +9057,6 @@
       "kind-group": "群組",
       "kind-direct": "私訊",
       "new-topic-short": "新開主題",
-      "no-chats-yet": "先在聊天室傳一則訊息給 bot，這裡就會出現",
       "manage-chats": "管理聊天室設定",
       "taken-by": "已連接：{pane}",
       "taken-hint": "已連接到另一個 pane，請先在那個 pane 解除連接才能選。"
@@ -9073,6 +9072,28 @@
       "feishu": "飛書群組預設要 {'@'}bot 才收得到訊息，除非 app 開了「讀取群內所有訊息」權限。",
       "dingtalk": "釘釘沒有討論串：一個群組＝一個 pane。",
       "imessage": "需要「完整磁碟取用權限」（系統設定 → 隱私權與安全性）；第一次送出時 macOS 會跳出「自動化控制 Messages」授權。"
+    },
+    "link": {
+      "next-step": "下一步：連結你的聊天帳號",
+      "next-step-desc": "按下面的按鈕，在 {platform} 完成後 Navide 會自動連結，不必再核准配對碼。",
+      "linked-summary": "已連結 {n} 個聊天室 · 在 pane 標題列的聊天按鈕選擇",
+      "link-account": "連結我的帳號",
+      "open-telegram": "在 Telegram 開啟（私訊）",
+      "add-group": "加到群組",
+      "add-server": "加到伺服器",
+      "open-slack": "開啟 Slack 私訊",
+      "get-code": "取得連結代碼",
+      "waiting-start": "等待你在 Telegram 按下「開始」…",
+      "waiting": "等待你在 {platform} 傳送代碼…",
+      "send-code-telegram": "若沒有自動開啟，在與 bot 的私訊傳送：",
+      "send-code-imessage": "在「訊息」傳給你自己（同一個 Apple ID），或請聯絡人傳送：",
+      "send-code": "在與 bot 的私訊（或在群組中提及 bot）傳送：",
+      "expires": "代碼 10 分鐘內有效，只能使用一次。",
+      "copy": "複製",
+      "copied": "已複製",
+      "linked": "✅ 已連結 {title}",
+      "pairing": "{name} 要求配對",
+      "open-failed": "無法開啟連結：{error}"
     }
   },
   "guard": {

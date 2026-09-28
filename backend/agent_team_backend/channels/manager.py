@@ -29,7 +29,7 @@ from typing import Any, Awaitable, Callable
 
 from . import redact, relay
 from .base import ChannelAdapter, InboundMessage, Location
-from .pairing import SenderGate
+from .pairing import LinkInvites, SenderGate, parse_link_code
 from .store import Binding, ChannelStore
 from .text import chunk_for
 
@@ -70,6 +70,8 @@ MSG_OFFLINE = "⚠️ pane 目前不在線上（可能在其他 workspace 或已
 MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
+MSG_LINKED = "✅ 已連結 Navide。回到 Navide 在 pane 的聊天按鈕選這個聊天室即可。"
+LINK_TARGETS = ("direct", "group")
 
 
 def _secret_name(platform: str) -> str:
@@ -173,6 +175,7 @@ class ChannelManager:
     ) -> None:
         self.store = store
         self.gate = SenderGate(store)
+        self.invites = LinkInvites()
         self._seams = seams
         self._factory_for = factory_for
         self._clock = clock
@@ -517,6 +520,22 @@ class ChannelManager:
         await self._changed()
         return {"ok": req is not None, **({} if req else {"error": "unknown code"})}
 
+    def link_create(self, platform: str, target: str) -> dict[str, Any]:
+        """A one-time code that links whoever sends it to the bot (see ``_link_chat``)."""
+        _check_platform(platform)
+        target = target or "direct"
+        if target not in LINK_TARGETS:
+            return {"ok": False, "error": f"unknown target {target!r}"}
+        adapter = self._adapters.get(platform)
+        if adapter is None:
+            return {"ok": False, "error": f"{platform} is not connected"}
+        invite = self.invites.create(platform, target)
+        link_url = getattr(adapter, "link_url", None)
+        url = link_url(invite.code, target) if callable(link_url) else ""
+        return {"ok": True, "platform": platform, "code": invite.code, "target": target,
+                "expires_at": invite.expires_at, "url": url or None,
+                "instructions": _link_instructions(platform, invite.code)}
+
     def allow_list(self, platform: str | None) -> dict[str, Any]:
         return {"ok": True, "entries": self.store.list_allow(platform or None)}
 
@@ -726,6 +745,12 @@ class ChannelManager:
             return
         if self._is_duplicate(msg):
             return
+        # A live invite code links its sender before the gate: that is its whole point.
+        code = parse_link_code(msg.text) if msg.text and not msg.callback_data else ""
+        invite = self.invites.consume(msg.platform, code) if code else None
+        if invite is not None:
+            self._enqueue(msg.location_key(), lambda: self._link_chat(msg))
+            return
         if not msg.is_direct and not self.gate.is_allowed(msg.platform, msg.sender_id):
             return  # group strangers are dropped silently
         self._enqueue(msg.location_key(), lambda: self._process_inbound(msg))
@@ -843,6 +868,29 @@ class ChannelManager:
             cwd=workspace, workspace=workspace, source="relay",
         )
         return decision.action != "allow"
+
+    async def _link_chat(self, msg: InboundMessage) -> None:
+        adapter = self._adapters.get(msg.platform)
+        if adapter is None:
+            return
+        if not self.gate.is_allowed(msg.platform, msg.sender_id):
+            self.store.add_allow(msg.platform, msg.sender_id, msg.sender_name, int(time.time()))
+        kind = "direct" if msg.is_direct else "group"
+        title = msg.sender_name
+        if not msg.is_direct:
+            known = getattr(adapter, "known_locations", None)
+            titles = {str(c.get("chat_id")): c.get("title") for c in known()} if callable(known) else {}
+            title = str(titles.get(msg.chat_id) or msg.chat_id)
+        try:
+            self.store.remember_chat(msg.platform, _bot_key(adapter), msg.chat_id, title, kind,
+                                     bool(msg.thread_id), int(time.time()))
+        except Exception as exc:  # noqa: BLE001 — the sender is linked; only the picker list misses it
+            log.warning("channels: remembering linked chat %s failed: %s", msg.chat_id, exc)
+        await self._reply(msg, MSG_LINKED)
+        await self._changed()
+        await self._seams.broadcast("channels.linked", {
+            "platform": msg.platform, "chat_id": msg.chat_id, "title": title, "kind": kind,
+        })
 
     async def _pairing_reply(self, msg: InboundMessage) -> None:
         outcome = self.gate.request_pairing(msg.platform, msg.sender_id, msg.sender_name, msg.chat_id)
@@ -1056,3 +1104,11 @@ def _mask_secret(secret: dict[str, Any]) -> str:
         if isinstance(value, str) and value:
             return f"{value[:4]}…{value[-4:]}" if len(value) > 12 else "••••"
     return ""
+
+
+def _link_instructions(platform: str, code: str) -> str:
+    if platform == "telegram":
+        return f"在 Telegram 按下「開始」；或在與 bot 的私訊傳送：/start {code}"
+    if platform == "imessage":
+        return f"在「訊息」傳給你自己（同一個 Apple ID）或請聯絡人傳送：link {code}"
+    return f"在與 bot 的私訊（或群組中 @bot）傳送：link {code}"

@@ -44,6 +44,8 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
         return await m.pairing_approve(_s(p, "platform"), _s(p, "code"))
     if msg_type == "channels.pairing.reject":
         return await m.pairing_reject(_s(p, "platform"), _s(p, "code"))
+    if msg_type == "channels.link.create":
+        return m.link_create(_s(p, "platform"), _s(p, "target"))
     if msg_type == "channels.allow.list":
         return m.allow_list(_s(p, "platform") or None)
     if msg_type == "channels.allow.remove":
@@ -65,7 +67,7 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
 MESSAGE_TYPES = (
     "channels.list", "channels.configure", "channels.set_enabled", "channels.set_global_enabled",
     "channels.remove", "channels.pairing.list", "channels.pairing.approve", "channels.pairing.reject",
-    "channels.allow.list", "channels.allow.remove", "channels.locations", "channels.bind",
+    "channels.link.create", "channels.allow.list", "channels.allow.remove", "channels.locations", "channels.bind",
     "channels.unbind", "channels.rebind", "channels.bindings",
 )
 

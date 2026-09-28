@@ -294,3 +294,22 @@ async def test_known_locations_from_inbound(http: FakeHttp) -> None:
         assert adapter.known_locations() == [
             {"chat_id": "C1", "title": "C1", "kind": "channel", "supports_topics": True}]
         await adapter.stop()
+
+
+async def test_link_url_opens_the_app_dm_once_bots_info_names_the_app(http: FakeHttp) -> None:
+    http.route("POST", "/bots.info", lambda r: {"ok": True, "bot": {"id": r.form()["bot"], "app_id": "A77"}})
+    sock = Socket()
+
+    async def script(ws, s: Socket) -> None:
+        await ws.send(json.dumps({"type": "hello", "num_connections": 1}))
+        await ws.wait_closed()
+
+    sock.scripts.append(script)
+    async with FakeWs(sock) as fake:
+        setup_api(http, fake.url)
+        adapter = await start(http, [])
+        await wait_for(lambda: adapter.status.lifecycle == "ready")
+        assert http.calls_to("POST", "/bots.info")[0].form()["bot"] == "B1"
+        assert adapter.link_url("ABCD2345", "direct") == "https://slack.com/app_redirect?app=A77&team=T1"
+        assert adapter.link_url("ABCD2345", "group") == ""
+        await adapter.stop()

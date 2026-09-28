@@ -255,6 +255,13 @@ class TelegramAdapter:
     def known_locations(self) -> list[dict[str, Any]]:
         return list(self._known_chats.values())
 
+    def link_url(self, code: str, target: str) -> str:
+        """Deep link that sends ``/start <code>`` (https://core.telegram.org/bots/features#deep-linking)."""
+        username = self.status.identity[1:] if self.status.identity.startswith("@") else ""
+        if not username:
+            return ""
+        return f"https://t.me/{username}?{'startgroup' if target == 'group' else 'start'}={code}"
+
     # --- outbound -------------------------------------------------------------
 
     def _target(self, loc: Location) -> dict[str, Any]:

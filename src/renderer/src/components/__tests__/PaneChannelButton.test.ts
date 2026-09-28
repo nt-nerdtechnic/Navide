@@ -159,11 +159,91 @@ describe('PaneChannelButton', () => {
     expect(qa('[data-testid="channel-bind-new"]')).toHaveLength(1)
   })
 
-  it('hints to message the bot when a connected platform knows no chat yet', async () => {
-    seed({ configured: true, locations: [] })
-    const w = await render()
-    await openPopover(w)
-    expect(q('[data-testid="channel-no-chats"]')?.textContent).toContain('Send the bot a message')
+  describe('linking guide when a connected platform knows no chat yet', () => {
+    let openExternal: ReturnType<typeof vi.fn>
+    beforeEach(() => {
+      openExternal = vi.fn(async () => ({ ok: true }))
+      ;(window as unknown as { agentTeam?: unknown }).agentTeam = { openExternal }
+    })
+    afterEach(() => {
+      delete (window as unknown as { agentTeam?: unknown }).agentTeam
+    })
+
+    it('offers the Telegram deep links and opens the one clicked', async () => {
+      seed({ configured: true, locations: [] })
+      mock.setResponse('channels.link.create', {
+        ok: true, code: 'K7Q2M9XA', target: 'direct', expires_at: 1, url: 'https://t.me/navide_bot?start=K7Q2M9XA', instructions: '',
+      })
+      const w = await render()
+      await openPopover(w)
+      expect(q('[data-testid="channel-no-chats"]')?.textContent).toContain('Next: link your chat account')
+      const actions = qa('[data-testid="channel-link-action"]')
+      expect(actions.map((a) => a.textContent)).toEqual(['Open in Telegram (DM)', 'Add to a group'])
+      actions[0].click()
+      await flushPromises()
+      expect(mock.sent.find((m) => m.type === 'channels.link.create')?.payload).toEqual({ platform: 'telegram', target: 'direct' })
+      expect(openExternal).toHaveBeenCalledWith('https://t.me/navide_bot?start=K7Q2M9XA')
+      expect(q('[data-testid="channel-link-waiting"]')?.textContent).toContain('tap Start in Telegram')
+      expect(q('[data-testid="channel-link-code"]')?.textContent).toBe('/start K7Q2M9XA')
+      // The picker stays open while the user is in Telegram.
+      expect(q('[data-testid="channel-popover"]')).not.toBeNull()
+    })
+
+    it('shows a code to send on a platform without a deep link', async () => {
+      seed({ configured: false })
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'mattermost', configured: true, enabled: true,
+          status: { lifecycle: 'ready', connected: true, identity: '@navide' }, config: {}, capabilities: null,
+        }],
+      })
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+      mock.setResponse('channels.link.create', {
+        ok: true, code: 'ABCD2345', target: 'direct', expires_at: 1, url: null, instructions: '',
+      })
+      const w = await render()
+      await openPopover(w)
+      const actions = qa('[data-testid="channel-link-action"]')
+      expect(actions.map((a) => a.textContent)).toEqual(['Get a link code'])
+      actions[0].click()
+      await flushPromises()
+      expect(openExternal).not.toHaveBeenCalled()
+      expect(q('[data-testid="channel-link-code"]')?.textContent).toBe('link ABCD2345')
+      expect(q('[data-testid="channel-link-waiting"]')?.textContent).toContain('mention the bot in a group')
+    })
+
+    it('approves a pending pairing request inline', async () => {
+      seed({ configured: true, locations: [] })
+      mock.setResponse('channels.pairing.list', {
+        ok: true,
+        requests: [{ platform: 'telegram', code: 'K7Q2M9XA', sender_id: '42', sender_name: 'neil', created_at: 1 }],
+      })
+      mock.setResponse('channels.pairing.approve', { ok: true, sender_id: '42' })
+      const w = await render()
+      await openPopover(w)
+      expect(q('[data-testid="channel-link-pairing"]')?.textContent).toContain('neil asks to pair')
+      q('[data-testid="channel-link-approve"]')!.click()
+      await flushPromises()
+      expect(mock.sent.find((m) => m.type === 'channels.pairing.approve')?.payload).toEqual({ platform: 'telegram', code: 'K7Q2M9XA' })
+    })
+
+    it('replaces the guide with the chat once the link lands', async () => {
+      seed({ configured: true, locations: [] })
+      const w = await render()
+      await openPopover(w)
+      expect(q('[data-testid="channel-link-guide"]')).not.toBeNull()
+      mock.setResponse('channels.locations', {
+        ok: true,
+        locations: [{ chat_id: '555', title: 'neil', kind: 'private', supports_topics: false }],
+      })
+      mock.emit('channels.linked', { platform: 'telegram', chat_id: '555', title: 'neil', kind: 'direct' })
+      mock.emit('channels.changed', {})
+      await flushPromises()
+      expect(q('[data-testid="channel-link-guide"]')).toBeNull()
+      expect(q('[data-testid="channel-bind-existing"]')?.textContent).toContain('neil')
+    })
   })
 
   it('links to channel settings from the footer', async () => {

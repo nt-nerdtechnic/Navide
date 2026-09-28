@@ -60,6 +60,9 @@ log = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://discord.com/api/v10"
 GATEWAY_QUERY = "v=10&encoding=json"
 INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15)
+# VIEW_CHANNEL, SEND_MESSAGES, READ_MESSAGE_HISTORY, CREATE_PUBLIC_THREADS, SEND_MESSAGES_IN_THREADS
+# (https://docs.discord.com/developers/topics/permissions).
+INSTALL_PERMISSIONS = (1 << 10) | (1 << 11) | (1 << 16) | (1 << 35) | (1 << 38)
 THREAD_TYPES = {10, 11, 12}
 # Message types that carry user text: DEFAULT and REPLY.
 TEXT_MESSAGE_TYPES = {0, 19}
@@ -102,6 +105,7 @@ class DiscordAdapter:
         )
         self._invalid_session_wait_s = invalid_session_wait_s
         self._bot_id = ""
+        self._app_id = ""
         self._session_id = ""
         self._resume_url = ""
         self._seq: int | None = None
@@ -228,6 +232,7 @@ class DiscordAdapter:
         if event == "READY":
             user = d.get("user") or {}
             self._bot_id = str(user.get("id") or "")
+            self._app_id = str((d.get("application") or {}).get("id") or "")
             self._session_id = str(d.get("session_id") or "")
             self._resume_url = str(d.get("resume_gateway_url") or "")
             self._loop.mark_ready(f"@{user.get('username', '')}" if user.get("username") else "")
@@ -317,6 +322,13 @@ class DiscordAdapter:
             is_direct=not d.get("guild_id"), ts=time.time(),
             callback_data=str((d.get("data") or {}).get("custom_id") or ""),
         ))
+
+    def link_url(self, code: str, target: str) -> str:
+        """Bot install URL for a server (https://docs.discord.com/developers/topics/oauth2#bot-authorization-flow);
+        the code is then sent in a channel with an @mention, or in a DM."""
+        if target != "group" or not self._app_id:
+            return ""
+        return f"https://discord.com/oauth2/authorize?client_id={self._app_id}&scope=bot&permissions={INSTALL_PERMISSIONS}"
 
     def known_locations(self) -> list[dict[str, Any]]:
         """Chats seen so far, for the "use existing" picker."""

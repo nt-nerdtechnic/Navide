@@ -212,4 +212,47 @@ describe('ChannelsPane', () => {
     await tg.get('[data-testid="channel-manage"]').trigger('click')
     expect(tg.find('[data-testid="channel-relay"]').exists()).toBe(false)
   })
+
+  describe('linking guide on a connected card', () => {
+    function seedConnected(locations: Record<string, unknown>[]): void {
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'telegram', configured: true, enabled: true,
+          status: { lifecycle: 'ready', connected: true, identity: '@navide_bot' }, config: {}, capabilities: null,
+        }],
+      })
+      mock.setResponse('channels.pairing.list', { ok: true, requests: [] })
+      mock.setResponse('channels.locations', { ok: true, locations })
+    }
+
+    it('shows the next step while the bot knows no chat', async () => {
+      seedConnected([])
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      expect(tg.get('[data-testid="channel-next-step"]').text()).toBe('Next: link your chat account')
+      expect(tg.findAll('[data-testid="channel-link-action"]').map((a) => a.text())).toEqual(['Open in Telegram (DM)', 'Add to a group'])
+      // Platforms that are not connected get no guide.
+      expect(w.get('[data-platform="slack"]').find('[data-testid="channel-link-block"]').exists()).toBe(false)
+    })
+
+    it('collapses to a summary once a chat is linked, with a button to link another', async () => {
+      seedConnected([])
+      const w = await render()
+      mock.setResponse('channels.locations', { ok: true, locations: [{ chat_id: '42', title: 'neil', kind: 'private', supports_topics: false }] })
+      mock.emit('channels.linked', { platform: 'telegram', chat_id: '42', title: 'neil', kind: 'direct' })
+      await flushPromises()
+      const tg = w.get('[data-platform="telegram"]')
+      expect(tg.find('[data-testid="channel-next-step"]').exists()).toBe(false)
+      expect(tg.get('[data-testid="channel-linked-summary"]').text()).toContain('1 chat(s) linked')
+      expect(tg.find('[data-testid="channel-link-guide"]').exists()).toBe(false)
+      mock.setResponse('channels.link.create', { ok: true, code: 'ABCD2345', target: 'group', expires_at: 1, url: null, instructions: '' })
+      await tg.get('[data-testid="channel-link-account"]').trigger('click')
+      await tg.findAll('[data-testid="channel-link-action"]')[1].trigger('click')
+      await flushPromises()
+      expect(mock.sent.find((m) => m.type === 'channels.link.create')?.payload).toEqual({ platform: 'telegram', target: 'group' })
+      expect(tg.get('[data-testid="channel-link-code"]').text()).toBe('/start ABCD2345')
+    })
+  })
 })

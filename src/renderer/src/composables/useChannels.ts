@@ -81,6 +81,24 @@ export interface ChannelLocation {
   supports_topics: boolean
 }
 
+/** A one-time code from `channels.link.create`: whoever sends it to the bot is linked. */
+export interface ChannelLinkInvite {
+  code: string
+  target: 'direct' | 'group'
+  expires_at: number
+  /** Platform deep link that sends the code (Telegram) or opens the bot (Discord install, Slack DM). */
+  url: string | null
+  instructions: string
+}
+
+/** `channels.linked`: a chat was linked by an invite code. */
+export interface ChannelLinkedEvent {
+  platform: ChannelPlatform
+  chat_id: string
+  title: string
+  kind: 'direct' | 'group'
+}
+
 export interface ChannelField {
   key: string
   /** Stored in the credential vault, never echoed back. */
@@ -161,6 +179,7 @@ function createChannelsStore(backend: Backend) {
   const allow = ref<ChannelAllowEntry[]>([])
   const loaded = ref(false)
   const error = ref('')
+  const lastLinked = ref<ChannelLinkedEvent | null>(null)
 
   async function call<T = Record<string, unknown>>(
     type: string,
@@ -214,6 +233,10 @@ function createChannelsStore(backend: Backend) {
   backend.on('channels.pairing_request', () => {
     void refresh()
   })
+  backend.on('channels.linked', (raw) => {
+    const msg = raw as ChannelLinkedEvent | null
+    if (msg?.platform) lastLinked.value = msg
+  })
   backend.on('channels.status', (raw) => {
     const msg = raw as { platform?: string; status?: Partial<ChannelStatus> } | null
     if (!msg?.platform) return
@@ -240,6 +263,7 @@ function createChannelsStore(backend: Backend) {
     allow,
     loaded,
     error,
+    lastLinked,
     configuredPlatforms,
     refresh,
     platformState: (platform: ChannelPlatform) => platforms.value.find((p) => p.platform === platform) ?? null,
@@ -253,6 +277,8 @@ function createChannelsStore(backend: Backend) {
     rejectPairing: (platform: ChannelPlatform, code: string) => mutate('channels.pairing.reject', { platform, code }),
     removeAllow: (platform: ChannelPlatform, senderId: string) =>
       mutate('channels.allow.remove', { platform, sender_id: senderId }),
+    createLink: (platform: ChannelPlatform, target: 'direct' | 'group') =>
+      call<ChannelLinkInvite>('channels.link.create', { platform, target }),
     locations: async (platform: ChannelPlatform): Promise<ChannelResult<{ locations: ChannelLocation[] }>> =>
       call<{ locations: ChannelLocation[] }>('channels.locations', { platform }),
     bind: (req: BindRequest) => mutate('channels.bind', { ...req }),

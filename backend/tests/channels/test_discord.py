@@ -353,3 +353,13 @@ async def test_known_locations_from_guild_channels_and_dms(http: FakeHttp) -> No
             {"chat_id": "D1", "title": "alice", "kind": "dm", "supports_topics": False},
         ]
         await adapter.stop()
+
+
+async def test_link_url_is_the_bot_install_url_from_ready() -> None:
+    adapter = DiscordAdapter("tok")
+    assert adapter.link_url("ABCD2345", "group") == ""  # before READY
+    await adapter._dispatch("READY", {"user": {"id": "999", "username": "navide"}, "session_id": "s",
+                                      "resume_gateway_url": "wss://x", "application": {"id": "555"}})
+    assert adapter.link_url("ABCD2345", "group") == (
+        "https://discord.com/oauth2/authorize?client_id=555&scope=bot&permissions=309237713920")
+    assert adapter.link_url("ABCD2345", "direct") == ""

@@ -9057,7 +9057,6 @@
       "kind-group": "Group",
       "kind-direct": "DM",
       "new-topic-short": "New topic",
-      "no-chats-yet": "Send the bot a message in a chat and it will show up here.",
       "manage-chats": "Manage chat settings",
       "taken-by": "Connected to {pane}",
       "taken-hint": "Connected to another pane. Unbind it there to use this chat here."
@@ -9073,6 +9072,28 @@
       "feishu": "In groups the bot only receives messages that {'@'}mention it, unless the app has the permission to read all group messages.",
       "dingtalk": "DingTalk has no threads: one group is one pane.",
       "imessage": "Needs Full Disk Access (System Settings → Privacy & Security). The first reply triggers a macOS prompt to allow controlling Messages."
+    },
+    "link": {
+      "next-step": "Next: link your chat account",
+      "next-step-desc": "Use a button below and finish in {platform}; Navide links it automatically, no pairing code to approve.",
+      "linked-summary": "{n} chat(s) linked · pick one with the chat button in a pane's title bar",
+      "link-account": "Link my account",
+      "open-telegram": "Open in Telegram (DM)",
+      "add-group": "Add to a group",
+      "add-server": "Add to a server",
+      "open-slack": "Open Slack DM",
+      "get-code": "Get a link code",
+      "waiting-start": "Waiting for you to tap Start in Telegram…",
+      "waiting": "Waiting for you to send the code in {platform}…",
+      "send-code-telegram": "If nothing opened, send this to the bot in a DM:",
+      "send-code-imessage": "In Messages, send this to yourself (same Apple ID), or have a contact send it:",
+      "send-code": "Send this to the bot in a DM (or mention the bot in a group):",
+      "expires": "The code works once, within 10 minutes.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "linked": "✅ Linked {title}",
+      "pairing": "{name} asks to pair",
+      "open-failed": "Could not open the link: {error}"
     }
   },
   "guard": {

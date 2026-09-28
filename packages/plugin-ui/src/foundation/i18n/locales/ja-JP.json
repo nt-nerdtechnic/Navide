@@ -9057,7 +9057,6 @@
       "kind-group": "グループ",
       "kind-direct": "DM",
       "new-topic-short": "新しいトピック",
-      "no-chats-yet": "チャットで bot にメッセージを送ると、ここに表示されます",
       "manage-chats": "チャット連携の設定を管理",
       "taken-by": "接続中：{pane}",
       "taken-hint": "別の pane に接続済みです。そちらで接続を解除すると選べます。"
@@ -9073,6 +9072,28 @@
       "feishu": "グループでは bot を {'@'}メンションしたメッセージしか届きません（アプリに「グループ内の全メッセージを読む」権限がある場合を除く）。",
       "dingtalk": "DingTalk にはスレッドがありません。1 グループ＝1 pane です。",
       "imessage": "フルディスクアクセス（システム設定 → プライバシーとセキュリティ）が必要です。最初の送信時に「メッセージの自動操作」の許可ダイアログが表示されます。"
+    },
+    "link": {
+      "next-step": "次へ：チャットアカウントをリンク",
+      "next-step-desc": "下のボタンから {platform} で操作を完了すると自動でリンクされます。ペアリングコードの承認は不要です。",
+      "linked-summary": "{n} 件のチャットをリンク済み · ペインのタイトルバーのチャットボタンで選択",
+      "link-account": "アカウントをリンク",
+      "open-telegram": "Telegram で開く（DM）",
+      "add-group": "グループに追加",
+      "add-server": "サーバーに追加",
+      "open-slack": "Slack の DM を開く",
+      "get-code": "リンクコードを取得",
+      "waiting-start": "Telegram で「開始」を押すのを待っています…",
+      "waiting": "{platform} でコードが送信されるのを待っています…",
+      "send-code-telegram": "自動で開かない場合は、bot との DM で送信：",
+      "send-code-imessage": "メッセージで自分自身（同じ Apple ID）に送るか、連絡先に送ってもらってください：",
+      "send-code": "bot との DM で（またはグループで bot をメンションして）送信：",
+      "expires": "コードは 10 分以内に 1 回だけ使えます。",
+      "copy": "コピー",
+      "copied": "コピーしました",
+      "linked": "✅ {title} をリンクしました",
+      "pairing": "{name} がペアリングを要求しています",
+      "open-failed": "リンクを開けませんでした：{error}"
     }
   },
   "guard": {

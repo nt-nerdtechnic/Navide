@@ -12,6 +12,7 @@ import {
 import { guardKey, type GuardStore } from '../composables/useGuard'
 import { vendorRunsYolo } from '../lib/guardYolo'
 import { useAgentMessaging } from '../composables/useAgentMessaging'
+import ChannelLinkGuide from './ChannelLinkGuide.vue'
 
 /**
  * Pane-header entry to chat channels. Unbound: a small button that opens a
@@ -265,7 +266,10 @@ function openSettings(): void {
           <div v-if="g.unavailable" class="pch-row pch-row-off" data-testid="channel-platform-off" aria-disabled="true">{{ g.unavailable }}</div>
           <div v-else-if="g.loading" class="pch-sub">{{ t('channels.pane.loading') }}</div>
           <p v-else-if="g.error" class="pch-error" role="alert">{{ g.error }}</p>
-          <div v-else-if="!g.locations.length" class="pch-sub" data-testid="channel-no-chats">{{ t('channels.pane.no-chats-yet') }}</div>
+          <div v-else-if="!g.locations.length" class="pch-empty" data-testid="channel-no-chats">
+            <span class="pch-next">{{ t('channels.link.next-step') }}</span>
+            <ChannelLinkGuide :store="store" :platform="g.platform" />
+          </div>
           <div v-for="loc in g.locations" :key="loc.chat_id" class="pch-loc" data-testid="channel-location">
             <button
               type="button"
@@ -334,5 +338,7 @@ function openSettings(): void {
 .pch-new:hover:not(:disabled) { background: var(--accent-subtle); }
 .pch-new:disabled { opacity: 0.5; cursor: default; }
 .pch-error { margin: 0; color: var(--danger-fg); }
+.pch-empty { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; border: 1px solid var(--accent-muted); border-radius: var(--radius-xs); background: var(--accent-subtle); }
+.pch-next { font-weight: 600; color: var(--text-bright); }
 .pch-warn { margin: 0 0 2px; color: var(--attention-fg); line-height: 1.4; }
 </style>

@@ -1,0 +1,146 @@
+"""One-click linking: invite codes that allowlist their sender without a pairing approval."""
+
+from __future__ import annotations
+
+import pytest
+
+from agent_team_backend.channels import pairing
+from agent_team_backend.channels.base import Location
+from agent_team_backend.channels.manager import MSG_LINKED
+from agent_team_backend.channels.pairing import CODE_ALPHABET, LinkInvites, parse_link_code
+from agent_team_backend.channels.telegram import TelegramAdapter
+
+from .test_manager import Env, env, fast_timers  # noqa: F401 — pytest fixtures
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_invite_code_format_expiry_and_single_use() -> None:
+    clock = Clock()
+    invites = LinkInvites(now=clock)
+    inv = invites.create("telegram", "direct")
+    assert len(inv.code) == 8 and set(inv.code) <= set(CODE_ALPHABET)
+    assert inv.expires_at == 1000.0 + 600
+    assert invites.consume("discord", inv.code) is None  # scoped to its platform
+    assert invites.consume("telegram", inv.code.lower()) == inv  # case-insensitive
+    assert invites.consume("telegram", inv.code) is None  # single use
+    late = invites.create("telegram", "direct")
+    clock.t += 601
+    assert invites.consume("telegram", late.code) is None
+
+
+def test_at_most_five_live_invites_per_platform_oldest_dropped() -> None:
+    invites = LinkInvites()
+    made = [invites.create("slack", "direct") for _ in range(6)]
+    assert invites.consume("slack", made[0].code) is None
+    assert all(invites.consume("slack", i.code) for i in made[1:])
+
+
+@pytest.mark.parametrize("text,code", [
+    ("/start ABCD2345", "ABCD2345"),
+    ("/start@navide_bot abcd2345", "ABCD2345"),
+    ("link ABCD-2345", "ABCD2345"),
+    ("abcd2345", "ABCD2345"),
+    ("<@U0123> link ABCD2345", "ABCD2345"),
+    ("@navide link ABCD2345", "ABCD2345"),
+    ("Navide Bot: link ABCD2345", "ABCD2345"),
+    ("link ABCD2345 <@U0123>", "ABCD2345"),
+    ("/start", ""),
+    ("link to the docs", ""),
+    ("please run ABCD2345 now", ""),
+])
+def test_parse_link_code(text: str, code: str) -> None:
+    assert parse_link_code(text) == code
+
+
+def test_telegram_link_url_uses_the_bot_username() -> None:
+    ad = TelegramAdapter("123:secret")
+    assert ad.link_url("ABCD2345", "direct") == ""  # identity unknown until getMe
+    ad.status.identity = "@navide_bot"
+    assert ad.link_url("ABCD2345", "direct") == "https://t.me/navide_bot?start=ABCD2345"
+    assert ad.link_url("ABCD2345", "group") == "https://t.me/navide_bot?startgroup=ABCD2345"
+
+
+async def test_link_create_answers_code_url_and_instructions(env: Env) -> None:
+    env.tg.link_url = lambda code, target: f"https://t.me/bot?{target}={code}"
+    res = env.m.link_create("telegram", "group")
+    assert res["ok"] and res["url"] == f"https://t.me/bot?group={res['code']}"
+    assert res["code"] in res["instructions"] and res["expires_at"] > 0
+    assert env.m.link_create("telegram", "sideways")["ok"] is False
+    assert env.m.link_create("discord", "direct") == {"ok": False, "error": "discord is not connected"}
+    with pytest.raises(ValueError):
+        env.m.link_create("myspace", "direct")
+
+
+async def test_start_code_from_a_stranger_links_their_dm(env: Env) -> None:
+    code = env.m.link_create("telegram", "direct")["code"]
+    await env.inbound(f"/start {code}", sender="99", chat="99", thread="", direct=True)
+    assert env.store.is_allowed("telegram", "99")
+    assert env.store.list_pairing("telegram") == []
+    assert env.tg.texts()[-1] == MSG_LINKED
+    assert ("channels.linked", {"platform": "telegram", "chat_id": "99", "title": "alice",
+                                "kind": "direct"}) in env.fake.events
+    assert ("channels.changed", {}) in env.fake.events
+    locs = env.m.locations("telegram")["locations"]
+    assert {"chat_id": "99", "kind": "direct"}.items() <= next(c for c in locs if c["chat_id"] == "99").items()
+    # Linked means allowed: the next message goes through the normal pipeline.
+    env.store.bind("pane-dm", Location("telegram", "default", "99", ""))
+    await env.inbound("hello", sender="99", chat="99", thread="", direct=True)
+    assert env.fake.delivered[-1] == ("pane-dm", "hello", "telegram:alice")
+
+
+async def test_startgroup_code_links_a_group_with_its_title(env: Env) -> None:
+    env.tg.known_locations = lambda: [{"chat_id": "-500", "title": "Team room", "kind": "supergroup"}]
+    code = env.m.link_create("telegram", "group")["code"]
+    await env.inbound(f"/start@navide_bot {code}", sender="42", chat="-500", thread="")
+    assert env.store.is_allowed("telegram", "42")
+    assert ("channels.linked", {"platform": "telegram", "chat_id": "-500", "title": "Team room",
+                                "kind": "group"}) in env.fake.events
+    chats = {c["chat_id"]: c for c in env.store.chats("telegram", env.tg.token_fingerprint()[:16])}
+    assert chats["-500"]["kind"] == "group"
+
+
+async def test_a_code_links_only_once(env: Env) -> None:
+    code = env.m.link_create("telegram", "direct")["code"]
+    await env.inbound(f"/start {code}", sender="99", chat="99", thread="", direct=True)
+    await env.inbound(f"/start {code}", sender="55", chat="55", thread="", direct=True)
+    assert not env.store.is_allowed("telegram", "55")
+    assert "配對" in env.tg.texts()[-1]  # the second sender falls back to pairing
+
+
+async def test_expired_or_unknown_code_falls_back_to_pairing(env: Env, monkeypatch) -> None:
+    await env.inbound("/start ZZZZ2222", sender="99", chat="99", thread="", direct=True)
+    assert not env.store.is_allowed("telegram", "99")
+    assert len(env.store.list_pairing("telegram")) == 1 and "配對" in env.tg.texts()[-1]
+    monkeypatch.setattr(pairing, "INVITE_TTL_S", 0)
+    code = env.m.link_create("telegram", "direct")["code"]
+    await env.inbound(f"/start {code}", sender="98", chat="98", thread="", direct=True)
+    assert not env.store.is_allowed("telegram", "98")
+    # A stranger's group message with a dead code is still dropped silently.
+    sent = len(env.tg.sent)
+    await env.inbound(f"link {code}", sender="97", chat="-700", thread="")
+    assert len(env.tg.sent) == sent and not env.store.is_allowed("telegram", "97")
+
+
+async def test_other_platform_link_code_from_a_group_mention(env: Env) -> None:
+    assert (await env.m.configure("slack", {}, {"token": "tok-S"}))["ok"]
+    res = env.m.link_create("slack", "direct")
+    assert res["url"] is None and f"link {res['code']}" in res["instructions"]
+    await env.inbound(f"<@U0BOT> link {res['code'].lower()}", sender="U9", chat="C1", thread="",
+                      platform="slack")
+    assert env.store.is_allowed("slack", "U9")
+    assert env.adapters["slack"].texts()[-1] == MSG_LINKED
+    assert ("channels.linked", {"platform": "slack", "chat_id": "C1", "title": "C1",
+                                "kind": "group"}) in env.fake.events
+
+
+async def test_an_allowed_senders_plain_start_keeps_todays_reply(env: Env) -> None:
+    await env.inbound("/start", sender="7", chat="-900", thread="")
+    assert not any(e == "channels.linked" for e, _ in env.fake.events)
+    assert env.tg.texts()[-1] != MSG_LINKED

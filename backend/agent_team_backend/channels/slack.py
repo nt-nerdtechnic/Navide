@@ -103,6 +103,8 @@ class SlackAdapter:
         self._ping_interval_s = ping_interval_s
         self._user_id = ""
         self._bot_id = ""
+        self._team_id = ""
+        self._app_id = ""
         self._names: dict[str, str] = {}
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._known: dict[str, dict[str, Any]] = {}
@@ -166,7 +168,15 @@ class SlackAdapter:
             me = await self._call("auth.test", token=self._bot_token, form={})
             self._user_id = str(me.get("user_id") or "")
             self._bot_id = str(me.get("bot_id") or "")
+            self._team_id = str(me.get("team_id") or "")
             self.status.identity = f"@{me.get('user')}" if me.get("user") else ""
+            if self._bot_id:
+                # Only the "open the app's DM" link needs the app id; without it linking is code-only.
+                try:
+                    info = await self._call("bots.info", token=self._bot_token, form={"bot": self._bot_id})
+                    self._app_id = str((info.get("bot") or {}).get("app_id") or "")
+                except Exception as exc:  # noqa: BLE001
+                    log.info("slack: bots.info failed, no DM link: %s", exc)
         opened = await self._call("apps.connections.open", token=self._app_token, form={})
         url = str(opened.get("url") or "")
         if not url:
@@ -267,6 +277,13 @@ class SlackAdapter:
             is_direct=channel.startswith("D"), ts=time.time(),
             callback_data=str(actions[0].get("value") or ""),
         ))
+
+    def link_url(self, code: str, target: str) -> str:
+        """Opens the app's DM (https://docs.slack.dev/interactivity/deep-linking/); the code is typed there."""
+        if target != "direct" or not self._app_id:
+            return ""
+        team = f"&team={self._team_id}" if self._team_id else ""
+        return f"https://slack.com/app_redirect?app={self._app_id}{team}"
 
     def known_locations(self) -> list[dict[str, Any]]:
         """Chats seen so far, for the "use existing" picker."""

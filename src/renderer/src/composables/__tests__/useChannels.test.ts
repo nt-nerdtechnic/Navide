@@ -126,4 +126,20 @@ describe('useChannels', () => {
     store.paneClosed('p1')
     expect(mock.sent.map((s) => s.type)).toEqual(['channels.unbind'])
   })
+
+  it('creates a link invite and records the chat a link brings in', async () => {
+    const mock = createMockBackend('connected')
+    seed(mock)
+    mock.setResponse('channels.link.create', {
+      ok: true, code: 'K7Q2M9XA', target: 'group', expires_at: 5, url: 'https://t.me/b?startgroup=K7Q2M9XA', instructions: 'x',
+    })
+    const store = useChannels(mock.backend)
+    await flush()
+    const res = await store.createLink('telegram', 'group')
+    expect(res.ok && res.data?.url).toBe('https://t.me/b?startgroup=K7Q2M9XA')
+    expect(mock.sent.find((s) => s.type === 'channels.link.create')?.payload).toEqual({ platform: 'telegram', target: 'group' })
+    expect(store.lastLinked.value).toBeNull()
+    mock.emit('channels.linked', { platform: 'telegram', chat_id: '-5', title: 'Team', kind: 'group' })
+    expect(store.lastLinked.value).toEqual({ platform: 'telegram', chat_id: '-5', title: 'Team', kind: 'group' })
+  })
 })

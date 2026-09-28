@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import type { useBackend } from '../../composables/useBackend'
@@ -10,6 +10,7 @@ import {
   type ChannelPlatformSpec,
   type ChannelPlatformState,
 } from '../../composables/useChannels'
+import ChannelLinkGuide from '../ChannelLinkGuide.vue'
 import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingRow from './SettingRow.vue'
@@ -166,6 +167,34 @@ async function removePlatform(platform: ChannelPlatform): Promise<void> {
   if (ok) expanded.value = null
 }
 
+function isConnected(platform: ChannelPlatform): boolean {
+  const st = stateOf(platform)
+  return !!st?.configured && st.enabled && st.status.connected && store.enabled.value
+}
+
+// Chats each connected bot knows: none yet means the card shows the linking
+// guide as the next step; some collapse it to a one-line summary.
+const chatCounts = reactive<Partial<Record<ChannelPlatform, number>>>({})
+const linkOpen = ref<ChannelPlatform | null>(null)
+const connectedKey = computed(() => specs.value.filter((s) => isConnected(s.platform)).map((s) => s.platform).join(','))
+
+async function loadChatCounts(): Promise<void> {
+  await Promise.all(
+    specs.value
+      .filter((s) => isConnected(s.platform))
+      .map(async (s) => {
+        const res = await store.locations(s.platform)
+        if (res.ok) chatCounts[s.platform] = res.data?.locations?.length ?? 0
+      })
+  )
+}
+
+watch(
+  () => [store.platforms.value, store.lastLinked.value, connectedKey.value],
+  () => void loadChatCounts(),
+  { immediate: true }
+)
+
 function formatTime(ts: number | null | undefined): string {
   if (!ts) return ''
   const ms = ts < 1e12 ? ts * 1000 : ts
@@ -232,6 +261,32 @@ function formatTime(ts: number | null | undefined): string {
                 {{ stateOf(spec.platform)?.configured ? t('channels.manage') : t('channels.connect') }}
               </button>
             </div>
+          </div>
+
+          <div
+            v-if="isConnected(spec.platform) && chatCounts[spec.platform] !== undefined"
+            class="ch-link"
+            :class="{ next: !chatCounts[spec.platform] }"
+            data-testid="channel-link-block"
+          >
+            <template v-if="!chatCounts[spec.platform]">
+              <div class="ch-link-title" data-testid="channel-next-step">{{ t('channels.link.next-step') }}</div>
+              <p class="ch-link-desc">{{ t('channels.link.next-step-desc', { platform: platformName(spec.platform) }) }}</p>
+              <ChannelLinkGuide :store="store" :platform="spec.platform" @linked="loadChatCounts" />
+            </template>
+            <template v-else>
+              <div class="ch-link-summary">
+                <span data-testid="channel-linked-summary">{{ t('channels.link.linked-summary', { n: chatCounts[spec.platform] }) }}</span>
+                <button
+                  type="button"
+                  class="ch-btn ghost sm"
+                  data-testid="channel-link-account"
+                  :aria-expanded="linkOpen === spec.platform"
+                  @click="linkOpen = linkOpen === spec.platform ? null : spec.platform"
+                >{{ t('channels.link.link-account') }}</button>
+              </div>
+              <ChannelLinkGuide v-if="linkOpen === spec.platform" :store="store" :platform="spec.platform" @linked="loadChatCounts" />
+            </template>
           </div>
 
           <form v-if="expanded === spec.platform" class="ch-form" @submit.prevent="save(spec)">
@@ -409,6 +464,13 @@ function formatTime(ts: number | null | undefined): string {
 .ch-btn.ghost:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-primary); }
 .ch-btn.danger-ghost { color: var(--danger-fg); border-color: var(--danger-muted); }
 .ch-btn.danger-ghost:hover:not(:disabled) { border-color: var(--danger-fg); }
+
+/* Linking guide under a connected platform, aligned with the row text. */
+.ch-link { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 2px 40px; }
+.ch-link.next { padding: 10px 12px; border: 1px solid var(--accent-muted); border-radius: var(--radius-sm); background: var(--accent-subtle); }
+.ch-link-title { font-size: var(--font-row-desc); font-weight: 600; color: var(--text-bright); }
+.ch-link-desc { margin: 0; font-size: var(--font-row-desc); color: var(--text-secondary); line-height: 1.4; }
+.ch-link-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--font-row-desc); color: var(--text-secondary); }
 
 /* Pairing / allowlist rows. */
 .ch-section-hint { margin: 0 0 8px; font-size: var(--font-row-desc); color: var(--text-secondary); }
