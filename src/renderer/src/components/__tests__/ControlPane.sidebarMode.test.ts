@@ -155,6 +155,19 @@ describe('ControlPane – sidebar mode switch', () => {
     expect(free.at(-1)?.classList.contains('hdr-add-ws')).toBe(true)
   })
 
+  it('offers the workspace picker, not a dead "add agent", in free mode with no workspace', async () => {
+    // A mode left on free outlives the last workspace. With nothing to spawn
+    // into, the "add agent" ＋ could only sit there disabled.
+    wrapper = mountPane({ workspaces: [], sidebarMode: 'free', workspace: '' })
+    const controls = [...wrapper.element.querySelectorAll('.agent-list-hdr > *')]
+    const add = controls.at(-1) as HTMLButtonElement | undefined
+    expect(add?.classList.contains('hdr-add-ws')).toBe(true)
+    expect(add?.disabled).toBe(false)
+    expect(add?.getAttribute('aria-label')).toBe('action.open-workspace-picker')
+    await wrapper.find('.hdr-add-ws').trigger('click')
+    expect(wrapper.emitted('open-workspace-picker')?.length).toBe(1)
+  })
+
   it('hides the switch in a detached window, which holds one workspace', () => {
     wrapper = mountPane({
       workspaces: [workspaceRow(HERE, ['p-here'])],

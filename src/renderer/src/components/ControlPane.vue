@@ -3492,9 +3492,10 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
              rows, so the ＋ those rows carry — the sidebar's only way to open an
              agent — would be gone with them; it opens the same menu here, in the
              workspace on screen. Adopting another project stays available from
-             the Window menu and from Workspace mode. -->
+             the Window menu and from Workspace mode. With no workspace at all
+             there is nothing to open an agent in, so it stays the picker. -->
         <button
-          v-if="!detachedWindow && freeMode"
+          v-if="!detachedWindow && freeMode && workspaces?.length"
           class="hdr-add-ws"
           :disabled="!canSpawn"
           :aria-expanded="addMenuOpen && addMenuWorkspace === workspacePath"
