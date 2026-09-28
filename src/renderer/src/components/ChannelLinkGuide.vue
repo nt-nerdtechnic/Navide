@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { ChannelLinkInvite, ChannelPlatform, ChannelsStore } from '../composables/useChannels'
 
@@ -23,20 +23,22 @@ const t = i18n.global.t
 interface LinkAction {
   target: 'direct' | 'group'
   label: string
+  /** The backend should answer with a platform link to open. */
+  opensLink?: boolean
 }
 
 // Telegram deep links carry the code; Discord's link installs the bot in a
 // server; Slack's opens the app's DM. Everywhere else the code is typed by hand.
 const ACTIONS: Partial<Record<ChannelPlatform, LinkAction[]>> = {
   telegram: [
-    { target: 'direct', label: 'channels.link.open-telegram' },
-    { target: 'group', label: 'channels.link.add-group' },
+    { target: 'direct', label: 'channels.link.open-telegram', opensLink: true },
+    { target: 'group', label: 'channels.link.add-group', opensLink: true },
   ],
   discord: [
-    { target: 'group', label: 'channels.link.add-server' },
+    { target: 'group', label: 'channels.link.add-server', opensLink: true },
     { target: 'direct', label: 'channels.link.get-code' },
   ],
-  slack: [{ target: 'direct', label: 'channels.link.open-slack' }],
+  slack: [{ target: 'direct', label: 'channels.link.open-slack', opensLink: true }],
 }
 const actions = computed(() => ACTIONS[props.platform] ?? [{ target: 'direct' as const, label: 'channels.link.get-code' }])
 
@@ -45,6 +47,23 @@ const busy = ref(false)
 const error = ref('')
 const copied = ref(false)
 const linkedTitle = ref('')
+const linkedConfirmed = ref(true)
+// A platform link was expected but the backend had none (e.g. Slack's bots.info failed).
+const noDeepLink = ref(false)
+let expiryTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearExpiry(): void {
+  if (expiryTimer !== null) clearTimeout(expiryTimer)
+  expiryTimer = null
+}
+
+/** Stop waiting on the current code, with the reason shown in its place. */
+function dropInvite(reason: string): void {
+  clearExpiry()
+  invite.value = null
+  error.value = reason
+}
+onBeforeUnmount(clearExpiry)
 
 const platformName = computed(() => t(`channels.platform.${props.platform}`))
 const command = computed(() =>
@@ -53,6 +72,7 @@ const command = computed(() =>
 const sendHint = computed(() => {
   if (props.platform === 'telegram') return t('channels.link.send-code-telegram')
   if (props.platform === 'imessage') return t('channels.link.send-code-imessage')
+  if (props.platform === 'discord' && invite.value?.target === 'direct') return t('channels.link.send-code-discord')
   return t('channels.link.send-code')
 })
 const waitingText = computed(() =>
@@ -65,6 +85,8 @@ async function start(action: LinkAction): Promise<void> {
   error.value = ''
   copied.value = false
   linkedTitle.value = ''
+  noDeepLink.value = false
+  clearExpiry()
   try {
     const res = await props.store.createLink(props.platform, action.target)
     if (!res.ok || !res.data) {
@@ -72,7 +94,12 @@ async function start(action: LinkAction): Promise<void> {
       return
     }
     invite.value = res.data
-    if (res.data.url) {
+    const code = res.data.code
+    expiryTimer = setTimeout(() => {
+      if (invite.value?.code === code) dropInvite(t('channels.link.expired'))
+    }, Math.max(0, res.data.expires_at * 1000 - Date.now()))
+    if (!res.data.url) noDeepLink.value = !!action.opensLink
+    else {
       // Main-process opener: http(s) only, app windows only.
       const opened = await window.agentTeam?.openExternal?.(res.data.url)
       if (opened && !opened.ok) error.value = t('channels.link.open-failed', { error: opened.error ?? '' })
@@ -88,6 +115,7 @@ async function copy(): Promise<void> {
     copied.value = true
   } catch {
     copied.value = false
+    error.value = t('channels.link.copy-failed')
   }
 }
 
@@ -101,10 +129,27 @@ async function approve(code: string): Promise<void> {
 watch(
   () => props.store.lastLinked.value,
   (ev) => {
-    if (!ev || ev.platform !== props.platform) return
+    if (!ev || ev.platform !== props.platform || ev.code !== invite.value?.code) return
+    clearExpiry()
     invite.value = null
     linkedTitle.value = ev.title || ev.chat_id
+    linkedConfirmed.value = ev.confirmed !== false
     emit('linked', linkedTitle.value)
+  }
+)
+
+watch(
+  () => props.store.lastLinkFailed.value,
+  (ev) => {
+    if (!ev || ev.platform !== props.platform || ev.code !== invite.value?.code) return
+    dropInvite(t('channels.link.failed', { error: ev.error }))
+  }
+)
+
+watch(
+  () => props.store.linkEpoch.value,
+  () => {
+    if (invite.value) dropInvite(t('channels.link.reconnected'))
   }
 )
 </script>
@@ -124,9 +169,10 @@ watch(
         @click="start(a)"
       >{{ t(a.label, { platform: platformName }) }}</button>
     </div>
-    <p v-if="linkedTitle" class="clg-ok" role="status" data-testid="channel-link-done">{{ t('channels.link.linked', { title: linkedTitle }) }}</p>
+    <p v-if="linkedTitle" class="clg-ok" role="status" data-testid="channel-link-done">{{ t(linkedConfirmed ? 'channels.link.linked' : 'channels.link.linked-unconfirmed', { title: linkedTitle }) }}</p>
     <div v-if="invite" class="clg-wait" data-testid="channel-link-waiting">
       <span class="clg-wait-text"><span class="clg-dot" aria-hidden="true"></span>{{ waitingText }}</span>
+      <span v-if="noDeepLink" class="clg-hint">{{ t('channels.link.no-deep-link', { platform: platformName }) }}</span>
       <span class="clg-hint">{{ sendHint }}</span>
       <span class="clg-code-row">
         <code class="clg-code" data-testid="channel-link-code">{{ command }}</code>

@@ -9098,7 +9098,15 @@
       "copied": "Copied",
       "linked": "✅ Linked {title}",
       "pairing": "{name} asks to pair",
-      "open-failed": "Could not open the link: {error}"
+      "open-failed": "Could not open the link: {error}",
+      "expired": "This code has expired. Get a new one.",
+      "reconnected": "The connection to the backend dropped, so this code may no longer work. Get a new one.",
+      "failed": "Linking failed: {error}. Get a new code and try again.",
+      "linked-unconfirmed": "✅ Linked {title}. The bot could not post its confirmation in the chat.",
+      "copy-failed": "Could not copy. Select the code and copy it yourself.",
+      "no-deep-link": "Could not open {platform} directly. Send the code below to the bot yourself.",
+      "send-code-discord": "Send this to the bot in a DM. Discord only lets you DM a bot you share a server with, so use “Add to a server” first if you don't.",
+      "count-failed": "Could not load the chats this bot knows: {error}"
     }
   },
   "guard": {

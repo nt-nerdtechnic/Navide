@@ -131,7 +131,7 @@ describe('useChannels', () => {
     const mock = createMockBackend('connected')
     seed(mock)
     mock.setResponse('channels.link.create', {
-      ok: true, code: 'K7Q2M9XA', target: 'group', expires_at: 5, url: 'https://t.me/b?startgroup=K7Q2M9XA', instructions: 'x',
+      ok: true, code: 'K7Q2M9XA', target: 'group', expires_at: 5, url: 'https://t.me/b?startgroup=K7Q2M9XA',
     })
     const store = useChannels(mock.backend)
     await flush()

@@ -88,15 +88,25 @@ export interface ChannelLinkInvite {
   expires_at: number
   /** Platform deep link that sends the code (Telegram) or opens the bot (Discord install, Slack DM). */
   url: string | null
-  instructions: string
 }
 
 /** `channels.linked`: a chat was linked by an invite code. */
 export interface ChannelLinkedEvent {
   platform: ChannelPlatform
+  /** The invite it redeemed, so only the guide that issued it reacts. */
+  code: string
   chat_id: string
   title: string
   kind: 'direct' | 'group'
+  /** False when the bot could not post its confirmation in the chat. */
+  confirmed: boolean
+}
+
+/** `channels.link_failed`: a sent invite code was spent but the link did not complete. */
+export interface ChannelLinkFailedEvent {
+  platform: ChannelPlatform
+  code: string
+  error: string
 }
 
 export interface ChannelField {
@@ -180,6 +190,10 @@ function createChannelsStore(backend: Backend) {
   const loaded = ref(false)
   const error = ref('')
   const lastLinked = ref<ChannelLinkedEvent | null>(null)
+  const lastLinkFailed = ref<ChannelLinkFailedEvent | null>(null)
+  // Bumped whenever the backend connection drops: invites live only in the
+  // backend's memory, so a code handed out before may be gone.
+  const linkEpoch = ref(0)
 
   async function call<T = Record<string, unknown>>(
     type: string,
@@ -237,6 +251,10 @@ function createChannelsStore(backend: Backend) {
     const msg = raw as ChannelLinkedEvent | null
     if (msg?.platform) lastLinked.value = msg
   })
+  backend.on('channels.link_failed', (raw) => {
+    const msg = raw as ChannelLinkFailedEvent | null
+    if (msg?.platform) lastLinkFailed.value = msg
+  })
   backend.on('channels.status', (raw) => {
     const msg = raw as { platform?: string; status?: Partial<ChannelStatus> } | null
     if (!msg?.platform) return
@@ -246,8 +264,9 @@ function createChannelsStore(backend: Backend) {
   })
   watch(
     () => backend.status.value,
-    (s) => {
+    (s, prev) => {
       if (s === 'connected') void refresh()
+      else if (prev === 'connected') linkEpoch.value += 1
     },
     { immediate: true }
   )
@@ -264,6 +283,8 @@ function createChannelsStore(backend: Backend) {
     loaded,
     error,
     lastLinked,
+    lastLinkFailed,
+    linkEpoch,
     configuredPlatforms,
     refresh,
     platformState: (platform: ChannelPlatform) => platforms.value.find((p) => p.platform === platform) ?? null,

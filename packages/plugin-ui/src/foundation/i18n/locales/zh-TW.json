@@ -9098,7 +9098,15 @@
       "copied": "已複製",
       "linked": "✅ 已連結 {title}",
       "pairing": "{name} 要求配對",
-      "open-failed": "無法開啟連結：{error}"
+      "open-failed": "無法開啟連結：{error}",
+      "expired": "代碼已過期，請重新取得。",
+      "reconnected": "與後端的連線中斷過，這組代碼可能已失效，請重新取得。",
+      "failed": "連結失敗：{error}。請重新取得代碼再試一次。",
+      "linked-unconfirmed": "✅ 已連結 {title}，但 bot 無法在聊天室送出確認訊息。",
+      "copy-failed": "無法複製，請自行選取代碼後複製。",
+      "no-deep-link": "無法直接開啟 {platform}，請自行把下方代碼傳給 bot。",
+      "send-code-discord": "在與 bot 的私訊傳送這段。Discord 只能私訊和你在同一個伺服器的 bot，若還沒有，請先按「加到伺服器」。",
+      "count-failed": "無法讀取這個 bot 已知的聊天室：{error}"
     }
   },
   "guard": {

@@ -237,6 +237,19 @@ describe('ChannelsPane', () => {
       expect(w.get('[data-platform="slack"]').find('[data-testid="channel-link-block"]').exists()).toBe(false)
     })
 
+    it('shows why the chats could not be loaded, and retries', async () => {
+      seedConnected([])
+      mock.setResponse('channels.locations', { ok: false, error: 'adapter exploded' })
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      expect(tg.get('[data-testid="channel-link-block"] [role="alert"]').text()).toContain('adapter exploded')
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+      await tg.get('[data-testid="channel-link-retry"]').trigger('click')
+      await flushPromises()
+      expect(tg.find('[role="alert"]').exists()).toBe(false)
+      expect(tg.get('[data-testid="channel-next-step"]').text()).toBe('Next: link your chat account')
+    })
+
     it('collapses to a summary once a chat is linked, with a button to link another', async () => {
       seedConnected([])
       const w = await render()
@@ -247,7 +260,7 @@ describe('ChannelsPane', () => {
       expect(tg.find('[data-testid="channel-next-step"]').exists()).toBe(false)
       expect(tg.get('[data-testid="channel-linked-summary"]').text()).toContain('1 chat(s) linked')
       expect(tg.find('[data-testid="channel-link-guide"]').exists()).toBe(false)
-      mock.setResponse('channels.link.create', { ok: true, code: 'ABCD2345', target: 'group', expires_at: 1, url: null, instructions: '' })
+      mock.setResponse('channels.link.create', { ok: true, code: 'ABCD2345', target: 'group', expires_at: Date.now() / 1000 + 600, url: null })
       await tg.get('[data-testid="channel-link-account"]').trigger('click')
       await tg.findAll('[data-testid="channel-link-action"]')[1].trigger('click')
       await flushPromises()

@@ -175,16 +175,29 @@ function isConnected(platform: ChannelPlatform): boolean {
 // Chats each connected bot knows: none yet means the card shows the linking
 // guide as the next step; some collapse it to a one-line summary.
 const chatCounts = reactive<Partial<Record<ChannelPlatform, number>>>({})
+// Why a count could not be read: the card shows it with a retry instead of
+// silently dropping the linking guide.
+const chatCountErrors = reactive<Partial<Record<ChannelPlatform, string>>>({})
 const linkOpen = ref<ChannelPlatform | null>(null)
 const connectedKey = computed(() => specs.value.filter((s) => isConnected(s.platform)).map((s) => s.platform).join(','))
 
+// Loads overlap (every status patch re-runs this); only the latest may write.
+let chatCountLoad = 0
+
 async function loadChatCounts(): Promise<void> {
+  const load = ++chatCountLoad
   await Promise.all(
     specs.value
       .filter((s) => isConnected(s.platform))
       .map(async (s) => {
         const res = await store.locations(s.platform)
-        if (res.ok) chatCounts[s.platform] = res.data?.locations?.length ?? 0
+        if (load !== chatCountLoad) return
+        if (res.ok) {
+          chatCounts[s.platform] = res.data?.locations?.length ?? 0
+          delete chatCountErrors[s.platform]
+        } else {
+          chatCountErrors[s.platform] = res.error ?? t('channels.error.generic')
+        }
       })
   )
 }
@@ -264,12 +277,16 @@ function formatTime(ts: number | null | undefined): string {
           </div>
 
           <div
-            v-if="isConnected(spec.platform) && chatCounts[spec.platform] !== undefined"
+            v-if="isConnected(spec.platform) && (chatCounts[spec.platform] !== undefined || chatCountErrors[spec.platform])"
             class="ch-link"
             :class="{ next: !chatCounts[spec.platform] }"
             data-testid="channel-link-block"
           >
-            <template v-if="!chatCounts[spec.platform]">
+            <div v-if="chatCountErrors[spec.platform]" class="ch-link-summary">
+              <span class="ch-link-error" role="alert">{{ t('channels.link.count-failed', { error: chatCountErrors[spec.platform] }) }}</span>
+              <button type="button" class="ch-btn ghost sm" data-testid="channel-link-retry" @click="loadChatCounts">{{ t('action.retry') }}</button>
+            </div>
+            <template v-else-if="!chatCounts[spec.platform]">
               <div class="ch-link-title" data-testid="channel-next-step">{{ t('channels.link.next-step') }}</div>
               <p class="ch-link-desc">{{ t('channels.link.next-step-desc', { platform: platformName(spec.platform) }) }}</p>
               <ChannelLinkGuide :store="store" :platform="spec.platform" @linked="loadChatCounts" />
@@ -471,6 +488,7 @@ function formatTime(ts: number | null | undefined): string {
 .ch-link-title { font-size: var(--font-row-desc); font-weight: 600; color: var(--text-bright); }
 .ch-link-desc { margin: 0; font-size: var(--font-row-desc); color: var(--text-secondary); line-height: 1.4; }
 .ch-link-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--font-row-desc); color: var(--text-secondary); }
+.ch-link-error { color: var(--danger-fg); word-break: break-word; }
 
 /* Pairing / allowlist rows. */
 .ch-section-hint { margin: 0 0 8px; font-size: var(--font-row-desc); color: var(--text-secondary); }

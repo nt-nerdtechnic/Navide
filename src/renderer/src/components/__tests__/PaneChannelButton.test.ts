@@ -172,7 +172,7 @@ describe('PaneChannelButton', () => {
     it('offers the Telegram deep links and opens the one clicked', async () => {
       seed({ configured: true, locations: [] })
       mock.setResponse('channels.link.create', {
-        ok: true, code: 'K7Q2M9XA', target: 'direct', expires_at: 1, url: 'https://t.me/navide_bot?start=K7Q2M9XA', instructions: '',
+        ok: true, code: 'K7Q2M9XA', target: 'direct', expires_at: Date.now() / 1000 + 600, url: 'https://t.me/navide_bot?start=K7Q2M9XA',
       })
       const w = await render()
       await openPopover(w)
@@ -201,7 +201,7 @@ describe('PaneChannelButton', () => {
       })
       mock.setResponse('channels.locations', { ok: true, locations: [] })
       mock.setResponse('channels.link.create', {
-        ok: true, code: 'ABCD2345', target: 'direct', expires_at: 1, url: null, instructions: '',
+        ok: true, code: 'ABCD2345', target: 'direct', expires_at: Date.now() / 1000 + 600, url: null,
       })
       const w = await render()
       await openPopover(w)
@@ -227,6 +227,91 @@ describe('PaneChannelButton', () => {
       q('[data-testid="channel-link-approve"]')!.click()
       await flushPromises()
       expect(mock.sent.find((m) => m.type === 'channels.pairing.approve')?.payload).toEqual({ platform: 'telegram', code: 'K7Q2M9XA' })
+    })
+
+    async function startTelegramLink(overrides: Record<string, unknown> = {}): Promise<void> {
+      seed({ configured: true, locations: [] })
+      mock.setResponse('channels.link.create', {
+        ok: true, code: 'K7Q2M9XA', target: 'direct', expires_at: Date.now() / 1000 + 600,
+        url: 'https://t.me/navide_bot?start=K7Q2M9XA', ...overrides,
+      })
+      const w = await render()
+      await openPopover(w)
+      qa('[data-testid="channel-link-action"]')[0].click()
+      await flushPromises()
+      expect(q('[data-testid="channel-link-waiting"]')).not.toBeNull()
+    }
+
+    it('stops waiting and says so once the code expires', async () => {
+      await startTelegramLink({ expires_at: Date.now() / 1000 + 0.05 })
+      await new Promise((r) => setTimeout(r, 120))
+      await flushPromises()
+      expect(q('[data-testid="channel-link-waiting"]')).toBeNull()
+      expect(q('[data-testid="channel-link-guide"] [role="alert"]')?.textContent).toContain('This code has expired')
+    })
+
+    it('stops waiting when the backend connection drops, since the code may be gone', async () => {
+      await startTelegramLink()
+      mock.status.value = 'disconnected'
+      await flushPromises()
+      expect(q('[data-testid="channel-link-waiting"]')).toBeNull()
+      expect(q('[data-testid="channel-link-guide"] [role="alert"]')?.textContent).toContain('may no longer work')
+    })
+
+    it('shows a failed link for its own code and ignores other codes', async () => {
+      await startTelegramLink()
+      mock.emit('channels.link_failed', { platform: 'telegram', code: 'OTHER234', error: 'x' })
+      mock.emit('channels.linked', { platform: 'telegram', code: 'OTHER234', chat_id: '1', title: 'bob', kind: 'direct', confirmed: true })
+      await flushPromises()
+      expect(q('[data-testid="channel-link-waiting"]')).not.toBeNull()
+      expect(q('[data-testid="channel-link-done"]')).toBeNull()
+      mock.emit('channels.link_failed', { platform: 'telegram', code: 'K7Q2M9XA', error: 'database is locked' })
+      await flushPromises()
+      expect(q('[data-testid="channel-link-waiting"]')).toBeNull()
+      expect(q('[data-testid="channel-link-guide"] [role="alert"]')?.textContent).toContain('Linking failed: database is locked')
+    })
+
+    it('says when the bot could not post its confirmation', async () => {
+      await startTelegramLink()
+      mock.emit('channels.linked', { platform: 'telegram', code: 'K7Q2M9XA', chat_id: '5', title: 'neil', kind: 'direct', confirmed: false })
+      await flushPromises()
+      expect(q('[data-testid="channel-link-done"]')?.textContent).toContain('could not post its confirmation')
+    })
+
+    it('reports a copy that failed', async () => {
+      await startTelegramLink()
+      const writeText = vi.fn(async () => { throw new Error('denied') })
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+      q('[data-testid="channel-link-copy"]')!.click()
+      await flushPromises()
+      expect(q('[data-testid="channel-link-guide"] [role="alert"]')?.textContent).toContain('Could not copy')
+    })
+
+    it('says so when a platform link was expected but none came back', async () => {
+      await startTelegramLink({ url: null })
+      expect(openExternal).not.toHaveBeenCalled()
+      expect(q('[data-testid="channel-link-waiting"]')?.textContent).toContain('Could not open Telegram directly')
+    })
+
+    it('tells a Discord DM that the bot must share a server', async () => {
+      seed({ configured: false })
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'discord', configured: true, enabled: true,
+          status: { lifecycle: 'ready', connected: true, identity: '@navide' }, config: {}, capabilities: null,
+        }],
+      })
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+      mock.setResponse('channels.link.create', { ok: true, code: 'ABCD2345', target: 'direct', expires_at: Date.now() / 1000 + 600, url: null })
+      const w = await render()
+      await openPopover(w)
+      qa('[data-testid="channel-link-action"]')[1].click()
+      await flushPromises()
+      const waiting = q('[data-testid="channel-link-waiting"]')?.textContent ?? ''
+      expect(waiting).toContain('share a server with')
+      expect(waiting).not.toContain('Could not open')
     })
 
     it('replaces the guide with the chat once the link lands', async () => {
