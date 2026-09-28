@@ -34,7 +34,8 @@ const SUBSCRIPTION_ID_KEY = 'io.modelcontextprotocol/subscriptionId'
 const EVENT_FILTER_KEY = 'dev.navide/pluginEvents'
 const PROTOCOL_ERROR_MESSAGE = 'Backend plugin returned an invalid protocol message.'
 const ENVIRONMENT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u
-const MAX_IGNORED_REQUEST_IDS = 256
+/** Live cancellation tombstones kept per child; the oldest is evicted past it. */
+export const MAX_IGNORED_REQUEST_IDS = 256
 const MAX_ACTIVE_SUBSCRIPTIONS = 256
 const MAX_RETAINED_STDERR_BYTES = 64 * 1024
 const MAX_DIAGNOSTIC_EMITTED_BYTES = 64 * 1024

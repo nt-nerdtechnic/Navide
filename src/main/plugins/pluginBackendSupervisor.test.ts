@@ -27,6 +27,7 @@ import {
   createTestPlansFilesystemPort,
   type PlansBridgePort,
 } from './plansBridge'
+import { MAX_IGNORED_REQUEST_IDS } from './pluginBackendSupervisor'
 import { MAX_BACKEND_BRIDGE_RESULT_BYTES } from './pluginBackendLimits'
 import { verifyInstalledBackendSpawnTrust } from './pluginBackendSpawnTrust'
 import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
@@ -1395,6 +1396,15 @@ describe('PluginBackendSupervisor', () => {
     expect(repeatedResponseError).toMatchObject({ code: 'PROTOCOL_ERROR' })
   })
 
+  // A tombstone is retired the moment a response arrives for the request it
+  // stands for, so the eviction this test is about only happens once MAX + 1
+  // tombstones are live at the same time. Ask the child for a delay it cannot
+  // possibly serve within the test: with 100ms the child's own timer raced our
+  // cancellation, one genuine response slipped through under load, the tombstone
+  // it retired kept the set one short of the bound, and the first id survived -
+  // which made the last assertion read `{ ok: true }` instead of a refusal.
+  const UNSERVABLE_DELAY_MS = 600_000
+
   it('bounds cancellation tombstones', async () => {
     const supervisor = makeSupervisor()
     supervisors.push(supervisor)
@@ -1402,18 +1412,20 @@ describe('PluginBackendSupervisor', () => {
 
     const firstError = await supervisor
       .clientFor(authenticatedRuntime)
-      .call('fixture.delay', { milliseconds: 100 }, { timeoutMs: 5 })
+      .call('fixture.delay', { milliseconds: UNSERVABLE_DELAY_MS }, { timeoutMs: 5 })
       .catch((value) => value)
     expect(firstError).toMatchObject({ code: 'TIMEOUT' })
     const firstRequestId = (firstError as BackendPluginError).requestId
     expect(firstRequestId).toEqual(expect.any(String))
     if (firstRequestId === undefined) throw new Error('Expected a timeout request id.')
 
+    // Exactly MAX more tombstones: the one above is then the oldest of MAX + 1
+    // live entries, so it - and only it - is evicted.
     let lastRequestId: string | number | undefined
-    for (let index = 0; index < 256; index += 1) {
+    for (let index = 0; index < MAX_IGNORED_REQUEST_IDS; index += 1) {
       const error = await supervisor
         .clientFor(authenticatedRuntime)
-        .call('fixture.delay', { milliseconds: 100 }, { timeoutMs: 5 })
+        .call('fixture.delay', { milliseconds: UNSERVABLE_DELAY_MS }, { timeoutMs: 5 })
         .catch((value) => value)
       expect(error).toMatchObject({ code: 'TIMEOUT' })
       lastRequestId = (error as BackendPluginError).requestId
