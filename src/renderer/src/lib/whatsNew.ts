@@ -124,9 +124,9 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': 'Channels でボットを接続したら、ワンクリックで自分のチャットアカウントを連携できます。Telegram の DM、グループやサーバーへの追加、Slack の DM、またはボットに送るワンタイムコードに対応し、ペアリングコードの承認は不要です。コードの期限切れや連携失敗時は画面に理由が表示され、新しいコードを取得できます。',
       },
       {
-        'zh-TW': '側欄新增 Workspace／Free 兩種模式：Workspace 照工作區分組，Free 把所有 agent 列成一張清單、主區顯示全部 pane。選擇會記住，已開的視窗也會即時跟著切換。',
-        'en-US': 'The sidebar has two modes: Workspace groups agents by workspace, and Free lists every agent in one flat list with every pane on the stage. The choice is remembered, and windows that are already open follow it live.',
-        'ja-JP': 'サイドバーに Workspace／Free の 2 つのモードを追加しました。Workspace はワークスペースごとにグループ化し、Free はすべてのエージェントを 1 つのリストにまとめ、すべてのペインを表示します。選択は保存され、開いている他のウィンドウにもすぐ反映されます。',
+        'zh-TW': '側欄新增 Workspace／Free 兩種模式：Workspace 照工作區分組，Free 把所有 agent 列成一張清單，每個 agent 自成一張線框卡片並標出所屬工作區，主區顯示全部 pane。選擇會記住，已開的視窗也會即時跟著切換。',
+        'en-US': 'The sidebar has two modes: Workspace groups agents by workspace, and Free lists every agent in one flat list — each in its own outlined card, labelled with its workspace — with every pane on the stage. The choice is remembered, and windows that are already open follow it live.',
+        'ja-JP': 'サイドバーに Workspace／Free の 2 つのモードを追加しました。Workspace はワークスペースごとにグループ化し、Free はすべてのエージェントを 1 つのリストにまとめ、各エージェントを所属ワークスペース付きの枠線カードで表示し、すべてのペインを表示します。選択は保存され、開いている他のウィンドウにもすぐ反映されます。',
       },
       {
         'zh-TW': '「設定 → 擴充套件」可以把已安裝的擴充套件回滾到它取代的版本，失敗時會說明原因並還原畫面。',

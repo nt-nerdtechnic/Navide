@@ -35,6 +35,13 @@ function pane(id: string, workspacePath: string): Record<string, unknown> {
   }
 }
 
+/** The lineage of a parent and its child — the shape that makes the list
+ *  reserve a caret slot on every row. */
+const PARENT_CHILD_LINEAGE = [
+  { id: 'p-here', depth: 0, hasChildren: true, collapsed: false, ancestors: [], descendantCount: 1 },
+  { id: 'p-there', depth: 1, hasChildren: false, collapsed: false, ancestors: ['p-here'], descendantCount: 0 }
+]
+
 function workspaceRow(path: string, paneIds: string[]): Record<string, unknown> {
   return {
     path,
@@ -202,6 +209,37 @@ describe('ControlPane – sidebar mode switch', () => {
       'tmp/here',
       'tmp/Dealpilot'
     ])
+  })
+
+  it('steps the tag line right only when the row carries a lineage slot', () => {
+    // A row with a caret — or the 12px spacer standing in for one — starts its
+    // badge 18px further right, so the line under it has to take the same step.
+    // A flat list where no pane has a parent keeps neither.
+    wrapper = mountPane({
+      workspaces: [workspaceRow(HERE, ['p-here'])],
+      lineage: PARENT_CHILD_LINEAGE,
+      sidebarMode: 'free'
+    })
+    const railed = wrapper.findAll('.pane-ws-line')
+    expect(railed.length).toBe(2)
+    expect(wrapper.findAll('.pane-ws-line--rail').length).toBe(2)
+
+    wrapper.unmount()
+    wrapper = mountPane({ workspaces: [workspaceRow(HERE, ['p-here'])], sidebarMode: 'free' })
+    expect(wrapper.findAll('.pane-ws-line').length).toBe(2)
+    expect(wrapper.findAll('.pane-ws-line--rail').length).toBe(0)
+  })
+
+  it('frames each row only in free mode', () => {
+    // The frame is what separates rows in a flat list. Workspace mode already
+    // has headings, run-group sections and lineage rails doing that, so a frame
+    // there would be a second, quieter grouping fighting the real one.
+    wrapper = mountPane({ workspaces: [workspaceRow(HERE, ['p-here'])], sidebarMode: 'free' })
+    expect(wrapper.findAll('.agent-item--card').length).toBe(wrapper.findAll('.agent-item').length)
+
+    wrapper.unmount()
+    wrapper = mountPane({ workspaces: [workspaceRow(HERE, ['p-here'])] })
+    expect(wrapper.findAll('.agent-item--card').length).toBe(0)
   })
 
   it('carries no tags in workspace mode, where the heading says it already', () => {

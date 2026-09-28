@@ -3820,7 +3820,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           :key="p.id"
           class="agent-item"
           :style="depth ? { marginLeft: depth * 13 + 'px' } : undefined"
-          :class="{ 'in-group': !g.bare, 'in-group-last': !g.bare && gi === g.rows.length - 1, pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'agent-item--selected': props.selectedPaneIds?.has(p.id), 'agent-item--dragging': draggingBatchIds.includes(p.id), 'drag-over': reorderDragOverId === p.id, 'agent-item--nest': nestDragOverId === p.id, expanded: isRowExpanded(p.id) }"
+          :class="{ 'agent-item--card': freeMode, 'in-group': !g.bare, 'in-group-last': !g.bare && gi === g.rows.length - 1, pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'agent-item--selected': props.selectedPaneIds?.has(p.id), 'agent-item--dragging': draggingBatchIds.includes(p.id), 'drag-over': reorderDragOverId === p.id, 'agent-item--nest': nestDragOverId === p.id, expanded: isRowExpanded(p.id) }"
           @dragover="onAgentDragOver($event, p.id)"
           @dragenter="onAgentDragOver($event, p.id)"
           @dragleave="onAgentDragLeave(p.id)"
@@ -3899,7 +3899,12 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                about 14px per row and keeps the name, the vendor and the
                workspace all readable. Free mode only — in workspace mode the
                heading above the row already says this. -->
-          <div v-if="workspaceTag(p)" class="pane-ws-line" :title="p.workspacePath">{{ workspaceTag(p) }}</div>
+          <div
+            v-if="workspaceTag(p)"
+            class="pane-ws-line"
+            :class="{ 'pane-ws-line--rail': hasChildren || depth || g.rail }"
+            :title="p.workspacePath"
+          >{{ workspaceTag(p) }}</div>
           <template v-if="isRowExpanded(p.id)">
             <div class="agent-role-line">
               <span class="agent-role-main">{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></span>
@@ -6452,6 +6457,21 @@ button.icon-btn.muted:hover {
   pointer-events: none;
 }
 .ws-head ~ .agent-item.in-group-last::before { bottom: 2px; }
+/* Free mode's rows are every project's panes in one flat list, each with a
+   second line under its name, so with nothing around them they read as one
+   block of text. A 1px frame is the lightest separation that still leaves the
+   name badge its contrast against the sidebar's own background — a tinted card
+   washes the badge out, which is why this is an outline and not a fill.
+   The base rule already carries a transparent border of the same width, so the
+   frame only colours it in: the expanded, focus, selected and drop states keep
+   working untouched. Free mode only — workspace mode separates rows with its
+   headings, run-group sections and lineage rails already. */
+.agent-item--card {
+  border-color: var(--border-muted);
+  border-radius: var(--radius-md);
+  padding: 4px 6px;
+  margin-bottom: 6px;
+}
 .agent-item.expanded {
   background: var(--bg-subtle);
   border-color: var(--border-muted);
@@ -6624,7 +6644,9 @@ button.icon-btn.muted:hover {
    Named for the pane, not the workspace: `.ws-line` is already the heading
    row's own class further up this file. */
 .pane-ws-line {
-  padding-left: 24px;
+  /* Aligned to the name badge's left edge, not the status dot's. The row leads
+     with the status dot, so this clears the dot and its gap. */
+  padding-left: 16px;
   margin-top: -2px;
   font-size: var(--font-3xs);
   color: var(--text-muted);
@@ -6649,6 +6671,14 @@ button.icon-btn.muted:hover {
 .agent-line:focus-within .agent-line-actions,
 .agent-item.expanded .agent-line-actions {
   display: inline-flex;
+}
+/* A row that carries a lineage caret — or the 12px spacer standing in for one —
+   starts its badge 18px further right (12px slot + 6px gap). The tag line has
+   to take the same step or it drifts left of the name it belongs to; a flat
+   list with no parent anywhere keeps neither, which is why this is a modifier
+   and not part of the rule above. */
+.pane-ws-line--rail {
+  padding-left: 34px;
 }
 .agent-line .badge {
   white-space: nowrap;
