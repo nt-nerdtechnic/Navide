@@ -243,11 +243,20 @@ describe('PaneChannelButton', () => {
     }
 
     it('stops waiting and says so once the code expires', async () => {
-      await startTelegramLink({ expires_at: Date.now() / 1000 + 0.05 })
-      await new Promise((r) => setTimeout(r, 120))
-      await flushPromises()
-      expect(q('[data-testid="channel-link-waiting"]')).toBeNull()
-      expect(q('[data-testid="channel-link-guide"] [role="alert"]')?.textContent).toContain('This code has expired')
+      // Only setTimeout is faked: flushPromises schedules on setImmediate.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        await startTelegramLink()
+        vi.advanceTimersByTime(599_000)
+        await flushPromises()
+        expect(q('[data-testid="channel-link-waiting"]')).not.toBeNull()
+        vi.advanceTimersByTime(2_000)
+        await flushPromises()
+        expect(q('[data-testid="channel-link-waiting"]')).toBeNull()
+        expect(q('[data-testid="channel-link-guide"] [role="alert"]')?.textContent).toContain('This code has expired')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('stops waiting when the backend connection drops, since the code may be gone', async () => {
