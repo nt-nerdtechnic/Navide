@@ -629,8 +629,12 @@ describe('ControlPane – workspace sections', () => {
   })
 
   it('titles the section Workspace once workspaces are grouped', () => {
+    // The title became the sidebar-mode switch, whose Workspace segment carries
+    // that same word; see ControlPane.sidebarMode.test.ts. With nothing grouped
+    // there is no mode to pick, so the header stays the running tally it was.
     wrapper = mountWith({ workspaces: [current()] })
-    expect(wrapper.find('.agent-list-hdr .lbl').text()).toBe('label.workspace')
+    expect(wrapper.find('.agent-list-hdr .lbl').exists()).toBe(false)
+    expect(wrapper.findAll('.agent-list-hdr .sidebar-mode-seg')[0].text()).toBe('label.workspace')
     wrapper.unmount()
     wrapper = mountWith({})
     expect(wrapper.find('.agent-list-hdr .lbl').text()).toBe('label.active-agents')

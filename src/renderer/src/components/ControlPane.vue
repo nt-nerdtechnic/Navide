@@ -11,6 +11,7 @@ import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabe
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
 import { subtreeSignals } from '../lib/paneSubtreeStatus'
 import { workspaceAliasOf, workspaceDisplayName } from '../lib/workspaceAlias'
+import type { SidebarMode } from '../lib/sidebarMode'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
 import {
@@ -410,6 +411,9 @@ interface Props {
    *  Phrased as the exception because Vue casts an absent boolean prop to
    *  false, which would have made the permissive spelling deny by default. */
   detachedWindow?: boolean
+  /** How the agent list is organised. Absent means 'workspace', which is the
+   *  list every other mount of this component has always drawn. */
+  sidebarMode?: SidebarMode
   /** View ids assigned to this slot, in tab order. Omitted means "all of
    *  them" — the layout store supplies the real list. A view moved to another
    *  slot disappears from here, which is what keeps it a singleton. */
@@ -447,9 +451,19 @@ const orderedPanes = computed(() => {
  *  list: no heading, every pane under it, which is what this looked like
  *  before workspaces were a layer at all. */
 const localWorkspaceRows = computed<(WorkspaceGroupRow | null)[]>(() => {
+  // Free mode takes that same ungrouped row on purpose rather than by default:
+  // one flat list of every pane, no headings, no run-group sections. Everything
+  // that keys off "are there real headings" — the fold-all button, the rail
+  // strip, the per-workspace ＋ — then switches itself off, with no second
+  // condition to keep in step.
+  if (props.sidebarMode === 'free') return [null]
   const rows = props.workspaces?.filter((w) => w.isCurrent) ?? []
   return rows.length ? rows : [null]
 })
+
+/** True while the list is flat. Named for the template, which asks this on the
+ *  header's two controls and on every pane row. */
+const freeMode = computed(() => props.sidebarMode === 'free')
 
 /** Whether the list has real workspace headings to draw. When it does the list
  *  must render even with no panes at all: the headings carry the only ＋ that
@@ -565,12 +579,6 @@ const visibleWorkspaceRows = computed<(WorkspaceGroupRow | null)[]>(() =>
   showRail.value
     ? filterRowsByRail(railRows.value, workspaceRails.value, activeRailId.value)
     : localWorkspaceRows.value
-)
-
-/** The current rail's name, for the section heading. Empty on All, where the
- *  heading keeps saying "Workspace". */
-const activeRailName = computed(
-  () => railCells.value.find((c) => c.active && c.id !== ALL_RAIL_ID)?.name ?? ''
 )
 
 function selectRail(id: string): void {
@@ -992,6 +1000,19 @@ function panesOf(
   return out
 }
 
+/** The folder tag a row carries in free mode, or '' when it needs none.
+ *
+ *  A flat list of every workspace's panes loses the one thing that told two
+ *  same-named panes apart — the heading they sat under. Only the panes from
+ *  elsewhere are tagged: tagging the workspace on screen too would label almost
+ *  every row with the same word. */
+function foreignWorkspaceTag(pane: ActivePaneView): string {
+  if (!freeMode.value) return ''
+  const path = pane.workspacePath
+  if (!path || path === workspacePath.value) return ''
+  return workspaceDisplayName(path, props.workspaceAliases)
+}
+
 // Build tag injected at build time (electron.vite.config.ts) so the header
 // shows exactly which build is running — avoids confusion over which version
 // is live when juggling worktrees / uncommitted changes.
@@ -1119,6 +1140,9 @@ const emit = defineEmits<{
   (e: 'rename-workspace', workspacePath: string, name: string): void
   (e: 'install-cli', payload: { agentKey: string; label: string }): void
   (e: 'update:collapsed', v: boolean): void
+  /** The header's mode switch. App owns the value so it can persist it and so
+   *  the stage agrees with the list about which panes are on screen. */
+  (e: 'update:sidebarMode', v: SidebarMode): void
 }>()
 
 const renamingPaneId = ref<string | null>(null)
@@ -3388,11 +3412,36 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
     <!-- ── Active agents ──────────────────────────────────────────────────── -->
     <section class="block panel-section">
       <div class="row between agent-list-hdr">
-        <!-- Each workspace row carries its own count now, so the header is a
-             plain section title rather than a running/total tally. -->
-        <!-- On a rail the heading names it: the list below is a subset, and
-             nothing else on screen would say so. -->
-        <label class="lbl">{{ workspaces?.length ? (activeRailName || $t('label.workspace')) : $t('label.active-agents', { running: runningCount, total: panes.length }) }}</label>
+        <!-- The title IS the mode switch: there is no room up here for both,
+             and a mode reads best as the two choices side by side. The rail's
+             name used to take this slot when one was picked; the rail row
+             highlights and names it already, so it no longer displaces the
+             title. Hidden in a detached window, which holds one workspace and
+             one run group — there is nothing for a flat list to flatten. -->
+        <div
+          v-if="workspaces?.length && !detachedWindow"
+          class="sidebar-mode"
+          role="group"
+          :aria-label="$t('label.sidebar-mode')"
+        >
+          <button
+            class="sidebar-mode-seg"
+            :class="{ on: !freeMode }"
+            :aria-pressed="!freeMode"
+            :title="$t('action.sidebar-mode-workspace')"
+            @click="emit('update:sidebarMode', 'workspace')"
+          >{{ $t('label.workspace') }}</button>
+          <button
+            class="sidebar-mode-seg"
+            :class="{ on: freeMode }"
+            :aria-pressed="freeMode"
+            :title="$t('action.sidebar-mode-free')"
+            @click="emit('update:sidebarMode', 'free')"
+          >{{ $t('label.sidebar-mode-free') }}</button>
+        </div>
+        <!-- No workspace to group by yet, so no mode to pick: the header stays
+             the running tally it has always been here. -->
+        <label v-else class="lbl">{{ workspaces?.length ? $t('label.workspace') : $t('label.active-agents', { running: runningCount, total: panes.length }) }}</label>
         <!-- Adds a WORKSPACE, not an agent: the per-workspace ＋ below opens
              an agent inside one. Always present — the section is a list of
              projects whether or not any is grouped yet. -->
@@ -3422,8 +3471,22 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <path :d="allWorkspacesCollapsed ? 'M4 9.5h5M6.5 7v5' : 'M4 9.5h5'" />
           </svg>
         </button>
+        <!-- Free mode has no workspace rows, so the ＋ those rows carry — the
+             sidebar's only way to open an agent — would be gone with them. It
+             moves up here and opens the same menu, in the workspace on screen.
+             Adopting another project stays available from the Window menu and
+             from Workspace mode. -->
         <button
-          v-if="!detachedWindow"
+          v-if="!detachedWindow && freeMode"
+          class="hdr-add-ws"
+          :disabled="!canSpawn"
+          :aria-expanded="addMenuOpen && addMenuWorkspace === workspacePath"
+          :title="canSpawn ? `${$t('action.new-agent-here')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"
+          :aria-label="$t('action.new-agent-here')"
+          @click.stop="toggleAddMenu($event, workspacePath)"
+        >＋</button>
+        <button
+          v-else-if="!detachedWindow"
           class="hdr-add-ws"
           :title="$t('action.open-workspace-picker')"
           :aria-label="$t('action.open-workspace-picker')"
@@ -3800,6 +3863,11 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
               Docked
             </span>
+            <span
+              v-if="foreignWorkspaceTag(p)"
+              class="ws-tag"
+              :title="p.workspacePath"
+            >{{ foreignWorkspaceTag(p) }}</span>
             <span class="expand-caret" aria-hidden="true">▶</span>
             <span class="agent-line-actions">
               <button
@@ -4882,6 +4950,32 @@ button.link {
 /* Title left, controls right: the row is space-between, and without this the
    ＋ lands in the middle of it. */
 .agent-list-hdr > .lbl { margin-right: auto; }
+.agent-list-hdr > .sidebar-mode { margin-right: auto; }
+/* Stands in for the header's title, so it is sized by the title's type scale
+   rather than by the 20×16 icon buttons beside it. */
+.sidebar-mode {
+  flex: none;
+  display: inline-flex;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+.sidebar-mode-seg {
+  border: none;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sidebar-mode-seg:hover { color: var(--text-bright); }
+.sidebar-mode-seg.on {
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+}
 .agent-list-hdr {
   position: sticky;
   top: 0;
@@ -6506,6 +6600,19 @@ button.icon-btn.muted:hover {
      the row's identity — to make room for context that repeats on the
      expanded card anyway. */
   flex-shrink: 4;
+}
+/* Free mode's "this pane is from another project" mark. Capped and unshrinkable
+   so a long folder name ellipses instead of eating the pane's own name, which
+   is the row's identity. */
+.ws-tag {
+  margin-left: auto;
+  flex-shrink: 0;
+  max-width: 72px;
+  font-size: var(--font-3xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .agent-line .minimized-tag {
   margin-left: auto;

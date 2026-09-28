@@ -147,15 +147,19 @@ describe('several workspaces in one window', () => {
     // over every pane in the window while the stage filtered by workspace.
     const start = appSource.indexOf('const stageTabShapes = computed')
     const shapes = appSource.slice(start, appSource.indexOf('\n)', start))
-    expect(shapes).toContain('panes: panesInView.value')
+    // panesOnStage IS panesInView in the default sidebar mode; free mode is the
+    // one case where the stage deliberately shows every workspace at once, and
+    // its tabs follow the same list so a count still matches what opens.
+    expect(shapes).toContain('panes: panesOnStage.value')
     expect(shapes).not.toContain('panes: panes.value')
+    expect(appSource).toContain('sidebarMode.value === \'free\' ? panes.value : panesInView.value')
     // The synthetic tab's label was hard-coded Chinese, so an English UI
     // showed a Chinese tab. The key had existed all along.
     expect(shapes).toContain("manualLabel: i18n.global.t('label.manual')")
     // And the grid filter narrows the same source rather than rebuilding it.
     const gStart = appSource.indexOf('const tabFilteredPaneIds = computed')
     const grid = appSource.slice(gStart, appSource.indexOf('\n)', gStart))
-    expect(grid).toContain('panesOfActiveTab(panesInView.value')
+    expect(grid).toContain('panesOfActiveTab(panesOnStage.value')
   })
 
   it('keeps the sweeping actions inside the workspace on screen', () => {
@@ -414,7 +418,10 @@ describe('several workspaces in one window', () => {
     const start = appSource.indexOf('const effectiveFocusPaneId = computed')
     expect(start).toBeGreaterThan(-1)
     const body = appSource.slice(start, appSource.indexOf('\n)', start))
-    expect(body).toContain('panesInView.value')
+    // panesOnStage is panesInView unless the sidebar is in free mode, where the
+    // stage draws every workspace — still "what the screen can render", which is
+    // the property this guards.
+    expect(body).toContain('panesOnStage.value')
     expect(body).not.toContain('panes.value')
   })
 

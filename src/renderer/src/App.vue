@@ -18,6 +18,7 @@ import { panesOfActiveTab, panesOfViewedWorkspace } from './lib/paneVisibility'
 import { buildStageTabs } from './lib/stageTabs'
 import { schedulePrewarm } from './lib/prewarm'
 import { flattenSidebarOrder, resolveFocusedPane } from './lib/paneFocus'
+import { parseSidebarMode, SIDEBAR_MODE_KEY, type SidebarMode } from './lib/sidebarMode'
 import { formatBytes } from './lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/resourceSampling'
 import { cliRiskKey, useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
@@ -16513,11 +16514,41 @@ const panesInView = computed<readonly ActivePane[]>(() =>
   panesOfViewedWorkspace(panes.value, extraWorkspaces.value)
 )
 
+/* ── Sidebar mode ─────────────────────────────────────────────────────────
+ *
+ *  Global and persisted, like gridPreset below: how you like to look at the
+ *  list should outlive the window, unlike which rail is picked.
+ *
+ *  Seeded synchronously from the settings cache, which the window fills from
+ *  its bootstrap snapshot before first paint, so the sidebar draws the right
+ *  shape on the first frame rather than flipping a beat later.
+ *
+ *  A detached window pins itself to 'workspace': it holds one workspace and one
+ *  run group, so it hides the switch — and a window with no way to change a
+ *  setting must not be reshaped by it either. */
+const sidebarMode = ref<SidebarMode>(
+  isDetachedWindow ? 'workspace' : parseSidebarMode(settingsGet(SIDEBAR_MODE_KEY, 'workspace'))
+)
+watch(sidebarMode, (v) => settingsSet(SIDEBAR_MODE_KEY, v))
+
+/** The panes the STAGE may draw. Free mode drops the workspace layer, so the
+ *  grid and its tabs show every pane this window runs — otherwise the sidebar
+ *  would list panes that clicking cannot open.
+ *
+ *  Deliberately separate from panesInView, which stays "the workspace on
+ *  screen" and keeps every owning action pointed at one project: closing a
+ *  workspace, kill-all, the pane-order write and the run-group edits all read
+ *  it, and a mode that is only a way of looking must not widen what they
+ *  destroy or file under the wrong path. */
+const panesOnStage = computed<readonly ActivePane[]>(() =>
+  sidebarMode.value === 'free' ? panes.value : panesInView.value
+)
+
 const stageTabShapes = computed<StageTabShape[]>(() =>
   // Structure, not stageTabs: no live status is read, so a status dot ticking
   // does not rebuild the strip.
   buildStageTabs({
-    panes: panesInView.value,
+    panes: panesOnStage.value,
     groups: runGroups.value,
     isDetached: isDetachedWindow,
     detachedGroupId,
@@ -16678,7 +16709,7 @@ async function runRunGroupCtxAction(
 const tabFilteredPaneIds = computed<Set<string>>(() =>
   // Structure, not stageTabs: this drives pane visibility and grid sizing, and
   // must not re-run when a status dot ticks.
-  panesOfActiveTab(panesInView.value, {
+  panesOfActiveTab(panesOnStage.value, {
     hasTabs: stageTabShapes.value.length > 0,
     activeTab: activeTab.value,
     groupIds: runGroups.value.map((g) => g.id),
@@ -17107,6 +17138,10 @@ async function openWorkspaceFromPicker(path: string): Promise<void> {
  *  overview, the history modal, a message notification) and every one of them
  *  can name a pane in a workspace that is not on screen. */
 async function ensurePaneWorkspaceOnScreen(paneId: string): Promise<boolean> {
+  // Free mode already draws every workspace's panes, so there is nothing to
+  // bring on screen — and switching anyway would swap the whole stage under a
+  // user who asked only to focus one row.
+  if (sidebarMode.value === 'free') return true
   const target = panes.value.find((p) => p.id === paneId)?.workspacePath ?? ''
   if (!target || !isLocalWorkspace(target)) return true
   if (normWs(target) === normWs(currentWorkspace.value)) return true
@@ -17846,7 +17881,11 @@ function rangeSelectPanes(toId: string, orderedIds?: string[]): void {
  *
  *  STRUCTURE LAYER: workspaceGroups and its lineages, never paneViews. */
 const sidebarOrderedPaneIds = computed<string[]>(() =>
-  flattenSidebarOrder(workspaceGroups.value)
+  // Free mode renders one flat list of the whole lineage, with no workspace
+  // sections to walk in turn — so that IS the order the eye sees.
+  sidebarMode.value === 'free'
+    ? flattenSidebarOrder([{ isCurrent: true, lineage: paneLineage.value }])
+    : flattenSidebarOrder(workspaceGroups.value)
 )
 
 async function onSidebarFocusPane(paneId: string, ev?: MouseEvent): Promise<void> {
@@ -18820,9 +18859,9 @@ function onGridHandleEnd(): void {
 
 // Resolved focus pane: skips minimized panes, falls back to first visible
 const effectiveFocusPaneId = computed(() =>
-  // Of the workspace on screen — naming a pane from another one renders
+  // Of the panes the stage can draw — naming one it filters out renders
   // nothing at all, since sidebar and spotlight draw this pane and no other.
-  resolveFocusedPane(focusPaneId.value, panesInView.value, minimizedPanes.value)
+  resolveFocusedPane(focusPaneId.value, panesOnStage.value, minimizedPanes.value)
 )
 
 // ── Dual-focus: show 2 running panes side-by-side in non-grid modes ───────────
@@ -19564,6 +19603,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :reclaimable-by-workspace="reclaimableByWorkspace"
       :rebuilding-all="rebuildingTabPanes"
       :detached-window="isDetachedWindow"
+      v-model:sidebar-mode="sidebarMode"
       @spawn="onManualSpawn"
       @spawn-resume="onManualResume"
       @kill="onKill"

@@ -65,8 +65,11 @@ describe('workspace switch — how the parts fit together', () => {
   it('renders and focuses from the same filtered list', () => {
     // A focused pane the render set excludes shows an empty main area beside a
     // full agent list.
+    // Both read the SAME list — panesOnStage, which is panesInView except in
+    // free mode, where the stage widens to every workspace and they widen
+    // together.
     for (const name of ['effectiveFocusPaneId', 'tabFilteredPaneIds']) {
-      expect(body(name, '\n})'), name).toContain('panesInView.value')
+      expect(body(name, '\n})'), name).toContain('panesOnStage.value')
     }
   })
 
@@ -102,14 +105,25 @@ describe('workspace switch — how the parts fit together', () => {
       'panesOfViewedWorkspace(panes.value, extraWorkspaces.value)',
     )
 
+    // The view layer reads panesOnStage, which collapses to panesInView in every
+    // mode but free — so the identity return still carries through it.
+    expect(body('panesOnStage', '\n)')).toContain(
+      "sidebarMode.value === 'free' ? panes.value : panesInView.value",
+    )
+
     for (const [name, end] of [
       ['effectiveFocusPaneId', '\n)'],
       ['tabFilteredPaneIds', '\n)'],
       ['stageTabShapes', '\n)'],
-      ['onKillAll', undefined],
-      ['persistPaneOrder', undefined],
     ] as const) {
       const b = body(name, end)
+      expect(b, name).toContain('panesOnStage.value')
+      expect(b, name).not.toContain('panes.value')
+    }
+
+    // The owning actions never widen: they act on one project in every mode.
+    for (const name of ['onKillAll', 'persistPaneOrder'] as const) {
+      const b = body(name)
       expect(b, name).toContain('panesInView.value')
       expect(b, name).not.toContain('panes.value')
     }
