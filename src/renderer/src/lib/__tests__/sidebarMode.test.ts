@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseSidebarMode, SIDEBAR_MODE_KEY } from '../sidebarMode'
+import { countUntouchedElsewhere, parseSidebarMode, SIDEBAR_MODE_KEY } from '../sidebarMode'
 
 describe('parseSidebarMode', () => {
   it('reads the two stored spellings', () => {
@@ -18,5 +18,24 @@ describe('parseSidebarMode', () => {
 
   it('stores under the global ui_settings key, like the grid preset', () => {
     expect(SIDEBAR_MODE_KEY).toBe('agentTeam.sidebarMode')
+  })
+})
+
+describe('countUntouchedElsewhere', () => {
+  const stage = [
+    { id: 'a', group: 'g1' },
+    { id: 'b', group: 'g1' },
+    { id: 'x', group: 'g1' },
+    { id: 'y', group: 'g2' },
+  ]
+  const inView = [{ id: 'a' }, { id: 'b' }]
+
+  it('counts the aimed-at panes on the stage that the workspace on screen does not own', () => {
+    expect(countUntouchedElsewhere(stage, inView, (p) => p.group === 'g1')).toBe(1)
+    expect(countUntouchedElsewhere(stage, inView, () => true)).toBe(2)
+  })
+
+  it('is zero when the stage and the workspace on screen agree', () => {
+    expect(countUntouchedElsewhere(inView, inView, () => true)).toBe(0)
   })
 })

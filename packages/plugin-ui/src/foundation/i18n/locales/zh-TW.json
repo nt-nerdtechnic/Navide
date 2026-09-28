@@ -7508,7 +7508,8 @@
     "close-running-confirm-confirm": "關閉",
     "remove-panes": "移除此群組的 CLI（{count}）",
     "move-to-group": "移到其他分組",
-    "close-all-panes": "關閉所有 pane"
+    "close-all-panes": "關閉所有 pane",
+    "free-mode-untouched": "只作用於目前的工作區：其他工作區的 {count} 個 pane 維持原狀。"
   },
   "status": {
     "not-git-repo": "非 Git 儲存庫",

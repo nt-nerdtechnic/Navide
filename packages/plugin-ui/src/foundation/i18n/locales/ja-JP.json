@@ -7508,7 +7508,8 @@
     "close-running-confirm-confirm": "閉じる",
     "remove-panes": "このグループの CLI を削除 ({count})",
     "move-to-group": "別のグループに移動",
-    "close-all-panes": "すべてのペインを閉じる"
+    "close-all-panes": "すべてのペインを閉じる",
+    "free-mode-untouched": "現在のワークスペースにのみ適用しました。他のワークスペースの {count} 個のペインはそのままです。"
   },
   "status": {
     "not-git-repo": "Git リポジトリではありません",

@@ -24,3 +24,15 @@ export const SIDEBAR_MODE_KEY = 'agentTeam.sidebarMode'
 export function parseSidebarMode(value: unknown): SidebarMode {
   return value === 'free' ? 'free' : 'workspace'
 }
+
+/** How many of the panes an action was aimed at are on the stage but outside
+ *  the workspace on screen — the ones free mode draws and owning actions,
+ *  which stay on that one workspace, leave alone. */
+export function countUntouchedElsewhere<P extends { id: string }>(
+  onStage: readonly P[],
+  inView: readonly { id: string }[],
+  aimedAt: (pane: P) => boolean
+): number {
+  const here = new Set(inView.map((p) => p.id))
+  return onStage.filter((p) => !here.has(p.id) && aimedAt(p)).length
+}

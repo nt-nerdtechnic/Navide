@@ -18,7 +18,7 @@ import { panesOfActiveTab, panesOfViewedWorkspace } from './lib/paneVisibility'
 import { buildStageTabs } from './lib/stageTabs'
 import { schedulePrewarm } from './lib/prewarm'
 import { flattenSidebarOrder, resolveFocusedPane } from './lib/paneFocus'
-import { parseSidebarMode, SIDEBAR_MODE_KEY, type SidebarMode } from './lib/sidebarMode'
+import { countUntouchedElsewhere, parseSidebarMode, SIDEBAR_MODE_KEY, type SidebarMode } from './lib/sidebarMode'
 import { formatBytes } from './lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/resourceSampling'
 import { cliRiskKey, useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
@@ -243,7 +243,7 @@ import {
   type RestoreSessionTrigger,
   type WorkspaceRestoreSession,
 } from './lib/resumeBehavior'
-import { flushSettingsOnExit, initSettingsBackend, settingsGet, settingsRemove, settingsSet } from '@navide/plugin-ui/shared'
+import { flushSettingsOnExit, initSettingsBackend, onSettingsChanged, settingsGet, settingsRemove, settingsSet } from '@navide/plugin-ui/shared'
 import { cliPermissionKey, parseCliPermissionMode, skipPermissionFlagFor } from '@navide/plugin-shell'
 import { chooseLaunchCommand, cliCommandKey, cliEnvKey, spawnEnvOverride, type LaunchCommandSource } from '@navide/plugin-shell'
 import { useLayoutStore } from './layout/useLayoutStore'
@@ -7875,7 +7875,18 @@ async function rebuildPanesViaResume(
     .filter((p) => p.realized && (scope === 'all' || tabFilteredPaneIds.value.has(p.id)) && paneCanRebuild(p))
     .filter((p) => !onlyPaneIds || onlyPaneIds.includes(p.id))
     .map((pane) => pane.id)
-  if (!ids.length) return
+  // Only the toolbar and tab strip aim at the stage itself; a heading or a
+  // run group's menu names its own panes and notes for itself.
+  const noteUntouched = (): void => {
+    if (workspacePath || onlyPaneIds) return
+    noteOtherWorkspacesUntouched(
+      (p) => p.realized && (scope === 'all' || tabFilteredPaneIds.value.has(p.id)) && paneCanRebuild(p)
+    )
+  }
+  if (!ids.length) {
+    noteUntouched()
+    return
+  }
   // The rebuild-all buttons hit every pane at once, so they always confirm:
   // the running-pane dialog when some are mid-turn (its cancel means "skip the
   // busy ones", not "abort"), a plain one otherwise — even idle panes lose
@@ -7905,6 +7916,7 @@ async function rebuildPanesViaResume(
   } finally {
     rebuildingTabPanes.value = false
   }
+  noteUntouched()
   if (busyCount > 0) {
     notifyRestore.toast(
       i18n.global.t('pane.terminal.rebuild-busy-skipped-batch', { count: busyCount }),
@@ -16433,6 +16445,7 @@ async function closeRunGroup(id: string, keepGroup = false): Promise<void> {
     await onPipelineAbort()
   }
   for (const p of [...affected]) await onKill(p.id)
+  noteOtherWorkspacesUntouched((p) => (id === 'manual' ? !p.runGroupId : p.runGroupId === id))
   if (id !== 'manual' && !keepGroup) {
     runGroups.value = runGroups.value.filter((g) => g.id !== id)
     if (currentRunGroupId.value === id) currentRunGroupId.value = ''
@@ -16529,7 +16542,16 @@ const panesInView = computed<readonly ActivePane[]>(() =>
 const sidebarMode = ref<SidebarMode>(
   isDetachedWindow ? 'workspace' : parseSidebarMode(settingsGet(SIDEBAR_MODE_KEY, 'workspace'))
 )
-watch(sidebarMode, (v) => settingsSet(SIDEBAR_MODE_KEY, v))
+watch(sidebarMode, (v) => {
+  if (settingsGet(SIDEBAR_MODE_KEY, 'workspace') !== v) settingsSet(SIDEBAR_MODE_KEY, v)
+})
+// Follow a switch made in another window live. The write guard above keeps
+// this from echoing it back; a detached window stays pinned.
+if (!isDetachedWindow) {
+  onUnmounted(onSettingsChanged((keys) => {
+    if (keys.includes(SIDEBAR_MODE_KEY)) sidebarMode.value = parseSidebarMode(settingsGet(SIDEBAR_MODE_KEY, 'workspace'))
+  }))
+}
 
 /** The panes the STAGE may draw. Free mode drops the workspace layer, so the
  *  grid and its tabs show every pane this window runs — otherwise the sidebar
@@ -16543,6 +16565,16 @@ watch(sidebarMode, (v) => settingsSet(SIDEBAR_MODE_KEY, v))
 const panesOnStage = computed<readonly ActivePane[]>(() =>
   sidebarMode.value === 'free' ? panes.value : panesInView.value
 )
+
+/** Free mode draws other workspaces' panes on this stage, while the actions
+ *  that own or destroy panes stay on panesInView. After one of them, say how
+ *  many of the panes it was aimed at it left alone, so a tab still showing
+ *  them does not read as an action that silently half-failed. */
+function noteOtherWorkspacesUntouched(aimedAt: (p: ActivePane) => boolean): void {
+  if (sidebarMode.value !== 'free') return
+  const count = countUntouchedElsewhere(panesOnStage.value, panesInView.value, aimedAt)
+  if (count > 0) notifyRestore.toast(i18n.global.t('stageTab.free-mode-untouched', { count }), { type: 'info' })
+}
 
 const stageTabShapes = computed<StageTabShape[]>(() =>
   // Structure, not stageTabs: no live status is read, so a status dot ticking
@@ -16616,7 +16648,11 @@ function runGroupPanes(workspacePath: string, key: string): ActivePane[] {
   const pool = normWs(workspacePath) === normWs(currentWorkspace.value)
     ? panesInView.value
     : panes.value.filter((p) => normWs(p.workspacePath) === normWs(workspacePath))
-  return pool.filter((p) => (key === 'manual' ? !p.runGroupId : p.runGroupId === key))
+  return pool.filter((p) => inRunGroup(p, key))
+}
+
+function inRunGroup(p: ActivePane, key: string): boolean {
+  return key === 'manual' ? !p.runGroupId : p.runGroupId === key
 }
 
 function runGroupReclaimableIds(workspacePath: string, key: string): string[] {
@@ -16664,10 +16700,15 @@ async function runRunGroupCtxAction(
     // where runGroupPanes found them.
     const here = normWs(m.workspacePath) === normWs(currentWorkspace.value)
     await rebuildPanesViaResume('all', here ? undefined : m.workspacePath, ids)
+    if (here) noteOtherWorkspacesUntouched((p) => inRunGroup(p, m.key) && p.realized && paneCanRebuild(p))
     return
   }
   if (action === 'reclaim') {
     const ids = runGroupReclaimableIds(m.workspacePath, m.key)
+    if (normWs(m.workspacePath) === normWs(currentWorkspace.value)) {
+      const reclaimable = new Set(reclaimableNowIds.value)
+      noteOtherWorkspacesUntouched((p) => inRunGroup(p, m.key) && reclaimable.has(p.id))
+    }
     if (ids.length && (await reclaimPanesNow(ids))) return
     notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
     return

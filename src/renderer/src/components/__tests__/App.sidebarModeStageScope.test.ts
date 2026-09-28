@@ -85,8 +85,28 @@ describe('free mode widens the stage, not the owning actions', () => {
   })
 
   it('persists the mode globally and pins a detached window to workspace', () => {
-    expect(appSource).toContain('watch(sidebarMode, (v) => settingsSet(SIDEBAR_MODE_KEY, v))')
     const seed = appSource.slice(appSource.indexOf('const sidebarMode = ref<SidebarMode>('))
     expect(seed.slice(0, 300)).toContain("isDetachedWindow ? 'workspace'")
+    // Written only when it differs from the cache, so following another
+    // window's change does not echo it back as a write of our own.
+    expect(seed).toMatch(/watch\(sidebarMode, \(v\) => \{\s*if \(settingsGet\(SIDEBAR_MODE_KEY, 'workspace'\) !== v\) settingsSet\(SIDEBAR_MODE_KEY, v\)/)
+  })
+
+  it('follows a mode changed in another window, except in a detached one', () => {
+    const at = appSource.indexOf('onSettingsChanged(')
+    expect(at).toBeGreaterThan(-1)
+    const sub = appSource.slice(at - 200, at + 400)
+    expect(sub).toContain('!isDetachedWindow')
+    expect(sub).toContain('keys.includes(SIDEBAR_MODE_KEY)')
+    expect(sub).toContain('parseSidebarMode(settingsGet(SIDEBAR_MODE_KEY')
+  })
+
+  it('says how many panes on the stage an owning action left alone in free mode', () => {
+    const note = body(appSource, 'noteOtherWorkspacesUntouched')
+    expect(note).toContain("sidebarMode.value !== 'free'")
+    expect(note).toContain('countUntouchedElsewhere(panesOnStage.value, panesInView.value')
+    for (const fn of ['closeRunGroup', 'rebuildPanesViaResume', 'runRunGroupCtxAction']) {
+      expect(body(appSource, fn), fn).toContain('noteOtherWorkspacesUntouched(')
+    }
   })
 })

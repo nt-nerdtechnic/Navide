@@ -7508,7 +7508,8 @@
     "close-running-confirm-confirm": "Close",
     "remove-panes": "Remove this group's CLIs ({count})",
     "move-to-group": "Move to another group",
-    "close-all-panes": "Close all panes"
+    "close-all-panes": "Close all panes",
+    "free-mode-untouched": "Only the current workspace was affected: {count} pane(s) from other workspaces were left as they are."
   },
   "status": {
     "not-git-repo": "Not a Git repository",
