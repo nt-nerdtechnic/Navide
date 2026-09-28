@@ -141,6 +141,20 @@ describe('ControlPane – sidebar mode switch', () => {
     expect(wrapper.find('.sidebar-mode').exists()).toBe(false)
   })
 
+  it('keeps the ＋ last in the header, whatever else the row carries', () => {
+    // "Add" sits at the far right by the user's decision, so the ＋ must stay
+    // after the fallback's rebuild-all/history pair in DOM order — the row is a
+    // plain flex line, so that order IS the placement.
+    wrapper = mountPane({ workspaces: [] })
+    const controls = [...wrapper.element.querySelectorAll('.agent-list-hdr > *')]
+    expect(controls.at(-1)?.classList.contains('hdr-add-ws')).toBe(true)
+
+    wrapper.unmount()
+    wrapper = mountPane({ workspaces: [workspaceRow(HERE, ['p-here'])], sidebarMode: 'free' })
+    const free = [...wrapper.element.querySelectorAll('.agent-list-hdr > *')]
+    expect(free.at(-1)?.classList.contains('hdr-add-ws')).toBe(true)
+  })
+
   it('hides the switch in a detached window, which holds one workspace', () => {
     wrapper = mountPane({
       workspaces: [workspaceRow(HERE, ['p-here'])],

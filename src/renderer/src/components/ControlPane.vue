@@ -3471,27 +3471,6 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <path :d="allWorkspacesCollapsed ? 'M4 9.5h5M6.5 7v5' : 'M4 9.5h5'" />
           </svg>
         </button>
-        <!-- Free mode has no workspace rows, so the ＋ those rows carry — the
-             sidebar's only way to open an agent — would be gone with them. It
-             moves up here and opens the same menu, in the workspace on screen.
-             Adopting another project stays available from the Window menu and
-             from Workspace mode. -->
-        <button
-          v-if="!detachedWindow && freeMode"
-          class="hdr-add-ws"
-          :disabled="!canSpawn"
-          :aria-expanded="addMenuOpen && addMenuWorkspace === workspacePath"
-          :title="canSpawn ? `${$t('action.new-agent-here')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"
-          :aria-label="$t('action.new-agent-here')"
-          @click.stop="toggleAddMenu($event, workspacePath)"
-        >＋</button>
-        <button
-          v-else-if="!detachedWindow"
-          class="hdr-add-ws"
-          :title="$t('action.open-workspace-picker')"
-          :aria-label="$t('action.open-workspace-picker')"
-          @click="emit('open-workspace-picker')"
-        >＋</button>
         <!-- Both of these act on one workspace's panes, so once the list is
              grouped they belong on that workspace's own row. This is the
              ungrouped fallback. -->
@@ -3508,6 +3487,28 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           </button>
           <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')"><HistoryIcon /></button>
         </div>
+        <!-- The ＋ is last in the row, so "add" sits at the far right whatever
+             else the header is carrying. In free mode there are no workspace
+             rows, so the ＋ those rows carry — the sidebar's only way to open an
+             agent — would be gone with them; it opens the same menu here, in the
+             workspace on screen. Adopting another project stays available from
+             the Window menu and from Workspace mode. -->
+        <button
+          v-if="!detachedWindow && freeMode"
+          class="hdr-add-ws"
+          :disabled="!canSpawn"
+          :aria-expanded="addMenuOpen && addMenuWorkspace === workspacePath"
+          :title="canSpawn ? `${$t('action.new-agent-here')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"
+          :aria-label="$t('action.new-agent-here')"
+          @click.stop="toggleAddMenu($event, workspacePath)"
+        >＋</button>
+        <button
+          v-else-if="!detachedWindow"
+          class="hdr-add-ws"
+          :title="$t('action.open-workspace-picker')"
+          :aria-label="$t('action.open-workspace-picker')"
+          @click="emit('open-workspace-picker')"
+        >＋</button>
       </div>
       <!-- Only the ungrouped list swaps itself out for the empty message. A
            grouped one keeps its workspace rows and puts the message under the
