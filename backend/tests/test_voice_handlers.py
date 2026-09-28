@@ -384,16 +384,21 @@ async def _speak_in_step(session: _Session, sid: str, blocks: range, timeout: fl
     partials have caught up. _speak's pace is wall-clock, so how much audio a
     partial takes in depends on the machine (and on Windows' 15.6 ms clock);
     the window size scales with it."""
-    rec = voice_handlers._active
-    assert rec is not None
     for i in blocks:
         await _speak(session, sid, range(i, i + 1), pause=0.0)
         if (i - blocks.start) % 2 == 0:
             continue
-        deadline = time.monotonic() + timeout
-        while voice_handlers._partial_due(rec) or (rec.partial is not None and not rec.partial.done()):
-            assert time.monotonic() < deadline, "partials did not catch up"
-            await asyncio.sleep(0.01)
+        await _catch_up(timeout)
+
+
+async def _catch_up(timeout: float = 5.0) -> None:
+    """Wait until a partial has heard all the audio sent so far and landed."""
+    rec = voice_handlers._active
+    assert rec is not None
+    deadline = time.monotonic() + timeout
+    while voice_handlers._partial_due(rec) or (rec.partial is not None and not rec.partial.done()):
+        assert time.monotonic() < deadline, "partials did not catch up"
+        await asyncio.sleep(0.01)
 
 
 def _partials(session: _Session) -> list[dict]:
@@ -522,8 +527,11 @@ async def test_skewed_boundaries_neither_drop_nor_repeat_words(
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
     await _speak(session, sid, range(48))
-    await asyncio.sleep(0.2)
-    await _settle(session)
+    # Partials run on the wall clock: on a slow machine the speech can end
+    # before any hypothesis has trusted boundaries to commit by (the window
+    # then ends inside a clause, whose skewed timestamps collapse). The one
+    # that hears all of it must land before the streaming state is checked.
+    await _catch_up()
     committed = [p["committed"] for p in _partials(session)]
     assert committed[-1] and voice_handlers._active.win_start > 0
     assert all(b.startswith(a) for a, b in zip(committed, committed[1:]))
