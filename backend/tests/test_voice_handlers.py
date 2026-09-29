@@ -259,6 +259,29 @@ async def test_prewarm_reports_missing_parts(voice: Path, monkeypatch: pytest.Mo
     assert stt_service.peek_sidecar() is None or not stt_service.peek_sidecar().running
 
 
+async def test_prewarm_logs_its_outcome_at_info(
+    voice: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    def lines() -> list[str]:
+        return [r.getMessage() for r in caplog.records if r.getMessage().startswith("voice.prewarm")]
+
+    with caplog.at_level("INFO", logger=voice_handlers.__name__):
+        assert (await call(_Session(), "voice.prewarm"))["ok"] is True
+        assert (await call(_Session(), "voice.prewarm"))["ok"] is True
+        monkeypatch.setattr(stt_service, "model_info", lambda: {"present": False, "bytes": 0, "path": "m"})
+        await call(_Session(), "voice.prewarm")
+    assert len(lines()) == 3
+    assert lines()[0].startswith("voice.prewarm: ready was_running=False took_ms=")
+    assert lines()[1].startswith("voice.prewarm: ready was_running=True took_ms=")
+    assert lines()[2] == "voice.prewarm: not ready reason=model-missing"
+
+
+async def test_a_cold_start_is_logged(voice: Path, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("INFO", logger=voice_handlers.__name__):
+        assert (await call(_Session(), "voice.start"))["ok"] is True
+    assert any(r.getMessage().startswith("voice.start: sidecar cold") for r in caplog.records)
+
+
 async def test_shutdown_stops_the_sidecar_and_drops_the_recording(voice: Path) -> None:
     session = _Session()
     sid = (await call(session, "voice.start"))["sessionId"]

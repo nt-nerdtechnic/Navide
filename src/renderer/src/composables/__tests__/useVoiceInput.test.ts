@@ -101,6 +101,30 @@ describe('useVoiceInput — capsule state machine', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
+  it('engineLoading holds from the mic opening until voice.start answers (a cold sidecar), audio buffered meanwhile', async () => {
+    const h = harness()
+    let answer: ((r: { ok: boolean; payload: never }) => void) | null = null
+    const base = h.deps.request
+    h.deps.request = (type, payload, timeoutMs) =>
+      type === 'voice.start'
+        ? new Promise((resolve) => { h.requests.push({ type, payload }); answer = resolve })
+        : base(type, payload, timeoutMs)
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    expect(v.state.phase).toBe('recording')
+    expect(v.state.engineLoading).toBe(true)
+    h.onChunk!(Int16Array.from([1, 2]))
+    expect(types(h)).toEqual(['voice.start'])
+    answer!({ ok: true, payload: { ok: true, sessionId: 's1' } as never })
+    await settle()
+    expect(v.state.engineLoading).toBe(false)
+    expect(types(h)).toEqual(['voice.start', 'voice.chunk'])
+    v.cancel()
+    await settle()
+    expect(v.state.engineLoading).toBe(false)
+  })
+
   it('press → recording → release → transcribing → text inserted at once, no countdown', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)

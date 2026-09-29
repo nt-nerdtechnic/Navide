@@ -68,6 +68,9 @@ export interface VoiceCapsuleState {
   /** Name of the microphone recording this take ('' when unknown), so the
    *  capsule and the mic errors can say which device they mean. */
   deviceLabel: string
+  /** voice.start has not answered yet: the recognizer is still loading (a cold
+   *  sidecar), so speech is being buffered and no live text can appear. */
+  engineLoading: boolean
   /** i18n key under `voice.error.`, while phase === 'error'. `text` is a
    *  transcript the pane did not take: kept on screen until dismissed so it
    *  can be copied rather than lost. */
@@ -192,6 +195,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     level: 0,
     deviceFallback: false,
     deviceLabel: '',
+    engineLoading: false,
     error: null,
   })
   const visible = computed(() => state.phase !== 'idle')
@@ -248,6 +252,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     state.level = 0
     state.deviceFallback = false
     state.deviceLabel = ''
+    state.engineLoading = false
     state.error = null
   }
 
@@ -375,6 +380,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     // The mic opens at once; voice.start (possibly loading the sidecar) runs
     // alongside, and what is said meanwhile waits in `pending`.
     sessionReady = new Promise((resolve) => { sessionWaiter = resolve })
+    state.engineLoading = true
     const script = deps.script?.()
     deps.request<StartResult>('voice.start', script ? { script } : {}, START_TIMEOUT_MS).then(
       (res) => onStarted(mine, res),
@@ -419,6 +425,7 @@ export function useVoiceInput(deps: VoiceDeps) {
       if (sid) cancelSession(sid)
       return
     }
+    state.engineLoading = false
     if (!res.ok || !res.payload?.ok || !sid) return fail(`start-${res.payload?.reason ?? 'failed'}`)
     sessionId = sid
     mark('session')

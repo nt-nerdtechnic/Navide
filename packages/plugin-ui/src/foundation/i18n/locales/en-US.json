@@ -127,6 +127,7 @@
   "prewarm-failed": "Voice input is not ready: {reason}",
     "capsule": {
       "starting": "Preparing microphone…",
+      "engine-loading": "Voice engine starting… go ahead and speak, the text will appear shortly",
       "recording": "Listening — release to insert",
       "recording-hands-free": "Listening hands-free — press the shortcut again to insert",
       "cap-left": "{s}s left",

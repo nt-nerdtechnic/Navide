@@ -51,8 +51,11 @@ MODEL_URLS: tuple[str, ...] = (
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
 )
 
-# An idle sidecar holds the model (~150 MB); give it back after this long.
-IDLE_SHUTDOWN_S = 600.0
+# An idle sidecar holds the model; give it back after this long. Measured on
+# macOS (base model, Metal): ~185 MB resident right after loading, ~22 MB once
+# idle (the pages are compressed), so 30 minutes costs little and spares the
+# cold start (a shader compile, up to a minute) after a short break.
+IDLE_SHUTDOWN_S = 1800.0
 # Covers model load plus the Metal warm-up; the first run after an install
 # (or a whisper.cpp upgrade) compiles shaders and can take about a minute.
 READY_TIMEOUT_S = 120.0

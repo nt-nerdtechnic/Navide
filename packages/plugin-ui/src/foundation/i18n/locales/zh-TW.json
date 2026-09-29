@@ -127,6 +127,7 @@
   "prewarm-failed": "語音輸入尚未就緒：{reason}",
     "capsule": {
       "starting": "準備麥克風…",
+      "engine-loading": "語音引擎啟動中…可以先講，文字稍後出現",
       "recording": "錄音中，放開即填入",
       "recording-hands-free": "免持錄音中，再按一次快捷鍵填入",
       "cap-left": "剩 {s} 秒",

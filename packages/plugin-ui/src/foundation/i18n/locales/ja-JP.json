@@ -127,6 +127,7 @@
   "prewarm-failed": "音声入力の準備ができていません：{reason}",
     "capsule": {
       "starting": "マイクを準備中…",
+      "engine-loading": "音声エンジンを起動中…そのまま話してください。文字は少し遅れて表示されます",
       "recording": "録音中 — 離すと入力",
       "recording-hands-free": "ハンズフリーで録音中 — もう一度ショートカットで入力",
       "cap-left": "残り {s} 秒",

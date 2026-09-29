@@ -1,4 +1,4 @@
-import { onScopeDispose, ref, watch } from 'vue'
+import { onScopeDispose, ref, watch, type Ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import {
   evaluateWhen,
@@ -106,7 +106,10 @@ export function needsSoloHold(key: string): boolean {
 
 /** What the main window must hand over to wire voice input. */
 export interface VoiceWiringHost {
-  backend: Pick<ReturnType<typeof useBackend>, 'send' | 'on'>
+  backend: Pick<ReturnType<typeof useBackend>, 'send' | 'on'> & {
+    /** The socket's state: a pre-warm waits for 'connected' and re-runs on every reconnect. */
+    status?: Readonly<Ref<string>>
+  }
   /** The focused CLI pane right now, if any. */
   focusedPaneId: () => string | null
   /** A pane's messaging handle and whether a CLI is running behind it. */
@@ -492,8 +495,10 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   // ── Pre-warm ────────────────────────────────────────────────────────────────
   // Loading the sidecar takes seconds (up to a minute cold), so it is started
   // ahead of the first press: when the setting is on at launch, when it is
-  // switched on, and when the window regains focus (the sidecar exits after
-  // ten idle minutes). Switching the setting off stops it.
+  // switched on, when the window regains focus (the sidecar exits after thirty
+  // idle minutes), when the backend (re)connects (the window sets up before the
+  // socket is open, and a restarted backend has no sidecar) and when the speech
+  // model finishes downloading. Switching the setting off stops it.
   let lastPrewarm = 0
   // Said once per reason: focus re-runs the pre-warm every minute, and the
   // same failure every minute would be noise. A success clears it.
@@ -504,6 +509,9 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     host.hint?.(i18n.global.t('voice.prewarm-failed', { reason: i18n.global.t(voiceErrorI18nKey(code), { code }) }))
   }
   function prewarm(): void {
+    // Not connected: the request would only queue (and be rejected by a
+    // backend restart); the 'connected' watch below runs it instead.
+    if (host.backend.status && host.backend.status.value !== 'connected') return
     lastPrewarm = Date.now()
     host.backend.send('voice.prewarm', {}, PREWARM_TIMEOUT_MS).then(
       (res) => {
@@ -518,6 +526,18 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   function onFocus(): void {
     if (Date.now() - lastPrewarm >= PREWARM_FOCUS_INTERVAL_MS) prewarm()
   }
+
+  if (host.backend.status) {
+    watch(host.backend.status, (s) => {
+      if (s === 'connected' && settings.voiceInputEnabled.value) prewarm()
+    })
+  }
+  // The model arrived (Settings, or another window): load it now rather than
+  // during the first take.
+  const offModelProgress = host.backend.on('voice.model.progress', (raw) => {
+    const p = raw as { done?: boolean; error?: string } | null
+    if (p?.done && !p.error && settings.voiceInputEnabled.value) prewarm()
+  })
 
   watch(
     settings.voiceInputEnabled,
@@ -540,6 +560,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
 
   onScopeDispose(() => {
     offPartial()
+    offModelProgress()
     offRulesChanged()
     fnListen(false)
     offKeydownSeen()

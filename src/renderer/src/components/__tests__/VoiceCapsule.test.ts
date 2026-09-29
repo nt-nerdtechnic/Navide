@@ -19,6 +19,7 @@ function makeState(over: Partial<VoiceCapsuleState> = {}): VoiceCapsuleState {
     level: 0.5,
     deviceFallback: false,
     deviceLabel: '',
+    engineLoading: false,
     error: null,
     ...over,
   })
@@ -54,6 +55,24 @@ describe('VoiceCapsule live text', () => {
     await nextTick()
     expect(wrapper.get('.vc-committed').text()).toBe('幫我跑測試')
     expect(wrapper.get('.vc-tentative').text()).toBe('')
+  })
+
+  it('says the engine is starting while recording with no text yet, then gives way to the live text', async () => {
+    const state = makeState({ engineLoading: true })
+    wrapper = mount(VoiceCapsule, { props: { state }, global: { plugins: [i18n] } })
+    await nextTick()
+    expect(wrapper.get('.vc-loading').text()).toBe(i18n.global.t('voice.capsule.engine-loading'))
+    expect(wrapper.find('.vc-meter').exists()).toBe(true)
+
+    state.committed = 'hello'
+    await nextTick()
+    expect(wrapper.find('.vc-loading').exists()).toBe(false)
+    expect(wrapper.get('.vc-committed').text()).toBe('hello')
+
+    state.committed = ''
+    state.engineLoading = false
+    await nextTick()
+    expect(wrapper.find('.vc-loading').exists()).toBe(false)
   })
 
   it('an undelivered transcript stays readable with a Copy button', async () => {

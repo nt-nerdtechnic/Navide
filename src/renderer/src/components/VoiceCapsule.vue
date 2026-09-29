@@ -70,6 +70,9 @@ const isNotice = computed(() => props.state.phase === 'error' && props.state.err
 const hasLive = computed(() => (props.state.phase === 'recording' || props.state.phase === 'transcribing') &&
   (props.state.committed !== '' || props.state.tentative !== ''))
 
+// The recognizer is still loading: what is said is kept, its text follows.
+const engineWaiting = computed(() => props.state.phase === 'recording' && props.state.engineLoading && !hasLive.value)
+
 // A transcript the pane did not take stays here until dismissed; copying it
 // is the way to keep it.
 const copied = ref(false)
@@ -122,7 +125,8 @@ const errorText = computed(() => {
         <button type="button" class="vc-action" :aria-label="t('voice.capsule.dismiss')" @click="emit('dismiss')">✕</button>
       </template>
     </div>
-    <div v-if="hasLive" ref="liveEl" class="vc-live">
+    <div v-if="engineWaiting" class="vc-live vc-loading">{{ t('voice.capsule.engine-loading') }}</div>
+    <div v-else-if="hasLive" ref="liveEl" class="vc-live">
       <span class="vc-committed">{{ state.committed }}</span><span class="vc-tentative">{{ state.tentative }}</span>
     </div>
     <div v-else-if="state.phase === 'error' && state.error?.text" class="vc-live vc-kept">{{ state.error.text }}</div>
@@ -176,6 +180,7 @@ const errorText = computed(() => {
   scrollbar-width: none;
 }
 .vc-kept { user-select: text; pointer-events: auto; }
+.vc-loading { color: var(--text-secondary); }
 .vc-tentative { color: var(--text-secondary); opacity: 0.7; }
 .vc-hint {
   flex-shrink: 0;

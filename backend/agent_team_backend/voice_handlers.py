@@ -237,21 +237,26 @@ async def voice_prewarm(session: "Session", msg_id: str, msg_type: str, payload:
     """Load the sidecar ahead of the first press. Claims no recording."""
     global _disabled
     _disabled = False
+    began = time.monotonic()
+    sidecar = stt_service.peek_sidecar()
+    was_running = bool(sidecar and sidecar.running)
+
+    async def refuse(reason: str) -> None:
+        log.info("voice.prewarm: not ready reason=%s", reason)
+        await _reply(session, msg_id, msg_type, {"ok": False, "reason": reason})
+
     if await stt_service.run_blocking(stt_service.sidecar_path) is None:
-        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-missing"})
-        return
+        return await refuse("sidecar-missing")
     if not (await stt_service.run_blocking(stt_service.model_info))["present"]:
-        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "model-missing"})
-        return
+        return await refuse("model-missing")
     try:
         await stt_service.get_sidecar().ensure_started()
     except stt_service.SidecarError as err:
         log.warning("voice.prewarm: sidecar failed: %s", err)
-        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-failed"})
-        return
+        return await refuse("sidecar-failed")
     if await _switched_off():
-        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "disabled"})
-        return
+        return await refuse("disabled")
+    log.info("voice.prewarm: ready was_running=%s took_ms=%d", was_running, (time.monotonic() - began) * 1000)
     await _reply(session, msg_id, msg_type, {"ok": True})
 
 
@@ -319,6 +324,7 @@ async def voice_start(session: "Session", msg_id: str, msg_type: str, payload: d
         return
     sidecar = stt_service.peek_sidecar()
     if sidecar is None or not sidecar.running:
+        log.info("voice.start: sidecar cold; loading it during the take")
         await stt_service.run_blocking(_sweep_stale_pcm)
     rec = _Recording(id=uuid.uuid4().hex, owner=session)
     language = payload.get("language")
