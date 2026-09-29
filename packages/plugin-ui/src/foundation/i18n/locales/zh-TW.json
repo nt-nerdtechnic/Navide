@@ -277,7 +277,27 @@
     "open-workspace": "請先開啟工作區以使用 Git。",
     "settings-unavailable": "Git 偏好設定載入失敗。",
     "settings-retry": "重試",
-    "settings-retrying": "重試中…"
+    "settings-retrying": "重試中…",
+    "account-update-failed": "無法更新此工作區的 Git 帳號。",
+    "host-action-failed": "無法完成此操作。",
+    "detail-unavailable": "無法顯示詳細內容。",
+    "editor-open-failed": "無法開啟編輯器。",
+    "repo-outside-workspace": "此儲存庫位於工作區之外，無法在此開啟。",
+    "discovery-failed": "無法掃描儲存庫。",
+    "commit-failed": "提交失敗。",
+    "undo-failed": "復原失敗。",
+    "generation-failed": "產生訊息失敗。",
+    "auto-commit-lint-aborted": "自動提交已中止：偵測到 {count} 個 lint 錯誤",
+    "auto-commit-generate-failed": "自動提交已停止：無法產生訊息，變更仍保留在暫存區。",
+    "auto-commit-commit-failed": "自動提交失敗：{error} 變更仍保留在暫存區。",
+    "auto-commit-done": "已自動提交：{message}",
+    "close-confirm-body": "Git 有尚未儲存的輸入（提交訊息或開啟中的表單），要關閉並捨棄嗎？",
+    "close-confirm-title": "關閉 Git",
+    "close-confirm-button": "捨棄並關閉",
+    "clean-changed": "預覽之後未追蹤檔案有變動，未刪除任何檔案，請重新檢視後再試。",
+    "issue-back": "← 返回",
+    "issue-comment": "留言",
+    "issue-create": "建立"
   },
   "pane": {
     "git": {

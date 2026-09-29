@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onUnmounted, ref, watch } from 'vue'
 import { createPluginViewRuntimeClient, type JsonValue, type PluginDetailCloseDecision, type PluginDetailCloseRequest } from '@navide/plugin-sdk'
-import { useNotify } from '@navide/plugin-ui/foundation'
+import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
 import GitFileDetailPane from './GitFileDetailPane.vue'
@@ -85,9 +85,9 @@ watch(target, (next) => {
 async function openInEditor(filepath: string): Promise<void> {
   try {
     const outcome = await gitUi.openInEditor({ workspacePath: detailWorkspacePath.value, filepath })
-    if (!outcome.opened) notify.toast(outcome.error || 'Could not open editor', { type: 'error' })
+    if (!outcome.opened) notify.toast(outcome.error || i18n.global.t('git.editor-open-failed'), { type: 'error' })
   } catch (error) {
-    notify.toast(error instanceof Error ? error.message : 'Could not open editor', { type: 'error' })
+    notify.toast(error instanceof Error ? error.message : i18n.global.t('git.editor-open-failed'), { type: 'error' })
   }
 }
 const viewRuntime = createPluginViewRuntimeClient()
@@ -132,7 +132,7 @@ onUnmounted(() => {
     <BranchDiffPane v-if="target?.resource.kind === 'branch-comparison'" :workspace-path="detailWorkspacePath" :base="target.resource.base" :compare="target.resource.compare" :git-transport="gitTransport" :branch-diff="branchDiff" :git-status="gitStatus" :git-branches="gitBranches" />
     <GitFileDetailPane v-else-if="fileTarget" ref="filePane" :target="fileTarget" :workspace-path="detailWorkspacePath" :git-transport="gitTransport" :file-access="fileAccess" :file-log="fileLog" :commit-file-diff="commitFileDiff" :blame-file="blameFile" :diff-blame="diffBlame" @open-file="openInEditor" />
     <ConflictPane v-else-if="target?.resource.kind === 'merge-conflict'" ref="conflictPane" :workspace-path="detailWorkspacePath" :filepath="target.resource.filepath" :name="target.resource.filepath.split('/').at(-1) ?? target.resource.filepath" :git-transport="gitTransport" :file-access="fileAccess" :merge-aborted="!conflictLive" />
-    <p v-else class="git-detail-unavailable">Detail is unavailable.</p>
+    <p v-else class="git-detail-unavailable">{{ i18n.global.t('git.detail-unavailable') }}</p>
   </main>
 </template>
 

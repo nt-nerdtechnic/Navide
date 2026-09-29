@@ -1224,6 +1224,14 @@ async function onCleanUntracked(): Promise<void> {
   if (!ok) return
   isRunningExtra.value = true
   try {
+    // The confirmed list is a snapshot; delete only if it still describes what
+    // git would remove, so a file created meanwhile is never deleted unseen.
+    const recheck = await cleanUntracked(true)
+    if (!recheck.ok || recheck.files.length !== preview.files.length ||
+      recheck.files.some((file, index) => file !== preview.files[index])) {
+      notify.toast(t('git.clean-changed'), { type: 'error' })
+      return
+    }
     const r = await cleanUntracked(false)
     const removed = r.files.length || preview.files.length
     const doneMsg =

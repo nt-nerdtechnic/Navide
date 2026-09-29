@@ -277,7 +277,27 @@
     "open-workspace": "Open a workspace to use Git.",
     "settings-unavailable": "Git preferences could not be loaded.",
     "settings-retry": "Retry",
-    "settings-retrying": "Retrying…"
+    "settings-retrying": "Retrying…",
+    "account-update-failed": "Could not update the Git account for this workspace.",
+    "host-action-failed": "The action could not be completed.",
+    "detail-unavailable": "Detail is unavailable.",
+    "editor-open-failed": "Could not open the editor.",
+    "repo-outside-workspace": "This repository is outside the workspace and cannot be opened here.",
+    "discovery-failed": "Could not scan for repositories.",
+    "commit-failed": "Commit failed.",
+    "undo-failed": "Undo failed.",
+    "generation-failed": "Message generation failed.",
+    "auto-commit-lint-aborted": "Auto Commit aborted: {count} lint error(s) detected",
+    "auto-commit-generate-failed": "Auto Commit stopped: could not generate a message. Changes remain staged.",
+    "auto-commit-commit-failed": "Auto Commit failed: {error} Changes remain staged.",
+    "auto-commit-done": "Auto-committed: {message}",
+    "close-confirm-body": "Git has unsaved input (a commit message or an open form). Close and discard it?",
+    "close-confirm-title": "Close Git",
+    "close-confirm-button": "Discard and Close",
+    "clean-changed": "Untracked files changed since the preview. Nothing was deleted — review and try again.",
+    "issue-back": "← Back",
+    "issue-comment": "Comment",
+    "issue-create": "Create"
   },
   "pane": {
     "git": {

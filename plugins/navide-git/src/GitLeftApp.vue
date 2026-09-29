@@ -110,7 +110,8 @@ onUnmounted(() => {
 })
 
 async function dispatch(action: Parameters<PluginGitContributionHostPort['dispatch']>[0]): Promise<void> {
-  try { await props.hostPort.dispatch(action) } catch { /* Host action failures are scoped and fail closed. */ }
+  // The Host fails closed; the user still needs to know the action did not happen.
+  try { await props.hostPort.dispatch(action) } catch { notify.toast(t('git.host-action-failed'), { type: 'error' }) }
 }
 
 function isSafePackagePath(filepath: string): boolean {
@@ -119,8 +120,11 @@ function isSafePackagePath(filepath: string): boolean {
     filepath.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
 }
 
-function repositoryRef(repositoryPath: string): string | null {
-  const root = workspacePath === '/' ? '/' : workspacePath.replace(/\/+$/, '')
+function repositoryRef(rawRepositoryPath: string): string | null {
+  // Windows paths arrive with backslashes; compare in one separator form.
+  const repositoryPath = rawRepositoryPath.replace(/\\/g, '/')
+  const normalizedWorkspace = workspacePath.replace(/\\/g, '/')
+  const root = normalizedWorkspace === '/' ? '/' : normalizedWorkspace.replace(/\/+$/, '')
   if (!root) return null
   if (repositoryPath === root) return '.'
   const prefix = root === '/' ? '/' : `${root}/`
@@ -154,7 +158,8 @@ async function openDetailOrFallback(
 
 async function openBranchDetail(payload: { workspace_path: string; base: string; compare: string }): Promise<void> {
   const repository = repositoryRef(payload.workspace_path)
-  if (!payload.base || !repository) return
+  if (!payload.base) return
+  if (!repository) { notify.toast(t('git.repo-outside-workspace'), { type: 'error' }); return }
   const target: JsonValue = {
     resource: {
       kind: 'branch-comparison',
@@ -172,7 +177,8 @@ async function openBranchDetail(payload: { workspace_path: string; base: string;
 
 async function openFileDetail(payload: { workspace_path: string; filepath: string; staged: boolean; name: string; commit?: string }): Promise<void> {
   const repository = repositoryRef(payload.workspace_path)
-  if (!repository || !isSafePackagePath(payload.filepath)) return
+  if (!repository) { notify.toast(t('git.repo-outside-workspace'), { type: 'error' }); return }
+  if (!isSafePackagePath(payload.filepath)) { notify.toast(t('git.host-action-failed'), { type: 'error' }); return }
   await openDetailOrFallback(
     {
       contributionKey: branchDetailViewId,
@@ -184,7 +190,8 @@ async function openFileDetail(payload: { workspace_path: string; filepath: strin
 
 async function openConflictDetail(payload: { workspace_path: string; filepath: string; name: string }): Promise<void> {
   const repository = repositoryRef(payload.workspace_path)
-  if (!repository || !isSafePackagePath(payload.filepath)) return
+  if (!repository) { notify.toast(t('git.repo-outside-workspace'), { type: 'error' }); return }
+  if (!isSafePackagePath(payload.filepath)) { notify.toast(t('git.host-action-failed'), { type: 'error' }); return }
   await openDetailOrFallback(
     {
       contributionKey: branchDetailViewId,

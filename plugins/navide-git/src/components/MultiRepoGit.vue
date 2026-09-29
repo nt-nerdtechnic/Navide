@@ -49,7 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { confirm } = useNotify()
+const { confirm, toast } = useNotify()
 
 // Mounted panes register here so one close preparation can freeze them all.
 const paneRefs = new Map<string, PaneCloseGuard>()
@@ -63,6 +63,9 @@ const surfacePorts = props.surfacePorts
 const discovery = useRepoDiscovery(() => props.workspacePath, gitTransport)
 const repositories = props.repositorySource ?? discovery.repositories
 const { adopt } = discovery
+watch(discovery.discoveryFailed, (failed) => {
+  if (failed) toast(t('git.discovery-failed'), { type: 'error' })
+})
 
 // When root is not a git repo, inject it as the first tab so init/connect features remain accessible.
 const allTabs = computed(() => {
@@ -223,8 +226,8 @@ async function prepareClose(): Promise<
 > {
   if (closePrepared.value) return { accepted: false, reason: 'busy' }
   const result = await preparePaneClose([...paneRefs.values()], () => confirm(
-    'Git has unsaved input (a commit message or an open form). Close and discard it?',
-    { title: 'Close Git', confirmText: 'Discard and Close' },
+    t('git.close-confirm-body'),
+    { title: t('git.close-confirm-title'), confirmText: t('git.close-confirm-button') },
   ))
   if (result.accepted) closePrepared.value = true
   return result

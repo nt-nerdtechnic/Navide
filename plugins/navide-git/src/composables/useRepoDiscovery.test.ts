@@ -76,3 +76,47 @@ describe('useRepoDiscovery forced refresh ownership', () => {
     scope.stop()
   })
 })
+
+describe('useRepoDiscovery failure and Windows paths', () => {
+  it('flags a failed scan and clears the flag once a scan succeeds (MED-5)', async () => {
+    let fail = true
+    const send = vi.fn(async (type: string) => {
+      if (type !== 'git.discover_repositories') return { ok: true, payload: { branch: 'main', staged: [], unstaged: [], untracked: [] } }
+      return fail
+        ? { ok: false, payload: null, error: { code: 'BACKEND_ERROR', message: 'down' } }
+        : { ok: true, payload: { ok: true, repositories: [] } }
+    })
+    const transport = { send, on: () => () => undefined } as unknown as GitTransport
+    const scope = effectScope()
+    const discovery = scope.run(() => useRepoDiscovery(() => '/ws', transport))!
+    await flush()
+    expect(discovery.discoveryFailed.value).toBe(true)
+
+    fail = false
+    await discovery.refresh()
+    expect(discovery.discoveryFailed.value).toBe(false)
+    scope.stop()
+  })
+
+  it('re-scans on a git.changed event from a nested repository with backslash paths (MED-5)', async () => {
+    vi.useFakeTimers()
+    try {
+      let changed: ((payload: unknown) => void) | null = null
+      const send = vi.fn(async () => ({ ok: true, payload: { ok: true, repositories: [] } }))
+      const transport = {
+        send,
+        on: (type: string, cb: (payload: unknown) => void) => { if (type === 'git.changed') changed = cb; return () => undefined },
+      } as unknown as GitTransport
+      const scope = effectScope()
+      scope.run(() => useRepoDiscovery(() => 'C:\\ws', transport))
+      await vi.advanceTimersByTimeAsync(0)
+      const before = send.mock.calls.length
+      changed!({ workspace_path: 'C:\\ws\\sub' })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(send.mock.calls.length).toBeGreaterThan(before)
+      scope.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

@@ -12533,6 +12533,62 @@ describe('first-party Git private bridge', () => {
     expect(socket.sent.map((raw) => JSON.parse(raw).payload.credential?.token)).not.toContain('plugin-supplied')
   })
 
+  it('bounds the size of a temp preview file the Git view may open', async () => {
+    const { view, sent } = await openGitView()
+    const ok = await call(view, 'git.contribution', {
+      operation: 'open_temp_file', payload: { name: 'a.txt', content: 'x'.repeat(1024) },
+    })
+    expect(ok).toMatchObject({ ok: true })
+    const tooLarge = await call(view, 'git.contribution', {
+      operation: 'open_temp_file', payload: { name: 'big.txt', content: 'x'.repeat(10 * 1024 * 1024 + 1) },
+    }, 'git-big-temp')
+    expect(tooLarge).toMatchObject({ reqId: 'git-big-temp', ok: false, error: { code: 'BAD_REQUEST' } })
+    expect(sent.filter((entry) => JSON.stringify(entry).includes('big.txt'))).toEqual([])
+  })
+
+  it('keeps slow remote Git requests pending past the generic 10s deadline and still settles them', async () => {
+    const { mgr, view } = await openGitView()
+    mgr.setBackendWsUrl('ws://git-slow-remote-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    vi.useFakeTimers()
+    try {
+      let settled: unknown = null
+      const operation = call(view, 'git.request', {
+        type: 'git.push',
+        payload: { workspace_path: '/workspace', remote: 'origin', branch: 'main' },
+      }).then((response) => { settled = response; return response })
+      await vi.advanceTimersByTimeAsync(0)
+      const request = JSON.parse(socket.sent.at(-1)!) as { id: string; type: string }
+      expect(request.type).toBe('git.push')
+      // Interactive credential entry or a slow remote: the backend has not answered yet.
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(settled).toBeNull()
+      socket.receive({ id: request.id, type: request.type, ok: true, payload: { ok: true }, error: null, timestamp: '' })
+      await expect(operation).resolves.toMatchObject({ ok: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still expires a local Git read at the short deadline', async () => {
+    const { mgr, view } = await openGitView()
+    mgr.setBackendWsUrl('ws://git-local-timeout-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    vi.useFakeTimers()
+    try {
+      const operation = call(view, 'git.request', {
+        type: 'git.status',
+        payload: { workspace_path: '/workspace' },
+      })
+      await vi.advanceTimersByTimeAsync(25_000)
+      await expect(operation).resolves.toMatchObject({ ok: false, error: { code: 'BACKEND_ERROR' } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('preserves Git-native authentication when no Host credential is bound', async () => {
     const { mgr, view } = await openGitView()
     mgr.setBackendWsUrl('ws://git-credential-required-test')

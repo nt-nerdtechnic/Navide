@@ -277,7 +277,27 @@
     "open-workspace": "Git を使用するにはワークスペースを開いてください。",
     "settings-unavailable": "Git の設定を読み込めませんでした。",
     "settings-retry": "再試行",
-    "settings-retrying": "再試行中…"
+    "settings-retrying": "再試行中…",
+    "account-update-failed": "このワークスペースの Git アカウントを更新できませんでした。",
+    "host-action-failed": "操作を完了できませんでした。",
+    "detail-unavailable": "詳細を表示できません。",
+    "editor-open-failed": "エディターを開けませんでした。",
+    "repo-outside-workspace": "このリポジトリはワークスペース外のため、ここでは開けません。",
+    "discovery-failed": "リポジトリをスキャンできませんでした。",
+    "commit-failed": "コミットに失敗しました。",
+    "undo-failed": "取り消しに失敗しました。",
+    "generation-failed": "メッセージの生成に失敗しました。",
+    "auto-commit-lint-aborted": "自動コミットを中止しました：lint エラーが {count} 件あります",
+    "auto-commit-generate-failed": "自動コミットを停止しました：メッセージを生成できません。変更はステージされたままです。",
+    "auto-commit-commit-failed": "自動コミットに失敗しました：{error} 変更はステージされたままです。",
+    "auto-commit-done": "自動コミットしました：{message}",
+    "close-confirm-body": "Git に未保存の入力（コミットメッセージまたは開いているフォーム）があります。閉じて破棄しますか？",
+    "close-confirm-title": "Git を閉じる",
+    "close-confirm-button": "破棄して閉じる",
+    "clean-changed": "プレビュー後に未追跡ファイルが変わりました。何も削除していません。確認してもう一度お試しください。",
+    "issue-back": "← 戻る",
+    "issue-comment": "コメント",
+    "issue-create": "作成"
   },
   "pane": {
     "git": {
