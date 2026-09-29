@@ -391,8 +391,19 @@ async def _speak_in_step(session: _Session, sid: str, blocks: range, timeout: fl
         await _catch_up(timeout)
 
 
+async def _pause(session: _Session, sid: str, blocks: range) -> None:
+    """Send ``blocks`` of silence, as the mic keeps streaming after speech."""
+    pcm = base64.b64encode(bytes(BLOCK)).decode()
+    for i in blocks:
+        await app_module.handle_message(session, {  # type: ignore[arg-type]
+            "id": "c", "type": "voice.chunk", "payload": {"sessionId": sid, "seq": i, "pcm": pcm},
+        })
+
+
 async def _catch_up(timeout: float = 5.0) -> None:
-    """Wait until a partial has heard all the audio sent so far and landed."""
+    """Wait until no partial is due or running. A partial is due only once
+    _PARTIAL_MIN_NEW_BYTES are unheard, so up to that much of the audio sent
+    so far may still be unheard."""
     rec = voice_handlers._active
     assert rec is not None
     deadline = time.monotonic() + timeout
@@ -527,11 +538,15 @@ async def test_skewed_boundaries_neither_drop_nor_repeat_words(
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
     await _speak(session, sid, range(48))
-    # Partials run on the wall clock: on a slow machine the speech can end
-    # before any hypothesis has trusted boundaries to commit by (the window
-    # then ends inside a clause, whose skewed timestamps collapse). The one
-    # that hears all of it must land before the streaming state is checked.
-    await _catch_up()
+    # Partials run on the wall clock: on a slow machine only a few run, each
+    # window ends inside a clause (whose last segment the +600 ms skew
+    # collapses, so nothing commits), and the last block (under
+    # _PARTIAL_MIN_NEW_BYTES) is never due. Committing needs two hypotheses
+    # that agree on whole clauses: keep the mic open with silence, as it is
+    # after real speech, until two partials have heard all of it.
+    for seq in (48, 50):
+        await _pause(session, sid, range(seq, seq + 2))
+        await _catch_up()
     committed = [p["committed"] for p in _partials(session)]
     assert committed[-1] and voice_handlers._active.win_start > 0
     assert all(b.startswith(a) for a, b in zip(committed, committed[1:]))
