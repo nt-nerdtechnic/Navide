@@ -657,6 +657,13 @@ def _relay_id(env: Env) -> str:
     return next(iter(env.m.relay._by_id))
 
 
+async def _until_relay_prompt(env: Env) -> None:
+    # The relay registers its id before the prompt is sent, so waiting on the id
+    # alone lets a slow runner assert (or send the next message) before the
+    # prompt has reached the chat. Wait for the prompt itself.
+    await _until(lambda: env.m.relay._by_id and any(t.startswith("⏸") for t in env.tg.texts()))
+
+
 async def test_stale_relay_off_config_is_ignored(env: Env) -> None:
     await _awaiting(env, stale_off_config=True)
     await _until(lambda: any(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()))
@@ -710,7 +717,7 @@ async def test_relay_buttons_via_callback_and_question_option(env: Env) -> None:
 
 async def test_relay_rejects_stranger_and_reports_seam_error(env: Env) -> None:
     await _awaiting(env)
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     await env.inbound(f"yes {rid}", sender="99")  # not allowlisted: dropped by the gate
     assert env.fake.answers == [] and rid in env.m.relay._by_id
@@ -723,7 +730,7 @@ async def test_relay_id_expires_when_pane_leaves_awaiting_or_ttl(clocked, monkey
     env, clock = clocked
     await _awaiting(env)
     clock.t += 1  # the fake clock only moves when told: let the awaiting probe run
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     env.fake.states["pane-1"] = {"exists": True, "busy": True, "display_status": "running"}
     clock.t += 1  # let the probe run again
@@ -842,7 +849,7 @@ async def test_options_not_starting_with_yes_relay_as_question(env: Env) -> None
     env.fake.kind = "permission"  # what Claude's AskUserQuestion reports
     env.fake.options = ["Keep it", "Discard"]
     await _awaiting(env)
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     text = next(t for t in env.tg.texts() if t.startswith("⏸"))
     assert "（question）" in text and "1. Keep it" in text and f"回覆 <選項編號> {rid}" in text
@@ -854,7 +861,7 @@ async def test_options_starting_with_yes_relay_as_permission(env: Env) -> None:
     env.fake.kind = "question"
     env.fake.options = ["Yes", "Yes, and don't ask again", "No"]
     await _awaiting(env)
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     assert f"yes {rid} / no {rid}" in next(t for t in env.tg.texts() if t.startswith("⏸"))
     await env.inbound(f"no {rid}")

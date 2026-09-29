@@ -27,7 +27,7 @@ def test_manager_platforms_is_the_registry_alias():
 def test_every_adapter_module_is_registered():
     on_disk = {
         p.stem for p in CHANNELS_DIR.glob("*.py")
-        if not p.stem.startswith("_") and re.search(r"^def create_adapter\b", p.read_text(), re.M)
+        if not p.stem.startswith("_") and re.search(r"^def create_adapter\b", p.read_text(encoding="utf-8"), re.M)
     }
     assert on_disk == set(registry.PLATFORMS)
 
