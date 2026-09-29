@@ -1003,7 +1003,10 @@ def write_part(
             with os.fdopen(fd, "ab") as handle:
                 st = os.fstat(handle.fileno())
                 owned = not hasattr(os, "getuid") or st.st_uid == os.getuid()
-                if not stat_mod.S_ISREG(st.st_mode) or not owned:
+                # Without O_NOFOLLOW a link planted after the is_symlink check
+                # is followed by the open: the name must be the file we opened.
+                same = os.path.samestat(st, os.lstat(staging))
+                if not stat_mod.S_ISREG(st.st_mode) or not owned or not same:
                     raise FsError("upload file is not a regular file")
                 if offset != 0 and st.st_size != offset:
                     out_of_order = True

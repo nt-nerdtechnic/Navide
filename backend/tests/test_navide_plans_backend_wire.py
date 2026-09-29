@@ -1541,6 +1541,17 @@ def _read_all_pages(process: subprocess.Popen[bytes], host: _DiskHost, rel_path:
         offset = value["next_offset"]
 
 
+def _assert_same_text(actual: str, expected: str) -> None:
+    """Compare documents of any size without pytest printing a multi-MB diff."""
+    if actual == expected:
+        return
+    at = next((i for i, (x, y) in enumerate(zip(actual, expected)) if x != y), min(len(actual), len(expected)))
+    pytest.fail(
+        f"texts differ at index {at} (lengths {len(actual)} vs {len(expected)}): "
+        f"{actual[at : at + 40]!r} != {expected[at : at + 40]!r}"
+    )
+
+
 def _plans_dir(tmp_path: Path) -> Path:
     plans = tmp_path / ".agent-team" / "plans"
     plans.mkdir(parents=True)
@@ -1581,7 +1592,7 @@ def test_plans_larger_than_every_bridge_limit_are_listed_and_read_in_full(
         assert len(text.encode("utf-8")) == len(source)
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == hashlib.sha256(source).hexdigest()
         if expected is not None:
-            assert text == expected
+            _assert_same_text(text, expected)
     first = _call_backend(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/huge_cccccc.html"})
     value = first["result"]["value"]
     assert value["meta"]["name"] == "Huge report"
@@ -1597,7 +1608,7 @@ def test_plan_pages_never_split_a_multibyte_character(
     (plans / "cjk_dddddd.html").write_text(document, encoding="utf-8", newline="")
     host = _DiskHost(tmp_path)
     text = _read_all_pages(backend_process, host, ".agent-team/plans/cjk_dddddd.html")
-    assert text == document
+    _assert_same_text(text, document)
 
 
 @pytest.mark.parametrize(
@@ -1756,7 +1767,7 @@ def test_a_multi_hundred_kilobyte_plan_can_be_updated_and_only_its_header_change
     )
     assert "error" not in todo
 
-    updated = path.read_text(encoding="utf-8")
+    updated = path.read_bytes().decode("utf-8")
     # The chunked path really ran (three updates → three staged swaps), and
     # every staged part fit one Bridge frame (asserted inside the host).
     assert [name for name, _ in host.calls].count("write_commit") == 3
@@ -1771,10 +1782,10 @@ def test_a_multi_hundred_kilobyte_plan_can_be_updated_and_only_its_header_change
     assert 'class="pill in-review">in-review<' in updated or ">in-review<" in updated
     assert '<li data-status="done" data-todo-id="t1"><span class="st">done</span>' in updated
     # ... and the rest of the 6 MB file is byte-identical.
-    assert _body_of(updated) == _body_of(original)
+    _assert_same_text(_body_of(updated), _body_of(original))
     assert len(updated.encode()) > 1_500_000
     assert hashlib.sha256(_body_of(updated).encode()).hexdigest() == hashlib.sha256(_body_of(original).encode()).hexdigest()
-    assert _read_all_pages(backend_process, host, rel) == updated
+    _assert_same_text(_read_all_pages(backend_process, host, rel), updated)
 
 
 def test_a_chunked_write_keeps_the_changed_on_disk_conflict_and_leaves_the_file_untouched(
@@ -1796,7 +1807,7 @@ def test_a_chunked_write_keeps_the_changed_on_disk_conflict_and_leaves_the_file_
         {"rel_path": ".agent-team/plans/race_777777.html", "stage": "approved"},
     )
     assert frame["error"]["data"]["code"] == "CONFLICT"
-    assert path.read_text(encoding="utf-8") == original
+    _assert_same_text(path.read_bytes().decode("utf-8"), original)
     assert host.staging_files() == []
 
 
@@ -1814,7 +1825,7 @@ def test_a_failed_part_discards_the_staged_upload(
     )
     assert "error" in frame
     assert [name for name, _ in host.calls].count("write_abort") == 1
-    assert path.read_text(encoding="utf-8") == original
+    _assert_same_text(path.read_bytes().decode("utf-8"), original)
     assert host.staging_files() == []
 
 
@@ -1831,7 +1842,7 @@ def test_a_host_without_chunked_writes_refuses_a_big_write_with_a_clear_code(
         {"rel_path": ".agent-team/plans/old_999999.html", "stage": "approved"},
     )
     assert frame["error"]["data"]["code"] == "RESOURCE_LIMIT"
-    assert path.read_text(encoding="utf-8") == original
+    _assert_same_text(path.read_bytes().decode("utf-8"), original)
     assert backend_process.poll() is None
 
 

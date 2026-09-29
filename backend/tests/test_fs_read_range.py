@@ -216,7 +216,8 @@ def test_read_file_ws_handler_lifts_the_limit_for_plan_documents_only(tmp_path: 
 
     plan = asyncio.run(read(".agent-team/plans/huge.html"))
     other = asyncio.run(read("huge.txt"))
-    assert plan["ok"] is True and plan["content"] == body
+    assert plan["ok"] is True and len(plan["content"]) == len(body)  # no multi-MB diff on failure
+    assert hashlib.sha256(plan["content"].encode()).hexdigest() == hashlib.sha256(body.encode()).hexdigest()
     assert other["ok"] is False and "too large" in other["error"]
 
 
@@ -224,7 +225,10 @@ def test_read_file_ws_handler_lifts_the_limit_for_plan_documents_only(tmp_path: 
 
 
 @pytest.mark.skipif(not _CAN_SYMLINK, reason="needs symlink creation (unavailable to unprivileged Windows)")
-def test_a_planted_symlink_staging_file_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize("nofollow", [True, False], ids=["O_NOFOLLOW", "no-O_NOFOLLOW"])
+def test_a_planted_symlink_staging_file_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nofollow: bool) -> None:
+    if not nofollow:  # as on Windows, where the open itself follows the link
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
     victim = tmp_path / "victim.txt"
     victim.write_text("keep")
     staging = tmp_path / f".a.html.{UPLOAD}.upload"
@@ -234,6 +238,31 @@ def test_a_planted_symlink_staging_file_is_refused(tmp_path: Path) -> None:
     assert fs_service.write_part(str(tmp_path), "a.html", UPLOAD, 4, b64)["ok"] is False
     assert fs_service.write_commit(str(tmp_path), "a.html", UPLOAD, 4)["ok"] is False
     assert victim.read_text() == "keep" and not (tmp_path / "a.html").exists()
+
+
+@pytest.mark.skipif(not _CAN_SYMLINK, reason="needs symlink creation (unavailable to unprivileged Windows)")
+def test_a_staging_symlink_planted_after_the_check_is_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without O_NOFOLLOW (Windows) only the lstat check guards the open; a link
+    # swapped in between that check and the open must still be refused.
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep")
+    _stage(tmp_path, "a.html", b"abcd")
+    staging = tmp_path / f".a.html.{UPLOAD}.upload"
+    real_open = os.open
+
+    def racing_open(path, flags, mode=0o777):  # type: ignore[no-untyped-def]
+        if Path(path) == staging:
+            staging.unlink()
+            staging.symlink_to(victim)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", racing_open)
+    b64 = base64.b64encode(b"evil").decode()
+    assert fs_service.write_part(str(tmp_path), "a.html", UPLOAD, 4, b64)["ok"] is False
+    assert victim.read_text() == "keep"
 
 
 def test_stale_staging_files_are_swept_but_nothing_else(tmp_path: Path) -> None:
