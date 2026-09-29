@@ -24,6 +24,35 @@ platform list — everything platform-specific lives in the two per-platform fil
    server on `127.0.0.1` — never the real platform. `test_channels_registry.py`
    checks the id imports and exposes a complete adapter.
 
+### Two-way pane mirroring: what an adapter owes it
+
+A bound chat mirrors everything its pane does (results, local prompts,
+delegations, child panes). The manager does the routing; an adapter only has to
+be honest about a few facts:
+
+- **`capabilities`** decide the layout. `threads` + `create_location` → each child
+  pane gets its own auto-created topic ("↳ name"); without them child messages ride
+  the parent chat with a `↳ name` prefix. `edit` → one status message edited in
+  place, else sparse new messages. `buttons` → permission buttons, else the text
+  command `yes <code>` / `no <code>`. Set them from what the platform really does.
+- **`rate_per_min`** (optional class attribute, default 60): the platform's sustained
+  send limit per chat. Every send to a location goes through one queue
+  (`mirror.Outbox`, a token bucket with a burst of 5) that paces to it and merges a
+  backlog of same-source messages instead of dropping them. Set it low for strict
+  platforms (Telegram groups and DingTalk robots: 20). Keep honouring 429
+  `retry_after` inside the adapter — the queue never retries.
+- **`send_text` must return the platform's message ids**, one per sent chunk, in
+  the same form an inbound reply names them. The mirror remembers which pane
+  produced which message so a reply can be routed to that child.
+- **`InboundMessage.reply_to_id`**: fill it with the id of the message the user
+  replied to (Discord `message_reference.message_id`, Matrix `m.in_reply_to` unless
+  `is_falling_back`, Feishu `parent_id`, Telegram `reply_to_message.message_id`,
+  Slack/Mattermost thread root). Leave it empty when the platform cannot tell or the
+  send API does not return usable ids, and say so in the adapter's docstring
+  (DingTalk and iMessage do). `@name text` routing works either way.
+- Do not truncate or summarise in the adapter: chunking to `text_limit` is fine,
+  everything else (verbosity, source labels, secret redaction) is the manager's.
+
 Verify: `uv --project backend run pytest backend/tests -k "channels or pyinstaller"`.
 
 ## Renderer (`src/renderer/src/platform/channels/`)

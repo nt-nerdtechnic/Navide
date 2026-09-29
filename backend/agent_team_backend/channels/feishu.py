@@ -411,6 +411,7 @@ class FeishuAdapter:
             sender_id=open_id, sender_name=name, text=text,
             message_id=str(msg.get("message_id") or ""), is_direct=is_direct,
             ts=int(created) / 1000.0 if str(created or "").isdigit() else time.time(),
+            reply_to_id=str(msg.get("parent_id") or ""),
         ))
 
     async def _sender_name(self, open_id: str) -> str:

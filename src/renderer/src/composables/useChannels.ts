@@ -66,7 +66,15 @@ export interface ChannelBinding {
   chat_id: string
   thread_id: string
   title: string
+  /** How much of the pane's activity the chat mirrors; absent on older backends (= full). */
+  verbosity?: ChannelVerbosity
+  /** Set on an auto-created child topic: the pane it reports into. */
+  parent_pane_id?: string
+  /** True for a topic the backend created itself (a child pane's), false for a manual binding. */
+  auto?: boolean
 }
+
+export type ChannelVerbosity = 'minimal' | 'standard' | 'full'
 
 export interface ChannelLocation {
   chat_id: string
@@ -255,6 +263,10 @@ function createChannelsStore(backend: Backend) {
     locations: async (platform: ChannelPlatform): Promise<ChannelResult<{ locations: ChannelLocation[] }>> =>
       call<{ locations: ChannelLocation[] }>('channels.locations', { platform }),
     bind: (req: BindRequest) => mutate('channels.bind', { ...req }),
+    /** Child topics the backend auto-bound under a parent pane's binding. */
+    childrenOf: (paneId: string): ChannelBinding[] => bindings.value.filter((b) => b.parent_pane_id === paneId),
+    setBindingOptions: (paneId: string, verbosity: ChannelVerbosity) =>
+      mutate('channels.set_binding_options', { pane_id: paneId, verbosity }),
     unbind: (paneId: string, paneName = '') => mutate('channels.unbind', { pane_id: paneId, pane_name: paneName }),
     rebind: (fromPaneId: string, toPaneId: string) =>
       mutate('channels.rebind', { from_pane_id: fromPaneId, to_pane_id: toPaneId }),

@@ -59,6 +59,8 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
         return await m.unbind(_s(p, "pane_id"), reason=_s(p, "reason"), pane_name=_s(p, "pane_name"))
     if msg_type == "channels.rebind":
         return await m.rebind(_s(p, "from_pane_id"), _s(p, "to_pane_id"))
+    if msg_type == "channels.set_binding_options":
+        return await m.set_binding_options(_s(p, "pane_id"), _s(p, "verbosity"))
     if msg_type == "channels.bindings":
         return m.bindings()
     return {"ok": False, "error": f"unknown request {msg_type}"}
@@ -68,7 +70,7 @@ MESSAGE_TYPES = (
     "channels.list", "channels.configure", "channels.set_enabled", "channels.set_global_enabled",
     "channels.remove", "channels.pairing.list", "channels.pairing.approve", "channels.pairing.reject",
     "channels.link.create", "channels.allow.list", "channels.allow.remove", "channels.locations", "channels.bind",
-    "channels.unbind", "channels.rebind", "channels.bindings",
+    "channels.unbind", "channels.rebind", "channels.bindings", "channels.set_binding_options",
 )
 
 

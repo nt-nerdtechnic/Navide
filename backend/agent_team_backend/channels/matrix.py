@@ -62,6 +62,14 @@ def _q(value: str) -> str:
     return quote(value, safe="")
 
 
+def _reply_target(rel: dict[str, Any]) -> str:
+    """The event a message replies to. A thread message always carries an
+    ``m.in_reply_to`` fallback (``is_falling_back``) that is not a real reply."""
+    if rel.get("is_falling_back"):
+        return ""
+    return str((rel.get("m.in_reply_to") or {}).get("event_id") or "")
+
+
 class MatrixAdapter:
     platform = "matrix"
     capabilities = Capabilities(
@@ -204,6 +212,7 @@ class MatrixAdapter:
             sender_id=sender, sender_name=await self._display_name(sender),
             text=str(content.get("body") or ""), message_id=str(event.get("event_id") or ""),
             is_direct=self._member_counts.get(room_id) == 2, ts=time.time(),
+            reply_to_id=_reply_target(rel),
         ))
 
     def known_locations(self) -> list[dict[str, Any]]:

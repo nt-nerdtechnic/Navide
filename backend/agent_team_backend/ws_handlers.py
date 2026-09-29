@@ -10387,6 +10387,7 @@ async def agent_msg_log_append(session: "Session", msg_id: str, msg_type: str, p
         )
         return
     written = app.agent_message_log.append(rows)
+    agent_messaging.notify_message_rows(rows)
     await session.send_json(make_response(msg_id, msg_type, {"written": written}))
 
 

@@ -23,6 +23,9 @@ messages, show typing, or send callback buttons (ActionCard buttons are URLs), s
 capabilities are off. Rejected credentials on connections/open are assumed to be 400/401/403
 (error bodies not documented in the SDK). Rate limits and 429 behaviour are not verified.
 Not verified against a live DingTalk app (tests use a local fake server).
+Replies (InboundMessage.reply_to_id): not mappable. The robot send API returns
+processQueryKey, never the msgId a quoted reply would name, so a reply cannot be tied
+to a bot message; reply_to_id stays empty (``@name`` still routes to a child).
 """
 
 from __future__ import annotations
@@ -72,6 +75,8 @@ class DingTalkAdapter:
         threads=False, create_location=False, edit=False, typing=False, buttons=False,
         text_limit=TEXT_LIMITS["dingtalk"],
     )
+    # A custom robot may send 20 messages a minute; the mirror outbox paces to this.
+    rate_per_min = 20.0
 
     def __init__(
         self,

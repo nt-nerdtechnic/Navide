@@ -1143,6 +1143,11 @@ _pane_activity: dict[str, dict[str, Any]] = {}
 # Observers of the table above (chat channels): called as (pane_id, entry) on
 # every record and (pane_id, None) when a closed pane is forgotten. Must not raise.
 pane_activity_listeners: list[Callable[[str, dict[str, Any] | None], None]] = []
+# Observers of the user's own prompts (chat channels): (pane_id, text) for every
+# user-record event: the reader's longer copy when it has one (up to 16K chars),
+# else the naming snippet. Must not raise.
+pane_prompt_listeners: list[Callable[[str, str], None]] = []
+_USER_PROMPT_DETAILS = frozenset({"user", "prompt", "user_message"})
 
 
 def _current_pane_id(pane_id: str) -> str:
@@ -1243,6 +1248,17 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             pane_id, "agent_active" if superseded else event.event_type, event.text,
             detail=event.detail,
         )
+        if (
+            event.event_type == "agent_active" and event.text and pane_id
+            and event.detail in _USER_PROMPT_DETAILS
+        ):
+            for prompt_listener in pane_prompt_listeners:
+                try:
+                    prompt_listener(
+                        _current_pane_id(pane_id), getattr(event.text, "full", "") or event.text
+                    )
+                except Exception as err:  # noqa: BLE001
+                    log.warning("prompt listener failed: %s", err)
         if event.event_type == "turn_complete":
             # The per-account turn count (by_account_day / quota cycles): the
             # reader's turn end is the one signal every vendor emits, on the

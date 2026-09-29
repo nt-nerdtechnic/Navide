@@ -297,6 +297,7 @@ class DiscordAdapter:
             sender_name=str(author.get("global_name") or author.get("username") or ""),
             text=str(d.get("content") or ""), message_id=str(d.get("id") or ""),
             is_direct=not d.get("guild_id"), ts=time.time(),
+            reply_to_id=str((d.get("message_reference") or {}).get("message_id") or ""),
         ))
 
     async def _on_interaction(self, d: dict[str, Any]) -> None:

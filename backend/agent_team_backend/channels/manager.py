@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from . import redact, relay
+from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summarize
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
@@ -99,6 +100,11 @@ class Seams:
     write_secret: Callable[[str, str | None], Awaitable[None]]
     # pane_id -> its workspace path ("" if unknown); scopes Navide Guard's paths
     pane_workspace: Callable[[str], str] = lambda _pane_id: ""
+    # () -> every mirrored pane as {pane_id, name, qualified_name, spawned_by, display_status};
+    # lineage for two-way mirroring, straight from the messaging registry (no I/O)
+    pane_directory: Callable[[], list[dict[str, Any]]] = lambda: []
+    # (child_pane_id, parent_pane_id): a child of a tainted pane is tainted too
+    inherit_taint: Callable[[str, str], None] = lambda _child, _parent: None
 
 
 AdapterFactory = Callable[[dict[str, Any], dict[str, Any], ChannelStore], ChannelAdapter]
@@ -143,6 +149,14 @@ class _Pending:
     started: float = field(default_factory=time.monotonic)
     awaiting_posted: bool = False
     task: asyncio.Task[None] | None = None
+    # Two-way mirroring: what started the turn ("💬 alice" / "🖥 本機" / "🤖 pane"), the
+    # child name when the pane rides its ancestor's chat, and how much of the run to show.
+    source: str = ""
+    child: str = ""
+    quiet: bool = False  # no typing / status message (minimal verbosity, or a child in the parent chat)
+    silent: bool = False  # no result either (a child at minimal verbosity)
+    summary: bool = False  # child result in the parent chat below full: a short excerpt
+    owner: str = ""  # pane whose messages these are, for reply-to routing
 
 
 @dataclass
@@ -195,6 +209,9 @@ class ChannelManager:
         # One serial worker per location: order kept within a chat, chats never block each other.
         self._workers: dict[str, _Worker] = {}
         self._known_panes: set[str] = set()
+        self._awaiting_posted: set[str] = set()
+        self._turn_source: dict[str, str] = {}
+        self.mirror = Mirror(self)
 
     # --- lifecycle --------------------------------------------------------------
 
@@ -206,6 +223,7 @@ class ChannelManager:
             for platform, acct in self.store.accounts().items():
                 if acct["enabled"]:
                     await self._start_platform(platform)
+        self.mirror.schedule_sync()
 
     async def stop(self) -> None:
         if self._status_task:
@@ -215,6 +233,7 @@ class ChannelManager:
             await self._stop_platform(platform)
         self._workers.clear()
         self._debounce.clear()
+        self.mirror.stop()
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()
@@ -388,6 +407,7 @@ class ChannelManager:
             current = self._seams.resolve_pane(b.pane_id)
             if current and current != b.pane_id and current not in taken:
                 if self.store.rename_pane(b.pane_id, current):
+                    self.mirror.rename_pane(b.pane_id, current)
                     taken.discard(b.pane_id)
                     taken.add(current)
                     changed = True
@@ -586,8 +606,10 @@ class ChannelManager:
                 return {"ok": False, "error": MSG_CHAT_TAKEN, "holder_pane_id": holder.pane_id}
         else:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
-        binding = self.store.bind(pane_id, loc)
+        previous = next((b for b in self.store.bindings() if b.pane_id == pane_id), None)
+        binding = self.store.bind(pane_id, loc, **({"verbosity": previous.verbosity} if previous else {}))
         await self._changed()
+        self.mirror.schedule_sync()  # children the pane already has get their topics now
         # Tell the chat which pane it now drives; off the request path like unbind,
         # on the chat's worker so a quick unbind's notice cannot overtake it.
         text = MSG_BOUND.format(name=pane_name or loc.title or pane_id)
@@ -598,6 +620,7 @@ class ChannelManager:
         removed = self.store.unbind(pane_id)
         self._drop_pending(pane_id)
         if removed:
+            await self.mirror.release_children(pane_id)
             await self._changed()
             # Tell the chat it is no longer connected; off the request path so the
             # window's unbind returns without waiting on the platform.
@@ -615,6 +638,7 @@ class ChannelManager:
             return {"ok": False, "error": "from_pane_id and to_pane_id are required"}
         if from_pane_id == to_pane_id or not self.store.rename_pane(from_pane_id, to_pane_id):
             return {"ok": True}
+        self.mirror.rename_pane(from_pane_id, to_pane_id)
         pending = self._pending.pop(from_pane_id, None)
         if pending is not None:
             if pending.task:
@@ -626,6 +650,25 @@ class ChannelManager:
         binding = next((b for b in self.store.bindings() if b.pane_id == to_pane_id), None)
         await self._changed()
         return {"ok": True, **({"binding": binding.public()} if binding else {})}
+
+    async def set_binding_options(self, pane_id: str, verbosity: str) -> dict[str, Any]:
+        """How much of the pane's activity its chat receives; auto child topics follow."""
+        level = normalize_verbosity(verbosity)
+        if level is None:
+            return {"ok": False, "error": f"verbosity must be one of minimal, standard, full (got {verbosity!r})"}
+        pane_id = self._seams.resolve_pane(pane_id) or pane_id
+        binding = self.store.set_verbosity(pane_id, level)
+        if binding is None:
+            return {"ok": False, "error": "this pane is not connected to a chat"}
+        stack = [pane_id]
+        while stack:
+            parent = stack.pop()
+            for b in self.store.bindings():
+                if b.auto and b.parent_pane_id == parent and b.verbosity != level:
+                    self.store.set_verbosity(b.pane_id, level)
+                    stack.append(b.pane_id)
+        await self._changed()
+        return {"ok": True, "binding": binding.public()}
 
     def bindings(self) -> dict[str, Any]:
         self._sync_bindings()
@@ -655,21 +698,66 @@ class ChannelManager:
             self._drop_pending(pane_id)
             self.relay.expire_pane(pane_id)
             self._known_panes.discard(pane_id)
+            self._turn_source.pop(pane_id, None)
             return
         if pane_id not in self._known_panes:
             # First activity from this id (e.g. after a restart): rebind by alias.
             self._known_panes.add(pane_id)
             self._sync_bindings()
         pending = self._pending.get(pane_id)
-        if pending is None or pending.armed_at is None or entry.get("event_type") != "turn_complete":
+        is_turn_end = entry.get("event_type") == "turn_complete"
+        if pending is None or pending.armed_at is None or not is_turn_end:
+            if is_turn_end:
+                self._mirror_unclaimed_turn(pane_id, str(entry.get("text") or ""))
             return
         if float(entry.get("ts_monotonic") or 0) <= pending.armed_at:
-            return  # the turn that was running when the message went in
+            # The turn that was running when the message went in: not this reply's,
+            # but still something the chat should hear about.
+            self._mirror_unclaimed_turn(pane_id, str(entry.get("text") or ""))
+            return
         self._pending.pop(pane_id, None)
         if pending.task:
             pending.task.cancel()
         self.relay.expire_pane(pane_id)
+        self._awaiting_posted.discard(pane_id)
         self._spawn(self._send_reply(pending, str(entry.get("text") or "")))
+
+    def _mirror_unclaimed_turn(self, pane_id: str, text: str) -> None:
+        """A turn end no chat message asked for (typed at the keyboard, delegated by
+        another pane, or run by a child): the bound chat still hears the result."""
+        if not text.strip():
+            return
+        route = self.mirror.route(pane_id)
+        if route is None:
+            return
+        pending = self._pending_for(pane_id, route, self._turn_source.pop(pane_id, "") or "🖥 本機")
+        if pending.silent:
+            return
+        self._spawn(self._send_reply(pending, text))
+
+    def _pending_for(self, pane_id: str, route: Any, source: str) -> _Pending:
+        """The run record for a turn the chat did not start; verbosity decides how loud it is."""
+        level = route.binding.verbosity
+        rides_parent = not route.own
+        return _Pending(
+            loc=route.binding.location(), source=source, child=route.child, owner=pane_id,
+            quiet=level == "minimal" or rides_parent,
+            silent=rides_parent and level == "minimal",
+            summary=rides_parent and level != "full",
+        )
+
+    def _begin_run(self, pane_id: str, route: Any, source: str) -> None:
+        """A local prompt or delegation started a turn: watch it like a chat message's."""
+        self._turn_source[pane_id] = source
+        if pane_id in self._pending:
+            return
+        pending = self._pending_for(pane_id, route, source)
+        pending.armed_at = pending.started = self._clock()
+        self._pending[pane_id] = pending
+        pending.task = self._spawn(self._while_running(pane_id, pending))
+
+    def _note_source(self, pane_id: str, source: str) -> None:
+        self._turn_source[pane_id] = source
 
     async def _send_reply(self, pending: _Pending, text: str) -> None:
         adapter = self._adapters.get(pending.loc.platform)
@@ -678,13 +766,19 @@ class ChannelManager:
         if pending.status_id:
             elapsed = int(self._clock() - pending.started)
             await self._edit_status(adapter, pending, f"✅ 完成（{elapsed}s）", force=True)
-        chunks = chunk_for(pending.loc.platform, text) or [MSG_EMPTY_REPLY]
+        if pending.silent:
+            return
+        body = summarize(text) if pending.summary else text
+        body = result_text(pending.source, body or MSG_EMPTY_REPLY, pending.child) if pending.source else body
+        chunks = chunk_for(pending.loc.platform, redact.redact_text(body)) or [MSG_EMPTY_REPLY]
         for chunk in chunks:
             try:
-                await adapter.send_text(pending.loc, chunk)
+                ids = await self.mirror.send(pending.loc, chunk)
             except Exception as exc:  # noqa: BLE001
                 log.warning("channels: reply to %s failed: %s", pending.loc.key(), exc)
                 return
+            if pending.owner:
+                self.mirror.owners.remember(pending.loc.key(), ids, pending.owner)
 
     # --- inbound ------------------------------------------------------------------
 
@@ -726,7 +820,7 @@ class ChannelManager:
             return ""
         loc = Location(msg.platform, msg.account, msg.chat_id, msg.thread_id)
         try:
-            ids = await adapter.send_text(loc, text)
+            ids = await self.mirror.send(loc, text)
             return ids[0] if ids else ""
         except Exception as exc:  # noqa: BLE001
             log.warning("channels: reply on %s failed: %s", msg.platform, exc)
@@ -781,6 +875,8 @@ class ChannelManager:
             self.store.rename_pane(binding.pane_id, pane_id)
         if _is_stop_word(msg.text):
             await self._interrupt(msg, pane_id)
+            return
+        if await self.mirror.handle_inbound(msg, binding, pane_id):
             return
         await self._debounced_deliver(msg, binding, pane_id)
 
@@ -920,13 +1016,13 @@ class ChannelManager:
             })
             await self._changed()
 
-    async def _interrupt(self, msg: InboundMessage, pane_id: str) -> None:
+    async def _interrupt(self, msg: InboundMessage, pane_id: str, ok_text: str = MSG_INTERRUPTED) -> None:
         try:
             result = await self._seams.interrupt(pane_id)
         except Exception as exc:  # noqa: BLE001
             result = {"ok": False, "error": str(exc)}
         if result.get("ok") and result.get("sent", True):
-            await self._reply(msg, MSG_INTERRUPTED)
+            await self._reply(msg, ok_text)
         else:
             await self._reply(msg, f"⚠️ 中斷失敗：{result.get('error') or 'not sent'}")
 
@@ -950,6 +1046,13 @@ class ChannelManager:
         if pending is None or pending.loc != loc:
             pending = _Pending(loc=loc)
             self._pending[pane_id] = pending
+        # The chat's own message comes back as the pane's prompt and its result carries this source.
+        self.mirror.echo.remember(pane_id, msg.text)
+        pending.source = pending.source or source_chat(msg.sender_name)
+        pending.owner = pane_id
+        if pane_id != binding.pane_id:
+            route = self.mirror.route(pane_id)
+            pending.child = route.child if route is not None else ""
         if state.get("busy") and not pending.status_id:
             pending.status_id = await self._reply(msg, MSG_RECEIVED_BUSY)
         queued.add(msg_key)
@@ -998,10 +1101,10 @@ class ChannelManager:
         """
         current = self._pending.get(pane_id)
         if current is None or current.loc != pending.loc:
-            bound = next((b for b in self.store.bindings() if b.pane_id == pane_id), None)
-            if bound is None or bound.location() != pending.loc:
+            route = self.mirror.route(pane_id)
+            if route is None or route.binding.location() != pending.loc:
                 return
-            current = _Pending(loc=pending.loc)
+            current = _Pending(loc=pending.loc, source=pending.source, child=pending.child, owner=pending.owner)
             self._pending[pane_id] = current
         if current.armed_at is None:
             current.armed_at = self._clock()
@@ -1011,7 +1114,7 @@ class ChannelManager:
 
     async def _notice(self, adapter: ChannelAdapter, loc: Location, text: str) -> None:
         try:
-            await adapter.send_text(loc, text)
+            await self.mirror.send(loc, text)
         except Exception as exc:  # noqa: BLE001
             log.warning("channels: notice to %s failed: %s", loc.key(), exc)
 
@@ -1021,12 +1124,12 @@ class ChannelManager:
         if adapter is None:
             return
         caps = adapter.capabilities
-        if caps.edit:
+        if caps.edit and not pending.quiet:
             if pending.status_id:
                 await self._edit_status(adapter, pending, MSG_WORKING, force=True)
             else:
                 try:
-                    ids = await adapter.send_text(pending.loc, MSG_WORKING)
+                    ids = await self.mirror.send(pending.loc, MSG_WORKING)
                     pending.status_id = ids[0] if ids else ""
                 except Exception:  # noqa: BLE001
                     pending.status_id = ""
@@ -1038,13 +1141,13 @@ class ChannelManager:
                 # indicators but keep the pending so a late turn_complete still replies.
                 await self._edit_status(adapter, pending, MSG_STILL_RUNNING, force=True)
                 return
-            if caps.typing and now >= next_typing:
+            if caps.typing and not pending.quiet and now >= next_typing:
                 next_typing = now + TYPING_EVERY_S
                 try:
                     await adapter.send_typing(pending.loc)
                 except Exception:  # noqa: BLE001
                     pass
-            if caps.edit and pending.status_id and now >= next_edit:
+            if caps.edit and not pending.quiet and pending.status_id and now >= next_edit:
                 next_edit = now + STATUS_EDIT_EVERY_S
                 await self._edit_status(adapter, pending, f"{MSG_WORKING}（{int(now - pending.started)}s）")
             if now >= next_probe:
@@ -1068,13 +1171,22 @@ class ChannelManager:
     async def _check_awaiting(self, adapter: ChannelAdapter, pane_id: str, pending: _Pending) -> None:
         state = self._seams.pane_state(pane_id)
         if state.get("display_status") != "awaiting":
-            if pending.awaiting_posted:
+            if pending.awaiting_posted or pane_id in self._awaiting_posted:
                 self.relay.expire_pane(pane_id)  # the prompt was answered at the keyboard
             pending.awaiting_posted = False
+            self._awaiting_posted.discard(pane_id)
             return
-        if pending.awaiting_posted:
+        if pending.awaiting_posted or pane_id in self._awaiting_posted:
             return
         pending.awaiting_posted = True
+        self._awaiting_posted.add(pane_id)
+        await self._post_awaiting(pane_id, pending.loc, pending.child)
+
+    async def _post_awaiting(self, pane_id: str, loc: Location, child: str = "") -> None:
+        """Relay a pane's permission/question to ``loc`` (always pushed, whoever started the turn)."""
+        adapter = self._adapters.get(loc.platform)
+        if adapter is None:
+            return
         try:
             info = await self._seams.awaiting_info(pane_id)
         except Exception:  # noqa: BLE001
@@ -1084,23 +1196,25 @@ class ChannelManager:
         # Claude's AskUserQuestion reports "permission"; the options tell them apart.
         if options:
             kind = "permission" if options[0].strip().lower().startswith("yes") else "question"
-        if not self._relay_enabled(pending.loc.platform):
-            await self._notice(adapter, pending.loc, f"⏸ pane 等待確認（{kind}）")
+        who = f"↳ {child} " if child else ""
+        if not self._relay_enabled(loc.platform):
+            await self._notice(adapter, loc, f"{who}⏸ pane 等待確認（{kind}）")
             return
         self.relay.expire_pane(pane_id)  # one live request per pane
         prompt = str(info.get("prompt") or "")
-        request = self.relay.create(pane_id, kind, options, pending.loc, prompt=prompt)
-        text = relay.prompt_text(request, prompt)
+        request = self.relay.create(pane_id, kind, options, loc, prompt=prompt)
+        text = who + relay.prompt_text(request, prompt)
         buttons = relay.buttons_for(request) if adapter.capabilities.buttons else None
         try:
-            await adapter.send_text(pending.loc, text, buttons=buttons or None)
+            ids = await self.mirror.send(loc, text, owner=pane_id, buttons=buttons or None)
         except Exception as exc:  # noqa: BLE001
-            log.warning("channels: relay prompt to %s failed: %s", pending.loc.key(), exc)
+            log.warning("channels: relay prompt to %s failed: %s", loc.key(), exc)
 
     def _drop_pending(self, pane_id: str) -> None:
         pending = self._pending.pop(pane_id, None)
         if pending and pending.task:
             pending.task.cancel()
+        self._awaiting_posted.discard(pane_id)
 
 
 def _check_platform(platform: str) -> None:

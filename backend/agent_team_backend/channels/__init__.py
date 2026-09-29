@@ -119,6 +119,19 @@ def default_seams() -> Seams:
         pane = agent_messaging.current(pane_id)
         return pane.workspace_path if pane is not None else ""
 
+    def pane_directory() -> list[dict[str, Any]]:
+        return [
+            {"pane_id": p.pane_id, "name": p.name, "qualified_name": p.qualified_name,
+             "spawned_by": p.spawned_by, "display_status": p.display_status}
+            for p in agent_messaging.list_panes()
+        ]
+
+    def inherit_taint(child_id: str, parent_id: str) -> None:
+        from ..guard import taint
+
+        if taint.is_tainted(parent_id) and not taint.is_tainted(child_id):
+            taint.safe_mark_tainted(child_id, "agent", f"spawned by tainted pane {parent_id}")
+
     async def broadcast(event_type: str, payload: dict[str, Any]) -> None:
         from .. import app
 
@@ -139,13 +152,14 @@ def default_seams() -> Seams:
         deliver=deliver, await_verdict=await_verdict, interrupt=interrupt, pane_state=pane_state,
         awaiting_info=awaiting_info, answer=answer, resolve_pane=resolve_pane, broadcast=broadcast,
         read_secret=read_secret, write_secret=write_secret, pane_workspace=pane_workspace,
+        pane_directory=pane_directory, inherit_taint=inherit_taint,
     )
 
 
 async def start() -> None:
     """Load channel config and start enabled adapters. Never raises into the lifespan."""
     global _manager, _start_task
-    from .. import app
+    from .. import agent_messaging, app
     from .store import ChannelStore
 
     if _manager is not None:
@@ -154,6 +168,9 @@ async def start() -> None:
         manager = ChannelManager(ChannelStore(app.database), default_seams())
         _manager = manager
         app.pane_activity_listeners.append(manager.on_pane_activity)
+        app.pane_prompt_listeners.append(manager.mirror.on_local_prompt)
+        agent_messaging.pane_listeners.append(manager.mirror.on_registry)
+        agent_messaging.message_row_listeners.append(manager.mirror.on_message_rows)
         # Keychain reads can take seconds; adapters come up without holding the lifespan.
         _start_task = asyncio.create_task(manager.start(), name="channels-start")
         _start_task.add_done_callback(_log_start_failure)
@@ -173,10 +190,18 @@ async def stop() -> None:
     manager, _manager = _manager, None
     if manager is None:
         return
-    try:
-        app.pane_activity_listeners.remove(manager.on_pane_activity)
-    except ValueError:
-        pass
+    from .. import agent_messaging
+
+    for registry, hook in (
+        (app.pane_activity_listeners, manager.on_pane_activity),
+        (app.pane_prompt_listeners, manager.mirror.on_local_prompt),
+        (agent_messaging.pane_listeners, manager.mirror.on_registry),
+        (agent_messaging.message_row_listeners, manager.mirror.on_message_rows),
+    ):
+        try:
+            registry.remove(hook)
+        except ValueError:
+            pass
     try:
         await manager.stop()
     except Exception:  # noqa: BLE001

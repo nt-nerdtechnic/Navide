@@ -481,4 +481,33 @@ describe('PaneChannelButton', () => {
     expect(q('[data-testid="channel-no-chats"]')).toBeNull()
     expect(q('[data-testid="channel-bind-existing"]')?.textContent).toContain('neillu123')
   })
+  it('shows the mirror verbosity menu (default full) and sends the pick', async () => {
+    seed({ configured: true, bound: true })
+    mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
+    const w = await render()
+    await w.get('[data-testid="channel-chip-menu"]').trigger('click')
+    await flushPromises()
+    expect(q('[data-testid="channel-verbosity-full"]')?.getAttribute('aria-checked')).toBe('true')
+    q('[data-testid="channel-verbosity-minimal"]')!.click()
+    await flushPromises()
+    expect(mock.sent.find((m) => m.type === 'channels.set_binding_options')?.payload).toEqual({
+      pane_id: 'p1',
+      verbosity: 'minimal',
+    })
+  })
+
+  it('reflects the binding verbosity and lists auto-bound child topics', async () => {
+    seed({
+      configured: true,
+      bindings: [
+        { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'standard' },
+        { pane_id: 'c1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '9', title: '↳ worker', verbosity: 'full', parent_pane_id: 'p1' },
+      ],
+    })
+    const w = await render()
+    await w.get('[data-testid="channel-chip-menu"]').trigger('click')
+    await flushPromises()
+    expect(q('[data-testid="channel-verbosity-standard"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(qa('[data-testid="channel-child"]').map((e) => e.textContent)).toEqual(['↳ ↳ worker'])
+  })
 })

@@ -9075,7 +9075,16 @@
       "new-topic-short": "New topic",
       "manage-chats": "Manage chat settings",
       "taken-by": "Connected to {pane}",
-      "taken-hint": "Connected to another pane. Unbind it there to use this chat here."
+      "taken-hint": "Connected to another pane. Unbind it there to use this chat here.",
+      "verbosity-label": "Mirror detail",
+      "verbosity-minimal": "Minimal",
+      "verbosity-standard": "Standard",
+      "verbosity-full": "Full",
+      "verbosity-minimal-hint": "Results and confirmations only",
+      "verbosity-standard-hint": "Plus progress and child summaries",
+      "verbosity-full-hint": "Everything, including local prompts and delegation text",
+      "children": "Sub-agents",
+      "child-topic": "Sub-agent topic"
     },
     "option": {
       "feishu": "Feishu (China)",

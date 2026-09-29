@@ -20,6 +20,9 @@ Gaps: no threads, edit, typing, buttons or chat creation (a pane binds an existi
 conversation). Tapbacks/reactions and attachment-only messages are skipped. The first
 send to a chat makes macOS ask for Automation permission to control Messages. Not verified
 on this machine's real chat.db (tests use a fixture database and a stub osascript).
+Replies (InboundMessage.reply_to_id): not mappable. osascript sends return no message
+id, so there is nothing for chat.db's thread_originator_guid to match; reply_to_id
+stays empty (``@name`` still routes to a child).
 """
 
 from __future__ import annotations
