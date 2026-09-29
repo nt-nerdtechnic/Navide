@@ -30,7 +30,9 @@ const state = {
 }
 
 const nav = {
-  callCapability: vi.fn(async (_namespace: string, method: string) => ({
+  callCapability: vi.fn(async (_namespace: string, method: string): Promise<{
+    reqId: string; ok: boolean; result: Record<string, unknown>
+  }> => ({
     reqId: 'test',
     ok: true,
     result: method === 'readEditorPreferences' ? { preferences: {} } : { found: false },
