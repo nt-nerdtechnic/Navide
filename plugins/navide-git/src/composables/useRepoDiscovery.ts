@@ -18,6 +18,8 @@ export function useRepoDiscovery(
   const { send, on } = transport
   const repositories = ref<DiscoveredRepoWithBadge[]>([])
   const discoverySkipped = ref(false)
+  /** True while the latest scan failed, so the caller can tell the user. */
+  const discoveryFailed = ref(false)
   let forcedWorkspace = ''
 
   async function refresh(force = false): Promise<void> {
@@ -35,13 +37,19 @@ export function useRepoDiscovery(
         'git.discover_repositories',
         { workspace_path: ws, force },
       )
-      if (!resp.ok || !resp.payload?.ok || workspacePath() !== ws) return
+      if (workspacePath() !== ws) return
+      if (!resp.ok || !resp.payload?.ok) {
+        discoveryFailed.value = true
+        return
+      }
+      discoveryFailed.value = false
       if (force) forcedWorkspace = ws
       const skipped = resp.payload.skipped === 'cloud_storage'
       if (skipped && forcedWorkspace === ws) return
       discovered = resp.payload.repositories ?? []
       discoverySkipped.value = skipped
     } catch {
+      if (workspacePath() === ws) discoveryFailed.value = true
       return
     }
 
@@ -113,8 +121,11 @@ export function useRepoDiscovery(
     const p = payload as { workspace_path?: string }
     const ws = workspacePath()
     if (p?.workspace_path && ws) {
-      const prefix = ws.endsWith('/') ? ws : ws + '/'
-      if (p.workspace_path !== ws && !p.workspace_path.startsWith(prefix)) return
+      // Windows paths use backslashes; compare both sides in one separator form.
+      const changed = p.workspace_path.replace(/\\/g, '/')
+      const root = ws.replace(/\\/g, '/')
+      const prefix = root.endsWith('/') ? root : root + '/'
+      if (changed !== root && !changed.startsWith(prefix)) return
     }
     if (_timer !== null) clearTimeout(_timer)
     _timer = setTimeout(() => {
@@ -127,5 +138,5 @@ export function useRepoDiscovery(
     if (_timer !== null) clearTimeout(_timer)
   })
 
-  return { repositories, discoverySkipped, refresh, adopt }
+  return { repositories, discoverySkipped, discoveryFailed, refresh, adopt }
 }

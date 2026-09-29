@@ -17,6 +17,17 @@ export function validatePublicGitRequest(address: string, value: unknown): value
   })
 }
 
+const REMOTE_GIT_OPERATIONS = new Set(['fetch', 'pull', 'push', 'push_force', 'push_upstream', 'sync', 'pull_rebase', 'clone'])
+
+/** Host deadline for one backend Git request. Remote and AI operations (and the
+ * interactive credential wait inside them) legitimately outlive a generic 10s
+ * deadline; expiring here first reports failure for work the backend may still
+ * complete, so this must stay at or above the backend's own subprocess limits. */
+export function gitRequestTimeoutMs(operation: string): number {
+  return operation === 'generate_message' ? 75_000 : REMOTE_GIT_OPERATIONS.has(operation) ? 65_000
+    : operation === 'connect_to_remote' ? 60_000 : 20_000
+}
+
 export function publicGitRequest(address: string, args: Record<string, unknown>, workspacePath: string): {
   operation: GitOperation
   type: string
@@ -30,12 +41,10 @@ export function publicGitRequest(address: string, args: Record<string, unknown>,
   const root = resolvePathForContainment(resolve(workspacePath, String(repositoryPath)))
   if (!root) throw new Error('repository cannot be safely resolved')
   payload.workspace_path = root
-  const remote = ['fetch', 'pull', 'push', 'push_force', 'push_upstream', 'sync', 'pull_rebase', 'clone']
   return {
     operation,
     type: `git.${operation}`,
     payload,
-    timeoutMs: operation === 'generate_message' ? 75_000 : remote.includes(operation) ? 65_000
-      : operation === 'connect_to_remote' ? 60_000 : 20_000,
+    timeoutMs: gitRequestTimeoutMs(operation),
   }
 }

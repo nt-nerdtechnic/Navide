@@ -2427,6 +2427,14 @@ export class PluginBackendSupervisor {
       ))
     }
 
+    // One frame larger than the child's whole input queue can never be
+    // written: refuse the request instead of writing it, because an overflow
+    // on the write path is fatal to the child.
+    const encoded = encodeFrame(frame)
+    if (encoded.length > MAX_BACKEND_BRIDGE_QUEUE_BYTES) {
+      return Promise.reject(new BackendPluginError('RESOURCE_LIMIT'))
+    }
+
     return new Promise<BackendWireResponse>((resolve, reject) => {
       let settled = false
       const timer = setTimeout(() => {
@@ -2472,7 +2480,7 @@ export class PluginBackendSupervisor {
             `child stdin not writable (exited=${generation.exited}, destroyed=${generation.child.stdin.destroyed}, ended=${generation.child.stdin.writableEnded})`,
           )
         }
-        this.writeFrame(generation, encodeFrame(frame))
+        this.writeFrame(generation, encoded)
       } catch (error) {
         this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, error)
       }

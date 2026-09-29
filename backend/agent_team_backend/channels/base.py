@@ -54,6 +54,8 @@ class InboundMessage:
     ts: float
     # Button press payload (permission relay); empty for plain text.
     callback_data: str = ""
+    # The platform message id this message replies to ("" when none or unknown).
+    reply_to_id: str = ""
 
     def location_key(self) -> str:
         return Location(self.platform, self.account, self.chat_id, self.thread_id).key()

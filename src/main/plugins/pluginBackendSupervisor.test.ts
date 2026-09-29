@@ -2434,6 +2434,25 @@ describe('PluginBackendSupervisor', () => {
       ).toBe(true)
     })
 
+    it('refuses a single request frame larger than the whole queue without failing the child', async () => {
+      const onFailure = vi.fn()
+      const harness = makeStallableChild()
+      const supervisor = makeSupervisor({ onFailure, spawnProcess: () => harness.child })
+      supervisors.push(supervisor)
+      await supervisor.start()
+
+      const client = supervisor.clientFor(authenticatedRuntime)
+      // One frame that can never fit (256 KiB queue): refused up front, not
+      // written, so the overflow that would kill the child never happens.
+      await expect(client.call('fixture.echo', { payload: 'z'.repeat(300 * 1024) }))
+        .rejects.toMatchObject({ code: 'RESOURCE_LIMIT' })
+      expect(harness.hostFrames.some((frame) => frame.includes('fixture.echo'))).toBe(false)
+      expect(onFailure).not.toHaveBeenCalled()
+      expect(harness.kill).not.toHaveBeenCalled()
+      // The child is still serving requests.
+      await expect(client.call('fixture.echo', { payload: 'ok' })).resolves.toBeDefined()
+    })
+
     it('records a private cause when a ready child exits cleanly with code 0 and no stderr', async () => {
       const onFailure = vi.fn()
       const stderrSink = vi.fn()

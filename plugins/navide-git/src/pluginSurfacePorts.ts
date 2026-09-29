@@ -68,7 +68,13 @@ export function createPluginCapabilitySdk(backend: {
     if (!call) {
       return { ok: false, payload: null, error: { code: 'CAPABILITY_DENIED', message: 'Host action is unavailable' } }
     }
-    const response = await call(action, payload)
+    let response: Awaited<ReturnType<typeof call>>
+    try {
+      response = await call(action, payload)
+    } catch (error) {
+      // An IPC rejection must reach callers as a failed response, like every other failure.
+      return { ok: false, payload: null, error: { code: 'BROKER_ERROR', message: error instanceof Error ? error.message : 'Host action failed' } }
+    }
     return {
       ok: response.ok,
       payload: response.ok ? (response.result as TPayload ?? null) : null,

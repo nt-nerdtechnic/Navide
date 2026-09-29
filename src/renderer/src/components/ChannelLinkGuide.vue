@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { ChannelLinkInvite, ChannelPlatform, ChannelsStore } from '../composables/useChannels'
+import { channelPlatform, type ChannelLinkTarget } from '../platform/channels'
 
 /**
  * "Link my chat account" for one connected platform: asks the backend for a
@@ -20,27 +21,10 @@ const emit = defineEmits<{ linked: [title: string] }>()
 // Global instance: the pane header mounts without the i18n plugin in tests.
 const t = i18n.global.t
 
-interface LinkAction {
-  target: 'direct' | 'group'
-  label: string
-  /** The backend should answer with a platform link to open. */
-  opensLink?: boolean
-}
-
-// Telegram deep links carry the code; Discord's link installs the bot in a
-// server; Slack's opens the app's DM. Everywhere else the code is typed by hand.
-const ACTIONS: Partial<Record<ChannelPlatform, LinkAction[]>> = {
-  telegram: [
-    { target: 'direct', label: 'channels.link.open-telegram', opensLink: true },
-    { target: 'group', label: 'channels.link.add-group', opensLink: true },
-  ],
-  discord: [
-    { target: 'group', label: 'channels.link.add-server', opensLink: true },
-    { target: 'direct', label: 'channels.link.get-code' },
-  ],
-  slack: [{ target: 'direct', label: 'channels.link.open-slack', opensLink: true }],
-}
-const actions = computed(() => ACTIONS[props.platform] ?? [{ target: 'direct' as const, label: 'channels.link.get-code' }])
+// Each platform declares its own buttons and code command (platform/channels/<id>.ts).
+const FALLBACK_TARGETS: readonly ChannelLinkTarget[] = [{ target: 'direct', label: 'channels.link.get-code' }]
+const spec = computed(() => channelPlatform(props.platform))
+const actions = computed(() => spec.value?.link.targets ?? FALLBACK_TARGETS)
 
 const invite = ref<ChannelLinkInvite | null>(null)
 const busy = ref(false)
@@ -66,21 +50,12 @@ function dropInvite(reason: string): void {
 onBeforeUnmount(clearExpiry)
 
 const platformName = computed(() => t(`channels.platform.${props.platform}`))
-const command = computed(() =>
-  invite.value ? `${props.platform === 'telegram' ? '/start' : 'link'} ${invite.value.code}` : ''
-)
-const sendHint = computed(() => {
-  if (props.platform === 'telegram') return t('channels.link.send-code-telegram')
-  if (props.platform === 'imessage') return t('channels.link.send-code-imessage')
-  if (props.platform === 'discord' && invite.value?.target === 'direct') return t('channels.link.send-code-discord')
-  return t('channels.link.send-code')
-})
-const waitingText = computed(() =>
-  props.platform === 'telegram' ? t('channels.link.waiting-start') : t('channels.link.waiting', { platform: platformName.value })
-)
+const command = computed(() => (invite.value ? `${spec.value?.link.codeCommand ?? 'link'} ${invite.value.code}` : ''))
+const sendHint = computed(() => t(spec.value?.link.sendCodeKey(invite.value?.target ?? 'direct') ?? 'channels.link.send-code'))
+const waitingText = computed(() => t(spec.value?.link.waitingKey ?? 'channels.link.waiting', { platform: platformName.value }))
 const pending = computed(() => props.store.pairing.value.filter((r) => r.platform === props.platform))
 
-async function start(action: LinkAction): Promise<void> {
+async function start(action: ChannelLinkTarget): Promise<void> {
   busy.value = true
   error.value = ''
   copied.value = false

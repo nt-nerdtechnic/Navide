@@ -128,11 +128,9 @@ function openAccountMenu(e: MouseEvent): void {
 async function selectAccount(accountId: string | null): Promise<void> {
   showAccountMenu.value = false
   if (!props.workspacePath) return
-  if (accountId) {
-    if (await gitAccounts.bind(accountId)) boundAccountId.value = accountId
-  } else if (await gitAccounts.unbind()) {
-    boundAccountId.value = null
-  }
+  const ok = accountId ? await gitAccounts.bind(accountId) : await gitAccounts.unbind()
+  if (ok) boundAccountId.value = accountId
+  else notifyToast(t('git.account-update-failed'), { type: 'error' })
 }
 
 // ── path helpers ──────────────────────────────────────────────────────────────
@@ -615,7 +613,7 @@ async function runCommit(opts: { amend?: boolean; then?: 'push' | 'sync' } = {})
   const r = amend
     ? await amendCommit(commitMessage.value)
     : await commit(commitMessage.value, !hasStaged.value)
-  if (!r.ok) { commitError.value = r.error || 'commit failed'; return }
+  if (!r.ok) { commitError.value = r.error || t('git.commit-failed'); return }
   commitMessage.value = ''; amendMode.value = false; genAttempt.value = 0
   if (opts.then === 'push') await doPush()
   else if (opts.then === 'sync') await doSync()
@@ -624,7 +622,7 @@ async function doCommit(): Promise<void> { await runCommit() }
 async function doUndo(): Promise<void> {
   commitError.value = ''
   const r = await undoLastCommit()
-  if (!r.ok) commitError.value = r.error || 'undo failed'
+  if (!r.ok) commitError.value = r.error || t('git.undo-failed')
 }
 // Each successive sparkle click raises the backend temperature (Copilot-style
 // retry) to escape a repeated answer; reset to 0 once the form clears.
@@ -635,7 +633,7 @@ async function doGenerate(): Promise<void> {
   clearGitError()
   const r = await generateMessage(props.analyzerModel || 'qwen2:latest', genAttempt.value)
   if (r.ok) { commitMessage.value = r.message; genAttempt.value++ }
-  else commitError.value = r.error || 'generation failed'
+  else commitError.value = r.error || t('git.generation-failed')
 }
 
 // ── auto-commit (background patrol) ──────────────────────────────────────────
@@ -679,7 +677,7 @@ async function runAutoCommit(): Promise<void> {
     autoCommitStep.value = 'checking'
     const lint = await checkStaged()
     if (!lint.ok) {
-      notifyToast(`Auto Commit aborted: ${lint.errorCount} lint error(s) detected`, { type: 'error' })
+      notifyToast(t('git.auto-commit-lint-aborted', { count: lint.errorCount }), { type: 'error' })
       return
     }
 
@@ -687,13 +685,17 @@ async function runAutoCommit(): Promise<void> {
     if (isGenerating.value || isCommitting.value) return
     autoCommitStep.value = 'generating'
     const r = await generateMessage(props.analyzerModel || 'qwen2:latest', 0)
-    if (!r.ok || !r.message) return
+    if (!r.ok || !r.message) {
+      notifyToast(t('git.auto-commit-generate-failed'), { type: 'error' })
+      return
+    }
 
     // Step 4: Commit staged files — guard against user having committed manually
     if (!autoCommit.value || isCommitting.value) return
     autoCommitStep.value = 'committing'
     const cr = await commit(r.message, false)
-    if (cr.ok) notifyToast(`Auto-committed: ${r.message}`, { type: 'success' })
+    if (cr.ok) notifyToast(t('git.auto-commit-done', { message: r.message }), { type: 'success' })
+    else notifyToast(t('git.auto-commit-commit-failed', { error: cr.error || t('git.commit-failed') }), { type: 'error' })
   } finally {
     autoCommitRunning.value = false
     autoCommitStep.value = ''
@@ -2599,7 +2601,7 @@ defineExpose({ getCloseState, setClosePrepared })
           <!-- detail view -->
           <template v-else-if="selectedIssue">
             <div class="input-row" style="margin-bottom:6px">
-              <button class="btn-ghost sm" @click="closeIssueDetail">← Back</button>
+              <button class="btn-ghost sm" @click="closeIssueDetail">{{ $t('git.issue-back') }}</button>
               <div class="spacer" />
               <div class="dispatch-wrap">
                 <button
@@ -2632,7 +2634,7 @@ defineExpose({ getCloseState, setClosePrepared })
             </div>
             <div class="input-row" style="margin-top:6px; flex-direction:column; gap:4px">
               <textarea v-model="newComment" class="git-input" rows="2" placeholder="Add a comment…" />
-              <button class="btn-ghost sm" :disabled="!newComment.trim() || isIssueSubmitting" @click="submitComment">Comment</button>
+              <button class="btn-ghost sm" :disabled="!newComment.trim() || isIssueSubmitting" @click="submitComment">{{ $t('git.issue-comment') }}</button>
             </div>
           </template>
 
@@ -2642,8 +2644,8 @@ defineExpose({ getCloseState, setClosePrepared })
               <input v-model="newIssueTitle" class="git-input" placeholder="Issue title" />
               <textarea v-model="newIssueBody" class="git-input" rows="3" placeholder="Description (optional)" />
               <div class="input-row">
-                <button class="btn-ghost sm" :disabled="!newIssueTitle.trim() || isIssueSubmitting" @click="submitNewIssue">Create</button>
-                <button class="btn-ghost sm" @click="showNewIssue = false">Cancel</button>
+                <button class="btn-ghost sm" :disabled="!newIssueTitle.trim() || isIssueSubmitting" @click="submitNewIssue">{{ $t('git.issue-create') }}</button>
+                <button class="btn-ghost sm" @click="showNewIssue = false">{{ $t('action.cancel') }}</button>
               </div>
             </div>
             <div v-if="isLoadingIssues" class="empty-msg" style="padding:2px 0">Loading…</div>

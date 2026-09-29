@@ -21,6 +21,7 @@
 
 import { AGENT_SPECS } from '@navide/plugin-shell'
 import { enUSMessages } from '@navide/plugin-ui/foundation'
+import { CHANNEL_PLATFORM_IDS } from '../platform/channels'
 
 export const MSG_START = '---MSG-START---'
 export const MSG_END = '---MSG-END---'
@@ -327,7 +328,7 @@ export const EXTERNAL_CONTENT_END = '[外部訊息結束]'
 const EXTERNAL_BOUNDARY_RE = /\[外部訊息(開始|結束)/g
 
 /** Chat platforms whose deliveries arrive as `<platform>:<sender name>`. */
-const CHANNEL_SENDER_RE = /^(telegram|discord|slack|feishu|dingtalk|matrix|mattermost|imessage):/
+const CHANNEL_SENDER_RE = new RegExp(`^(${CHANNEL_PLATFORM_IDS.join('|')}):`)
 
 /**
  * Whether an `agent_msg.deliver` event carries content from outside this

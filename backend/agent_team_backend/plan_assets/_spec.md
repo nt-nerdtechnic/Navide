@@ -103,8 +103,10 @@ Field rules:
 ## Document rules
 
 - Self-contained: no external scripts, styles, fonts, or images (preview runs
-  in a CSP sandbox). No executable JavaScript — presentation only; the JSON
-  island is data, not code.
+  in a CSP sandbox: `default-src 'none'`, `img-src data:`, `font-src data:`).
+  Embed every image as a `data:` URI (base64 or inline SVG) — a `file:`,
+  relative or `http(s):` image URL renders as a broken image. No executable
+  JavaScript — presentation only; the JSON island is data, not code.
 - Theme-aware: keep the template's CSS token structure
   (`prefers-color-scheme` + `:root[data-theme=…]` overrides).
 - Wide content (tables, code, diagrams) sits in its own `overflow-x: auto`
@@ -125,5 +127,30 @@ directly.
 
 ## Size guidance
 
-Aim for 300–600 lines. If a plan outgrows that, split it into multiple plans
-rather than growing one file.
+Aim for 300–600 lines of prose. If a plan outgrows that, split it into
+multiple plans rather than growing one file.
+
+There is **no size limit** on a plan document: every file in a plan directory
+is listed in the Plan view and by `plan_list`, opens in full, and can be updated
+(stage, todos, notes, review notes) however large it is — a report with embedded
+screenshots can be several MB. Large files are read and written in pages, and
+listing reads each file only up to the end of its `plan-meta` block, so keep
+that block at the top of the file (the template does): an island further down
+still works, but every listing reads the file up to it, and a large file with no
+`plan-meta` at all is read in full (once, linearly) on every listing. What still scales with
+size:
+
+- **Opening** loads the whole file into the preview, so a multi-MB report takes
+  a moment; prefer compressing screenshots (WebP/JPEG) before embedding.
+- **Updates** rewrite the whole file (staged, then swapped in atomically), so
+  updating a multi-MB plan costs proportionally; keep bulky embedded images in
+  a separate read-only report if the plan is edited often.
+- **`plan_list`** returns every entry with `rel_path`, `name`, `stage`,
+  `overview`, `todos`, `mtime`. When a workspace has so many plans that the full
+  list would exceed one 1 MiB backend message (roughly 700 KB of listing), each
+  entry's `meta` is dropped to null and everything above is kept, so nothing is
+  ever left out; the Plans view pages the list and always has full `meta`.
+- A document whose `plan-meta` is missing or broken is still listed, marked
+  "Needs attention" with the reason (`kind: "document"`, `reason`), and can be
+  opened; fix the block to make it a plan again. A file that cannot be read at
+  all is listed with `kind: "unreadable"` and the reason.

@@ -60,6 +60,7 @@ import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER, rawR
 import type { MessageReason, PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
+import { parsePlanTargetArgs } from './lib/planTarget'
 import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isExternalDelivery, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
 import {
   evaluateTurnSpawns,
@@ -8851,8 +8852,8 @@ registerCommand('workbench.action.openGitWindow', async () => {
     await window.agentTeam?.openGitWindow?.({ workspace_path: currentWorkspace.value })
   }
 })
-registerCommand('workbench.action.openPlans', async () => {
-  await openPlansWindow()
+registerCommand('workbench.action.openPlans', async (args) => {
+  await openPlansTarget(args)
 })
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
@@ -9282,7 +9283,7 @@ registerCommand('ui.preview.show', (args) => {
 registerCommand('workbench.action.focusPreview', () => {
   preview.focus()
 })
-registerCommand('ui.window.openPlans', () => { openPlansWindow() })
+registerCommand('ui.window.openPlans', (args) => openPlansTarget(args))
 registerCommand('ui.window.openResourceManager', () => { openResourceManager() })
 registerCommand('ui.window.openTurnStats', () => { openTurnStats() })
 registerCommand('ui.window.openGit', async () => {
@@ -12588,6 +12589,16 @@ async function titlebarRevealWorkspace(): Promise<void> {
 function openPlansWindow(): void {
   if (!currentWorkspace.value) return
   controlPaneRef.value?.selectSidebarTab('plans')
+}
+
+// MCP entry (ui_invoke): with a rel_path, open the Plan window on that one
+// document; without args, behave exactly like openPlansWindow().
+async function openPlansTarget(args: unknown): Promise<void> {
+  const { relPath } = parsePlanTargetArgs(args)
+  if (!relPath) { openPlansWindow(); return }
+  if (!currentWorkspace.value) throw new Error('no workspace is open in this window')
+  const res = await window.agentTeam?.openPlansWindow?.({ workspace_path: currentWorkspace.value, rel_path: relPath })
+  if (!res?.ok) throw new Error(`could not open the Plan window for ${relPath}`)
 }
 
 /** @param opts.keepPanes  Leave the panes of the workspace being left alone.

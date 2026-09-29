@@ -1,5 +1,6 @@
 import { computed, ref, watch, type InjectionKey } from 'vue'
 import type { useBackend } from './useBackend'
+import type { ChannelPlatform } from '../platform/channels'
 
 /**
  * Chat channels (Telegram, Discord, Slack, …) as seen from the renderer. The
@@ -9,15 +10,8 @@ import type { useBackend } from './useBackend'
  * place on `channels.status`.
  */
 
-export type ChannelPlatform =
-  | 'telegram'
-  | 'discord'
-  | 'slack'
-  | 'feishu'
-  | 'dingtalk'
-  | 'matrix'
-  | 'mattermost'
-  | 'imessage'
+// The platform union is derived from the registry (platform/channels/index.ts).
+export type { ChannelPlatform }
 
 export type ChannelLifecycle = 'stopped' | 'starting' | 'ready' | 'recovering' | 'blocked'
 
@@ -72,7 +66,15 @@ export interface ChannelBinding {
   chat_id: string
   thread_id: string
   title: string
+  /** How much of the pane's activity the chat mirrors; absent on older backends (= full). */
+  verbosity?: ChannelVerbosity
+  /** Set on an auto-created child topic: the pane it reports into. */
+  parent_pane_id?: string
+  /** True for a topic the backend created itself (a child pane's), false for a manual binding. */
+  auto?: boolean
 }
+
+export type ChannelVerbosity = 'minimal' | 'standard' | 'full'
 
 export interface ChannelLocation {
   chat_id: string
@@ -108,48 +110,6 @@ export interface ChannelLinkFailedEvent {
   code: string
   error: string
 }
-
-export interface ChannelField {
-  key: string
-  /** Stored in the credential vault, never echoed back. */
-  secret: boolean
-  optional?: boolean
-  /** Fixed choices; the first is the default. */
-  options?: string[]
-}
-
-export interface ChannelPlatformSpec {
-  platform: ChannelPlatform
-  fields: ChannelField[]
-  macOnly?: boolean
-}
-
-/** Display order and the credentials each platform needs. Keys match each
- *  backend adapter's `create_adapter(config, secret)`. */
-export const CHANNEL_PLATFORMS: readonly ChannelPlatformSpec[] = [
-  { platform: 'telegram', fields: [{ key: 'token', secret: true }] },
-  { platform: 'discord', fields: [{ key: 'token', secret: true }] },
-  { platform: 'slack', fields: [{ key: 'app_token', secret: true }, { key: 'bot_token', secret: true }] },
-  {
-    platform: 'feishu',
-    fields: [
-      { key: 'app_id', secret: true },
-      { key: 'app_secret', secret: true },
-      { key: 'domain', secret: false, optional: true, options: ['feishu', 'lark'] },
-    ],
-  },
-  {
-    platform: 'dingtalk',
-    fields: [
-      { key: 'client_id', secret: true },
-      { key: 'client_secret', secret: true },
-      { key: 'robot_code', secret: false, optional: true },
-    ],
-  },
-  { platform: 'matrix', fields: [{ key: 'homeserver', secret: false }, { key: 'access_token', secret: true }] },
-  { platform: 'mattermost', fields: [{ key: 'server_url', secret: false }, { key: 'token', secret: true }] },
-  { platform: 'imessage', fields: [], macOnly: true },
-]
 
 export interface ChannelResult<T = Record<string, unknown>> {
   ok: boolean
@@ -303,6 +263,10 @@ function createChannelsStore(backend: Backend) {
     locations: async (platform: ChannelPlatform): Promise<ChannelResult<{ locations: ChannelLocation[] }>> =>
       call<{ locations: ChannelLocation[] }>('channels.locations', { platform }),
     bind: (req: BindRequest) => mutate('channels.bind', { ...req }),
+    /** Child topics the backend auto-bound under a parent pane's binding. */
+    childrenOf: (paneId: string): ChannelBinding[] => bindings.value.filter((b) => b.parent_pane_id === paneId),
+    setBindingOptions: (paneId: string, verbosity: ChannelVerbosity) =>
+      mutate('channels.set_binding_options', { pane_id: paneId, verbosity }),
     unbind: (paneId: string, paneName = '') => mutate('channels.unbind', { pane_id: paneId, pane_name: paneName }),
     rebind: (fromPaneId: string, toPaneId: string) =>
       mutate('channels.rebind', { from_pane_id: fromPaneId, to_pane_id: toPaneId }),

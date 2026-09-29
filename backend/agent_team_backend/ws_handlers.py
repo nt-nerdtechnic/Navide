@@ -377,6 +377,56 @@ async def fs_write_file(session: "Session", msg_id: str, msg_type: str, payload:
         asyncio.create_task(app.broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
 
+@handler("fs.write_part")
+async def fs_write_part(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    result = await asyncio.to_thread(
+        app.fs_service.write_part,
+        payload.get("workspace_path") or "",
+        payload.get("rel_path", "") or "",
+        payload.get("upload_id"),
+        payload.get("offset"),
+        payload.get("data_base64"),
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("fs.write_commit")
+async def fs_write_commit(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    ws_path = payload.get("workspace_path") or ""
+    await asyncio.to_thread(
+        app._watch_plans_workspace, ws_path, payload.get("rel_path", "") or ""
+    )
+    expected_mtime = payload.get("expected_mtime")
+    result = await asyncio.to_thread(
+        app.fs_service.write_commit,
+        ws_path,
+        payload.get("rel_path", "") or "",
+        payload.get("upload_id"),
+        payload.get("total_size"),
+        float(expected_mtime) if expected_mtime is not None else None,
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        asyncio.create_task(app.broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+
+@handler("fs.write_abort")
+async def fs_write_abort(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    result = await asyncio.to_thread(
+        app.fs_service.write_abort,
+        payload.get("workspace_path") or "",
+        payload.get("rel_path", "") or "",
+        payload.get("upload_id"),
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 @handler("fs.read_file")
 async def fs_read_file(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -386,8 +436,25 @@ async def fs_read_file(session: "Session", msg_id: str, msg_type: str, payload: 
         app._watch_plans_workspace, ws_path, payload.get("rel_path", "") or ""
     )
     enc_override = payload.get("encoding_override") or None
+    rel_path = payload.get("rel_path", "") or ""
+    # Plan documents open at any size; every other file keeps the editor limit.
+    read_kwargs: dict = {"size_limit": None} if app.fs_service.is_plan_document(ws_path, rel_path) else {}
     result = await asyncio.to_thread(
-        app.fs_service.read_file, ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override
+        app.fs_service.read_file, ws_path, rel_path, encoding_override=enc_override, **read_kwargs
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("fs.read_range")
+async def fs_read_range(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    result = await asyncio.to_thread(
+        app.fs_service.read_range,
+        payload.get("workspace_path") or "",
+        payload.get("rel_path", "") or "",
+        payload.get("offset"),
+        payload.get("length"),
     )
     await session.send_json(make_response(msg_id, msg_type, result))
 
@@ -10387,6 +10454,7 @@ async def agent_msg_log_append(session: "Session", msg_id: str, msg_type: str, p
         )
         return
     written = app.agent_message_log.append(rows)
+    agent_messaging.notify_message_rows(rows)
     await session.send_json(make_response(msg_id, msg_type, {"written": written}))
 
 

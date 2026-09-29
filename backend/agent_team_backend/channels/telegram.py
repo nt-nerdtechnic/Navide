@@ -77,6 +77,8 @@ class TelegramAdapter:
         threads=True, create_location=True, edit=True, typing=True, buttons=True,
         text_limit=TEXT_LIMITS["telegram"],
     )
+    # Groups allow about 20 messages a minute; the mirror outbox paces to this.
+    rate_per_min = 20.0
 
     def __init__(
         self,
@@ -223,11 +225,12 @@ class TelegramAdapter:
             chat=chat, sender=msg.get("from") or {}, text=text, thread=_thread_of(msg),
             message_id=f"{chat.get('id')}:{msg.get('message_id')}",
             ts=float(msg.get("date") or time.time()),
+            reply_to_id=str((msg.get("reply_to_message") or {}).get("message_id") or ""),
         )
 
     async def _deliver(
         self, *, chat: dict[str, Any], sender: dict[str, Any], text: str, thread: str,
-        message_id: str, ts: float, callback_data: str = "",
+        message_id: str, ts: float, callback_data: str = "", reply_to_id: str = "",
     ) -> None:
         self.status.last_inbound_at = time.time()
         if self._emit is None:
@@ -239,7 +242,7 @@ class TelegramAdapter:
             platform=self.platform, account=self.account, chat_id=str(chat.get("id", "")),
             thread_id=thread, sender_id=str(sender.get("id", "")), sender_name=name,
             text=text, message_id=message_id, is_direct=chat.get("type") == "private", ts=ts,
-            callback_data=callback_data,
+            callback_data=callback_data, reply_to_id=reply_to_id,
         ))
 
     def _remember_chat(self, chat: dict[str, Any]) -> None:

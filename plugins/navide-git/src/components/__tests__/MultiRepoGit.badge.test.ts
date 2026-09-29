@@ -15,7 +15,7 @@ const stubSurfacePorts = {
 
 import MultiRepoGit from '../MultiRepoGit.vue'
 vi.mock('../../composables/useRepoDiscovery', () => ({
-  useRepoDiscovery: () => ({ repositories: mockRepositories, refresh: vi.fn(), adopt: vi.fn() }),
+  useRepoDiscovery: () => ({ repositories: mockRepositories, discoveryFailed: { value: false }, refresh: vi.fn(), adopt: vi.fn() }),
 }))
 
 vi.mock('vue-i18n', () => ({

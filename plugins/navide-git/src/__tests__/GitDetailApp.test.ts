@@ -44,6 +44,7 @@ vi.mock('@navide/plugin-sdk', () => ({
 
 vi.mock('@navide/plugin-ui/foundation', () => ({
   useNotify: () => notify,
+  i18n: { global: { t: (key: string) => key } },
 }))
 
 vi.mock('../composables/useGit', () => ({

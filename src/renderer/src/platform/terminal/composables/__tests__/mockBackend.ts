@@ -173,12 +173,13 @@ export function createMockBackend(initialStatus: BackendStatus = 'connected') {
     statPath: (path, timeoutMs) => request('fs.stat_path', { path }, timeoutMs),
     getHomeDirectory: async () => '/tmp',
     openFile: async ({ workspacePath, filepath, fileWorkspace, line }) => {
-      await agentTeam()?.openEditorWindow?.({
+      const res = await agentTeam()?.openEditorWindow?.({
         workspace_path: workspacePath,
         filepath,
         ...(fileWorkspace ? { file_ws: fileWorkspace } : {}),
         ...(line === undefined ? {} : { line }),
       })
+      return res?.ok === true
     },
     openExternal: async () => {},
     reportSelection: (selection) => { agentTeam()?.reportTerminalSelection?.(selection) },

@@ -26,6 +26,7 @@ import { resolvePlanStore, type SectionBody } from './retained/planStore'
 import { htmlPlanAwaitingUser, parseHtmlPlanMeta } from './retained/usePlanHtml'
 import { sharePlanToGit } from './retained/planShare'
 import { plansTransport } from './retained/transport'
+import { listAllPlans, readWholeDocument } from './planPaging'
 import type { ReviewNote, PlanTodo as RetainedTodo, PlanMeta as RetainedMeta } from './retained/planModel'
 import { buildPlanRuntimeScript, buildTodoStatusRuntime, createPlanRuntimeMessageHandler, sanitizePlanSectionHtml } from './retained/planRuntime'
 
@@ -59,8 +60,12 @@ interface PlanSummary {
   overview?: string
   todos?: TodoSummary
   mtime?: number | null
-  kind?: 'plan' | 'document'
+  kind?: 'plan' | 'document' | 'unreadable'
   meta?: PlanMeta | null
+  /** Why the backend could not fully read or parse this document; it is
+   *  listed regardless, so no plan ever disappears from the view. */
+  reason?: string
+  size?: number
 }
 
 interface PlanDocument {
@@ -129,11 +134,6 @@ const collapsedSections = ref<Set<string>>(new Set(['archived']))
 const loading = ref(false)
 const error = ref('')
 const busy = ref(false)
-const newName = ref('')
-const newOverview = ref('')
-const newTodos = ref('')
-const todoStatus = ref('pending')
-const selectedTodoId = ref('')
 const recentPaths = ref<string[]>([])
 const pinnedPaths = ref<string[]>([])
 const sidebarCollapsed = ref(false)
@@ -145,7 +145,6 @@ const contextMenu = ref<{ x: number; y: number; relPath: string } | null>(null)
 const renameInput = ref<HTMLInputElement | null>(null)
 const renameTarget = ref<string | null>(null)
 const renameValue = ref('')
-const showCreateForm = ref(false)
 let stopTarget: (() => void) | null = null
 let plansSubscription: ReturnType<typeof plansBackend.subscribe> | null = null
 /** One saved document produces several plans.changed events and a file storm
@@ -617,8 +616,6 @@ function applySelected(document: PlanDocument, relPath: string): void {
   previewAnchorCounts = countNoteAnchors(document.meta?.reviewNotes ?? [])
   selected.value = { ...document, rel_path: document.rel_path || relPath }
   selectedPath.value = relPath
-  selectedTodoId.value = document.meta?.todos[0]?.id ?? ''
-  todoStatus.value = document.meta?.todos[0]?.status ?? 'pending'
   markdownRefresh.value++
   persistLastOpened(relPath)
 }
@@ -649,7 +646,6 @@ function openHtmlPreview(target: { path: string; name: string }): void {
   documentLoadError.value = null
   selected.value = null
   selectedPath.value = ''
-  selectedTodoId.value = ''
   htmlPreviewTarget.value = target
 }
 
@@ -687,13 +683,20 @@ async function readPlan(relPath: string): Promise<void> {
   }
   selectedPath.value = relPath
   try {
-    const document = await plansBackend.call('plans.read', { rel_path: relPath }) as unknown as PlanDocument
+    const document = await readWholeDocument<PlanDocument & Record<string, unknown>>(
+      plansBackend.call.bind(plansBackend) as never, 'plans.read', 'html', { rel_path: relPath },
+    )
     if (currentGeneration !== activeReadGeneration || selectedPath.value !== relPath) return
     documentLoadError.value = null
     applySelected(document, relPath)
   } catch (cause) {
     if (currentGeneration !== activeReadGeneration || selectedPath.value !== relPath) return
-    documentLoadError.value = { relPath, reason: cause instanceof Error ? cause.message : String(cause ?? '').trim() }
+    const listed = plans.value.find(plan => plan.rel_path === relPath)
+    documentLoadError.value = {
+      relPath,
+      reason: [listed?.reason, cause instanceof Error ? cause.message : String(cause ?? '').trim()]
+        .filter(Boolean).join(' — '),
+    }
     selected.value = null
     snapshotPreview.value = null
     sectionEditing.value = false
@@ -756,7 +759,7 @@ async function loadPlans(openSelected = true): Promise<void> {
   loading.value = isFirstLoad
   error.value = ''
   try {
-    const result = await plansBackend.call('plans.list', {}) as unknown as PlanSummary[]
+    const result = await listAllPlans(plansBackend.call.bind(plansBackend) as never) as PlanSummary[]
     plans.value = Array.isArray(result) ? result : []
     if (openSelected && selectedPath.value && plans.value.some((plan) => plan.rel_path === selectedPath.value)) {
       if (!selected.value || selected.value.rel_path !== selectedPath.value) {
@@ -770,46 +773,7 @@ async function loadPlans(openSelected = true): Promise<void> {
   }
 }
 
-async function createPlan(): Promise<void> {
-  if (!newName.value.trim()) return
-  busy.value = true
-  try {
-    const result = await plansBackend.call<{ rel_path: string }>('plans.create', {
-      name: newName.value,
-      overview: newOverview.value,
-      todos: newTodos.value.split('\n').map((line) => line.trim()).filter(Boolean),
-    })
-    newName.value = ''
-    newOverview.value = ''
-    newTodos.value = ''
-    await loadPlans(false)
-    await openPlan(result.rel_path)
-    toast(t('pane.plans.v2.plan-created'), { type: 'success' })
-  } catch (cause) {
-    toast(formatBackendError(cause), { type: 'error' })
-  } finally {
-    busy.value = false
-  }
-}
 
-
-async function updateTodo(): Promise<void> {
-  if (!selectedPath.value || !selectedTodoId.value) return
-  busy.value = true
-  try {
-    await plansBackend.call('plans.update_todo', {
-      rel_path: selectedPath.value,
-      todo_id: selectedTodoId.value,
-      status: todoStatus.value,
-    })
-    await loadPlans(false)
-    await refreshSelected()
-  } catch (cause) {
-    toast(formatBackendError(cause), { type: 'error' })
-  } finally {
-    busy.value = false
-  }
-}
 
 interface ReviewTarget {
   path: string
@@ -903,6 +867,8 @@ async function archiveAllDone(): Promise<void> {
     await refreshSelected()
   } catch (cause) {
     toast(formatBackendError(cause), { type: 'error' })
+    // Earlier items already took effect; show what is really left.
+    await loadPlans(false)
   } finally {
     busy.value = false
   }
@@ -954,6 +920,8 @@ async function deleteCompleted(): Promise<void> {
     }
   } catch (cause) {
     toast(formatBackendError(cause), { type: 'error' })
+    // Earlier items already took effect; show what is really left.
+    await loadPlans(false)
   } finally {
     busy.value = false
   }
@@ -1233,7 +1201,7 @@ async function submitRename(): Promise<void> {
   try {
     const result = await plansBackend.call<{ to: string }>('plans.rename', {
       from: target,
-      to: `.agent-team/plans/${nextName}`,
+      to: `${target.includes('/') ? target.slice(0, target.lastIndexOf('/') + 1) : '.agent-team/plans/'}${nextName}`,
     })
     if (selectedPath.value === target) selectedPath.value = result.to
     await loadPlans(false)
@@ -1515,6 +1483,11 @@ onUnmounted(() => {
                     {{ planStageLabel(planStage(plan)) }}
                   </span>
                   <span v-else class="plan-chip">{{ t('pane.plans.v2.document') }}</span>
+                  <span
+                    v-if="plan.reason"
+                    class="plan-chip plan-chip--problem"
+                    :title="`${t('pane.plans.v2.needs-attention-title')} ${plan.reason}`"
+                  >{{ t('pane.plans.v2.needs-attention') }}</span>
                   <span
                     v-if="planAwaiting(plan) > 0"
                     class="plan-chip plan-chip--awaiting"
@@ -2040,6 +2013,11 @@ onUnmounted(() => {
 .plan-chip--awaiting {
   background: var(--danger-subtle, var(--attention-subtle));
   color: var(--danger-bright, var(--attention-bright));
+  text-transform: none;
+}
+.plan-chip--problem {
+  background: var(--attention-subtle);
+  color: var(--attention-bright);
   text-transform: none;
 }
 

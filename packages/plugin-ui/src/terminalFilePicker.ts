@@ -98,8 +98,17 @@ export function createTerminalFilePicker(options: TerminalFilePickerOptions): Te
     let debounceTimer: ReturnType<typeof setTimeout>
     let searchPending = true
 
+    let rowEls: HTMLElement[] = []
+    const SELECTED_BG = 'rgba(56,139,253,0.2)'
+    // Move the highlight in place: hover and arrow keys must not rebuild the
+    // rows, or the element under the pointer is replaced mid-interaction.
+    function updateSelection(): void {
+      rowEls.forEach((el, i) => { el.style.background = i === selectedIdx ? SELECTED_BG : '' })
+    }
+
     function renderList(): void {
       itemList.innerHTML = ''
+      rowEls = []
       if (!currentItems.length) {
         const msg = document.createElement('div')
         msg.textContent = searchPending ? 'Searching…' : 'No files found'
@@ -112,7 +121,7 @@ export function createTerminalFilePicker(options: TerminalFilePickerOptions): Te
         Object.assign(row.style, {
           padding: '7px 16px', cursor: 'pointer',
           display: 'flex', gap: '10px', alignItems: 'baseline',
-          background: i === selectedIdx ? 'rgba(56,139,253,0.2)' : '',
+          background: i === selectedIdx ? SELECTED_BG : '',
         })
         const nameSpan = document.createElement('span')
         nameSpan.textContent = item.name
@@ -122,12 +131,13 @@ export function createTerminalFilePicker(options: TerminalFilePickerOptions): Te
         Object.assign(dirSpan.style, { color: '#8b949e', fontSize: '11px' })
         row.appendChild(nameSpan)
         row.appendChild(dirSpan)
-        row.addEventListener('mouseenter', () => { selectedIdx = i; renderList() })
+        row.addEventListener('mouseenter', () => { selectedIdx = i; updateSelection() })
         row.addEventListener('mousedown', (e) => {
           e.preventDefault()
           close('select')
           options.onPick(item, request.lineNum, e)
         })
+        rowEls.push(row)
         itemList.appendChild(row)
       })
     }
@@ -161,10 +171,10 @@ export function createTerminalFilePicker(options: TerminalFilePickerOptions): Te
     pickerInput.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        if (selectedIdx < currentItems.length - 1) { selectedIdx++; renderList() }
+        if (selectedIdx < currentItems.length - 1) { selectedIdx++; updateSelection() }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
-        if (selectedIdx > 0) { selectedIdx--; renderList() }
+        if (selectedIdx > 0) { selectedIdx--; updateSelection() }
       } else if (e.key === 'Enter') {
         e.preventDefault()
         const item = currentItems[selectedIdx]

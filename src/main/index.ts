@@ -1150,7 +1150,11 @@ frontendPluginManager.setPlansBackendFailureHandler((failure) => {
   const query = failure.query.startsWith('?') ? failure.query.slice(1) : failure.query
   const relPath = new URLSearchParams(query).get('rel_path') ?? undefined
   warnMain(`[main] navide.plans v2 failed (${failure.reason}); switched to legacy recovery`)
-  if (!isLeftContribution) void openLegacyPlanWindow(failure.workspacePath, relPath)
+  if (!isLeftContribution) {
+    void openLegacyPlanWindow(failure.workspacePath, relPath).then((opened) => {
+      if (opened === false) showPlansRecoveryUnavailable(failure.workspacePath)
+    })
+  }
 })
 let approvedInstalledPluginActivations = [
   ...installedPluginLoad.activationCatalog,
@@ -1676,6 +1680,16 @@ const plansHasCompleteV2Package = Boolean(
   bundledPlansDescriptor?.packageVersion &&
   bundledPlansDescriptor?.packageDir
 )
+/** Re-read on every retry: an installed Plans package can arrive or change
+ *  after startup, so the startup snapshot above cannot decide a later retry. */
+function plansHasCompleteV2PackageNow(): boolean {
+  const descriptor = frontendPluginManager.getDescriptor('navide.plans')
+  return Boolean(
+    hasCompletePlansContributions(descriptor) &&
+    descriptor?.packageVersion &&
+    descriptor?.packageDir
+  )
+}
 if (!plansHasCompleteV2Package) {
   plansRecoveryEnabled = true
   plansRecoveryReason ??= 'package-incomplete'
@@ -1729,7 +1743,7 @@ function retryPlansV2AfterRecovery(): { ok: boolean; reason?: string } {
   const decision = decidePlansV2Retry({
     recoveryEnabled: plansRecoveryEnabled,
     forced: plansRecoveryForced,
-    hasCompleteV2Package: plansHasCompleteV2Package,
+    hasCompleteV2Package: plansHasCompleteV2PackageNow(),
     retriesLeft: plansV2RetriesLeft,
   })
   if (decision.outcome === 'not-in-recovery') return { ok: true }
@@ -2799,6 +2813,22 @@ async function handleMiniIdeUnavailable(
     : dialog.showMessageBox(options))
 }
 
+/** The v2 Plans window was closed on a failure and the legacy window could not
+ *  take its place (its storage is unreadable); say so instead of leaving the
+ *  user with a window that just vanished. */
+function showPlansRecoveryUnavailable(workspacePath: string): void {
+  const target = findMainWindowForWorkspace(workspacePath) ?? mainWindow
+  const options: Electron.MessageBoxOptions = {
+    type: 'error',
+    title: 'Plans unavailable',
+    message: 'Plans could not be opened because its data could not be read.',
+    detail: 'Open Settings → Extensions to inspect the Plans extension, or restart Navide.',
+  }
+  void (target && !target.isDestroyed()
+    ? dialog.showMessageBox(target, options)
+    : dialog.showMessageBox(options))
+}
+
 function showPlansPreviewUnavailable(workspacePath: string): void {
   const plansInstalled = Boolean(
     frontendPluginManager.getDescriptor('navide.plans') ||
@@ -3284,6 +3314,11 @@ async function openCatalogContributionWindow(
     }
     return result
   }
+  // A reused window only had its query updated and was focused; whether the
+  // file then showed is the guest's business, so leave a trace for main.log.
+  if (!created && contributionKey === MINI_IDE_CONTRIBUTION) {
+    warnMain(`[main] mini-ide window reused; workspace=${workspacePath} filepath=${extraParams.filepath ?? ''}`)
+  }
   // Only a window this call created is tracked: the reopen path above focuses
   // an already-tracked window, and it is only now, past the failure branch,
   // that the window is one the user will actually see.
@@ -3640,6 +3675,9 @@ ipcMain.handle('window:openEditor', async (event, args: Record<string, string>) 
     return { ok: true }
   }
   const ok = await routeEditorOpen(BrowserWindow.fromWebContents(event.sender), params)
+  if (!ok) {
+    warnMain(`[main] window:openEditor failed workspace=${workspacePath} filepath=${filepath} file_ws=${params.file_ws ?? ''}`)
+  }
   return { ok }
 })
 

@@ -58,6 +58,19 @@ class TokenUsage:
 USER_PROMPT_MAX_CHARS = 500
 
 
+#: Cap for the longer copy of the same prompt kept for chat-channel mirroring.
+FULL_PROMPT_MAX_CHARS = 16000
+
+
+class PromptText(str):
+    """A user prompt capped at ``USER_PROMPT_MAX_CHARS`` (what pane naming and every
+    other consumer sees) that also carries ``.full``: the same normalized text up to
+    ``FULL_PROMPT_MAX_CHARS``. Only the chat mirror reads ``.full``; anything that
+    slices or copies the string gets a plain ``str`` and is unaffected."""
+
+    full: str = ""
+
+
 def user_prompt_text(raw: str) -> str:
     """Normalize a user-record's text for pane auto-naming: strip, drop
     '<'-prefixed injected wrappers (session markers, command stubs), cap
@@ -66,7 +79,9 @@ def user_prompt_text(raw: str) -> str:
     text = raw.strip()
     if not text or text.startswith("<"):
         return ""
-    return text[:USER_PROMPT_MAX_CHARS]
+    out = PromptText(text[:USER_PROMPT_MAX_CHARS])
+    out.full = text[:FULL_PROMPT_MAX_CHARS]
+    return out
 
 
 @dataclass

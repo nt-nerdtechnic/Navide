@@ -20,6 +20,9 @@ Verified facts (docs.slack.dev, read 2026-09-24):
 Gaps: bots have no typing indicator over the Web API / Socket Mode (typing=False).
 Markdown is sent as-is (Slack mrkdwn differs: **bold** shows literally).
 Not verified against a live workspace (tests use local fakes).
+Replies (InboundMessage.reply_to_id): a Slack reply is a thread reply, so it is the
+thread_ts (root ts, equal to the ts send_text returned). The reply also lands in the
+thread's own location (thread_id), which is a different binding than the channel's.
 """
 
 from __future__ import annotations
@@ -257,6 +260,8 @@ class SlackAdapter:
             sender_id=user, sender_name=await self._sender_name(user),
             text=str(event.get("text") or ""), message_id=f"{channel}:{ts}",
             is_direct=event.get("channel_type") == "im", ts=time.time(),
+            # A Slack reply is a thread reply: its parent is the thread root.
+            reply_to_id=thread_ts if thread_ts != ts else "",
         ))
 
     async def _on_block_action(self, payload: dict[str, Any]) -> None:

@@ -57,3 +57,8 @@ def install(logger_name: str = "httpx") -> SecretRedactFilter:
 
 def add_secret(secret: str) -> None:
     _filter.add_secret(secret)
+
+
+def redact_text(text: str) -> str:
+    """``text`` with every registered secret (and bot-token URL segment) masked."""
+    return _filter.redact(text)

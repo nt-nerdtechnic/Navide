@@ -132,6 +132,11 @@ class FakeSeams:
                      read_secret=self.read_secret, write_secret=self.write_secret)
 
 
+def _said(env: "Env", needle: str) -> bool:
+    """Some sent message contains ``needle`` (replies now carry a source header)."""
+    return any(needle in t for t in env.tg.texts())
+
+
 async def _until(pred, timeout: float = 3.0) -> None:
     deadline = time.monotonic() + timeout
     while not pred():
@@ -282,24 +287,22 @@ async def test_alias_follows_rebuilt_pane(env: Env) -> None:
 
 
 async def test_outbound_after_turn_complete_only(env: Env) -> None:
-    env.turn_complete("pane-1", "stale turn before anything was sent")
     await env.inbound("do it")
-    # Still queued: a turn ending now is the one the message is waiting behind.
+    # Still queued: a turn ending now is the one the message is waiting behind. It is
+    # not this message's reply, but the bound chat still hears it, from the keyboard.
     env.turn_complete("pane-1", "not the reply")
-    await asyncio.sleep(0.05)
-    assert "not the reply" not in env.tg.texts()
+    await _until(lambda: "✅ 完成 · 🖥 本機\nnot the reply" in env.tg.texts())
     env.fake.verdicts["k1"] = {"status": "delivered"}
     await _until(lambda: MSG_WORKING in env.tg.texts())
     env.turn_complete("pane-1", "the **answer**")
-    await _until(lambda: "the **answer**" in env.tg.texts())
-    loc = next(loc for loc, t in env.tg.sent if t == "the **answer**")
+    await _until(lambda: "✅ 完成 · 💬 alice\nthe **answer**" in env.tg.texts())
+    loc = next(loc for loc, t in env.tg.sent if t.endswith("the **answer**"))
     assert (loc.chat_id, loc.thread_id) == ("-100", "50")
     assert any(text.startswith("✅") for _, text in env.tg.edits)
     assert env.tg.typing >= 1
-    # A later turn with no new message is not relayed.
+    # A later turn with no new message is relayed too, as a local turn.
     env.turn_complete("pane-1", "unsolicited")
-    await asyncio.sleep(0.05)
-    assert "unsolicited" not in env.tg.texts()
+    await _until(lambda: "✅ 完成 · 🖥 本機\nunsolicited" in env.tg.texts())
 
 
 async def test_long_reply_is_chunked(env: Env) -> None:
@@ -307,7 +310,7 @@ async def test_long_reply_is_chunked(env: Env) -> None:
     env.fake.verdicts["k1"] = {"status": "delivered"}
     await _until(lambda: MSG_WORKING in env.tg.texts())
     env.turn_complete("pane-1", "\n".join("x" * 99 for _ in range(100)))
-    await _until(lambda: sum(1 for t in env.tg.texts() if t.startswith("xxx")) == 3)
+    await _until(lambda: sum(1 for t in env.tg.texts() if "xxx" in t) == 3)
 
 
 async def test_busy_pane_gets_received_status_message(env: Env) -> None:
@@ -406,11 +409,11 @@ async def test_second_message_queued_behind_first_turn_still_gets_its_reply(env:
     await env.inbound("second")  # sits in the pane's queue behind turn 1
     await asyncio.sleep(0.05)
     env.turn_complete("pane-1", "reply one")
-    await _until(lambda: "reply one" in env.tg.texts())
+    await _until(lambda: _said(env, "reply one"))
     env.fake.verdicts["k2"] = {"status": "delivered"}  # now injected
     await asyncio.sleep(0.05)
     env.turn_complete("pane-1", "reply two")
-    await _until(lambda: "reply two" in env.tg.texts())
+    await _until(lambda: _said(env, "reply two"))
 
 
 async def test_second_message_not_rearmed_after_unbind(env: Env) -> None:
@@ -574,7 +577,7 @@ async def test_running_watch_is_capped_but_late_reply_still_sent(clocked) -> Non
     await asyncio.sleep(0.1)
     assert (env.tg.typing, len(env.tg.edits)) == (typing, edits)  # indicators stopped
     env.turn_complete("pane-1", "finally")
-    await _until(lambda: "finally" in env.tg.texts())
+    await _until(lambda: _said(env, "finally"))
 
 
 async def test_pane_close_drops_pending_and_its_task(env: Env) -> None:
@@ -610,7 +613,7 @@ async def test_rebind_moves_binding_and_running_watch(env: Env) -> None:
     assert result["ok"] and result["binding"]["pane_id"] == "pane-1n"
     assert [b.pane_id for b in env.store.bindings()] == ["pane-1n"]
     env.turn_complete("pane-1n", "reply after rebuild")
-    await _until(lambda: "reply after rebuild" in env.tg.texts())
+    await _until(lambda: _said(env, "reply after rebuild"))
     assert await env.m.rebind("nobody", "x") == {"ok": True}
 
 
@@ -652,6 +655,13 @@ async def _awaiting(env: Env, *, stale_off_config: bool = False) -> None:
 
 def _relay_id(env: Env) -> str:
     return next(iter(env.m.relay._by_id))
+
+
+async def _until_relay_prompt(env: Env) -> None:
+    # The relay registers its id before the prompt is sent, so waiting on the id
+    # alone lets a slow runner assert (or send the next message) before the
+    # prompt has reached the chat. Wait for the prompt itself.
+    await _until(lambda: env.m.relay._by_id and any(t.startswith("⏸") for t in env.tg.texts()))
 
 
 async def test_stale_relay_off_config_is_ignored(env: Env) -> None:
@@ -707,7 +717,7 @@ async def test_relay_buttons_via_callback_and_question_option(env: Env) -> None:
 
 async def test_relay_rejects_stranger_and_reports_seam_error(env: Env) -> None:
     await _awaiting(env)
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     await env.inbound(f"yes {rid}", sender="99")  # not allowlisted: dropped by the gate
     assert env.fake.answers == [] and rid in env.m.relay._by_id
@@ -720,7 +730,7 @@ async def test_relay_id_expires_when_pane_leaves_awaiting_or_ttl(clocked, monkey
     env, clock = clocked
     await _awaiting(env)
     clock.t += 1  # the fake clock only moves when told: let the awaiting probe run
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     env.fake.states["pane-1"] = {"exists": True, "busy": True, "display_status": "running"}
     clock.t += 1  # let the probe run again
@@ -839,7 +849,7 @@ async def test_options_not_starting_with_yes_relay_as_question(env: Env) -> None
     env.fake.kind = "permission"  # what Claude's AskUserQuestion reports
     env.fake.options = ["Keep it", "Discard"]
     await _awaiting(env)
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     text = next(t for t in env.tg.texts() if t.startswith("⏸"))
     assert "（question）" in text and "1. Keep it" in text and f"回覆 <選項編號> {rid}" in text
@@ -851,7 +861,7 @@ async def test_options_starting_with_yes_relay_as_permission(env: Env) -> None:
     env.fake.kind = "question"
     env.fake.options = ["Yes", "Yes, and don't ask again", "No"]
     await _awaiting(env)
-    await _until(lambda: env.m.relay._by_id)
+    await _until_relay_prompt(env)
     rid = _relay_id(env)
     assert f"yes {rid} / no {rid}" in next(t for t in env.tg.texts() if t.startswith("⏸"))
     await env.inbound(f"no {rid}")

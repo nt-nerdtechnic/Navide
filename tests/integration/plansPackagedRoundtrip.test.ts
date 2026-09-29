@@ -668,7 +668,8 @@ describe('Plans packaged backend composition', () => {
           channel: 'plugin:backend:call',
           payload: expect.objectContaining({
             name: 'plans.list',
-            args: {},
+            // The view pages the list so no response can outgrow a frame.
+            args: { offset: 0 },
           }),
         }))
 

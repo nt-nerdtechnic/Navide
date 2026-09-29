@@ -442,3 +442,69 @@ describe('MiniIdeApp receiver item lifecycle', { timeout: 30_000 }, () => {
     wrapper.unmount()
   })
 })
+
+describe('MiniIdeApp failure exits and Quick Open', { timeout: 30_000 }, () => {
+  it('reports a detail view whose mount fails instead of swallowing it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    state.mountImplementation = () => Promise.reject(new Error('mount refused'))
+    const wrapper = shallowMiniIde()
+    await flushPromises()
+    await offer('offer-fail', 'acme.provider.detail', 'detail')
+    expect(warn.mock.calls.some(call => String(call[0]).includes('plugin view failed') && String(call[1]).includes('mount refused'))).toBe(true)
+    wrapper.unmount()
+  })
+
+  async function openQuickOpen(wrapper: VueWrapper): Promise<HTMLInputElement> {
+    const { executeCommand } = await import('@navide/plugin-ui/shared')
+    void executeCommand('workbench.action.quickOpen')
+    await flushPromises()
+    const input = document.querySelector<HTMLInputElement>('.ide-palette-input')
+    expect(input).toBeTruthy()
+    void wrapper
+    return input!
+  }
+
+  it('opens the row that was clicked, not the row the highlight last stopped on', async () => {
+    const wrapper = shallowMiniIde()
+    await flushPromises()
+    await state.editorTargetListener?.({ path: 'src/a.ts', sourceItem: 'x' })
+    await state.editorTargetListener?.({ path: 'src/b.ts', sourceItem: 'x' })
+    const input = await openQuickOpen(wrapper)
+    expect(document.querySelectorAll('.ide-palette-item').length).toBe(2)
+    const rows = [...document.querySelectorAll<HTMLElement>('.ide-palette-item')]
+    // No mouseover fired: the highlight still sits on row 0.
+    rows[1]!.click()
+    await flushPromises()
+    expect(document.querySelector('.ide-palette-input')).toBeNull()
+    expect(document.querySelector('.ide-tab.active, .ide-tab--active, [class*="tab"][class*="active"]')?.textContent ?? '').toContain('b.ts')
+    void input
+    wrapper.unmount()
+  })
+
+  it('offers workspace files that are not open, and opens one on click', async () => {
+    nav.callCapability.mockImplementation(async (_ns: string, method: string) => ({
+      reqId: 'test', ok: true,
+      result: method === 'readEditorPreferences' ? { preferences: {} }
+        : method === 'listFilesFlat' ? { files: ['docs/adding-a-chat-channel.md'] } : { found: false },
+    }))
+    try {
+      const wrapper = shallowMiniIde()
+      await flushPromises()
+      const input = await openQuickOpen(wrapper)
+      input.value = 'chat-channel'
+      input.dispatchEvent(new Event('input'))
+      await vi.waitFor(() => expect(document.body.textContent).toContain('adding-a-chat-channel.md'), { timeout: 2000 })
+      const row = [...document.querySelectorAll<HTMLElement>('.ide-palette-item')].find(r => r.textContent?.includes('adding-a-chat-channel.md'))!
+      row.click()
+      await flushPromises()
+      expect(document.body.textContent).toContain('adding-a-chat-channel.md')
+      expect(document.querySelector('.ide-palette-input')).toBeNull()
+      wrapper.unmount()
+    } finally {
+      nav.callCapability.mockImplementation(async (_ns: string, method: string) => ({
+        reqId: 'test', ok: true,
+        result: method === 'readEditorPreferences' ? { preferences: {} } : { found: false },
+      }))
+    }
+  })
+})

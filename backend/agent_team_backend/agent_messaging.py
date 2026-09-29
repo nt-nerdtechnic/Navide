@@ -25,7 +25,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from . import device_identity, remote_roster
 
@@ -224,6 +224,30 @@ _OWNERS: dict[str, Any] = {}
 # superseded pane_id -> the pane that took its place
 _ALIASES: dict[str, PaneAlias] = {}
 
+# Observers of the registry (chat-channel mirroring), called synchronously as
+# (event, pane_id) with event "register" | "unregister" | "status", and of the
+# message-log rows windows append. They must be cheap and must not raise.
+pane_listeners: list[Callable[[str, str], None]] = []
+message_row_listeners: list[Callable[[list[dict[str, Any]]], None]] = []
+
+
+def _notify_pane(event: str, pane_id: str) -> None:
+    for listener in list(pane_listeners):
+        try:
+            listener(event, pane_id)
+        except Exception:  # noqa: BLE001 — an observer must never break the registry
+            log.exception("agent_messaging: pane listener failed")
+
+
+def notify_message_rows(rows: list[Any]) -> None:
+    """Tell observers which rows a window just appended to the message log."""
+    clean = [r for r in rows if isinstance(r, dict)]
+    for listener in list(message_row_listeners):
+        try:
+            listener(clean)
+        except Exception:  # noqa: BLE001
+            log.exception("agent_messaging: delivery listener failed")
+
 
 def _normalize_workspace(path: str) -> str:
     return (path or "").rstrip("/") or (path or "")
@@ -266,6 +290,7 @@ def register(
     _PANES[pane_id] = entry
     if owner is not None:
         _OWNERS[pane_id] = owner
+    _notify_pane("register", pane_id)
     return entry
 
 
@@ -384,6 +409,7 @@ def unregister(pane_id: str, owner: Any = None) -> bool:
     _PANES.pop(pane_id, None)
     _OWNERS.pop(pane_id, None)
     _forget_aliases_to(pane_id)
+    _notify_pane("unregister", pane_id)
     return True
 
 
@@ -429,6 +455,7 @@ def purge_expired() -> list[str]:
         _PANES.pop(pane_id, None)
         _OWNERS.pop(pane_id, None)
         _forget_aliases_to(pane_id)
+        _notify_pane("unregister", pane_id)
     return expired
 
 
@@ -469,6 +496,8 @@ def set_busy(pane_id: str, busy: bool, display_status: str | None = None) -> boo
     if display_status is not None and entry.display_status != display_status:
         entry.display_status = display_status
         changed = True
+    if changed:
+        _notify_pane("status", pane_id)
     return changed
 
 

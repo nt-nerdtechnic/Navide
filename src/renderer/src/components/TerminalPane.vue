@@ -216,6 +216,10 @@ function onClipboardFailure(reason: ClipboardFailureReason, chars: number): void
   )
 }
 
+function onOpenFileFailure(filepath: string): void {
+  notifyToast(i18n.global.t('pane.terminal.open-file-failed', { file: filepath }), { type: 'error' })
+}
+
 const terminal = useTerminal(props.paneId, props.terminalPort, {
   workspacePath: props.workspacePath,
   onClear: () => emit('rebuild-clean'),
@@ -225,6 +229,7 @@ const terminal = useTerminal(props.paneId, props.terminalPort, {
   onScreen: () => props.onScreen ?? true,
   onFirstOutput: () => emit('first-output'),
   onClipboardFailure,
+  onOpenFileFailure,
   onPtyLostWhileDisconnected: () => emit('pty-lost'),
   agentProfileFor,
 })

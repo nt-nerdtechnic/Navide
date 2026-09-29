@@ -1,5 +1,6 @@
 /** Private ports for the retained Plans UI. No renderer selects a Host root. */
 import { plansBackend } from '../backend'
+import { needsChunkedWrite, readWholeDocument, writeDocumentChunked } from '../planPaging'
 
 export interface PlansTransport {
   send<T = unknown>(type: string, payload?: Record<string, unknown>): Promise<{ payload: T }>
@@ -20,7 +21,18 @@ export const plansTransport: PlansTransport = {
     // The legacy interface supplies workspace_path; the package boundary
     // deliberately drops it. The Host binds the root to the calling instance.
     const { workspace_path: _workspacePath, ...args } = payload
-    const result = await plansBackend.call(name, args as never)
+    const result = type === 'fs.read_file'
+      // A document is returned page by page when it does not fit one response.
+      ? await readWholeDocument(plansBackend.call.bind(plansBackend) as never, 'plans.read_document', 'content', args)
+      : type === 'fs.write_file' && typeof args.content === 'string' && needsChunkedWrite(args.content)
+        // Too large for one request: stage it in parts, then commit atomically.
+        ? await writeDocumentChunked(
+          plansBackend.call.bind(plansBackend) as never,
+          String(args.rel_path),
+          args.content,
+          typeof args.expected_mtime === 'number' ? args.expected_mtime : undefined,
+        )
+        : await plansBackend.call(name, args as never)
     return { payload: (type === 'fs.delete' ? { ok: true } : result) as T }
   },
   on(type, listener) {

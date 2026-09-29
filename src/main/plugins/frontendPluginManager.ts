@@ -54,7 +54,7 @@ import {
   PUBLIC_CAPABILITY_EVENT_ADDRESSES,
   publicCapabilityEntry,
 } from './pluginCapabilityCatalog'
-import { PUBLIC_GIT_METHODS, publicGitRequest } from './gitPublicCapability'
+import { PUBLIC_GIT_METHODS, gitRequestTimeoutMs, publicGitRequest } from './gitPublicCapability'
 import { GIT_ACCOUNT_PUBLIC_METHODS } from './gitAccountCapability'
 import { PUBLIC_ISSUE_METHODS, issueRequest } from './issueCapability'
 import {
@@ -853,6 +853,8 @@ const GIT_HOST_UI_ACTIONS = new Set([
   'ui.open_workspace',
   'ui.pick_folder',
 ])
+/** Upper bound on a preview file the Git package may ask the Host to open. */
+const GIT_TEMP_FILE_MAX_CHARS = 10 * 1024 * 1024
 const GIT_PATH_GRANT_TTL_MS = 5 * 60 * 1000
 const MAX_GIT_PATH_GRANTS_PER_INSTANCE = 16
 const GIT_HOST_FS_TYPES = new Set([
@@ -3733,7 +3735,10 @@ export class FrontendPluginManager {
     const record = payload as Record<string, unknown>
     const stringField = (key: string): boolean => typeof record[key] === 'string' && String(record[key]).length > 0
     if (operation === 'open_path') return stringField('path')
-    if (operation === 'open_temp_file') return stringField('name') && typeof record.content === 'string'
+    if (operation === 'open_temp_file') {
+      return stringField('name') && typeof record.content === 'string' &&
+        record.content.length <= GIT_TEMP_FILE_MAX_CHARS
+    }
     if (operation === 'pick_workspace') return record.default_path === undefined || typeof record.default_path === 'string'
     if (operation === 'open_main_window') return stringField('workspace_path')
     if (operation === 'open_branch_diff_window') return stringField('workspace_path') && stringField('base')
@@ -4253,7 +4258,13 @@ export class FrontendPluginManager {
         return { ...payload, reqId } as CapabilityResponse
       }
       const wsPayload = payload as Record<string, unknown>
-      return this.executeBoundGitRequest(plugin, reqId, action, type, wsPayload)
+      // The Host deadline must not undercut the operation: a push/pull/clone (or
+      // the credential prompt inside it) can outlive 10s, and expiring here
+      // reports failure for work the backend may still complete.
+      const timeoutMs = action === 'git.request'
+        ? gitRequestTimeoutMs(type.slice('git.'.length))
+        : action === 'issues.request' ? 30_000 : undefined
+      return this.executeBoundGitRequest(plugin, reqId, action, type, wsPayload, timeoutMs)
     }
 
     if (action === 'ui.request') {
@@ -6220,7 +6231,20 @@ export class FrontendPluginManager {
         !this.plansCapabilityContext(packageVersion, workspacePath, 'plans-mcp') ||
         !this.plansAgentFilesystemPolicyAllows(workspacePath, initiator)
       ) return buildError(record.reqId, 'CAPABILITY_DENIED', 'Plans runtime authorization changed')
-      if (!ready) return buildError(record.reqId, 'BACKEND_UNAVAILABLE', 'Plans storage is unavailable')
+      if (!ready) {
+        // Nothing has been dispatched, and the agent policy was verified above,
+        // so the MCP caller may serve this from its local plan tools instead of
+        // failing: withdraw the v2 availability bit (as any other v2 failure
+        // does) so the same pre-dispatch recovery verdict is minted.
+        this.markPlansBackendUnavailable('storage-unavailable')
+        const unavailable: PlansRecoveryResponse = buildError(
+          record.reqId, 'BACKEND_UNAVAILABLE', 'Plans storage is unavailable',
+        )
+        if (this.canMintPlansLegacyRecoveryDisposition(
+          descriptor, activation, workspacePath, record.name, initiator,
+        )) unavailable.recoveryDisposition = LEGACY_SAFE_BEFORE_DISPATCH
+        return unavailable
+      }
     }
     if (!this.isPlansBackendAvailable()) {
       return this.plansPreDispatchFailureResponse(
@@ -11857,6 +11881,9 @@ export const PLANS_BACKEND_METHODS = [
   'plans.read',
   'plans.read_document',
   'plans.write_document',
+  'plans.write_document_part',
+  'plans.write_document_commit',
+  'plans.write_document_abort',
   'plans.list_directory',
   'plans.cache_put',
   'plans.create',

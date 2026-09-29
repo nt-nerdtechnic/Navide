@@ -17,6 +17,9 @@ Verified facts (mattermost/mattermost api/v4/source/*.yaml and server source, re
 Gaps: interactive buttons need an integration URL the server can call back, which a
 local desktop app does not have -> buttons=False. Missed events while disconnected are
 not replayed (no connection_id/sequence_number resume). Not verified against a live server.
+Replies (InboundMessage.reply_to_id): a Mattermost reply is a thread reply, so it is
+the post's root_id (the id send_text returned). The reply also lands in that thread's
+own location (thread_id), which is a different binding than the channel's.
 """
 
 from __future__ import annotations
@@ -184,6 +187,8 @@ class MattermostAdapter:
             sender_id=user_id, sender_name=str(data.get("sender_name") or user_id).lstrip("@"),
             text=str(post.get("message") or ""), message_id=str(post.get("id") or ""),
             is_direct=data.get("channel_type") == "D", ts=time.time(),
+            # A Mattermost reply is a thread reply: its parent is the thread root.
+            reply_to_id=str(post.get("root_id") or ""),
         ))
 
     def known_locations(self) -> list[dict[str, Any]]:

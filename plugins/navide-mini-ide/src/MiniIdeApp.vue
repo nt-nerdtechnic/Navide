@@ -15,6 +15,7 @@ import NotificationHost from './components/NotificationHost.vue'
 // PTY terminal), the same panel other plugin windows embed.
 import AiCliDock from './components/MiniIdeAiDock.vue'
 import { aiTerminalPaneId, bracketedPaste, truncateText } from './lib/aiContext'
+import { splitEditorTarget } from './lib/editorTargetPath'
 import ProblemsPane from './components/ProblemsPane.vue'
 import PlanFileView from './editor/PlanFileView.vue'
 import FilePreviewPane from './editor/FilePreviewPane.vue'
@@ -1324,7 +1325,23 @@ const qoPlaceholder = computed(() => {
   if (q.startsWith(':')) return 'Enter line number to jump to… (e.g. :42)'
   if (q === '@:') return 'Show all symbols grouped'
   if (q.startsWith('@')) return 'Enter symbol name… (e.g. @myFunction  @:grouped)'
-  return 'Search open files… (:line  @symbol  >command)'
+  return 'Search files… (:line  @symbol  >command)'
+})
+// Workspace files matching the query, so ⌘P reaches beyond the open tabs.
+// `qoRepoSeq` drops answers that arrive after the query has moved on.
+const qoRepoFiles = ref<string[]>([])
+let qoRepoSeq = 0
+let qoRepoTimer: ReturnType<typeof setTimeout> | undefined
+const qoIsPlainQuery = (q: string): boolean => q.trim() !== '' && !/^[:@>]/.test(q)
+watch(qoQuery, (q) => {
+  clearTimeout(qoRepoTimer)
+  const seq = ++qoRepoSeq
+  if (!qoIsPlainQuery(q)) { qoRepoFiles.value = []; return }
+  qoRepoTimer = setTimeout(async () => {
+    const res = await backend.send<{ files?: string[] }>('fs.list_files_flat', { query: q.trim(), max_results: 20 })
+    if (seq !== qoRepoSeq) return
+    qoRepoFiles.value = res.ok && Array.isArray(res.payload?.files) ? res.payload.files : []
+  }, 150)
 })
 const qoItems = computed((): QoItem[] => {
   const q = qoQuery.value
@@ -1378,7 +1395,11 @@ const qoItems = computed((): QoItem[] => {
     if (best > 0) scored.push({ f, score: best })
   }
   scored.sort((a, b) => b.score - a.score)
-  return scored.map(({ f }) => item(f))
+  const listed = new Set(scored.map(({ f }) => tabKey(f)))
+  const repo = qoRepoFiles.value
+    .filter((rel) => !listed.has(tabKeyOf(undefined, rel)))
+    .map((rel) => item({ name: rel.split('/').pop() || rel, relPath: rel }))
+  return [...scored.map(({ f }) => item(f)), ...repo]
 })
 function openQuickOpen(): void {
   qoQuery.value = ''
@@ -1387,10 +1408,16 @@ function openQuickOpen(): void {
   void nextTick(() => qoInputEl.value?.focus())
 }
 function closeQuickOpen(): void { qoOpen.value = false }
-function confirmQuickOpen(): void {
-  const item = qoItems.value[qoIdx.value]
+// A click passes the row it landed on: qoIdx only follows `mouseover`, which
+// never fires when the list re-sorts under a still pointer.
+function confirmQuickOpen(index: number = qoIdx.value): void {
+  const item = qoItems.value[index]
   if (!item || item.qoKind === 'header') { closeQuickOpen(); return }
-  if (item.qoKind === 'file') { activeKey.value = item.key }
+  if (item.qoKind === 'file') {
+    // Recently-closed and workspace hits have no tab yet.
+    if (findTab(item.key)) activeKey.value = item.key
+    else openFile({ filepath: item.relPath, wsPath: item.wsPath, name: item.name })
+  }
   else if (item.qoKind === 'line') { activeEditor()?.jumpToLine(item.line) }
   else if (item.qoKind === 'symbol') { activeEditor()?.jumpToLine(item.line) }
   closeQuickOpen()
@@ -2198,8 +2225,9 @@ async function openReceiverEditorTarget(target: PluginEditorFileTarget): Promise
   if (!target.path) return { opened: false }
   const line = target.line ?? 1
   const column = target.column ?? 1
-  openFile({ filepath: target.path, line })
-  const paneKey = tabKeyOf(undefined, target.path)
+  const { filepath, wsPath } = splitEditorTarget(target.path, [workspacePath, workspaceRealPath.value])
+  openFile({ filepath, line, wsPath })
+  const paneKey = tabKeyOf(normWs(wsPath), filepath)
   await nextTick()
   const pane = editorPaneRefs.get(paneKey)
   return { opened: await pane?.revealPositionWhenReady(line, column) === true }
@@ -2400,10 +2428,11 @@ async function flushViewReceiverOffers(): Promise<void> {
             indexProviderTab(item.tab, groupKey)
             syncViewReceiverDetailHosts()
           }
-        } catch {
+        } catch (error) {
           item.host.remove()
           if (item.tab) removeProviderTab(item.tab)
           syncViewReceiverDetailHosts()
+          recordPluginViewFailure(error)
         }
       } finally {
         reservations.delete(offer.resourceKey)
@@ -2937,7 +2966,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
             class="ide-palette-item"
             :class="{ active: i === qoIdx }"
             @mouseover="qoIdx = i"
-            @click="confirmQuickOpen"
+            @click="confirmQuickOpen(i)"
           >
             <template v-if="item.qoKind === 'file'">
               <span class="ide-palette-label">{{ item.name }}</span>

@@ -42,7 +42,7 @@ def test_migration_is_idempotent(tmp_path) -> None:
     db = Database(tmp_path / "n.db")
     ChannelStore(db)
     ChannelStore(db)
-    assert db.schema_version("channels") == 3
+    assert db.schema_version("channels") == 4
     db.close()
 
 
@@ -131,7 +131,7 @@ def test_v2_seen_chats_survive_the_bot_migration_and_go_to_the_next_bot(tmp_path
         cur.execute("INSERT INTO channel_chats (platform, chat_id, title, kind, supports_topics, last_seen)"
                     " VALUES ('telegram', '-200', 'team', 'group', 1, 5)")
     s = ChannelStore(db)
-    assert db.schema_version("channels") == 3
+    assert db.schema_version("channels") == 4
     assert s.chats("telegram", "bot-a") == []
     assert s.adopt_chats("telegram", "bot-a") == 1
     assert s.chats("telegram", "bot-a") == [

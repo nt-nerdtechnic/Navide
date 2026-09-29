@@ -245,4 +245,47 @@ describe('GitLeftApp', () => {
     }
     wrapper.unmount()
   })
+
+  it('tells the user when a repository is outside the workspace instead of doing nothing (MED-4)', async () => {
+    const dispatch = vi.fn(async () => undefined)
+    const wrapper = shallowMount(GitLeftApp, { props: props(dispatch) })
+    notifyState.toast.mockClear()
+    wrapper.findComponent({ name: 'MultiRepoGit' }).vm.$emit('open-diff', {
+      workspace_path: '/elsewhere/repo', filepath: 'src/a.ts', staged: false, name: 'a.ts',
+    })
+    await flushPromises()
+
+    expect(runtimeState.openDetail).not.toHaveBeenCalled()
+    expect(notifyState.toast).toHaveBeenCalledWith('git.repo-outside-workspace', { type: 'error' })
+    wrapper.unmount()
+  })
+
+  it('resolves a Windows-style nested repository against the workspace (MED-4)', async () => {
+    window.history.replaceState({}, '', '/?workspace_path=C%3A%5Cws')
+    runtimeState.openDetail.mockResolvedValueOnce({ opened: true })
+    const wrapper = shallowMount(GitLeftApp, { props: props() })
+    wrapper.findComponent({ name: 'MultiRepoGit' }).vm.$emit('open-diff', {
+      workspace_path: 'C:\\ws\\sub', filepath: 'src/a.ts', staged: false, name: 'a.ts',
+    })
+    await flushPromises()
+
+    expect(runtimeState.openDetail).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        resource: expect.objectContaining({ repository: 'sub' }),
+      }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('surfaces a rejected Host dispatch (MED-4)', async () => {
+    const dispatch = vi.fn(async () => { throw new Error('denied') })
+    const wrapper = shallowMount(GitLeftApp, { props: props(dispatch) })
+    notifyState.toast.mockClear()
+    wrapper.findComponent({ name: 'MultiRepoGit' }).vm.$emit('focus-pane', 'pane-1')
+    await flushPromises()
+
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(notifyState.toast).toHaveBeenCalledWith('git.host-action-failed', { type: 'error' })
+    wrapper.unmount()
+  })
 })

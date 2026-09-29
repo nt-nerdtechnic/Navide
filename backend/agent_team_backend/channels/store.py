@@ -77,6 +77,18 @@ def _v3(cur: sqlite3.Cursor) -> None:
     cur.execute("ALTER TABLE channel_chats_v3 RENAME TO channel_chats")
 
 
+def _v4(cur: sqlite3.Cursor) -> None:
+    # Two-way mirroring: how much of a pane's activity its chat receives, and
+    # which bindings were auto-created for a child pane (parent_pane_id set).
+    cur.execute("ALTER TABLE channel_bindings ADD COLUMN verbosity TEXT NOT NULL DEFAULT 'full'")
+    cur.execute("ALTER TABLE channel_bindings ADD COLUMN parent_pane_id TEXT NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE channel_bindings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+
+
+VERBOSITIES = ("minimal", "standard", "full")
+DEFAULT_VERBOSITY = "full"
+
+
 @dataclass
 class PairingRequest:
     platform: str
@@ -100,13 +112,17 @@ class Binding:
     thread_id: str
     title: str
     created_at: int
+    verbosity: str = DEFAULT_VERBOSITY
+    parent_pane_id: str = ""
+    auto: bool = False
 
     def location(self) -> Location:
         return Location(self.platform, self.account, self.chat_id, self.thread_id, self.title)
 
     def public(self) -> dict[str, Any]:
         return {"pane_id": self.pane_id, "platform": self.platform, "account": self.account,
-                "chat_id": self.chat_id, "thread_id": self.thread_id, "title": self.title}
+                "chat_id": self.chat_id, "thread_id": self.thread_id, "title": self.title,
+                "verbosity": self.verbosity, "parent_pane_id": self.parent_pane_id, "auto": self.auto}
 
 
 class ChannelStore:
@@ -115,6 +131,7 @@ class ChannelStore:
         db.migrate(COMPONENT, 1, _v1)
         db.migrate(COMPONENT, 2, _v2)
         db.migrate(COMPONENT, 3, _v3)
+        db.migrate(COMPONENT, 4, _v4)
 
     def _rows(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._db.transaction() as cur:
@@ -253,21 +270,28 @@ class ChannelStore:
 
     # --- bindings -------------------------------------------------------------
 
-    def bindings(self) -> list[Binding]:
-        return [Binding(r["pane_id"], r["platform"], r["account"], r["chat_id"], r["thread_id"],
-                        r["title"], int(r["created_at"]))
-                for r in self._rows("SELECT * FROM channel_bindings ORDER BY created_at")]
+    @staticmethod
+    def _binding(r: sqlite3.Row) -> Binding:
+        return Binding(r["pane_id"], r["platform"], r["account"], r["chat_id"], r["thread_id"],
+                       r["title"], int(r["created_at"]), r["verbosity"], r["parent_pane_id"], bool(r["auto"]))
 
-    def bind(self, pane_id: str, loc: Location) -> Binding:
+    def bindings(self) -> list[Binding]:
+        return [self._binding(r) for r in self._rows("SELECT * FROM channel_bindings ORDER BY created_at")]
+
+    def bind(self, pane_id: str, loc: Location, *, verbosity: str = DEFAULT_VERBOSITY,
+             parent_pane_id: str = "", auto: bool = False) -> Binding:
         now = int(time.time())
         with self._db.transaction() as cur:
             # One pane <-> one location: rebinding either side replaces the old row.
             cur.execute("DELETE FROM channel_bindings WHERE pane_id = ? OR (platform = ? AND account = ?"
                         " AND chat_id = ? AND thread_id = ?)",
                         (pane_id, loc.platform, loc.account, loc.chat_id, loc.thread_id))
-            cur.execute("INSERT INTO channel_bindings VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (pane_id, loc.platform, loc.account, loc.chat_id, loc.thread_id, loc.title, now))
-        return Binding(pane_id, loc.platform, loc.account, loc.chat_id, loc.thread_id, loc.title, now)
+            cur.execute("INSERT INTO channel_bindings (pane_id, platform, account, chat_id, thread_id, title,"
+                        " created_at, verbosity, parent_pane_id, auto) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (pane_id, loc.platform, loc.account, loc.chat_id, loc.thread_id, loc.title, now,
+                         verbosity, parent_pane_id, int(auto)))
+        return Binding(pane_id, loc.platform, loc.account, loc.chat_id, loc.thread_id, loc.title, now,
+                       verbosity, parent_pane_id, auto)
 
     def unbind(self, pane_id: str) -> Binding | None:
         with self._db.transaction() as cur:
@@ -275,12 +299,20 @@ class ChannelStore:
             if r is None:
                 return None
             cur.execute("DELETE FROM channel_bindings WHERE pane_id = ?", (pane_id,))
-            return Binding(r["pane_id"], r["platform"], r["account"], r["chat_id"], r["thread_id"],
-                           r["title"], int(r["created_at"]))
+            return self._binding(r)
 
     def rename_pane(self, old_pane_id: str, new_pane_id: str) -> bool:
-        return self._exec("UPDATE channel_bindings SET pane_id = ? WHERE pane_id = ?",
-                          (new_pane_id, old_pane_id)) > 0
+        with self._db.transaction() as cur:
+            cur.execute("UPDATE channel_bindings SET parent_pane_id = ? WHERE parent_pane_id = ?",
+                        (new_pane_id, old_pane_id))
+            return cur.execute("UPDATE channel_bindings SET pane_id = ? WHERE pane_id = ?",
+                               (new_pane_id, old_pane_id)).rowcount > 0
+
+    def set_verbosity(self, pane_id: str, verbosity: str) -> Binding | None:
+        with self._db.transaction() as cur:
+            cur.execute("UPDATE channel_bindings SET verbosity = ? WHERE pane_id = ?", (verbosity, pane_id))
+            r = cur.execute("SELECT * FROM channel_bindings WHERE pane_id = ?", (pane_id,)).fetchone()
+            return self._binding(r) if r is not None else None
 
     # --- offsets (Telegram OffsetStore protocol) --------------------------------
 

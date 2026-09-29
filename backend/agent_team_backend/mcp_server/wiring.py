@@ -1,6 +1,6 @@
 """Wire pane CLI agents to the Plan MCP endpoint.
 
-The backend serves a Plan MCP server at ``/plan-mcp`` (see plan_mcp.py) on a
+The backend serves a Plan MCP server at ``/plan-mcp`` (see server.py) on a
 dynamic port picked fresh each launch, so nothing static can point at it.
 Merge-writing user-owned config files was rejected as clobber-prone:
 ``~/.claude.json`` is rewritten wholesale by a running claude CLI (a

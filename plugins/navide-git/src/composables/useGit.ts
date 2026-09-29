@@ -300,7 +300,7 @@ export function useGit(
       // successful write (large stage/commit) isn't cut short by the frontend
       // first with a spurious "request … timeout".
       const resp = await send<{ ok: boolean; error?: string }>(type, payload, 20_000)
-      const r = resp.payload ?? { ok: false, error: 'no response' }
+      const r = resp.payload ?? { ok: false, error: resp.error?.message || 'no response' }
       if (!r.ok) gitError.value = r.error || `${type} failed`
       return r
     } catch (e) {

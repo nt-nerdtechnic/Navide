@@ -103,6 +103,48 @@ async def _host_agent_plan_call(
 
 _NO_HOST_ROUTE = object()
 
+_READ_RETRIES = 3
+
+
+async def _read_plan_via_host(caller: Caller, workspace_path: str, rel_path: str) -> Any:
+    """Assemble a plan of any size from the Host's paged ``plans.read``.
+
+    A document that fits one page arrives as a single reply. A larger one
+    carries ``eof: false`` and ``next_offset``; pages are fetched until the
+    end and joined. If the file changes between pages the read restarts, so
+    two versions are never spliced together.
+    """
+    for _ in range(_READ_RETRIES):
+        first = await _host_agent_plan_call(caller, workspace_path, "plans.read", {"rel_path": rel_path})
+        if first is _NO_HOST_ROUTE or not isinstance(first, dict) or first.get("eof") is not False:
+            return first
+        parts = [str(first.get("html", ""))]
+        next_offset = first.get("next_offset")
+        stable = True
+        while True:
+            if not isinstance(next_offset, int) or isinstance(next_offset, bool):
+                raise FsError("plan read returned no next_offset", code="BACKEND_UNAVAILABLE")
+            page = await _host_agent_plan_call(
+                caller, workspace_path, "plans.read", {"rel_path": rel_path, "offset": next_offset}
+            )
+            if not isinstance(page, dict) or page is _NO_HOST_ROUTE:
+                raise FsError("plan read page was malformed", code="BACKEND_UNAVAILABLE")
+            if page.get("mtime") != first.get("mtime"):
+                stable = False
+                break
+            parts.append(str(page.get("html", "")))
+            if page.get("eof") is not False:
+                break
+            following = page.get("next_offset")
+            if not isinstance(following, int) or following <= next_offset:
+                raise FsError("plan read made no progress", code="BACKEND_UNAVAILABLE")
+            next_offset = following
+        if stable:
+            whole = {k: v for k, v in first.items() if k not in ("size", "offset", "eof", "next_offset")}
+            whole["html"] = "".join(parts)
+            return whole
+    raise FsError(f"plan changed while it was being read: {rel_path}; retry", code="CONFLICT")
+
 
 # ── sync filesystem layer (runs in a worker thread) ─────────────────────────
 
@@ -166,13 +208,40 @@ def _list_plans_sync(workspace_path: str) -> list[dict[str, Any]]:
             continue
         try:
             html = path.read_text(encoding="utf-8", errors="replace")
-            mtime = path.stat().st_mtime
-        except OSError:
+            stat = path.stat()
+        except OSError as error:
+            # Never drop a plan document from the list: an unreadable one is
+            # listed with the reason so the user can see it exists.
+            entries.append(
+                {
+                    "rel_path": _plan_rel_path(path.name),
+                    "name": path.name,
+                    "stage": None,
+                    "overview": "",
+                    "todos": {"total": 0, "by_status": {}, "awaiting_user": 0},
+                    "mtime": None,
+                    "kind": "unreadable",
+                    "reason": f"could not be read ({error.strerror or type(error).__name__})",
+                }
+            )
             continue
         meta = parse_plan_meta(html)
         if meta is None:
-            # Consistent policy: files without a valid plan-meta island are
-            # not plan documents — skip them entirely.
+            # No usable plan-meta island: still a document the user owns, so
+            # it is listed (kind "document") rather than hidden.
+            entries.append(
+                {
+                    "rel_path": _plan_rel_path(path.name),
+                    "name": path.name,
+                    "stage": None,
+                    "overview": "",
+                    "todos": {"total": 0, "by_status": {}, "awaiting_user": 0},
+                    "mtime": stat.st_mtime,
+                    "kind": "document",
+                    "reason": "missing or invalid plan-meta",
+                    "size": stat.st_size,
+                }
+            )
             continue
         entries.append(
             {
@@ -181,7 +250,7 @@ def _list_plans_sync(workspace_path: str) -> list[dict[str, Any]]:
                 "stage": meta.get("stage"),
                 "overview": meta.get("overview"),
                 "todos": _todo_summary(meta),
-                "mtime": mtime,
+                "mtime": stat.st_mtime,
             }
         )
     return entries
@@ -457,10 +526,14 @@ def _add_note_sync(
 async def plan_list(ctx: Context, workspace_path: str = "") -> list[dict[str, Any]]:
     """List plan documents in the workspace's .agent-team/plans/ directory.
 
-    Skips provisioned assets (basename starting with "_") and files without a
-    valid plan-meta island. Each entry has: rel_path (workspace-relative, e.g.
-    ".agent-team/plans/foo.html" — pass it to plan_read), name, stage,
-    overview, todos ({total, by_status} counts), mtime (epoch seconds).
+    Skips only provisioned assets (basename starting with "_"); no plan
+    document is ever left out, whatever its size or condition. Each entry has:
+    rel_path (workspace-relative, e.g. ".agent-team/plans/foo.html" — pass it
+    to plan_read), name, stage, overview, todos ({total, by_status} counts),
+    mtime (epoch seconds). A document whose plan-meta is missing, broken or
+    unreadable is still listed, with "kind" ("document" or "unreadable") and a
+    "reason" saying why (and "size" in bytes). Every entry always carries
+    rel_path, name, stage, overview, todos, mtime, so nothing is left out.
 
     workspace_path defaults to your own pane's workspace; pass it only to read
     another project's plans.
@@ -486,7 +559,7 @@ async def plan_read(rel_path: str, ctx: Context, workspace_path: str = "") -> di
     """
     caller = resolve_caller(ctx)
     workspace_path = await caller_workspace(caller, workspace_path)
-    routed = await _host_agent_plan_call(caller, workspace_path, "plans.read", {"rel_path": rel_path})
+    routed = await _read_plan_via_host(caller, workspace_path, rel_path)
     if routed is not _NO_HOST_ROUTE:
         return routed
     return await asyncio.to_thread(_read_plan_sync, workspace_path, rel_path)
@@ -502,8 +575,10 @@ async def plan_create(
 ) -> dict[str, Any]:
     """Create a new plan document in the workspace's .agent-team/plans/ directory.
 
-    The file is copied from the provisioned _template.html (auto-provisioned
-    if missing), named <kebab-slug>_<6-hex>.html per the plan spec. Each todos
+    The file is copied from the provisioned _template.html, named
+    <kebab-slug>_<6-hex>.html per the plan spec. The Plans backend fails when
+    the template is missing; only the degraded fallback provisions it first.
+    Each todos
     item is either a plain string (the todo content; id auto-assigned as t1,
     t2, ...) or a {"id": "<kebab-case>", "content": "...", "owner": "user"}
     object. Set `owner: "user"` on anything only the user can do — a manual

@@ -7,6 +7,7 @@ import {
   type ChannelLocation,
   type ChannelPlatform,
   type ChannelPlatformState,
+  type ChannelVerbosity,
   type ChannelsStore,
 } from '../composables/useChannels'
 import { guardKey, type GuardStore } from '../composables/useGuard'
@@ -200,6 +201,62 @@ async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new'
   else error.value = res.error ?? t('channels.error.generic')
 }
 
+const VERBOSITIES: ChannelVerbosity[] = ['minimal', 'standard', 'full']
+const menuOpen = ref(false)
+const chipRef = ref<HTMLElement | null>(null)
+const menuRef = ref<HTMLElement | null>(null)
+const menuStyle = ref<Record<string, string>>({})
+const verbosity = computed<ChannelVerbosity>(() => binding.value?.verbosity ?? 'full')
+const children = computed(() => store?.childrenOf(props.paneId) ?? [])
+
+async function toggleMenu(): Promise<void> {
+  if (menuOpen.value) {
+    closeMenu()
+    return
+  }
+  menuOpen.value = true
+  document.addEventListener('pointerdown', onMenuPointerDown, true)
+  document.addEventListener('keydown', onMenuKeydown, true)
+  await nextTick()
+  const rect = chipRef.value?.getBoundingClientRect()
+  const menu = menuRef.value
+  if (!rect || !menu) return
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8))
+  const below = rect.bottom + 6
+  const top = below + menu.offsetHeight > window.innerHeight - 8 ? Math.max(8, rect.top - 6 - menu.offsetHeight) : below
+  menuStyle.value = { top: `${top}px`, left: `${left}px` }
+}
+
+function closeMenu(): void {
+  menuOpen.value = false
+  document.removeEventListener('pointerdown', onMenuPointerDown, true)
+  document.removeEventListener('keydown', onMenuKeydown, true)
+}
+
+function onMenuPointerDown(event: Event): void {
+  const target = event.target as Node | null
+  if (target && (menuRef.value?.contains(target) || chipRef.value?.contains(target))) return
+  closeMenu()
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  closeMenu()
+}
+
+onBeforeUnmount(closeMenu)
+
+async function pickVerbosity(v: ChannelVerbosity): Promise<void> {
+  if (!store || v === verbosity.value) return
+  busy.value = true
+  error.value = ''
+  const res = await store.setBindingOptions(props.paneId, v)
+  busy.value = false
+  if (!res.ok) error.value = res.error ?? t('channels.error.generic')
+}
+
 async function unbind(): Promise<void> {
   if (!store) return
   busy.value = true
@@ -215,9 +272,20 @@ function openSettings(): void {
 
 <template>
   <span v-if="store" class="pane-channel">
-    <span v-if="binding" class="pch-chip" data-testid="channel-chip" :title="`${platformName(binding.platform)} · ${binding.title || binding.chat_id}`">
-      <svg class="pch-icon pch-chip-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z" /><path d="M5.4 6.2h5.2M5.4 8.2h3.2" /></svg>
-      <span class="pch-chip-label">{{ platformName(binding.platform) }} · {{ binding.title || binding.chat_id }}</span>
+    <span v-if="binding" ref="chipRef" class="pch-chip" data-testid="channel-chip" :title="`${platformName(binding.platform)} · ${binding.title || binding.chat_id}`">
+      <button
+        type="button"
+        class="pch-chip-main"
+        data-testid="channel-chip-menu"
+        :aria-expanded="menuOpen"
+        :aria-label="t('channels.pane.verbosity-label')"
+        @click.stop="toggleMenu"
+        @mousedown.stop
+        @dblclick.stop
+      >
+        <svg class="pch-icon pch-chip-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z" /><path d="M5.4 6.2h5.2M5.4 8.2h3.2" /></svg>
+        <span class="pch-chip-label">{{ platformName(binding.platform) }} · {{ binding.title || binding.chat_id }}</span>
+      </button>
       <button
         type="button"
         class="pch-chip-x"
@@ -244,6 +312,40 @@ function openSettings(): void {
       @dblclick.stop
     ><svg class="pch-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z" /><path d="M5.4 6.2h5.2M5.4 8.2h3.2" /></svg></button>
     <Teleport to="body">
+      <div
+        v-if="menuOpen && binding"
+        ref="menuRef"
+        class="pch-pop pch-menu"
+        :style="menuStyle"
+        role="dialog"
+        :aria-label="t('channels.pane.verbosity-label')"
+        data-testid="channel-menu"
+        @click.stop
+        @mousedown.stop
+      >
+        <div class="pch-pop-head">{{ t('channels.pane.verbosity-label') }}</div>
+        <button
+          v-for="v in VERBOSITIES"
+          :key="v"
+          type="button"
+          class="pch-row"
+          :class="{ 'pch-row-active': v === verbosity }"
+          role="menuitemradio"
+          :aria-checked="v === verbosity"
+          :data-testid="`channel-verbosity-${v}`"
+          :disabled="busy"
+          :title="t(`channels.pane.verbosity-${v}-hint`)"
+          @click="pickVerbosity(v)"
+        >
+          <span class="pch-loc-title pch-ellipsis">{{ t(`channels.pane.verbosity-${v}`) }}</span>
+          <span class="pch-kind pch-ellipsis">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
+        </button>
+        <template v-if="children.length">
+          <div class="pch-pop-head pch-children-head">{{ t('channels.pane.children') }}</div>
+          <div v-for="c in children" :key="c.pane_id" class="pch-sub pch-ellipsis" data-testid="channel-child">↳ {{ c.title || c.pane_id }}</div>
+        </template>
+        <p v-if="error" class="pch-error" role="alert">{{ error }}</p>
+      </div>
       <div
         v-if="open"
         ref="popRef"
@@ -309,6 +411,9 @@ function openSettings(): void {
 .pch-icon { display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 /* Same height and type as the header's status badge. */
 .pch-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 1; max-width: 200px; font-size: var(--font-3xs); color: var(--accent-fg); background: var(--accent-subtle); border: 1px solid var(--accent-muted); border-radius: 999px; padding: 1px 2px 1px 7px; }
+.pch-chip-main { display: inline-flex; align-items: center; gap: 4px; min-width: 0; font: inherit; color: inherit; background: transparent; border: none; padding: 0; cursor: pointer; }
+.pch-row-active { border-color: var(--accent-muted); background: var(--accent-subtle); }
+.pch-children-head { margin-top: 4px; }
 .pch-chip-icon { width: 11px; height: 11px; flex-shrink: 0; }
 .pch-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pch-chip-x { font: inherit; line-height: 1; color: inherit; background: transparent; border: none; padding: 0 3px; cursor: pointer; opacity: 0.8; }

@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
@@ -18,6 +19,7 @@ import type { BackendRuntimeContext, JsonValue } from './pluginBackendSupervisor
 import {
   MAX_BACKEND_BRIDGE_RESULT_BYTES,
   MAX_BACKEND_BRIDGE_CHUNK_BYTES,
+  MAX_BACKEND_BRIDGE_RANGE_BYTES,
 } from './pluginBackendLimits'
 
 const runtime = {
@@ -415,6 +417,235 @@ describe('Plans Host Bridge ports', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('reads a file larger than 5 MB in full by paging ranges that each fit the bridge result bound', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-range-'))
+    const dispatcher = createLocalFilesystemDispatcher()
+    const controller = new AbortController()
+    const bridgeContext = context(controller.signal, [], root, runtime, realpathSync(root))
+    const payload = Buffer.alloc(6 * 1024 * 1024 + 123)
+    for (let index = 0; index < payload.length; index++) payload[index] = (index * 31 + 7) & 0xff
+    writeFileSync(join(root, 'huge.html'), payload)
+    try {
+      // A whole-file read refuses it (the shared result bound is unchanged) ...
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'read_file', { rel_path: 'huge.html' }),
+        bridgeContext,
+      )).rejects.toMatchObject({ code: 'RESULT_TOO_LARGE' })
+      // ... and ranged reads assemble it, each result inside that bound.
+      const parts: Buffer[] = []
+      let offset = 0
+      for (;;) {
+        const page = await dispatcher.dispatch(
+          request('filesystem', 'read_range', {
+            rel_path: 'huge.html', offset, length: MAX_BACKEND_BRIDGE_RANGE_BYTES,
+          }),
+          bridgeContext,
+        ) as { data_base64: string; size: number; mtime: number; eof: boolean }
+        expect(JSON.stringify(page).length).toBeLessThan(MAX_BACKEND_BRIDGE_RESULT_BYTES)
+        expect(page.size).toBe(payload.length)
+        const bytes = Buffer.from(page.data_base64, 'base64')
+        parts.push(bytes)
+        offset += bytes.length
+        if (page.eof) break
+      }
+      const assembled = Buffer.concat(parts)
+      expect(assembled.length).toBe(payload.length)
+      expect(createHash('sha256').update(assembled).digest('hex'))
+        .toBe(createHash('sha256').update(payload).digest('hex'))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects malformed, oversized and escaping range reads', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-range-bad-'))
+    const dispatcher = createLocalFilesystemDispatcher()
+    const controller = new AbortController()
+    const bridgeContext = context(controller.signal, [], root, runtime, realpathSync(root))
+    writeFileSync(join(root, 'a.md'), 'hello')
+    try {
+      const bad: Array<Record<string, JsonValue>> = [
+        { rel_path: 'a.md', offset: -1, length: 1 },
+        { rel_path: 'a.md', offset: 0, length: 0 },
+        { rel_path: 'a.md', offset: 0, length: MAX_BACKEND_BRIDGE_RANGE_BYTES + 1 },
+        { rel_path: 'a.md', offset: 1.5, length: 1 },
+        { rel_path: 'a.md', offset: 0 },
+        { rel_path: 'a.md', offset: 0, length: 1, extra: true },
+      ]
+      for (const args of bad) {
+        await expect(dispatcher.dispatch(request('filesystem', 'read_range', args), bridgeContext))
+          .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+      }
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'read_range', { rel_path: '../outside', offset: 0, length: 1 }),
+        bridgeContext,
+      )).rejects.toMatchObject({ code: 'WORKSPACE_SCOPE_VIOLATION' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('delegates production range reads to the Host filesystem service', async () => {
+    const root = realpathSync(process.cwd())
+    const calls: Array<{ operation: string; payload: Record<string, unknown> }> = []
+    const service: PlansFilesystemService = {
+      async call(operation, payload): Promise<JsonValue> {
+        calls.push({ operation, payload })
+        return { ok: true, data_base64: 'aGk=', size: 2, mtime: 5, eof: true, offset: 0 }
+      },
+    }
+    const port = createHostPlansFilesystemPort(service)
+    const bridgeContext = context(new AbortController().signal, [], '/workspace', runtime, root)
+
+    await expect(port.readRange({ rel_path: 'plan.html', offset: 0, length: 1024 }, bridgeContext))
+      .resolves.toEqual({ data_base64: 'aGk=', size: 2, mtime: 5, eof: true })
+    expect(calls).toEqual([
+      {
+        operation: 'fs.read_range',
+        payload: { rel_path: 'plan.html', offset: 0, length: 1024, workspace_path: root },
+      },
+    ])
+    await expect(port.readRange({ rel_path: 'plan.html', offset: 0, length: MAX_BACKEND_BRIDGE_RANGE_BYTES + 1 }, bridgeContext))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
+
+  it('writes a multi-megabyte file in parts and swaps it in atomically with the mtime conflict check', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-chunked-'))
+    const dispatcher = createLocalFilesystemDispatcher()
+    const controller = new AbortController()
+    const bridgeContext = context(controller.signal, [], root, runtime, realpathSync(root))
+    const uploadId = 'a'.repeat(32)
+    const payload = Buffer.alloc(3 * 1024 * 1024 + 17)
+    for (let index = 0; index < payload.length; index++) payload[index] = (index * 13 + 5) & 0xff
+    writeFileSync(join(root, 'plan.html'), 'old')
+    try {
+      let offset = 0
+      while (offset < payload.length) {
+        const part = payload.subarray(offset, offset + MAX_BACKEND_BRIDGE_RANGE_BYTES)
+        await expect(dispatcher.dispatch(
+          request('filesystem', 'write_part', {
+            rel_path: 'plan.html', upload_id: uploadId, offset, data_base64: part.toString('base64'),
+          }),
+          bridgeContext,
+        )).resolves.toEqual({ ok: true, size: offset + part.length })
+        offset += part.length
+      }
+      expect(readFileSync(join(root, 'plan.html'), 'utf8')).toBe('old') // not visible before commit
+
+      // A stale expected_mtime is refused and the staged bytes are discarded.
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'write_commit', {
+          rel_path: 'plan.html', upload_id: uploadId, total_size: payload.length, expected_mtime: 1,
+        }),
+        bridgeContext,
+      )).resolves.toMatchObject({ ok: false, conflict: true })
+      expect(readFileSync(join(root, 'plan.html'), 'utf8')).toBe('old')
+      expect(readdirSync(root)).toEqual(['plan.html'])
+
+      // Stage again and commit with the real mtime.
+      offset = 0
+      while (offset < payload.length) {
+        const part = payload.subarray(offset, offset + MAX_BACKEND_BRIDGE_RANGE_BYTES)
+        await dispatcher.dispatch(
+          request('filesystem', 'write_part', {
+            rel_path: 'plan.html', upload_id: uploadId, offset, data_base64: part.toString('base64'),
+          }),
+          bridgeContext,
+        )
+        offset += part.length
+      }
+      const mtime = statSync(join(root, 'plan.html')).mtimeMs
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'write_commit', {
+          rel_path: 'plan.html', upload_id: uploadId, total_size: payload.length, expected_mtime: mtime,
+        }),
+        bridgeContext,
+      )).resolves.toMatchObject({ ok: true, mtime: expect.any(Number) })
+      const written = readFileSync(join(root, 'plan.html'))
+      expect(createHash('sha256').update(written).digest('hex'))
+        .toBe(createHash('sha256').update(payload).digest('hex'))
+      expect(readdirSync(root)).toEqual(['plan.html'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects malformed, out-of-order and protected chunked writes, and aborts idempotently', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-chunked-bad-'))
+    const dispatcher = createLocalFilesystemDispatcher()
+    const controller = new AbortController()
+    const bridgeContext = context(controller.signal, [], root, runtime, realpathSync(root))
+    const id = 'b'.repeat(32)
+    const data = Buffer.from('abc').toString('base64')
+    try {
+      const bad: Array<[string, Record<string, JsonValue>]> = [
+        ['write_part', { rel_path: 'a.md', upload_id: 'short', offset: 0, data_base64: data }],
+        ['write_part', { rel_path: 'a.md', upload_id: id, offset: -1, data_base64: data }],
+        ['write_part', { rel_path: 'a.md', upload_id: id, offset: 0 }],
+        ['write_part', { rel_path: 'a.md', upload_id: id, offset: 0, data_base64: 'A'.repeat(140_000) }],
+        ['write_part', { rel_path: 'a.md', upload_id: id, offset: 0, data_base64: data, extra: 1 }],
+        ['write_commit', { rel_path: 'a.md', upload_id: id }],
+        ['write_commit', { rel_path: 'a.md', upload_id: id, total_size: 1, expected_mtime: 'x' }],
+        ['write_abort', { rel_path: 'a.md' }],
+      ]
+      for (const [operation, args] of bad) {
+        await expect(dispatcher.dispatch(request('filesystem', operation, args), bridgeContext))
+          .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+      }
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'write_part', { rel_path: '.git/config', upload_id: id, offset: 0, data_base64: data }),
+        bridgeContext,
+      )).rejects.toMatchObject({ code: 'WORKSPACE_SCOPE_VIOLATION' })
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'write_part', { rel_path: 'a.md', upload_id: id, offset: 3, data_base64: data }),
+        bridgeContext,
+      )).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+      await dispatcher.dispatch(
+        request('filesystem', 'write_part', { rel_path: 'a.md', upload_id: id, offset: 0, data_base64: data }),
+        bridgeContext,
+      )
+      await expect(dispatcher.dispatch(
+        request('filesystem', 'write_commit', { rel_path: 'a.md', upload_id: id, total_size: 99 }),
+        bridgeContext,
+      )).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(dispatcher.dispatch(
+          request('filesystem', 'write_abort', { rel_path: 'a.md', upload_id: id }),
+          bridgeContext,
+        )).resolves.toEqual({ ok: true })
+      }
+      expect(readdirSync(root)).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('delegates production chunked writes to the Host filesystem service', async () => {
+    const root = realpathSync(process.cwd())
+    const calls: Array<{ operation: string; payload: Record<string, unknown> }> = []
+    const service: PlansFilesystemService = {
+      async call(operation, payload): Promise<JsonValue> {
+        calls.push({ operation, payload })
+        if (operation === 'fs.write_commit') return { ok: false, conflict: true, mtime: 9 }
+        return { ok: true, size: 3 }
+      },
+    }
+    const port = createHostPlansFilesystemPort(service)
+    const bridgeContext = context(new AbortController().signal, [], '/workspace', runtime, root)
+    const id = 'c'.repeat(32)
+
+    await expect(port.writePart({ rel_path: 'p.html', upload_id: id, offset: 0, data_base64: 'YWJj' }, bridgeContext))
+      .resolves.toEqual({ ok: true, size: 3 })
+    await expect(port.writeCommit({ rel_path: 'p.html', upload_id: id, total_size: 3, expected_mtime: 4 }, bridgeContext))
+      .resolves.toEqual({ ok: false, conflict: true, mtime: 9 })
+    await expect(port.writeAbort({ rel_path: 'p.html', upload_id: id }, bridgeContext)).resolves.toEqual({ ok: true })
+    expect(calls).toEqual([
+      { operation: 'fs.write_part', payload: { rel_path: 'p.html', upload_id: id, offset: 0, data_base64: 'YWJj', workspace_path: root } },
+      { operation: 'fs.write_commit', payload: { rel_path: 'p.html', upload_id: id, total_size: 3, expected_mtime: 4, workspace_path: root } },
+      { operation: 'fs.write_abort', payload: { rel_path: 'p.html', upload_id: id, workspace_path: root } },
+    ])
   })
 
   it.each([

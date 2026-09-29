@@ -9,6 +9,7 @@
  */
 
 import {
+  appendFileSync,
   constants,
   mkdirSync,
   closeSync,
@@ -18,6 +19,7 @@ import {
   readSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   watch as watchPath,
   writeFileSync,
@@ -35,6 +37,7 @@ import type {
 import {
   MAX_BACKEND_BRIDGE_CHUNK_BYTES,
   MAX_BACKEND_BRIDGE_QUEUE_BYTES,
+  MAX_BACKEND_BRIDGE_RANGE_BYTES,
   MAX_BACKEND_BRIDGE_RESULT_BYTES,
 } from './pluginBackendLimits'
 import {
@@ -106,7 +109,18 @@ export interface PlansBridgeContext {
 
 export interface PlansFilesystemPort {
   readFile(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
+  /** Read `length` bytes at `offset`; returns `{ data_base64, size, mtime, eof }`.
+   * Unlike `readFile` a file of any size can be read by paging ranges. */
+  readRange(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
   writeFile(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
+  /** Chunked write, step 1..n: append one part (`upload_id`, in-order `offset`,
+   * `data_base64` of at most one range) to the staging file of `rel_path`. */
+  writePart(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
+  /** Chunked write, last step: atomically swap the staged bytes in, with the
+   * same `expected_mtime` conflict check `writeFile` has. */
+  writeCommit(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
+  /** Discard a staged chunked write. */
+  writeAbort(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
   listDir(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
   listFilesFlat(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
   statPath(arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue>
@@ -121,7 +135,11 @@ export interface PlansFilesystemPort {
  * payloads never choose the root and the bridge context is never serialized. */
 export type PlansFilesystemServiceOperation =
   | 'fs.read_file'
+  | 'fs.read_range'
   | 'fs.write_file'
+  | 'fs.write_part'
+  | 'fs.write_commit'
+  | 'fs.write_abort'
   | 'fs.list_dir'
   | 'fs.stat_workspace_path'
   | 'fs.delete'
@@ -193,7 +211,11 @@ type PortOperation = {
 const PORT_OPERATIONS: PortOperation = {
   filesystem: [
     'read_file',
+    'read_range',
     'write_file',
+    'write_part',
+    'write_commit',
+    'write_abort',
     'list_dir',
     'list_files_flat',
     'stat_path',
@@ -345,6 +367,110 @@ function readFileBounded(path: string): string {
   }
 }
 
+interface RangeArguments {
+  offset: number
+  length: number
+}
+
+function rangeArguments(values: Record<string, JsonValue>): RangeArguments {
+  const { offset, length } = values
+  if (
+    Object.keys(values).some((key) => !['rel_path', 'offset', 'length'].includes(key)) ||
+    !Object.prototype.hasOwnProperty.call(values, 'rel_path') ||
+    typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 ||
+    typeof length !== 'number' || !Number.isSafeInteger(length) ||
+    length < 1 || length > MAX_BACKEND_BRIDGE_RANGE_BYTES
+  ) throw new PlansBridgeError('INVALID_ARGUMENT')
+  return { offset, length }
+}
+
+/** Read one byte range through an open descriptor; never allocates more than
+ * the (bounded) range and never reads the rest of the file. */
+function readRangeBounded(path: string, { offset, length }: RangeArguments): {
+  data_base64: string
+  size: number
+  mtime: number
+  eof: boolean
+} {
+  const flags = constants.O_RDONLY |
+    (constants.O_NONBLOCK ?? 0) |
+    (constants.O_NOFOLLOW ?? 0)
+  const fd = openSync(path, flags)
+  try {
+    const stat = fstatSync(fd)
+    if (!stat.isFile()) {
+      throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace path is not a regular file.')
+    }
+    const buffer = Buffer.allocUnsafe(length)
+    let filled = 0
+    while (filled < length) {
+      const count = readSync(fd, buffer, filled, length - filled, offset + filled)
+      if (count === 0) break
+      filled += count
+    }
+    return {
+      data_base64: buffer.subarray(0, filled).toString('base64'),
+      size: stat.size,
+      mtime: stat.mtimeMs,
+      eof: offset + filled >= stat.size,
+    }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+const UPLOAD_ID_RE = /^[0-9a-f]{32}$/
+/** Base64 of one full range, the most a single write part may carry. */
+const MAX_WRITE_PART_BASE64_CHARS = Math.ceil(MAX_BACKEND_BRIDGE_RANGE_BYTES / 3) * 4
+
+function uploadId(values: Record<string, JsonValue>): string {
+  const id = values.upload_id
+  if (typeof id !== 'string' || !UPLOAD_ID_RE.test(id)) throw new PlansBridgeError('INVALID_ARGUMENT')
+  return id
+}
+
+function nonNegativeInteger(value: JsonValue | undefined): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new PlansBridgeError('INVALID_ARGUMENT')
+  }
+  return value
+}
+
+interface WritePartArguments { id: string; offset: number; data: string }
+interface WriteCommitArguments { id: string; totalSize: number; expectedMtime: number | undefined }
+
+function writePartArguments(values: Record<string, JsonValue>): WritePartArguments {
+  if (
+    Object.keys(values).some((key) => !['rel_path', 'upload_id', 'offset', 'data_base64'].includes(key)) ||
+    !Object.prototype.hasOwnProperty.call(values, 'rel_path') ||
+    typeof values.data_base64 !== 'string' ||
+    values.data_base64.length > MAX_WRITE_PART_BASE64_CHARS
+  ) throw new PlansBridgeError('INVALID_ARGUMENT')
+  return { id: uploadId(values), offset: nonNegativeInteger(values.offset), data: values.data_base64 }
+}
+
+function writeCommitArguments(values: Record<string, JsonValue>): WriteCommitArguments {
+  const { expected_mtime: expected } = values
+  if (
+    Object.keys(values).some((key) => !['rel_path', 'upload_id', 'total_size', 'expected_mtime'].includes(key)) ||
+    !Object.prototype.hasOwnProperty.call(values, 'rel_path') ||
+    (expected !== undefined && (typeof expected !== 'number' || !Number.isFinite(expected)))
+  ) throw new PlansBridgeError('INVALID_ARGUMENT')
+  return {
+    id: uploadId(values),
+    totalSize: nonNegativeInteger(values.total_size),
+    expectedMtime: expected as number | undefined,
+  }
+}
+
+function writeAbortArguments(values: Record<string, JsonValue>): string {
+  if (
+    Object.keys(values).some((key) => !['rel_path', 'upload_id'].includes(key)) ||
+    !Object.prototype.hasOwnProperty.call(values, 'rel_path')
+  ) throw new PlansBridgeError('INVALID_ARGUMENT')
+  return uploadId(values)
+}
+
 function backendResultRecord(value: JsonValue): Record<string, JsonValue> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Filesystem service returned an invalid response.')
@@ -421,6 +547,32 @@ export function createHostPlansFilesystemPort(
       }
       return normalized
     },
+    async readRange(arguments_, context): Promise<JsonValue> {
+      const values = recordArguments(arguments_)
+      const { offset, length } = rangeArguments(values)
+      const result = await callFilesystemService(
+        service,
+        'fs.read_range',
+        { rel_path: pathString(arguments_, 'rel_path'), offset, length },
+        context,
+      )
+      if (
+        typeof result.data_base64 !== 'string' ||
+        typeof result.size !== 'number' ||
+        typeof result.eof !== 'boolean'
+      ) {
+        throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace file range is unavailable.')
+      }
+      const normalized: Record<string, JsonValue> = {
+        data_base64: result.data_base64,
+        size: result.size,
+        eof: result.eof,
+      }
+      if (typeof result.mtime === 'number' && Number.isFinite(result.mtime)) {
+        normalized.mtime = result.mtime
+      }
+      return normalized
+    },
     async writeFile(arguments_, context): Promise<JsonValue> {
       const values = recordArguments(arguments_)
       if (
@@ -458,6 +610,52 @@ export function createHostPlansFilesystemPort(
           ? { mtime: result.mtime }
           : {}),
       }
+    },
+    async writePart(arguments_, context): Promise<JsonValue> {
+      const part = writePartArguments(recordArguments(arguments_))
+      const result = await callFilesystemService(
+        service,
+        'fs.write_part',
+        {
+          rel_path: pathString(arguments_, 'rel_path'),
+          upload_id: part.id,
+          offset: part.offset,
+          data_base64: part.data,
+        },
+        context,
+      )
+      return { ok: true, size: typeof result.size === 'number' ? result.size : part.offset }
+    },
+    async writeCommit(arguments_, context): Promise<JsonValue> {
+      const commit = writeCommitArguments(recordArguments(arguments_))
+      const payload: Record<string, JsonValue> = {
+        rel_path: pathString(arguments_, 'rel_path'),
+        upload_id: commit.id,
+        total_size: commit.totalSize,
+      }
+      if (commit.expectedMtime !== undefined) payload.expected_mtime = commit.expectedMtime
+      const result = await callFilesystemService(
+        service,
+        'fs.write_commit',
+        payload,
+        context,
+        { allowConflict: true },
+      )
+      const outcome: Record<string, JsonValue> = result.conflict === true
+        ? { ok: false, conflict: true }
+        : { ok: true }
+      if (typeof result.mtime === 'number' && Number.isFinite(result.mtime)) outcome.mtime = result.mtime
+      return outcome
+    },
+    async writeAbort(arguments_, context): Promise<JsonValue> {
+      const id = writeAbortArguments(recordArguments(arguments_))
+      await callFilesystemService(
+        service,
+        'fs.write_abort',
+        { rel_path: pathString(arguments_, 'rel_path'), upload_id: id },
+        context,
+      )
+      return { ok: true }
     },
     async listDir(arguments_, context): Promise<JsonValue> {
       exactArguments(arguments_, ['rel_path'], ['mode'])
@@ -590,7 +788,11 @@ function deniedCorePorts(): PlansCorePorts {
   return {
     filesystem: {
       readFile: deniedPort('filesystem'),
+      readRange: deniedPort('filesystem'),
       writeFile: deniedPort('filesystem'),
+      writePart: deniedPort('filesystem'),
+      writeCommit: deniedPort('filesystem'),
+      writeAbort: deniedPort('filesystem'),
       listDir: deniedPort('filesystem'),
       listFilesFlat: deniedPort('filesystem'),
       statPath: deniedPort('filesystem'),
@@ -642,7 +844,11 @@ export function createPlansBridgeDispatcher(ports: PlansCorePorts): BackendBridg
         case 'filesystem': {
           const operations: Record<string, (arguments_: JsonValue, context: PlansBridgeContext) => Promise<JsonValue>> = {
             read_file: ports.filesystem.readFile.bind(ports.filesystem),
+            read_range: ports.filesystem.readRange.bind(ports.filesystem),
             write_file: ports.filesystem.writeFile.bind(ports.filesystem),
+            write_part: ports.filesystem.writePart.bind(ports.filesystem),
+            write_commit: ports.filesystem.writeCommit.bind(ports.filesystem),
+            write_abort: ports.filesystem.writeAbort.bind(ports.filesystem),
             list_dir: ports.filesystem.listDir.bind(ports.filesystem),
             list_files_flat: ports.filesystem.listFilesFlat.bind(ports.filesystem),
             stat_path: ports.filesystem.statPath.bind(ports.filesystem),
@@ -825,6 +1031,17 @@ export function createTestPlansFilesystemPort(): PlansFilesystemPort {
         throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace file is unavailable.')
       }
     },
+    async readRange(arguments_, context): Promise<JsonValue> {
+      const values = recordArguments(arguments_)
+      const range = rangeArguments(values)
+      const file = safePlanPath(arguments_, 'rel_path', context)
+      try {
+        return readRangeBounded(file, range)
+      } catch (error) {
+        if (error instanceof PlansBridgeError) throw error
+        throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace file is unavailable.')
+      }
+    },
     async writeFile(arguments_, context): Promise<JsonValue> {
       const values = recordArguments(arguments_)
       if (
@@ -856,6 +1073,54 @@ export function createTestPlansFilesystemPort(): PlansFilesystemPort {
         throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace file could not be written.')
       }
       return expectedMtime === undefined ? { ok: true } : { ok: true, mtime: statSync(file).mtimeMs }
+    },
+    async writePart(arguments_, context): Promise<JsonValue> {
+      const part = writePartArguments(recordArguments(arguments_))
+      const file = mutationPath(context, safePlanPath(arguments_, 'rel_path', context, false))
+      const staging = `${file}.${part.id}.upload`
+      const data = Buffer.from(part.data, 'base64')
+      try {
+        if (part.offset === 0) {
+          mkdirSync(dirname(file), { recursive: true })
+          writeFileSync(staging, data)
+        } else {
+          if (statSync(staging).size !== part.offset) throw new PlansBridgeError('BACKEND_UNAVAILABLE')
+          appendFileSync(staging, data)
+        }
+      } catch (error) {
+        rmSync(staging, { force: true })
+        if (error instanceof PlansBridgeError) throw error
+        throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace file could not be written.')
+      }
+      return { ok: true, size: part.offset + data.length }
+    },
+    async writeCommit(arguments_, context): Promise<JsonValue> {
+      const commit = writeCommitArguments(recordArguments(arguments_))
+      const file = mutationPath(context, safePlanPath(arguments_, 'rel_path', context, false))
+      const staging = `${file}.${commit.id}.upload`
+      try {
+        if (statSync(staging).size !== commit.totalSize) throw new PlansBridgeError('BACKEND_UNAVAILABLE')
+        if (commit.expectedMtime !== undefined) {
+          let current: number | undefined
+          try { current = statSync(file).mtimeMs } catch { current = undefined }
+          if (current !== commit.expectedMtime) {
+            rmSync(staging, { force: true })
+            return current === undefined ? { ok: false, conflict: true } : { ok: false, conflict: true, mtime: current }
+          }
+        }
+        renameSync(staging, file)
+      } catch (error) {
+        rmSync(staging, { force: true })
+        if (error instanceof PlansBridgeError) throw error
+        throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace file could not be written.')
+      }
+      return { ok: true, mtime: statSync(file).mtimeMs }
+    },
+    async writeAbort(arguments_, context): Promise<JsonValue> {
+      const id = writeAbortArguments(recordArguments(arguments_))
+      const file = mutationPath(context, safePlanPath(arguments_, 'rel_path', context, false))
+      rmSync(`${file}.${id}.upload`, { force: true })
+      return { ok: true }
     },
     async listDir(arguments_, context) {
       const directory = exactPathArguments(arguments_, 'rel_path', context)
@@ -979,6 +1244,7 @@ export function createInMemoryPlansCorePorts(options: InMemoryPlansCoreOptions =
   const root = resolve(options.root ?? '/workspace')
   const files = new Map(Object.entries(options.files ?? {}))
   const mtimes = new Map<string, number>()
+  const uploads = new Map<string, Buffer[]>()
   let nextMtime = 1
   const storage = new Map<string, JsonValue>()
   const sessions = new Map<string, string>()
@@ -1038,6 +1304,21 @@ export function createInMemoryPlansCorePorts(options: InMemoryPlansCoreOptions =
         ? { content, mtime: mtimes.get(path) ?? 1 }
         : { content }
     },
+    async readRange(arguments_, context): Promise<JsonValue> {
+      const values = recordArguments(arguments_)
+      const { offset, length } = rangeArguments(values)
+      const path = pathFor(arguments_, context)
+      const content = files.get(path)
+      if (content === undefined) throw new PlansBridgeError('BACKEND_UNAVAILABLE')
+      const bytes = Buffer.from(content, 'utf8')
+      const slice = bytes.subarray(offset, offset + length)
+      return {
+        data_base64: slice.toString('base64'),
+        size: bytes.length,
+        mtime: mtimes.get(path) ?? 1,
+        eof: offset + slice.length >= bytes.length,
+      }
+    },
     async writeFile(arguments_, context): Promise<JsonValue> {
       const values = recordArguments(arguments_)
       if (
@@ -1064,6 +1345,49 @@ export function createInMemoryPlansCorePorts(options: InMemoryPlansCoreOptions =
       mtimes.set(path, mtime)
       notify(path, 'change')
       return expectedMtime === undefined ? { ok: true } : { ok: true, mtime }
+    },
+    async writePart(arguments_, context): Promise<JsonValue> {
+      const part = writePartArguments(recordArguments(arguments_))
+      const path = pathFor(arguments_, context)
+      if (virtualMutationPathError(workspaceRootFor(context, root), path)) {
+        throw new PlansBridgeError('WORKSPACE_SCOPE_VIOLATION')
+      }
+      const key = `${path}\u0000${part.id}`
+      const data = Buffer.from(part.data, 'base64')
+      const staged = part.offset === 0 ? [] : uploads.get(key)
+      if (!staged || staged.reduce((sum, chunk) => sum + chunk.length, 0) !== part.offset) {
+        uploads.delete(key)
+        throw new PlansBridgeError('BACKEND_UNAVAILABLE')
+      }
+      staged.push(data)
+      uploads.set(key, staged)
+      return { ok: true, size: part.offset + data.length }
+    },
+    async writeCommit(arguments_, context): Promise<JsonValue> {
+      const commit = writeCommitArguments(recordArguments(arguments_))
+      const path = pathFor(arguments_, context)
+      if (virtualMutationPathError(workspaceRootFor(context, root), path)) {
+        throw new PlansBridgeError('WORKSPACE_SCOPE_VIOLATION')
+      }
+      const key = `${path}\u0000${commit.id}`
+      const staged = uploads.get(key)
+      uploads.delete(key)
+      const bytes = staged ? Buffer.concat(staged) : undefined
+      if (!bytes || bytes.length !== commit.totalSize) throw new PlansBridgeError('BACKEND_UNAVAILABLE')
+      if (commit.expectedMtime !== undefined && files.has(path) && (mtimes.get(path) ?? 1) !== commit.expectedMtime) {
+        return { ok: false, conflict: true, mtime: mtimes.get(path) ?? 1 }
+      }
+      if (commit.expectedMtime !== undefined && !files.has(path)) return { ok: false, conflict: true }
+      files.set(path, bytes.toString('utf8'))
+      const mtime = ++nextMtime
+      mtimes.set(path, mtime)
+      notify(path, 'change')
+      return { ok: true, mtime }
+    },
+    async writeAbort(arguments_, context): Promise<JsonValue> {
+      const id = writeAbortArguments(recordArguments(arguments_))
+      uploads.delete(`${pathFor(arguments_, context)}\u0000${id}`)
+      return { ok: true }
     },
     async listDir(arguments_, context) {
       exactArguments(arguments_, ['rel_path'])
