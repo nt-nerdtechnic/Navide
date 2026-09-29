@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import json
+import os
 import queue
 import re
 import subprocess
@@ -93,6 +96,29 @@ def _reply_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], val
     )
 
 
+def _reply_range(
+    process: subprocess.Popen[bytes],
+    request: dict[str, Any],
+    content: str,
+    mtime: float,
+) -> None:
+    """Answer a Host `read_range` call from an in-memory document."""
+    arguments = request["params"]["arguments"]
+    raw = content.encode("utf-8")
+    offset, length = arguments["offset"], arguments["length"]
+    piece = raw[offset : offset + length]
+    _reply_bridge(
+        process,
+        request,
+        {
+            "data_base64": base64.b64encode(piece).decode("ascii"),
+            "size": len(raw),
+            "mtime": mtime,
+            "eof": offset + len(piece) >= len(raw),
+        },
+    )
+
+
 def _error_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], code: str) -> None:
     _send(
         process,
@@ -168,9 +194,11 @@ def test_health_and_agent_create_update_read_round_trip(
             operation = params["operation"]
             arguments = params["arguments"]
             assert "workspace_path" not in arguments
-            if operation == "read_file":
+            if operation in ("read_file", "read_range"):
                 rel_path = arguments["rel_path"]
-                if rel_path in stored:
+                if rel_path in stored and operation == "read_range":
+                    _reply_range(backend_process, frame, stored[rel_path], mtime)
+                elif rel_path in stored:
                     _reply_bridge(backend_process, frame, {"content": stored[rel_path], "mtime": mtime})
                 else:
                     _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
@@ -509,6 +537,12 @@ def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_
                 else:
                     assert arguments == {"rel_path": ".agent-team/plans"}
                     _reply_bridge(backend_process, frame, {"entries": ["README.md"]})
+            elif operation == "read_range":
+                rel_path = arguments["rel_path"]
+                if rel_path not in stored:
+                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
+                else:
+                    _reply_range(backend_process, frame, stored[rel_path], mtimes[rel_path])
             elif operation == "read_file":
                 rel_path = arguments["rel_path"]
                 if rel_path not in stored:
@@ -685,6 +719,8 @@ def test_list_caller_arriving_mid_scan_sees_the_write_the_scan_missed(
             _reply_bridge(backend_process, frame, {"exists": rel in disk or rel.startswith(".agent-team/plans/")})
         elif params["operation"] == "list_dir":
             _reply_bridge(backend_process, frame, {"entries": disk.get(rel, [])})
+        elif params["operation"] == "read_range":
+            _reply_range(backend_process, frame, plan_html, 1.0)
         elif params["operation"] == "read_file":
             _reply_bridge(backend_process, frame, {"content": plan_html, "mtime": 1.0})
         else:
@@ -832,6 +868,10 @@ def test_lists_and_reads_legacy_plans_across_doc_dirs(
                 else:
                     assert arguments == {"rel_path": ".cursor/plans"}
                     _reply_bridge(backend_process, frame, {"entries": ["feature.plan.md"]})
+            elif operation == "read_range":
+                rel_path = arguments["rel_path"]
+                assert rel_path in stored
+                _reply_range(backend_process, frame, stored[rel_path], mtimes[rel_path])
             elif operation == "read_file":
                 rel_path = arguments["rel_path"]
                 assert rel_path in stored
@@ -955,9 +995,11 @@ def test_lists_nested_plan_roots_accepts_git_directory_and_rejects_git_file(
                     _reply_bridge(backend_process, frame, {"entries": ["inner.html"]})
                 else:
                     _reply_bridge(backend_process, frame, {"entries": []})
-            elif operation == "read_file":
+            elif operation in ("read_file", "read_range"):
                 rel = arguments["rel_path"]
-                if rel in stored:
+                if rel in stored and operation == "read_range":
+                    _reply_range(backend_process, frame, stored[rel], mtime)
+                elif rel in stored:
                     _reply_bridge(backend_process, frame, {"content": stored[rel], "mtime": mtime})
                 else:
                     _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
@@ -1189,9 +1231,11 @@ def _create_plan_over_wire(
             params = frame["params"]
             operation = params["operation"]
             arguments = params["arguments"]
-            if operation == "read_file":
+            if operation in ("read_file", "read_range"):
                 rel_path = arguments["rel_path"]
-                if rel_path in stored:
+                if rel_path in stored and operation == "read_range":
+                    _reply_range(backend_process, frame, stored[rel_path], mtime)
+                elif rel_path in stored:
                     _reply_bridge(backend_process, frame, {"content": stored[rel_path], "mtime": mtime})
                 else:
                     _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
@@ -1313,3 +1357,604 @@ def test_agent_create_preserves_double_braces_in_user_text(
     assert "{{PLAN_NAME}}" not in document
     assert "{{PHASE_A_TITLE}}" not in document
     assert "TBD" in document
+
+
+# ── documents of any size ───────────────────────────────────────────────────
+
+HOST_RESULT_LIMIT = 192 * 1024
+HOST_RANGE_LIMIT = 96 * 1024
+
+
+class _DiskHost:
+    """A Host Bridge that serves a real directory the way the Host does.
+
+    It enforces the Host's own limits so a test can only pass if the child
+    stays inside them: a `read_file` result over the 192 KiB Bridge cap fails
+    with RESULT_TOO_LARGE, and a `read_range` may not ask for more than 96 KiB.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        legacy: bool = False,
+        unreadable: tuple[str, ...] = (),
+        no_chunked_writes: bool = False,
+        fail_part: int | None = None,
+        before_commit: Any = None,
+    ) -> None:
+        self.root = root
+        self.legacy = legacy
+        self.unreadable = unreadable
+        self.no_chunked_writes = no_chunked_writes
+        self.fail_part = fail_part
+        self.before_commit = before_commit
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.write_frame_bytes: list[int] = []
+
+    def __call__(self, process: subprocess.Popen[bytes], frame: dict[str, Any]) -> None:
+        params = frame["params"]
+        assert params["port"] == "filesystem"
+        operation = params["operation"]
+        arguments = params["arguments"]
+        self.calls.append((operation, dict(arguments)))
+        rel = arguments.get("rel_path", "")
+        target = self.root / rel
+        if operation == "stat_path":
+            _reply_bridge(process, frame, {"exists": target.exists(), "isDirectory": target.is_dir()})
+        elif operation == "list_dir":
+            names = sorted(child.name for child in target.iterdir()) if target.is_dir() else []
+            _reply_bridge(process, frame, {"entries": names})
+        elif operation == "read_range":
+            if self.legacy:
+                _error_bridge(process, frame, "METHOD_NOT_FOUND")
+            elif rel in self.unreadable or not target.is_file():
+                _error_bridge(process, frame, "BACKEND_UNAVAILABLE")
+            else:
+                assert 0 < arguments["length"] <= HOST_RANGE_LIMIT
+                raw = target.read_bytes()
+                offset = arguments["offset"]
+                piece = raw[offset : offset + arguments["length"]]
+                _reply_bridge(
+                    process,
+                    frame,
+                    {
+                        "data_base64": base64.b64encode(piece).decode("ascii"),
+                        "size": len(raw),
+                        "mtime": target.stat().st_mtime,
+                        "eof": offset + len(piece) >= len(raw),
+                    },
+                )
+        elif operation == "read_file":
+            if rel in self.unreadable or not target.is_file():
+                _error_bridge(process, frame, "BACKEND_UNAVAILABLE")
+            elif target.stat().st_size > HOST_RESULT_LIMIT - 1024:
+                _error_bridge(process, frame, "RESULT_TOO_LARGE")
+            else:
+                _reply_bridge(
+                    process, frame, {"content": target.read_text(encoding="utf-8"), "mtime": target.stat().st_mtime}
+                )
+        elif operation == "write_file":
+            target.write_text(arguments["content"], encoding="utf-8")
+            _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
+        elif operation in ("write_part", "write_commit", "write_abort"):
+            self._chunked_write(process, frame, operation, arguments, target)
+        else:
+            raise AssertionError(f"unexpected filesystem operation: {operation}")
+
+    def staging_files(self) -> list[Path]:
+        return sorted(self.root.rglob("*.upload"))
+
+    def _chunked_write(
+        self,
+        process: subprocess.Popen[bytes],
+        frame: dict[str, Any],
+        operation: str,
+        arguments: dict[str, Any],
+        target: Path,
+    ) -> None:
+        if self.no_chunked_writes:
+            _error_bridge(process, frame, "METHOD_NOT_FOUND")
+            return
+        staging = target.parent / f".{target.name}.{arguments['upload_id']}.upload"
+        if operation == "write_part":
+            parts_so_far = sum(1 for name, _ in self.calls if name == "write_part")
+            if self.fail_part is not None and parts_so_far == self.fail_part:
+                _error_bridge(process, frame, "BACKEND_UNAVAILABLE")
+                return
+            piece = base64.b64decode(arguments["data_base64"])
+            assert len(piece) <= HOST_RANGE_LIMIT
+            # Every part must fit a Bridge frame, whatever the document's size.
+            assert len(json.dumps(arguments)) < HOST_RESULT_LIMIT
+            if arguments["offset"] == 0:
+                staging.write_bytes(piece)
+            else:
+                assert staging.stat().st_size == arguments["offset"]
+                with staging.open("ab") as handle:
+                    handle.write(piece)
+            _reply_bridge(process, frame, {"ok": True, "size": arguments["offset"] + len(piece)})
+        elif operation == "write_commit":
+            if self.before_commit is not None:
+                self.before_commit(target)
+            assert staging.stat().st_size == arguments["total_size"]
+            expected = arguments.get("expected_mtime")
+            if expected is not None and abs(target.stat().st_mtime - expected) > 1e-4:
+                staging.unlink()
+                _reply_bridge(process, frame, {"ok": False, "conflict": True, "mtime": target.stat().st_mtime})
+                return
+            staging.replace(target)
+            _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
+        else:
+            staging.unlink(missing_ok=True)
+            _reply_bridge(process, frame, {"ok": True})
+
+
+_call_counter = 0
+
+
+def _call_backend(
+    process: subprocess.Popen[bytes], host: _DiskHost, name: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    global _call_counter
+    _call_counter += 1
+    request_id = f"large-{_call_counter}"
+    _send(
+        process,
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "navide/call",
+            "params": {"_meta": CLIENT_META, "name": name, "arguments": arguments, "runtime": RUNTIME},
+        },
+    )
+    while True:
+        frame = _read(process, timeout=30)
+        if frame.get("id") == request_id:
+            return frame
+        assert frame.get("method") == "navide/host/call"
+        host(process, frame)
+
+
+def _plan_html(name: str, padding: int = 0, stage: str = "draft", extra: str = "") -> str:
+    meta = {"schemaVersion": 1, "name": name, "overview": f"{name} overview", "stage": stage, "todos": [], "reviewNotes": []}
+    body = "<p>" + ("x" * padding) + "</p>" if padding else ""
+    return (
+        f'<!doctype html><html><head><title>{name}</title></head><body>\n'
+        f'<script type="application/json" id="plan-meta">\n{json.dumps(meta)}\n</script>\n'
+        f"{body}{extra}</body></html>\n"
+    )
+
+
+def _read_all_pages(process: subprocess.Popen[bytes], host: _DiskHost, rel_path: str) -> str:
+    parts: list[str] = []
+    offset = 0
+    while True:
+        args: dict[str, Any] = {"rel_path": rel_path}
+        if offset:
+            args["offset"] = offset
+        frame = _call_backend(process, host, "plans.read", args)
+        value = frame["result"]["value"]
+        parts.append(value["html"])
+        if value.get("eof") is not False:
+            return "".join(parts)
+        assert value["next_offset"] > offset
+        offset = value["next_offset"]
+
+
+def _plans_dir(tmp_path: Path) -> Path:
+    plans = tmp_path / ".agent-team" / "plans"
+    plans.mkdir(parents=True)
+    return plans
+
+
+def test_plans_larger_than_every_bridge_limit_are_listed_and_read_in_full(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "small_aaaaaa.html").write_text(_plan_html("Small"), encoding="utf-8")
+    (plans / "medium_bbbbbb.html").write_text(_plan_html("Medium", padding=300 * 1024), encoding="utf-8")
+    # Over the 5 MB editor read limit as well as the 192 KiB Bridge result cap.
+    huge = _plan_html("Huge report", padding=6 * 1024 * 1024, extra="<p>tail marker ✓</p>")
+    (plans / "huge_cccccc.html").write_text(huge, encoding="utf-8")
+    huge_bytes = huge.encode("utf-8")
+    assert len(huge_bytes) > 5 * 1024 * 1024
+    host = _DiskHost(tmp_path)
+
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    by_path = {entry["rel_path"]: entry for entry in listed}
+    assert sorted(by_path) == [
+        ".agent-team/plans/huge_cccccc.html",
+        ".agent-team/plans/medium_bbbbbb.html",
+        ".agent-team/plans/small_aaaaaa.html",
+    ]
+    assert by_path[".agent-team/plans/huge_cccccc.html"]["name"] == "Huge report"
+    assert by_path[".agent-team/plans/huge_cccccc.html"]["kind"] == "plan"
+    assert "reason" not in by_path[".agent-team/plans/huge_cccccc.html"]
+    # Listing reads the head only: one range for the multi-MB file, no full read.
+    huge_reads = [call for call in host.calls if call[1].get("rel_path", "").endswith("huge_cccccc.html")]
+    assert [operation for operation, _ in huge_reads] == ["read_range"]
+
+    for name, expected in (("medium_bbbbbb.html", None), ("huge_cccccc.html", huge)):
+        rel = f".agent-team/plans/{name}"
+        text = _read_all_pages(backend_process, host, rel)
+        source = (plans / name).read_bytes()
+        assert len(text.encode("utf-8")) == len(source)
+        assert hashlib.sha256(text.encode("utf-8")).hexdigest() == hashlib.sha256(source).hexdigest()
+        if expected is not None:
+            assert text == expected
+    first = _call_backend(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/huge_cccccc.html"})
+    value = first["result"]["value"]
+    assert value["meta"]["name"] == "Huge report"
+    assert value["eof"] is False and value["size"] == len(huge_bytes)
+    assert len(value["html"].encode("utf-8")) <= 256 * 1024
+
+
+def test_plan_pages_never_split_a_multibyte_character(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    document = _plan_html("中文計畫", extra="<p>" + "計畫文件✓😀" * 90_000 + "</p>")
+    (plans / "cjk_dddddd.html").write_text(document, encoding="utf-8")
+    host = _DiskHost(tmp_path)
+    text = _read_all_pages(backend_process, host, ".agent-team/plans/cjk_dddddd.html")
+    assert text == document
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ('<script type="application/json" id="plan-meta">{not json</script>', "plan-meta is not valid JSON"),
+        ('<script type="application/json" id="plan-meta">{"schemaVersion": 2, "name": "x"}</script>', "plan-meta schemaVersion must be 1"),
+        ('<script type="application/json" id="plan-meta">{"schemaVersion": 1}</script>', "plan-meta has no name"),
+        ('<script type="application/json" id="plan-meta">{"schemaVersion": 1, "name": "x"}', "plan-meta script is not closed"),
+    ],
+)
+def test_a_document_with_broken_plan_meta_is_listed_with_the_reason(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path, body: str, reason: str
+) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "broken_eeeeee.html").write_text(f"<html><body>{body}<p>content</p></body></html>", encoding="utf-8")
+    (plans / "fine_ffffff.html").write_text(_plan_html("Fine"), encoding="utf-8")
+    host = _DiskHost(tmp_path)
+
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    by_path = {entry["rel_path"]: entry for entry in listed}
+    broken = by_path[".agent-team/plans/broken_eeeeee.html"]
+    assert broken["kind"] == "document"
+    assert broken["meta"] is None
+    assert broken["reason"] == reason
+    assert broken["size"] > 0
+    assert by_path[".agent-team/plans/fine_ffffff.html"]["kind"] == "plan"
+    # The plain document (no plan-meta at all) is not a "problem".
+    (plans / "plain_000000.html").write_text("<html><body>hello</body></html>", encoding="utf-8")
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    plain = next(entry for entry in listed if entry["rel_path"].endswith("plain_000000.html"))
+    assert plain["kind"] == "document" and "reason" not in plain
+
+
+def test_an_unreadable_document_is_listed_not_dropped(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "locked_111111.html").write_text(_plan_html("Locked"), encoding="utf-8")
+    (plans / "open_222222.html").write_text(_plan_html("Open"), encoding="utf-8")
+    host = _DiskHost(tmp_path, unreadable=(".agent-team/plans/locked_111111.html",))
+
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    by_path = {entry["rel_path"]: entry for entry in listed}
+    assert sorted(by_path) == [".agent-team/plans/locked_111111.html", ".agent-team/plans/open_222222.html"]
+    locked = by_path[".agent-team/plans/locked_111111.html"]
+    assert locked["kind"] == "unreadable"
+    assert locked["reason"] == "could not be read (BACKEND_UNAVAILABLE)"
+    assert locked["meta"] is None and locked["name"] == "locked_111111.html"
+
+
+def test_an_oversized_list_is_paged_and_never_kills_the_child(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    count = 700
+    notes = [{"id": f"n{i}", "author": "user", "text": "note " * 80, "resolved": False, "reply": ""} for i in range(5)]
+    for index in range(count):
+        meta = {
+            "schemaVersion": 1, "name": f"Plan {index:04d}", "overview": "o", "stage": "draft",
+            "todos": [], "reviewNotes": notes,
+        }
+        html = f'<script type="application/json" id="plan-meta">{json.dumps(meta)}</script>'
+        (plans / f"plan-{index:04d}_abcdef.html").write_text(html, encoding="utf-8")
+    (plans / "broken-list_abcdef.html").write_text('<script id="plan-meta" type="application/json">{oops</script>', encoding="utf-8")
+    count += 1
+    host = _DiskHost(tmp_path)
+
+    # Un-paged: one frame that would exceed 1 MiB with full meta. The child
+    # answers with every entry, meta trimmed, instead of dying on a protocol error.
+    plain = _call_backend(backend_process, host, "plans.list", {})
+    assert "error" not in plain
+    trimmed = plain["result"]["value"]
+    assert len(trimmed) == count
+    assert backend_process.poll() is None
+    # What an agent's plan_list needs survives the trim, for every entry.
+    for entry in trimmed:
+        assert {"rel_path", "name", "stage", "overview", "todos", "kind", "mtime"} <= set(entry)
+        assert set(entry["todos"]) >= {"total", "by_status"}
+    by_path = {entry["rel_path"]: entry for entry in trimmed}
+    assert by_path[".agent-team/plans/plan-0007_abcdef.html"]["name"] == "Plan 0007"
+    assert by_path[".agent-team/plans/broken-list_abcdef.html"]["reason"] == "plan-meta is not valid JSON"
+
+    # Paged: every plan arrives, each page fits well inside one frame.
+    seen: list[str] = []
+    offset = 0
+    pages = 0
+    while offset is not None:
+        frame = _call_backend(backend_process, host, "plans.list", {"offset": offset})
+        value = frame["result"]["value"]
+        assert value["total"] == count
+        seen.extend(entry["rel_path"] for entry in value["entries"])
+        assert len(json.dumps(value).encode("utf-8")) < 700 * 1024
+        assert all(entry["meta"] is not None for entry in value["entries"] if entry["kind"] == "plan")
+        offset = value["next_offset"]
+        pages += 1
+    assert pages > 1
+    assert len(seen) == count == len(set(seen))
+    assert _call_backend(backend_process, host, "plans.list", {"offset": -1})["error"]["data"]["code"] == "INVALID_ARGUMENT"
+
+
+def test_a_host_without_ranged_reads_still_lists_and_flags_the_big_file(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "small_333333.html").write_text(_plan_html("Small"), encoding="utf-8")
+    (plans / "big_444444.html").write_text(_plan_html("Big", padding=400 * 1024), encoding="utf-8")
+    host = _DiskHost(tmp_path, legacy=True)
+
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    by_path = {entry["rel_path"]: entry for entry in listed}
+    assert by_path[".agent-team/plans/small_333333.html"]["kind"] == "plan"
+    big = by_path[".agent-team/plans/big_444444.html"]
+    assert big["kind"] == "unreadable" and "RESULT_TOO_LARGE" in big["reason"]
+    small = _call_backend(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/small_333333.html"})
+    assert small["result"]["value"]["meta"]["name"] == "Small"
+
+
+def _big_plan(name: str, padding: int) -> str:
+    """A plan whose header (pill + island) sits above a body of `padding` bytes."""
+    meta = {
+        "schemaVersion": 1, "name": name, "overview": "big", "stage": "draft",
+        "todos": [{"id": "t1", "content": "Task", "status": "pending"}], "reviewNotes": [],
+    }
+    return (
+        f'<!doctype html><html><head><title>{name}</title></head><body>\n'
+        f'<header><h1>{name}</h1><span class="pill draft">draft</span></header>\n'
+        f'<script type="application/json" id="plan-meta">\n{json.dumps(meta, indent=2)}\n</script>\n'
+        f'<ul><li data-status="pending" data-todo-id="t1"><span class="st">pending</span> <span>Task</span></li></ul>\n'
+        f'<main><p>{"x" * padding}</p><p>tail marker ✓</p></main></body></html>\n'
+    )
+
+
+def _body_of(html: str) -> str:
+    return html[html.index("<main>") :]
+
+
+def test_a_six_megabyte_plan_can_be_updated_and_only_its_header_changes(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    path = plans / "huge_666666.html"
+    original = _big_plan("Huge", 6 * 1024 * 1024)
+    path.write_text(original, encoding="utf-8")
+    rel = ".agent-team/plans/huge_666666.html"
+    host = _DiskHost(tmp_path)
+
+    stage = _call_backend(backend_process, host, "plans.update_stage", {"rel_path": rel, "stage": "in-review"})
+    assert stage["result"]["value"]["stage"] == "in-review"
+    note = _call_backend(
+        backend_process, host, "plans.add_note", {"rel_path": rel, "author": "user", "text": "check this ✓"}
+    )
+    assert "error" not in note
+    todo = _call_backend(
+        backend_process, host, "plans.update_todo", {"rel_path": rel, "todo_id": "t1", "status": "done"}
+    )
+    assert "error" not in todo
+
+    updated = path.read_text(encoding="utf-8")
+    # The chunked path really ran (three updates → three staged swaps), and
+    # every staged part fit one Bridge frame (asserted inside the host).
+    assert [name for name, _ in host.calls].count("write_commit") == 3
+    assert [name for name, _ in host.calls].count("write_file") == 0
+    assert host.staging_files() == []
+    # Meta and visible markup were both updated ...
+    read = _call_backend(backend_process, host, "plans.read", {"rel_path": rel})["result"]["value"]
+    meta = read["meta"]
+    assert meta["stage"] == "in-review"
+    assert [n["text"] for n in meta["reviewNotes"]] == ["check this ✓"]
+    assert meta["todos"][0]["status"] == "done"
+    assert 'class="pill in-review">in-review<' in updated or ">in-review<" in updated
+    assert '<li data-status="done" data-todo-id="t1"><span class="st">done</span>' in updated
+    # ... and the rest of the 6 MB file is byte-identical.
+    assert _body_of(updated) == _body_of(original)
+    assert len(updated.encode()) > 6 * 1024 * 1024
+    assert hashlib.sha256(_body_of(updated).encode()).hexdigest() == hashlib.sha256(_body_of(original).encode()).hexdigest()
+    assert _read_all_pages(backend_process, host, rel) == updated
+
+
+def test_a_chunked_write_keeps_the_changed_on_disk_conflict_and_leaves_the_file_untouched(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    path = plans / "race_777777.html"
+    original = _big_plan("Race", 700 * 1024)
+    path.write_text(original, encoding="utf-8")
+
+    def another_writer(target: Path) -> None:
+        # Someone else saves the file after we read it but before we commit.
+        stat = target.stat()
+        os.utime(target, (stat.st_atime + 10, stat.st_mtime + 10))
+
+    host = _DiskHost(tmp_path, before_commit=another_writer)
+    frame = _call_backend(
+        backend_process, host, "plans.update_stage",
+        {"rel_path": ".agent-team/plans/race_777777.html", "stage": "approved"},
+    )
+    assert frame["error"]["data"]["code"] == "CONFLICT"
+    assert path.read_text(encoding="utf-8") == original
+    assert host.staging_files() == []
+
+
+def test_a_failed_part_discards_the_staged_upload(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    path = plans / "fail_888888.html"
+    original = _big_plan("Fail", 700 * 1024)
+    path.write_text(original, encoding="utf-8")
+    host = _DiskHost(tmp_path, fail_part=2)
+    frame = _call_backend(
+        backend_process, host, "plans.update_stage",
+        {"rel_path": ".agent-team/plans/fail_888888.html", "stage": "approved"},
+    )
+    assert "error" in frame
+    assert [name for name, _ in host.calls].count("write_abort") == 1
+    assert path.read_text(encoding="utf-8") == original
+    assert host.staging_files() == []
+
+
+def test_a_host_without_chunked_writes_refuses_a_big_write_with_a_clear_code(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    path = plans / "old_999999.html"
+    original = _big_plan("Old", 700 * 1024)
+    path.write_text(original, encoding="utf-8")
+    host = _DiskHost(tmp_path, no_chunked_writes=True)
+    frame = _call_backend(
+        backend_process, host, "plans.update_stage",
+        {"rel_path": ".agent-team/plans/old_999999.html", "stage": "approved"},
+    )
+    assert frame["error"]["data"]["code"] == "RESOURCE_LIMIT"
+    assert path.read_text(encoding="utf-8") == original
+    assert backend_process.poll() is None
+
+
+def test_a_small_write_still_uses_the_single_call_path(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "tiny_aaaaab.html").write_text(_big_plan("Tiny", 100), encoding="utf-8")
+    host = _DiskHost(tmp_path)
+    _call_backend(
+        backend_process, host, "plans.update_stage",
+        {"rel_path": ".agent-team/plans/tiny_aaaaab.html", "stage": "approved"},
+    )
+    names = [name for name, _ in host.calls]
+    assert "write_file" in names and "write_part" not in names
+
+
+def test_plan_meta_far_down_a_huge_file_is_still_found(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    meta = {"schemaVersion": 1, "name": "Island last", "stage": "approved", "todos": [], "reviewNotes": []}
+    late = f'<html><body><p>{"x" * (1_400_000)}</p><script type="application/json" id="plan-meta">{json.dumps(meta)}</script></body></html>'
+    (plans / "late_bbbbbb.html").write_text(late, encoding="utf-8")
+    host = _DiskHost(tmp_path)
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    entry = next(e for e in listed if e["rel_path"].endswith("late_bbbbbb.html"))
+    assert entry["kind"] == "plan" and entry["name"] == "Island last" and entry["stage"] == "approved"
+    # The common case is unchanged: an island at the top costs one range read.
+    (plans / "top_cccccd.html").write_text(_plan_html("Top", padding=2_000_000), encoding="utf-8")
+    host.calls.clear()
+    _call_backend(backend_process, host, "plans.list", {})
+    top_reads = [op for op, args in host.calls if args.get("rel_path", "").endswith("top_cccccd.html")]
+    assert top_reads == ["read_range"]
+
+
+def _upload(process: subprocess.Popen[bytes], host: _DiskHost, rel: str, data: bytes, upload_id: str) -> None:
+    offset = 0
+    while True:
+        part = data[offset : offset + 96 * 1024]
+        frame = _call_backend(
+            process, host, "plans.write_document_part",
+            {"rel_path": rel, "upload_id": upload_id, "offset": offset, "data_base64": base64.b64encode(part).decode()},
+        )
+        assert frame["result"]["value"] == {"ok": True, "size": offset + len(part)}
+        offset += len(part)
+        if offset >= len(data):
+            return
+
+
+def test_the_renderer_can_write_a_document_of_any_size_in_parts(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    plans = _plans_dir(tmp_path)
+    path = plans / "ui_dddddd.html"
+    path.write_text("old", encoding="utf-8")
+    rel = ".agent-team/plans/ui_dddddd.html"
+    payload = _big_plan("Written from the UI", 5 * 1024 * 1024).encode("utf-8")
+    upload_id = "d" * 32
+    host = _DiskHost(tmp_path)
+
+    _upload(backend_process, host, rel, payload, upload_id)
+    assert path.read_text(encoding="utf-8") == "old"
+    stale = _call_backend(
+        backend_process, host, "plans.write_document_commit",
+        {"rel_path": rel, "upload_id": upload_id, "total_size": len(payload), "expected_mtime": 1.0},
+    )
+    assert stale["result"]["value"] == {"ok": False, "conflict": True}
+    assert path.read_text(encoding="utf-8") == "old" and host.staging_files() == []
+
+    _upload(backend_process, host, rel, payload, upload_id)
+    committed = _call_backend(
+        backend_process, host, "plans.write_document_commit",
+        {"rel_path": rel, "upload_id": upload_id, "total_size": len(payload), "expected_mtime": path.stat().st_mtime},
+    )["result"]["value"]
+    assert committed["ok"] is True and isinstance(committed["mtime"], float)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
+    assert host.staging_files() == []
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "code"),
+    [
+        ("plans.write_document_part", {"rel_path": ".agent-team/plans/a.html", "upload_id": "short", "offset": 0, "data_base64": ""}, "INVALID_ARGUMENT"),
+        ("plans.write_document_part", {"rel_path": ".agent-team/plans/a.html", "upload_id": "e" * 32, "offset": -1, "data_base64": ""}, "INVALID_ARGUMENT"),
+        ("plans.write_document_part", {"rel_path": ".agent-team/plans/a.html", "upload_id": "e" * 32, "offset": 0, "data_base64": "A" * 140_000}, "INVALID_ARGUMENT"),
+        ("plans.write_document_part", {"rel_path": ".agent-team/plans/a.html", "upload_id": "e" * 32, "offset": 0}, "INVALID_ARGUMENT"),
+        ("plans.write_document_part", {"rel_path": "../escape.html", "upload_id": "e" * 32, "offset": 0, "data_base64": ""}, "WORKSPACE_SCOPE_VIOLATION"),
+        ("plans.write_document_part", {"rel_path": "src/a.ts", "upload_id": "e" * 32, "offset": 0, "data_base64": ""}, "INVALID_ARGUMENT"),
+        ("plans.write_document_part", {"rel_path": ".agent-team/plans/.history/a/x.html", "upload_id": "e" * 32, "offset": 0, "data_base64": ""}, "WORKSPACE_SCOPE_VIOLATION"),
+        ("plans.write_document_commit", {"rel_path": ".agent-team/plans/a.html", "upload_id": "e" * 32}, "INVALID_ARGUMENT"),
+        ("plans.write_document_commit", {"rel_path": ".agent-team/plans/a.html", "upload_id": "e" * 32, "total_size": 1, "expected_mtime": "x"}, "INVALID_ARGUMENT"),
+        ("plans.write_document_abort", {"rel_path": ".agent-team/plans/a.html"}, "INVALID_ARGUMENT"),
+    ],
+)
+def test_chunked_document_writes_validate_before_touching_the_host(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path, name: str, arguments: dict[str, Any], code: str
+) -> None:
+    host = _DiskHost(tmp_path)
+    frame = _call_backend(backend_process, host, name, arguments)
+    assert frame["error"]["data"]["code"] == code
+    assert host.calls == []
+
+
+def test_a_huge_file_without_plan_meta_is_scanned_in_linear_time(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    import time
+
+    plans = _plans_dir(tmp_path)
+    size = 20 * 1024 * 1024
+    path = plans / "noisy_eeeeef.html"
+    path.write_text("<html><body>" + "<p>é</p>" * (size // 8) + "</body></html>", encoding="utf-8")
+    actual = path.stat().st_size
+    host = _DiskHost(tmp_path)
+
+    started = time.monotonic()
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    elapsed = time.monotonic() - started
+
+    entry = next(e for e in listed if e["rel_path"].endswith("noisy_eeeeef.html"))
+    assert entry["kind"] == "document" and "reason" not in entry  # never skipped, not a problem
+    reads = [op for op, args in host.calls if args.get("rel_path", "").endswith("noisy_eeeeef.html")]
+    expected = -(-actual // (96 * 1024))
+    assert reads == ["read_range"] * len(reads) and expected <= len(reads) <= expected + 1
+    assert elapsed < 10  # ~23 s (quadratic) before the incremental scan

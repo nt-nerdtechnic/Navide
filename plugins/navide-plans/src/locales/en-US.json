@@ -172,6 +172,8 @@
         "todo-placeholder": "One todo per line",
         "plan-metadata": "Plan metadata",
         "plain-document": "Plain workspace document",
+        "needs-attention": "Needs attention",
+        "needs-attention-title": "This document is listed but could not be fully read or parsed.",
         "stage": "Stage",
         "todo": "Todo",
         "promote-description": "This document has no plan metadata yet. Promote it to add a draft plan envelope without replacing its body.",

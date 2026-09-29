@@ -3879,7 +3879,14 @@ describe('production Plans agent backend routing', () => {
         expect(call).toHaveBeenCalledOnce()
       } else {
         expect(result).toMatchObject({ ok: false, error: { code: outcome === 'timeout' ? 'TIMEOUT' : outcome === 'failed' ? 'BACKEND_UNAVAILABLE' : 'CAPABILITY_DENIED' } })
-        expect(result).not.toHaveProperty('recoveryDisposition')
+        if (outcome === 'failed') {
+          // Nothing was dispatched and the agent policy was verified, so the MCP
+          // caller may serve the request from its local plan tools rather than
+          // fail with "Plans storage is unavailable" for the rest of the session.
+          expect(result).toMatchObject({ recoveryDisposition: 'legacy-safe-before-dispatch' })
+        } else {
+          expect(result).not.toHaveProperty('recoveryDisposition')
+        }
         expect(bind).not.toHaveBeenCalled()
         expect(call).not.toHaveBeenCalled()
       }

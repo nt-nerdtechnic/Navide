@@ -420,6 +420,53 @@ describe('PlansApp', () => {
     expect(view.find('iframe').exists()).toBe(true)
   })
 
+  it('lists a document the backend could not fully read, with its reason, and explains the failed open', async () => {
+    reviewFixture()
+    const pathB = '.agent-team/plans/huge.html'
+    state.list.push({
+      rel_path: pathB, name: 'huge.html', kind: 'unreadable', meta: null,
+      reason: 'too large for this version of Navide to read (RESULT_TOO_LARGE)',
+    })
+    const original = (window as any).nav.callBackend
+    ;(window as any).nav.callBackend = async (reqId: string, name: string, args: Record<string, unknown>) => {
+      if (name === 'plans.read' && args.rel_path === pathB) return { reqId, ok: false, error: { code: 'BACKEND_ERROR', message: 'nope' } }
+      return original(reqId, name, args)
+    }
+    const view = await mountPlans({ attachTo: document.body })
+    const row = view.findAll('.plan-row').find(candidate => candidate.text().includes('huge.html'))!
+    expect(row.get('.plan-chip--problem').attributes('title')).toContain('RESULT_TOO_LARGE')
+    // A healthy plan carries no such chip.
+    expect(view.findAll('.plan-row').find(candidate => candidate.text().includes('Existing plan'))!.find('.plan-chip--problem').exists()).toBe(false)
+    await row.trigger('click')
+    await flushPromises()
+    expect(view.get('.pdp-error-reason').text()).toBe('too large for this version of Navide to read (RESULT_TOO_LARGE) — nope')
+  })
+
+  it('opens a document the backend returns page by page as one preview', async () => {
+    reviewFixture()
+    const pathB = '.agent-team/plans/paged.html'
+    state.list.push({ rel_path: pathB, name: 'Paged plan' })
+    const meta = { schemaVersion: 1, name: 'Paged plan', stage: 'draft', todos: [], reviewNotes: [] }
+    const original = (window as any).nav.callBackend
+    ;(window as any).nav.callBackend = async (reqId: string, name: string, args: Record<string, unknown>) => {
+      if (name === 'plans.read' && args.rel_path === pathB) {
+        state.calls.push({ name, args })
+        return { reqId, ok: true, result: args.offset === undefined
+          ? { rel_path: pathB, meta, html: '<html><body><h2>Part one</h2>', mtime: 3, size: 60, offset: 0, eof: false, next_offset: 30 }
+          : { rel_path: pathB, html: '<p>Part two</p></body></html>', mtime: 3, size: 60, offset: 30, eof: true } }
+      }
+      return original(reqId, name, args)
+    }
+    const view = await mountPlans({ attachTo: document.body })
+    await view.findAll('.plan-row').find(row => row.text().includes('Paged plan'))!.trigger('click')
+    await flushPromises()
+    const srcdoc = view.get('iframe').attributes('srcdoc')!
+    expect(srcdoc).toContain('Part one')
+    expect(srcdoc).toContain('Part two')
+    expect(state.calls.filter(({ name, args }) => name === 'plans.read' && args.rel_path === pathB).map(({ args }) => args.offset))
+      .toEqual([undefined, 30])
+  })
+
   it('parity: a real plans.changed broadcast after todo status persistence does not reload the preview', async () => {
     reviewFixture()
     ;(state.documents[existingPath].meta as any).todos = [{ id: 't1', content: 'Task', status: 'pending' }]

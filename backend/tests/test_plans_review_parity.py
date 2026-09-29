@@ -1,5 +1,6 @@
 """Exercise manual Plans mutations at the packaged child's real write seam."""
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -74,8 +75,15 @@ def test_document_transport_preserves_read_mtime_and_write_conflict(child, monke
 
     def bridge(origin, port, operation, args):
         calls.append((port, operation, args))
-        if operation == "read_file":
-            return {"content": plan([]), "mtime": 12.0}
+        if operation == "read_range":
+            raw = plan([]).encode("utf-8")
+            piece = raw[args["offset"] : args["offset"] + args["length"]]
+            return {
+                "data_base64": base64.b64encode(piece).decode("ascii"),
+                "size": len(raw),
+                "mtime": 12.0,
+                "eof": args["offset"] + len(piece) >= len(raw),
+            }
         return {"ok": False, "conflict": True}
 
     monkeypatch.setattr(child, "_bridge_call", bridge)

@@ -6220,7 +6220,20 @@ export class FrontendPluginManager {
         !this.plansCapabilityContext(packageVersion, workspacePath, 'plans-mcp') ||
         !this.plansAgentFilesystemPolicyAllows(workspacePath, initiator)
       ) return buildError(record.reqId, 'CAPABILITY_DENIED', 'Plans runtime authorization changed')
-      if (!ready) return buildError(record.reqId, 'BACKEND_UNAVAILABLE', 'Plans storage is unavailable')
+      if (!ready) {
+        // Nothing has been dispatched, and the agent policy was verified above,
+        // so the MCP caller may serve this from its local plan tools instead of
+        // failing: withdraw the v2 availability bit (as any other v2 failure
+        // does) so the same pre-dispatch recovery verdict is minted.
+        this.markPlansBackendUnavailable('storage-unavailable')
+        const unavailable: PlansRecoveryResponse = buildError(
+          record.reqId, 'BACKEND_UNAVAILABLE', 'Plans storage is unavailable',
+        )
+        if (this.canMintPlansLegacyRecoveryDisposition(
+          descriptor, activation, workspacePath, record.name, initiator,
+        )) unavailable.recoveryDisposition = LEGACY_SAFE_BEFORE_DISPATCH
+        return unavailable
+      }
     }
     if (!this.isPlansBackendAvailable()) {
       return this.plansPreDispatchFailureResponse(
@@ -11868,6 +11881,9 @@ export const PLANS_BACKEND_METHODS = [
   'plans.review_note_resolve',
   'plans.review_note_delete',
   'plans.update_archive',
+  'plans.write_document_part',
+  'plans.write_document_commit',
+  'plans.write_document_abort',
   'plans.promote',
   'plans.rename',
   'plans.delete',

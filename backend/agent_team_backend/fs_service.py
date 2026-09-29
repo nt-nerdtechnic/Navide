@@ -12,7 +12,9 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import stat as stat_mod
+import time
 import tarfile
 import zipfile
 from pathlib import Path
@@ -495,8 +497,66 @@ def _is_binary_content(raw: bytes) -> bool:
 _READ_SIZE_LIMIT = 5 * 1024 * 1024  # 5 MB — cap editor reads; bigger payloads stall WS serialization
 
 
-def read_file(workspace_path: str, rel_path: str, encoding_override: str | None = None) -> dict[str, Any]:
+# Directories whose documents are plan/report documents (same set as
+# plan_index.PLAN_DOC_DIRS; fs_service must not import plan_index).
+_PLAN_DOC_DIRS = (
+    ".agent-team/plans",
+    ".agent-team/reports",
+    ".claude/loop-reports",
+    ".claude/plans",
+    ".cursor/plans",
+    "docs/plans",
+    "docs/reports",
+)
+
+
+def is_plan_document_path(rel_path: str) -> bool:
+    """Whether ``rel_path`` names a plan/report document (by location and name).
+
+    Plan documents are the one kind of file exempt from the editor read limit:
+    a report with embedded screenshots is legitimately several MB and must open.
+    """
+    if not isinstance(rel_path, str):
+        return False
+    parts = rel_path.replace("\\", "/").split("/")
+    name = parts[-1]
+    if (
+        name.startswith(("_", "."))
+        or not name.lower().endswith((".html", ".plan.md", ".md"))
+        or any(part in ("", ".", "..") for part in parts)
+        or len(parts) < 3
+    ):
+        return False
+    return "/".join(parts[-3:-1]) in _PLAN_DOC_DIRS
+
+
+def is_plan_document(workspace_path: str, rel_path: str) -> bool:
+    """:func:`is_plan_document_path` for the path as written AND as resolved.
+
+    A symlink inside a plans directory that points at some other file in the
+    workspace is not a plan document: the real location decides, so it keeps
+    the normal read limit.
+    """
+    if not is_plan_document_path(rel_path):
+        return False
+    try:
+        real = _resolve_safe(workspace_path, rel_path, allow_mockups=True)
+        rel_real = real.relative_to(Path(workspace_path).resolve())
+    except (FsError, OSError, ValueError):
+        return False
+    return is_plan_document_path(rel_real.as_posix())
+
+
+def read_file(
+    workspace_path: str,
+    rel_path: str,
+    encoding_override: str | None = None,
+    size_limit: int | None = _READ_SIZE_LIMIT,
+) -> dict[str, Any]:
     """Read a file, auto-detecting encoding.
+
+    ``size_limit`` is the largest file returned (None: no limit); the default
+    is the editor read limit.
 
     If *encoding_override* is given, skip detection and decode with that codec.
 
@@ -526,7 +586,7 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
                 "ext": ext,
             }
 
-        if size > _READ_SIZE_LIMIT:
+        if size_limit is not None and size > size_limit:
             return {
                 "ok": False,
                 "error": f"file too large ({size / (1024 * 1024):.1f} MB > 5 MB)",
@@ -581,6 +641,49 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
 
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc), "is_binary": False, "size": 0, "ext": ""}
+
+
+# Per-call ceiling for read_range. This bounds one response's memory, not the
+# file: callers page through a file of any size with successive offsets.
+_READ_RANGE_MAX_BYTES = 1024 * 1024
+
+
+def read_range(workspace_path: str, rel_path: str, offset: int, length: int) -> dict[str, Any]:
+    """Read ``length`` raw bytes of a file starting at byte ``offset``.
+
+    Unlike :func:`read_file` there is no whole-file size limit, no binary
+    sniffing and no decoding: the caller pages through the file and owns the
+    decode. Used for plan documents, which must open at any size.
+
+    Returns:
+        ok=True  -> {"ok": True, "data_base64": str, "offset": int,
+                     "size": int, "mtime": float, "eof": bool}
+        ok=False -> {"ok": False, "error": str}
+    """
+    try:
+        if (
+            isinstance(offset, bool) or isinstance(length, bool)
+            or not isinstance(offset, int) or not isinstance(length, int)
+            or offset < 0 or not 0 < length <= _READ_RANGE_MAX_BYTES
+        ):
+            raise FsError("invalid range")
+        target = _resolve_safe(workspace_path, rel_path, allow_mockups=True)
+        if not target.is_file():
+            raise FsError("not a file")
+        with target.open("rb") as handle:
+            st = os.fstat(handle.fileno())
+            handle.seek(offset)
+            data = handle.read(length)
+        return {
+            "ok": True,
+            "data_base64": base64.b64encode(data).decode("ascii"),
+            "offset": offset,
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "eof": offset + len(data) >= st.st_size,
+        }
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 # MIME type per image extension. The renderer renders the returned data URL in
@@ -806,6 +909,160 @@ def write_file(
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "mtime": target.stat().st_mtime}
+
+
+# ── chunked (multi-part) writes ─────────────────────────────────────────────
+#
+# write_file takes the whole content in one message, which cannot carry a
+# document past one WebSocket / Backend Wire frame. A chunked write stages the
+# bytes in a sibling file part by part, then swaps it in with the same atomic
+# rename and the same mtime conflict check write_file uses. Only the size of
+# one part is bounded; the document is not.
+
+_UPLOAD_ID_RE = re.compile(r"[0-9a-f]{32}")
+_WRITE_PART_MAX_BYTES = 1024 * 1024
+
+
+def _staging_path(workspace_path: str, rel_path: str, upload_id: str) -> tuple[Path, Path]:
+    if not isinstance(upload_id, str) or _UPLOAD_ID_RE.fullmatch(upload_id) is None:
+        raise FsError("invalid upload id")
+    target = _resolve_mutation_safe(workspace_path, rel_path)
+    if target == Path(workspace_path).resolve():
+        raise FsError("invalid path")
+    if target.exists() and target.is_dir():
+        raise FsError("path is a directory")
+    return target, target.parent / f".{target.name}.{upload_id}.upload"
+
+
+_STAGING_NAME_RE = re.compile(r"\..+\.[0-9a-f]{32}\.upload")
+_STAGING_MAX_AGE_S = 3600
+
+
+def _sweep_stale_staging(directory: Path) -> None:
+    """Remove abandoned chunked-write staging files (older than an hour).
+
+    Only names of the exact staging shape are touched, and never symlinks'
+    targets: an upload killed mid-way must not leave litter forever.
+    """
+    cutoff = time.time() - _STAGING_MAX_AGE_S
+    try:
+        for entry in directory.iterdir():
+            if _STAGING_NAME_RE.fullmatch(entry.name) is None:
+                continue
+            try:
+                if entry.lstat().st_mtime < cutoff:
+                    entry.unlink()
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
+def write_part(
+    workspace_path: str, rel_path: str, upload_id: str, offset: int, data_base64: str
+) -> dict[str, Any]:
+    """Append one part to the staging file of a chunked write.
+
+    Parts must arrive in order: ``offset`` is the number of bytes already
+    staged (0 starts the upload). Returns the new staged size.
+    """
+    try:
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise FsError("invalid offset")
+        if not isinstance(data_base64, str):
+            raise FsError("invalid data")
+        try:
+            data = base64.b64decode(data_base64, validate=True)
+        except ValueError:
+            raise FsError("invalid data") from None
+        if len(data) > _WRITE_PART_MAX_BYTES:
+            raise FsError("part too large")
+        target, staging = _staging_path(workspace_path, rel_path, upload_id)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if offset == 0:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _sweep_stale_staging(target.parent)
+            if not staging.is_symlink():
+                staging.unlink(missing_ok=True)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
+        else:
+            flags = os.O_WRONLY | os.O_APPEND | nofollow
+        try:
+            fd = os.open(staging, flags, 0o600)
+        except OSError as exc:
+            if offset != 0:
+                raise FsError("upload part out of order") from exc
+            raise FsError("cannot create upload file") from exc
+        out_of_order = False
+        try:
+            with os.fdopen(fd, "ab") as handle:
+                st = os.fstat(handle.fileno())
+                owned = not hasattr(os, "getuid") or st.st_uid == os.getuid()
+                if not stat_mod.S_ISREG(st.st_mode) or not owned:
+                    raise FsError("upload file is not a regular file")
+                if offset != 0 and st.st_size != offset:
+                    out_of_order = True
+                    raise FsError("upload part out of order")
+                handle.write(data)
+        except Exception:
+            if not out_of_order:
+                staging.unlink(missing_ok=True)
+            raise
+        return {"ok": True, "size": offset + len(data)}
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def write_commit(
+    workspace_path: str,
+    rel_path: str,
+    upload_id: str,
+    total_size: int,
+    expected_mtime: float | None = None,
+) -> dict[str, Any]:
+    """Swap a fully staged upload in as ``rel_path``.
+
+    Same contract as :func:`write_file`: when ``expected_mtime`` is given and
+    the file on disk has a different mtime the write is refused with
+    ``conflict=True`` (the staging file is discarded); success returns the new
+    ``mtime``. The replace is one atomic rename, so a reader never sees a
+    half-written document.
+    """
+    staging: Path | None = None
+    try:
+        if isinstance(total_size, bool) or not isinstance(total_size, int) or total_size < 0:
+            raise FsError("invalid size")
+        target, staging = _staging_path(workspace_path, rel_path, upload_id)
+        _sweep_stale_staging(target.parent)
+        if staging.is_symlink() or not staging.is_file():
+            raise FsError("no such upload")
+        if staging.stat().st_size != total_size:
+            raise FsError("upload incomplete")
+        orig_mode: int | None = None
+        if target.exists():
+            st = target.stat()
+            orig_mode = st.st_mode
+            if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
+                staging.unlink(missing_ok=True)
+                return {"ok": False, "conflict": True, "mtime": st.st_mtime, "error": "file changed on disk"}
+        if orig_mode is not None:
+            os.chmod(staging, stat_mod.S_IMODE(orig_mode))
+        os.replace(staging, target)
+        return {"ok": True, "mtime": target.stat().st_mtime}
+    except (FsError, OSError) as exc:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+        return {"ok": False, "error": str(exc)}
+
+
+def write_abort(workspace_path: str, rel_path: str, upload_id: str) -> dict[str, Any]:
+    """Discard the staging file of a chunked write (idempotent)."""
+    try:
+        _target, staging = _staging_path(workspace_path, rel_path, upload_id)
+        staging.unlink(missing_ok=True)
+        return {"ok": True}
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def stat_path(abs_path: str) -> dict[str, Any]:

@@ -472,6 +472,8 @@
         "todo-placeholder": "每行一項待辦",
         "plan-metadata": "計畫中繼資料",
         "plain-document": "一般工作區文件",
+        "needs-attention": "需要處理",
+        "needs-attention-title": "此文件已列出，但無法完整讀取或解析。",
         "stage": "階段",
         "todo": "待辦",
         "promote-description": "此文件尚無計畫中繼資料。升級為計畫會加入草稿信封，不會取代原本文字。",

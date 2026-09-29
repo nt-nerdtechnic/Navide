@@ -26,6 +26,7 @@ import { resolvePlanStore, type SectionBody } from './retained/planStore'
 import { htmlPlanAwaitingUser, parseHtmlPlanMeta } from './retained/usePlanHtml'
 import { sharePlanToGit } from './retained/planShare'
 import { plansTransport } from './retained/transport'
+import { listAllPlans, readWholeDocument } from './planPaging'
 import type { ReviewNote, PlanTodo as RetainedTodo, PlanMeta as RetainedMeta } from './retained/planModel'
 import { buildPlanRuntimeScript, buildTodoStatusRuntime, createPlanRuntimeMessageHandler, sanitizePlanSectionHtml } from './retained/planRuntime'
 
@@ -59,8 +60,12 @@ interface PlanSummary {
   overview?: string
   todos?: TodoSummary
   mtime?: number | null
-  kind?: 'plan' | 'document'
+  kind?: 'plan' | 'document' | 'unreadable'
   meta?: PlanMeta | null
+  /** Why the backend could not fully read or parse this document; it is
+   *  listed regardless, so no plan ever disappears from the view. */
+  reason?: string
+  size?: number
 }
 
 interface PlanDocument {
@@ -687,13 +692,20 @@ async function readPlan(relPath: string): Promise<void> {
   }
   selectedPath.value = relPath
   try {
-    const document = await plansBackend.call('plans.read', { rel_path: relPath }) as unknown as PlanDocument
+    const document = await readWholeDocument<PlanDocument & Record<string, unknown>>(
+      plansBackend.call.bind(plansBackend) as never, 'plans.read', 'html', { rel_path: relPath },
+    )
     if (currentGeneration !== activeReadGeneration || selectedPath.value !== relPath) return
     documentLoadError.value = null
     applySelected(document, relPath)
   } catch (cause) {
     if (currentGeneration !== activeReadGeneration || selectedPath.value !== relPath) return
-    documentLoadError.value = { relPath, reason: cause instanceof Error ? cause.message : String(cause ?? '').trim() }
+    const listed = plans.value.find(plan => plan.rel_path === relPath)
+    documentLoadError.value = {
+      relPath,
+      reason: [listed?.reason, cause instanceof Error ? cause.message : String(cause ?? '').trim()]
+        .filter(Boolean).join(' — '),
+    }
     selected.value = null
     snapshotPreview.value = null
     sectionEditing.value = false
@@ -756,7 +768,7 @@ async function loadPlans(openSelected = true): Promise<void> {
   loading.value = isFirstLoad
   error.value = ''
   try {
-    const result = await plansBackend.call('plans.list', {}) as unknown as PlanSummary[]
+    const result = await listAllPlans(plansBackend.call.bind(plansBackend) as never) as PlanSummary[]
     plans.value = Array.isArray(result) ? result : []
     if (openSelected && selectedPath.value && plans.value.some((plan) => plan.rel_path === selectedPath.value)) {
       if (!selected.value || selected.value.rel_path !== selectedPath.value) {
@@ -1516,6 +1528,11 @@ onUnmounted(() => {
                   </span>
                   <span v-else class="plan-chip">{{ t('pane.plans.v2.document') }}</span>
                   <span
+                    v-if="plan.reason"
+                    class="plan-chip plan-chip--problem"
+                    :title="`${t('pane.plans.v2.needs-attention-title')} ${plan.reason}`"
+                  >{{ t('pane.plans.v2.needs-attention') }}</span>
+                  <span
                     v-if="planAwaiting(plan) > 0"
                     class="plan-chip plan-chip--awaiting"
                     :title="t('pane.plans.awaiting-you-title')"
@@ -2040,6 +2057,11 @@ onUnmounted(() => {
 .plan-chip--awaiting {
   background: var(--danger-subtle, var(--attention-subtle));
   color: var(--danger-bright, var(--attention-bright));
+  text-transform: none;
+}
+.plan-chip--problem {
+  background: var(--attention-subtle);
+  color: var(--attention-bright);
   text-transform: none;
 }
 

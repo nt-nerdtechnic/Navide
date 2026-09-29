@@ -124,7 +124,8 @@ def workspace(tmp_path: Path) -> Path:
         _plan_html({"name": "Beta", "stage": "draft", "overview": "Second plan"}),
         encoding="utf-8",
     )
-    # Provisioned assets and meta-less files must be skipped by plan_list.
+    # Provisioned assets are skipped by plan_list; a meta-less file is a
+    # document the user owns and is listed with a reason, never hidden.
     (plans / "_template.html").write_text("<h1>template</h1>", encoding="utf-8")
     (plans / "no-meta.html").write_text("<h1>not a plan</h1>", encoding="utf-8")
     # Target for the traversal test: exists, but outside the plans subtree.
@@ -146,8 +147,12 @@ async def test_plan_list_returns_plans_with_meta(workspace: Path) -> None:
     assert [p["rel_path"] for p in plans] == [
         ".agent-team/plans/alpha.html",
         ".agent-team/plans/beta.html",
+        ".agent-team/plans/no-meta.html",
     ]
-    alpha, beta = plans
+    alpha, beta, no_meta = plans
+    assert no_meta["kind"] == "document"
+    assert no_meta["reason"] == "missing or invalid plan-meta"
+    assert no_meta["size"] == len("<h1>not a plan</h1>")
     assert alpha["name"] == "Alpha"
     assert alpha["stage"] == "approved"
     assert alpha["overview"] == "First plan"
@@ -733,7 +738,7 @@ async def test_plan_list_without_a_workspace_uses_the_callers_pane(
     result = await _pane_call("plan_list", {})
 
     assert not result.isError
-    assert {p["name"] for p in result.structuredContent["result"]} == {"Alpha", "Beta"}
+    assert {p["name"] for p in result.structuredContent["result"]} == {"Alpha", "Beta", "no-meta.html"}
 
 
 async def test_an_explicit_workspace_still_wins_over_the_panes(
@@ -908,3 +913,106 @@ async def test_plan_create_preserves_double_braces_in_caller_text(
     assert "{{PLAN_NAME}}" not in html
     assert "{{PHASE_A_TITLE}}" not in html
     assert "TBD" in html
+
+
+# ── large documents and the Host's paged plans.read ─────────────────────────
+
+
+def _route_with(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[tuple[str, dict[str, Any]]]:
+    """Answer the Host route with `handler(name, args)`; returns the call log."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def route(_target: str, _workspace: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        calls.append((payload["name"], dict(payload["args"])))
+        return {"ok": True, "result": handler(payload["name"], payload["args"])}
+
+    monkeypatch.setattr(plan_mcp, "request_host_agent_workspace_backend", route)
+    return calls
+
+
+async def test_plan_read_joins_the_hosts_pages_into_one_document(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pieces = ["<html>" + "a" * 10, "b" * 10, "c" * 10 + "</html>"]
+    meta = {"schemaVersion": 1, "name": "Big", "stage": "draft", "todos": [], "reviewNotes": []}
+
+    def host(name: str, args: dict[str, Any]) -> dict[str, Any]:
+        assert name == "plans.read"
+        offset = args.get("offset", 0)
+        index = 0 if offset == 0 else 1 if offset == 100 else 2
+        page: dict[str, Any] = {"rel_path": args["rel_path"], "html": pieces[index], "mtime": 7.0}
+        if offset == 0:
+            page["meta"] = meta
+        if index < 2:
+            page.update({"size": 300, "offset": offset, "eof": False, "next_offset": offset + 100 if offset else 100})
+            page["next_offset"] = 100 if index == 0 else 200
+        else:
+            page.update({"size": 300, "offset": offset, "eof": True})
+        return page
+
+    calls = _route_with(monkeypatch, host)
+    result = await _call("plan_read", {"workspace_path": str(workspace), "rel_path": "big.html"})
+
+    assert not result.isError
+    value = result.structuredContent
+    assert value["html"] == "".join(pieces)
+    assert value["meta"] == meta and value["mtime"] == 7.0
+    assert not {"eof", "next_offset", "offset", "size"} & set(value)
+    assert [args.get("offset") for _name, args in calls] == [None, 100, 200]
+
+
+async def test_plan_read_restarts_when_the_file_changes_between_pages(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = {"reads": 0}
+
+    def host(_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        offset = args.get("offset", 0)
+        if offset == 0:
+            seen["reads"] += 1
+            return {"rel_path": "x", "meta": None, "html": "v%d-a" % seen["reads"], "mtime": float(seen["reads"]),
+                    "size": 10, "offset": 0, "eof": False, "next_offset": 5}
+        # The file is rewritten during the first attempt only.
+        return {"rel_path": "x", "html": "-b", "mtime": 99.0 if seen["reads"] == 1 else float(seen["reads"]),
+                "size": 10, "offset": offset, "eof": True}
+
+    _route_with(monkeypatch, host)
+    result = await _call("plan_read", {"workspace_path": str(workspace), "rel_path": "x.html"})
+
+    assert not result.isError
+    assert result.structuredContent["html"] == "v2-a-b"
+    assert seen["reads"] == 2
+
+
+async def test_plan_read_falls_back_to_the_local_file_when_the_host_reports_storage_unavailable(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def route(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": {"code": "BACKEND_UNAVAILABLE", "message": "Plans storage is unavailable"},
+            "recoveryDisposition": "legacy-safe-before-dispatch",
+        }
+
+    monkeypatch.setattr(plan_mcp, "request_host_agent_workspace_backend", route)
+    listed = await _call("plan_list", {"workspace_path": str(workspace)})
+    read = await _call("plan_read", {"workspace_path": str(workspace), "rel_path": "alpha.html"})
+
+    assert not listed.isError and not read.isError
+    assert ".agent-team/plans/alpha.html" in [p["rel_path"] for p in listed.structuredContent["result"]]
+    assert read.structuredContent["meta"]["name"] == "Alpha"
+
+
+async def test_plan_list_locally_lists_a_document_it_cannot_read(workspace: Path) -> None:
+    plans = _plans_dir(workspace)
+    (plans / "huge.html").write_bytes(b"<html>" + b"x" * (6 * 1024 * 1024) + b"</html>")
+    (plans / "binary.html").write_bytes(b"\xff\xfe" * 10)
+
+    result = await _call("plan_list", {"workspace_path": str(workspace)})
+
+    by_path = {p["rel_path"]: p for p in result.structuredContent["result"]}
+    assert by_path[".agent-team/plans/huge.html"]["kind"] == "document"
+    assert by_path[".agent-team/plans/huge.html"]["size"] > 5 * 1024 * 1024
+    assert ".agent-team/plans/binary.html" in by_path
+    read = await _call("plan_read", {"workspace_path": str(workspace), "rel_path": "huge.html"})
+    assert len(read.structuredContent["html"]) == 6 * 1024 * 1024 + len("<html></html>")

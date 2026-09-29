@@ -472,6 +472,8 @@
         "todo-placeholder": "1 行に 1 つのタスクを入力",
         "plan-metadata": "プランのメタデータ",
         "plain-document": "通常のワークスペースドキュメント",
+        "needs-attention": "要確認",
+        "needs-attention-title": "このドキュメントは一覧に表示されていますが、完全には読み込めないか解析できませんでした。",
         "stage": "ステージ",
         "todo": "タスク",
         "promote-description": "このドキュメントにはまだプランのメタデータがありません。昇格すると、本文を置き換えずに下書きプランの情報を追加します。",
