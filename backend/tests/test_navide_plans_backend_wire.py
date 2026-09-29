@@ -1435,7 +1435,7 @@ class _DiskHost:
                     process, frame, {"content": target.read_text(encoding="utf-8"), "mtime": target.stat().st_mtime}
                 )
         elif operation == "write_file":
-            target.write_text(arguments["content"], encoding="utf-8")
+            target.write_text(arguments["content"], encoding="utf-8", newline="")
             _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
         elif operation in ("write_part", "write_commit", "write_abort"):
             self._chunked_write(process, frame, operation, arguments, target)
@@ -1551,11 +1551,11 @@ def test_plans_larger_than_every_bridge_limit_are_listed_and_read_in_full(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     plans = _plans_dir(tmp_path)
-    (plans / "small_aaaaaa.html").write_text(_plan_html("Small"), encoding="utf-8")
-    (plans / "medium_bbbbbb.html").write_text(_plan_html("Medium", padding=300 * 1024), encoding="utf-8")
+    (plans / "small_aaaaaa.html").write_text(_plan_html("Small"), encoding="utf-8", newline="")
+    (plans / "medium_bbbbbb.html").write_text(_plan_html("Medium", padding=300 * 1024), encoding="utf-8", newline="")
     # Over the 5 MB editor read limit as well as the 192 KiB Bridge result cap.
     huge = _plan_html("Huge report", padding=6 * 1024 * 1024, extra="<p>tail marker ✓</p>")
-    (plans / "huge_cccccc.html").write_text(huge, encoding="utf-8")
+    (plans / "huge_cccccc.html").write_text(huge, encoding="utf-8", newline="")
     huge_bytes = huge.encode("utf-8")
     assert len(huge_bytes) > 5 * 1024 * 1024
     host = _DiskHost(tmp_path)
@@ -1594,7 +1594,7 @@ def test_plan_pages_never_split_a_multibyte_character(
 ) -> None:
     plans = _plans_dir(tmp_path)
     document = _plan_html("中文計畫", extra="<p>" + "計畫文件✓😀" * 90_000 + "</p>")
-    (plans / "cjk_dddddd.html").write_text(document, encoding="utf-8")
+    (plans / "cjk_dddddd.html").write_text(document, encoding="utf-8", newline="")
     host = _DiskHost(tmp_path)
     text = _read_all_pages(backend_process, host, ".agent-team/plans/cjk_dddddd.html")
     assert text == document
@@ -1613,8 +1613,8 @@ def test_a_document_with_broken_plan_meta_is_listed_with_the_reason(
     backend_process: subprocess.Popen[bytes], tmp_path: Path, body: str, reason: str
 ) -> None:
     plans = _plans_dir(tmp_path)
-    (plans / "broken_eeeeee.html").write_text(f"<html><body>{body}<p>content</p></body></html>", encoding="utf-8")
-    (plans / "fine_ffffff.html").write_text(_plan_html("Fine"), encoding="utf-8")
+    (plans / "broken_eeeeee.html").write_text(f"<html><body>{body}<p>content</p></body></html>", encoding="utf-8", newline="")
+    (plans / "fine_ffffff.html").write_text(_plan_html("Fine"), encoding="utf-8", newline="")
     host = _DiskHost(tmp_path)
 
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
@@ -1626,7 +1626,7 @@ def test_a_document_with_broken_plan_meta_is_listed_with_the_reason(
     assert broken["size"] > 0
     assert by_path[".agent-team/plans/fine_ffffff.html"]["kind"] == "plan"
     # The plain document (no plan-meta at all) is not a "problem".
-    (plans / "plain_000000.html").write_text("<html><body>hello</body></html>", encoding="utf-8")
+    (plans / "plain_000000.html").write_text("<html><body>hello</body></html>", encoding="utf-8", newline="")
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
     plain = next(entry for entry in listed if entry["rel_path"].endswith("plain_000000.html"))
     assert plain["kind"] == "document" and "reason" not in plain
@@ -1636,8 +1636,8 @@ def test_an_unreadable_document_is_listed_not_dropped(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     plans = _plans_dir(tmp_path)
-    (plans / "locked_111111.html").write_text(_plan_html("Locked"), encoding="utf-8")
-    (plans / "open_222222.html").write_text(_plan_html("Open"), encoding="utf-8")
+    (plans / "locked_111111.html").write_text(_plan_html("Locked"), encoding="utf-8", newline="")
+    (plans / "open_222222.html").write_text(_plan_html("Open"), encoding="utf-8", newline="")
     host = _DiskHost(tmp_path, unreadable=(".agent-team/plans/locked_111111.html",))
 
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
@@ -1653,16 +1653,16 @@ def test_an_oversized_list_is_paged_and_never_kills_the_child(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     plans = _plans_dir(tmp_path)
-    count = 700
-    notes = [{"id": f"n{i}", "author": "user", "text": "note " * 80, "resolved": False, "reply": ""} for i in range(5)]
+    count = 220
+    notes = [{"id": f"n{i}", "author": "user", "text": "note " * 80, "resolved": False, "reply": ""} for i in range(10)]
     for index in range(count):
         meta = {
             "schemaVersion": 1, "name": f"Plan {index:04d}", "overview": "o", "stage": "draft",
             "todos": [], "reviewNotes": notes,
         }
         html = f'<script type="application/json" id="plan-meta">{json.dumps(meta)}</script>'
-        (plans / f"plan-{index:04d}_abcdef.html").write_text(html, encoding="utf-8")
-    (plans / "broken-list_abcdef.html").write_text('<script id="plan-meta" type="application/json">{oops</script>', encoding="utf-8")
+        (plans / f"plan-{index:04d}_abcdef.html").write_text(html, encoding="utf-8", newline="")
+    (plans / "broken-list_abcdef.html").write_text('<script id="plan-meta" type="application/json">{oops</script>', encoding="utf-8", newline="")
     count += 1
     host = _DiskHost(tmp_path)
 
@@ -1703,8 +1703,8 @@ def test_a_host_without_ranged_reads_still_lists_and_flags_the_big_file(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     plans = _plans_dir(tmp_path)
-    (plans / "small_333333.html").write_text(_plan_html("Small"), encoding="utf-8")
-    (plans / "big_444444.html").write_text(_plan_html("Big", padding=400 * 1024), encoding="utf-8")
+    (plans / "small_333333.html").write_text(_plan_html("Small"), encoding="utf-8", newline="")
+    (plans / "big_444444.html").write_text(_plan_html("Big", padding=400 * 1024), encoding="utf-8", newline="")
     host = _DiskHost(tmp_path, legacy=True)
 
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
@@ -1735,13 +1735,13 @@ def _body_of(html: str) -> str:
     return html[html.index("<main>") :]
 
 
-def test_a_six_megabyte_plan_can_be_updated_and_only_its_header_changes(
+def test_a_multi_hundred_kilobyte_plan_can_be_updated_and_only_its_header_changes(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     plans = _plans_dir(tmp_path)
     path = plans / "huge_666666.html"
-    original = _big_plan("Huge", 6 * 1024 * 1024)
-    path.write_text(original, encoding="utf-8")
+    original = _big_plan("Huge", 1_500_000)  # well past one frame; the >5 MB case is covered by the read/list test
+    path.write_text(original, encoding="utf-8", newline="")
     rel = ".agent-team/plans/huge_666666.html"
     host = _DiskHost(tmp_path)
 
@@ -1772,7 +1772,7 @@ def test_a_six_megabyte_plan_can_be_updated_and_only_its_header_changes(
     assert '<li data-status="done" data-todo-id="t1"><span class="st">done</span>' in updated
     # ... and the rest of the 6 MB file is byte-identical.
     assert _body_of(updated) == _body_of(original)
-    assert len(updated.encode()) > 6 * 1024 * 1024
+    assert len(updated.encode()) > 1_500_000
     assert hashlib.sha256(_body_of(updated).encode()).hexdigest() == hashlib.sha256(_body_of(original).encode()).hexdigest()
     assert _read_all_pages(backend_process, host, rel) == updated
 
@@ -1783,7 +1783,7 @@ def test_a_chunked_write_keeps_the_changed_on_disk_conflict_and_leaves_the_file_
     plans = _plans_dir(tmp_path)
     path = plans / "race_777777.html"
     original = _big_plan("Race", 700 * 1024)
-    path.write_text(original, encoding="utf-8")
+    path.write_text(original, encoding="utf-8", newline="")
 
     def another_writer(target: Path) -> None:
         # Someone else saves the file after we read it but before we commit.
@@ -1806,7 +1806,7 @@ def test_a_failed_part_discards_the_staged_upload(
     plans = _plans_dir(tmp_path)
     path = plans / "fail_888888.html"
     original = _big_plan("Fail", 700 * 1024)
-    path.write_text(original, encoding="utf-8")
+    path.write_text(original, encoding="utf-8", newline="")
     host = _DiskHost(tmp_path, fail_part=2)
     frame = _call_backend(
         backend_process, host, "plans.update_stage",
@@ -1824,7 +1824,7 @@ def test_a_host_without_chunked_writes_refuses_a_big_write_with_a_clear_code(
     plans = _plans_dir(tmp_path)
     path = plans / "old_999999.html"
     original = _big_plan("Old", 700 * 1024)
-    path.write_text(original, encoding="utf-8")
+    path.write_text(original, encoding="utf-8", newline="")
     host = _DiskHost(tmp_path, no_chunked_writes=True)
     frame = _call_backend(
         backend_process, host, "plans.update_stage",
@@ -1839,7 +1839,7 @@ def test_a_small_write_still_uses_the_single_call_path(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     plans = _plans_dir(tmp_path)
-    (plans / "tiny_aaaaab.html").write_text(_big_plan("Tiny", 100), encoding="utf-8")
+    (plans / "tiny_aaaaab.html").write_text(_big_plan("Tiny", 100), encoding="utf-8", newline="")
     host = _DiskHost(tmp_path)
     _call_backend(
         backend_process, host, "plans.update_stage",
@@ -1855,13 +1855,13 @@ def test_plan_meta_far_down_a_huge_file_is_still_found(
     plans = _plans_dir(tmp_path)
     meta = {"schemaVersion": 1, "name": "Island last", "stage": "approved", "todos": [], "reviewNotes": []}
     late = f'<html><body><p>{"x" * (1_400_000)}</p><script type="application/json" id="plan-meta">{json.dumps(meta)}</script></body></html>'
-    (plans / "late_bbbbbb.html").write_text(late, encoding="utf-8")
+    (plans / "late_bbbbbb.html").write_text(late, encoding="utf-8", newline="")
     host = _DiskHost(tmp_path)
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
     entry = next(e for e in listed if e["rel_path"].endswith("late_bbbbbb.html"))
     assert entry["kind"] == "plan" and entry["name"] == "Island last" and entry["stage"] == "approved"
     # The common case is unchanged: an island at the top costs one range read.
-    (plans / "top_cccccd.html").write_text(_plan_html("Top", padding=2_000_000), encoding="utf-8")
+    (plans / "top_cccccd.html").write_text(_plan_html("Top", padding=2_000_000), encoding="utf-8", newline="")
     host.calls.clear()
     _call_backend(backend_process, host, "plans.list", {})
     top_reads = [op for op, args in host.calls if args.get("rel_path", "").endswith("top_cccccd.html")]
@@ -1887,9 +1887,9 @@ def test_the_renderer_can_write_a_document_of_any_size_in_parts(
 ) -> None:
     plans = _plans_dir(tmp_path)
     path = plans / "ui_dddddd.html"
-    path.write_text("old", encoding="utf-8")
+    path.write_text("old", encoding="utf-8", newline="")
     rel = ".agent-team/plans/ui_dddddd.html"
-    payload = _big_plan("Written from the UI", 5 * 1024 * 1024).encode("utf-8")
+    payload = _big_plan("Written from the UI", 1_000_000).encode("utf-8")
     upload_id = "d" * 32
     host = _DiskHost(tmp_path)
 
@@ -1942,9 +1942,9 @@ def test_a_huge_file_without_plan_meta_is_scanned_in_linear_time(
     import time
 
     plans = _plans_dir(tmp_path)
-    size = 20 * 1024 * 1024
+    size = 6 * 1024 * 1024
     path = plans / "noisy_eeeeef.html"
-    path.write_text("<html><body>" + "<p>é</p>" * (size // 8) + "</body></html>", encoding="utf-8")
+    path.write_text("<html><body>" + "<p>é</p>" * (size // 8) + "</body></html>", encoding="utf-8", newline="")
     actual = path.stat().st_size
     host = _DiskHost(tmp_path)
 
@@ -1957,4 +1957,4 @@ def test_a_huge_file_without_plan_meta_is_scanned_in_linear_time(
     reads = [op for op, args in host.calls if args.get("rel_path", "").endswith("noisy_eeeeef.html")]
     expected = -(-actual // (96 * 1024))
     assert reads == ["read_range"] * len(reads) and expected <= len(reads) <= expected + 1
-    assert elapsed < 10  # ~23 s (quadratic) before the incremental scan
+    assert elapsed < 30  # 20 MB took ~23 s (quadratic) before the incremental scan

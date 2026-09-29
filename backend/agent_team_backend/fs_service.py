@@ -978,7 +978,12 @@ def write_part(
         if len(data) > _WRITE_PART_MAX_BYTES:
             raise FsError("part too large")
         target, staging = _staging_path(workspace_path, rel_path, upload_id)
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        # O_NOFOLLOW does not exist on Windows: there a symlink staging file is
+        # refused by the explicit lstat check instead (also done on POSIX, so
+        # the refusal does not depend on the flag alone).
+        nofollow = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        if staging.is_symlink():
+            raise FsError("cannot create upload file")
         if offset == 0:
             target.parent.mkdir(parents=True, exist_ok=True)
             _sweep_stale_staging(target.parent)

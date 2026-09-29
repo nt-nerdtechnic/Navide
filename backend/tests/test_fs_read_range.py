@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend import fs_service
+from agent_team_backend import fs_service, osplat
 
 
 def _page_through(workspace: Path, rel_path: str, step: int) -> bytes:
@@ -72,6 +72,20 @@ def test_invalid_ranges_and_paths_are_rejected(tmp_path: Path) -> None:
 UPLOAD = "0123456789abcdef0123456789abcdef"
 
 
+def _can_symlink() -> bool:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        try:
+            (Path(directory) / "l").symlink_to(Path(directory))
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
+_CAN_SYMLINK = _can_symlink()
+
+
 def _stage(workspace: Path, rel_path: str, payload: bytes, step: int = 96 * 1024, upload: str = UPLOAD) -> None:
     offset = 0
     while True:
@@ -88,7 +102,8 @@ def test_a_multi_megabyte_file_is_written_in_parts_and_swapped_in_atomically(tmp
     plans.mkdir(parents=True)
     target = plans / "huge.html"
     target.write_bytes(b"old")
-    os.chmod(target, 0o640)
+    if osplat.paths.enforces_posix_modes():
+        os.chmod(target, 0o640)
     payload = (b"0123456789abcdef" * 1024) * 400  # 6.4 MB: far past one WebSocket / Backend Wire frame
     rel = ".agent-team/plans/huge.html"
 
@@ -98,7 +113,8 @@ def test_a_multi_megabyte_file_is_written_in_parts_and_swapped_in_atomically(tmp
 
     assert committed["ok"] is True and committed["mtime"] == target.stat().st_mtime
     assert hashlib.sha256(target.read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    if osplat.paths.enforces_posix_modes():
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
     assert list(plans.glob(".*.upload")) == []
 
 
@@ -183,8 +199,8 @@ def test_read_file_ws_handler_lifts_the_limit_for_plan_documents_only(tmp_path: 
     plans = tmp_path / ".agent-team" / "plans"
     plans.mkdir(parents=True)
     body = "<p>" + "x" * (6 * 1024 * 1024) + "</p>"
-    (plans / "huge.html").write_text(body, encoding="utf-8")
-    (tmp_path / "huge.txt").write_text(body, encoding="utf-8")
+    (plans / "huge.html").write_text(body, encoding="utf-8", newline="")
+    (tmp_path / "huge.txt").write_text(body, encoding="utf-8", newline="")
 
     class _Session:
         def __init__(self) -> None:
@@ -207,6 +223,7 @@ def test_read_file_ws_handler_lifts_the_limit_for_plan_documents_only(tmp_path: 
 # ── hardening round ─────────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(not _CAN_SYMLINK, reason="needs symlink creation (unavailable to unprivileged Windows)")
 def test_a_planted_symlink_staging_file_is_refused(tmp_path: Path) -> None:
     victim = tmp_path / "victim.txt"
     victim.write_text("keep")
@@ -233,6 +250,7 @@ def test_stale_staging_files_are_swept_but_nothing_else(tmp_path: Path) -> None:
     assert all(path.exists() for path in lookalikes)
 
 
+@pytest.mark.skipif(not _CAN_SYMLINK, reason="needs symlink creation (unavailable to unprivileged Windows)")
 def test_a_symlink_to_a_non_plan_file_keeps_the_normal_read_limit(tmp_path: Path) -> None:
     import asyncio
 
@@ -241,9 +259,9 @@ def test_a_symlink_to_a_non_plan_file_keeps_the_normal_read_limit(tmp_path: Path
     plans = tmp_path / ".agent-team" / "plans"
     plans.mkdir(parents=True)
     big = tmp_path / "big.txt"
-    big.write_text("x" * (6 * 1024 * 1024))
+    big.write_bytes(b"x" * (6 * 1024 * 1024))
     (plans / "link.html").symlink_to(big)
-    (plans / "real.html").write_text("x" * (6 * 1024 * 1024))
+    (plans / "real.html").write_bytes(b"x" * (6 * 1024 * 1024))
     assert fs_service.is_plan_document(str(tmp_path), ".agent-team/plans/real.html") is True
     assert fs_service.is_plan_document(str(tmp_path), ".agent-team/plans/link.html") is False
 
