@@ -1,39 +1,75 @@
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { resolve } from 'node:path'
-import { parse } from 'yaml'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 
-const workflow = parse(readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')) as {
+type Step = {
+  name?: string; run?: string; if?: string; uses?: string; shell?: string
+  env?: Record<string, string>; 'continue-on-error'?: boolean
+}
+const workflow = parse(readFileSync('.github/workflows/ci.yml', 'utf8')) as {
   jobs: Record<string, {
-    needs?: string[]; if?: string; steps: Array<{ run?: string; if?: string; uses?: string }>
-    strategy?: { matrix: { include: Array<{ platform: string; shard?: string }> } }
+    needs?: string[]; if?: string; steps: Step[]; 'timeout-minutes'?: string | number
+    strategy?: { matrix: { include: Array<{ platform: string; shard?: string; timeout?: number }> } }
   }>
 }
+const gate = workflow.jobs['lint-and-test']
+const verdict = gate.steps.find((step) => step.name === 'Require every check to succeed')!
+const results = Object.keys(verdict.env ?? {})
+const shellEnvironment = { ...process.env }
+delete shellEnvironment.BASH_ENV
+delete shellEnvironment.ENV
+const bashAvailable = spawnSync('bash', ['--noprofile', '--norc', '-c', 'exit 0'], {
+  env: shellEnvironment, encoding: 'utf8', timeout: 5000,
+}).status === 0
 
 describe('required CI gate', () => {
   it('requires every verification job, including native speech tests', () => {
-    expect(workflow.jobs['lint-and-test'].needs?.slice().sort())
+    expect(gate.needs?.slice().sort())
       .toEqual(Object.keys(workflow.jobs).filter((name) => name !== 'lint-and-test').sort())
-    expect(workflow.jobs['lint-and-test'].if).toContain('always()')
-  })
-
-  it.each(['failure', 'cancelled', 'skipped'])('rejects %s from an upstream job', (result) => {
-    const run = spawnSync(process.execPath, [resolve('scripts/check-ci-results.mjs')], {
-      encoding: 'utf8', env: { ...process.env, CI_NEEDS: JSON.stringify({ frontend: { result: 'success' }, backend: { result } }) },
+    expect(gate.if).toContain('always()')
+    const mapped = Object.values(verdict.env ?? {}).map((value) => {
+      const match = value.match(/needs(?:\.([\w-]+)|\['([\w-]+)'\])\.result/)
+      expect(match, `unrecognized result mapping: ${value}`).not.toBeNull()
+      return match?.[1] ?? match?.[2]
     })
-    expect(run.status).toBe(1)
-    expect(run.stderr).toContain(`backend: ${result}`)
+    expect(mapped.sort()).toEqual(gate.needs?.slice().sort())
+    expect(gate.steps.some((step) => step.uses)).toBe(false)
+    expect(verdict.shell).toBe('bash')
   })
 
-  it('accepts only a nonempty set of successful checks', () => {
-    for (const [needs, expected] of [[{ frontend: { result: 'success' } }, 0], [{}, 1]] as const) {
-      const run = spawnSync(process.execPath, [resolve('scripts/check-ci-results.mjs')], {
-        encoding: 'utf8', env: { ...process.env, CI_NEEDS: JSON.stringify(needs) },
+  it('requires executable shell validation in the Linux static job', () => {
+    const step = workflow.jobs.static.steps.find((entry) => entry.run?.startsWith('pnpm test:infrastructure'))
+    expect(step?.env?.NAVIDE_REQUIRE_CI_SHELL).toBe('1')
+    if (process.env.NAVIDE_REQUIRE_CI_SHELL === '1') expect(bashAvailable).toBe(true)
+  })
+
+  // Probe the capability rather than assuming every Windows host has Git Bash.
+  // The required Linux static job fails above if this executable check cannot run.
+  describe.skipIf(!bashAvailable)('actual workflow shell verdict', () => {
+    function run(overrides: Record<string, string | undefined>) {
+      const env: NodeJS.ProcessEnv = { ...shellEnvironment, ...Object.fromEntries(results.map((key) => [key, 'success'])) }
+      for (const [key, value] of Object.entries(overrides)) {
+        if (value === undefined) delete env[key]
+        else env[key] = value
+      }
+      return spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', verdict.run!], {
+        encoding: 'utf8', env, timeout: 5000,
       })
-      expect(run.status).toBe(expected)
     }
-    expect(workflow.jobs['lint-and-test'].steps.some((step) => step.run?.includes('scripts/check-ci-results.mjs'))).toBe(true)
+
+    it('accepts successful results from every required job', () => {
+      const result = run({})
+      expect(result.status, result.stderr).toBe(0)
+    })
+
+    it.each(['failure', 'cancelled', 'skipped', '', undefined])('rejects any required result of %s', (value) => {
+      for (const key of results) expect(run({ [key]: value }).status, key).toBe(1)
+    })
+
+    it('rejects an entirely missing set of results', () => {
+      expect(run(Object.fromEntries(results.map((key) => [key, undefined]))).status).toBe(1)
+    })
   })
 
   it('retains complete source and artifact suites on every supported desktop platform', () => {
@@ -45,5 +81,27 @@ describe('required CI gate', () => {
     }
     expect(workflow.jobs.backend.strategy?.matrix.include.filter((entry) => entry.platform === 'Windows')
       .map((entry) => entry.shard)).toEqual(['1/2', '2/2'])
+  })
+
+  it('preserves platform time budgets and best-effort Windows diagnostics', () => {
+    const backend = workflow.jobs.backend
+    expect(backend['timeout-minutes']).toBe('${{ matrix.timeout }}')
+    expect(backend.strategy?.matrix.include.map(({ platform, timeout }) => [platform, timeout]))
+      .toEqual([['macOS', 15], ['Linux', 15], ['Windows', 45], ['Windows', 45]])
+    const diagnostic = backend.steps.find((step) => step.name === 'Report the backend test log')!
+    expect(diagnostic.if).toContain('always()')
+    expect(diagnostic.if).toContain("runner.os == 'Windows'")
+    expect(diagnostic.shell).toBe('pwsh')
+    expect(diagnostic['continue-on-error']).toBe(true)
+    expect(diagnostic.run).toContain('Get-Process')
+    expect(diagnostic.run).toContain('pytest.log')
+  })
+
+  it('does not let diagnostic uploads replace the test verdict', () => {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps.filter((entry) => entry.uses?.startsWith('actions/upload-artifact@'))) {
+        expect(step['continue-on-error']).toBe(true)
+      }
+    }
   })
 })

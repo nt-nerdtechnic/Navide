@@ -20,6 +20,12 @@ have one writer before workers start: a test must not rebuild a shared `dist`
 directory while another test consumes it. Production builds keep their normal
 build mode; inherited `NODE_ENV=test` must not change their content or build ID.
 
+Standalone artifact tests reuse a local success stamp only when source,
+configuration, lockfile, toolchain/build-environment and output fingerprints
+match, and the required entrypoints still exist. Missing or changed outputs,
+partial stamps and failed builds force preparation again. The CI artifact job
+consumes its immediately preceding unconditional build without using that cache.
+
 Package composition tests remain distinct from UI E2E. Packaged Plans checks
 exercise the production backend and its host composition, with the Go fixture
 kept separate from production output. Registry contracts, deterministic STT
@@ -38,6 +44,13 @@ publishing and mirror workflows are outside this change.
 | Speech sidecar | macOS | Deterministic Rust tests; model-backed transcription remains explicit manual smoke |
 | Dependency audit | Linux | Existing dependency policy, including its visible Windows ARM advisory exception |
 | Lint and test | Linux | Reject any missing, failed, cancelled or skipped upstream job |
+
+The aggregate verdict is a shell step with explicit job-result inputs; it needs
+no checkout or Node setup. Infrastructure tests execute that actual shell body
+for success and every non-success result, and verify that every job is in
+`needs`. Shell execution is mandatory in the Linux static job; local hosts probe
+for Bash. Backend job budgets remain 15 minutes on macOS/Linux and 45 minutes
+per Windows shard, with a separate 35-minute detached-runner wait limit.
 
 Secret scanning remains a separate workflow. Repository branch protection must
 continue requiring the stable `Lint and test` check; changing remote repository
@@ -240,6 +253,10 @@ files and credential stores. Artifact retention is seven days. Pytest's
 `--collection-report` records the full and selected node IDs so shard ownership
 can be reproduced with `--shard 1/2` or `--shard 2/2`.
 
+Windows also prints a final process snapshot, result count and log tail. These
+diagnostics and all artifact uploads are best effort: an upload outage or
+process-exhaustion error must not replace the test verdict.
+
 Do not run independent artifact builds concurrently in the same checkout.
 Each invocation prepares shared distributions before worker startup; separate
 jobs have separate workspaces. Reproduce native Windows or Linux failures on
@@ -305,3 +322,37 @@ from a temporary `uv run --no-project --with cmake` environment because CMake
 was absent from the machine. No real provider, login, AI quota or UI automation
 was used. Remote Actions, native Linux/Windows execution, advisory-service
 audits and manual provider/release smoke were not run in this session.
+
+### Post-review corrections (2026-09-30)
+
+The channel approval test's fixture now supplies an explicit pane workspace.
+This PR's temporary HOME isolation exposed the fixture's fallback to HOME and
+changed Guard's classification of relative deletion targets. The earlier
+description of that failure as an upstream defect was incorrect: upstream
+`7c96aca7` passed its normal CI. The fixture correction retains HOME isolation,
+the real Guard and the original rejection assertion; it changes no Guard policy.
+
+Both App kickoff call sites are now executed with the real retry coordinator,
+checking that injection evidence reaches the callback and its returned echo.
+Negative mutations prove either dropped connection is detected. The router
+scan-window assertion starts at the actual awaited kickoff completion, including
+the gap before cancellation handling and the local result assignment. Retry
+limits and their log messages share constants (three kickoff attempts, eight
+pane-session persistence attempts). The separate fake CLI installers remain.
+
+Local validation after these corrections:
+
+| Check actually run | Result |
+| --- | --- |
+| Complete frontend unit + CLI projects with mandatory contract reporter | 797 files, 11,879 tests passed |
+| Infrastructure inventory, actual shell gate and artifact cache | 40 passed |
+| `pnpm typecheck`; backend Ruff | Passed |
+| `pnpm build` and production Plans fixture-exclusion check | Passed |
+| Complete prepared artifact suite, including packaged/production Plans | 22 files, 201 tests passed |
+| Channel mirror suite, native macOS and Windows path seam | 37 passed in each run |
+| Complete backend suite | 8,709 passed, exactly the three deferred reader failures, 18 platform/capability skips; 333.26 seconds |
+| Two consecutive standalone artifact preparations | Both passed; second run preserved the success stamp and sampled output contents/mtimes |
+
+Native Linux/Windows execution, live provider smoke and manual Electron checks
+remain separate from these local results. The three reader failures still fail
+the gate; no skip, xfail or product fix was added for them.

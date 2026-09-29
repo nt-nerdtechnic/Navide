@@ -106,16 +106,21 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-python@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v7
+      - name: Set up uv and dependency cache
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
@@ -128,14 +133,20 @@ jobs:
       - name: Backend correctness lint
         run: uv --project backend run --locked ruff check backend
       - name: Verify collection ownership and required gate
+        env:
+          NAVIDE_REQUIRE_CI_SHELL: '1'
         run: pnpm test:infrastructure --reporter=default --reporter=junit --outputFile.junit=test-results/ci/infrastructure.xml
-      - uses: actions/upload-artifact@v7
+      - name: Upload diagnostic artifacts
+        uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true
         with:
           name: static-diagnostics
           path: test-results/ci/
           retention-days: 7
 
+  # Run complete suites on all desktop platforms: platform branches are part
+  # of the contract. Ubuntu 22.04 retains the supported glibc floor.
   frontend:
     name: Frontend tests (${{ matrix.platform }})
     strategy:
@@ -151,17 +162,22 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       # backend-ws-token-parity.test.ts deliberately checks the Python seam.
-      - uses: actions/setup-python@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v7
+      - name: Set up uv and dependency cache
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
@@ -173,8 +189,10 @@ jobs:
         env:
           NAVIDE_CLI_COVERAGE_REQUIRED: '1'
         run: pnpm test:frontend --reporter=default --reporter=./tests/cli/contractReporter.ts --reporter=junit --reporter=json --outputFile.junit=test-results/ci/frontend.xml --outputFile.json=test-results/ci/frontend.json
-      - uses: actions/upload-artifact@v7
+      - name: Upload diagnostic artifacts
+        uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true
         with:
           name: frontend-${{ matrix.platform }}-diagnostics
           path: test-results/ci/
@@ -195,22 +213,29 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     env:
+      # Mini IDE bundles the editor; leave enough heap for its production build.
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-python@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v7
+      - name: Set up uv and dependency cache
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
-      - uses: actions/setup-go@v7
+      - name: Set up Go for native Plans contracts
+        uses: actions/setup-go@v7
         if: runner.os == 'macOS'
         with:
           go-version: '1.27.x'
@@ -227,13 +252,17 @@ jobs:
         run: pnpm test:artifacts:ci --reporter=default --reporter=junit --reporter=json --outputFile.junit=test-results/ci/artifacts.xml --outputFile.json=test-results/ci/artifacts.json
       - name: Verify production Plans excludes fixtures
         run: node scripts/verify-plans-production.mjs
-      - uses: actions/upload-artifact@v7
+      - name: Upload diagnostic artifacts
+        uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true
         with:
           name: artifacts-${{ matrix.platform }}-diagnostics
           path: test-results/ci/
           retention-days: 7
 
+  # macOS exercises native PTY/zsh behavior; Linux and Windows retain their
+  # complete suites. Only Windows is split across two collection-based shards.
   backend:
     name: Backend tests (${{ matrix.platform }}, ${{ matrix.shard }})
     strategy:
@@ -244,26 +273,33 @@ jobs:
             runner: macos-14
             shard: 1/1
             artifact: macos
+            timeout: 15
           - platform: Linux
             runner: ubuntu-22.04
             shard: 1/1
             artifact: linux
+            timeout: 15
           - platform: Windows
             runner: windows-latest
             shard: 1/2
             artifact: windows-1
+            timeout: 45
           - platform: Windows
             runner: windows-latest
             shard: 2/2
             artifact: windows-2
+            timeout: 45
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v7
+      - name: Set up uv and dependency cache
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
@@ -278,6 +314,9 @@ jobs:
       - name: Backend imports on Windows
         if: runner.os == 'Windows'
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
+      # Full Windows runs took 1109–1880 seconds on 2026-09-25; two shards
+      # retain coverage while bounding runner time. The runner uses a Job Object
+      # to clean up descendants when pytest exits.
       # Preserve detached supervision: watchdog threads attached to the Actions
       # console previously hung the step even after pytest had exited.
       - name: Start detached Windows tests
@@ -289,6 +328,7 @@ jobs:
         shell: pwsh
         timeout-minutes: 35
         run: |
+          # Use PowerShell sleep rather than spawning a child process in this loop.
           $deadline = (Get-Date).AddMinutes(34)
           $seen = 0
           while (-not (Test-Path ci-windows-tests.done) -and (Get-Date) -lt $deadline) {
@@ -301,8 +341,26 @@ jobs:
           if (Test-Path ci-windows-tests.log) { Get-Content ci-windows-tests.log }
           if (-not (Test-Path ci-windows-tests.done)) { Write-Host 'Runner did not finish before deadline'; exit 1 }
           exit [int](Get-Content ci-windows-tests.done)
-      - uses: actions/upload-artifact@v7
+      # Process exhaustion can make even diagnostics fail (0xC0000142).
+      # Keep the original pytest verdict authoritative.
+      - name: Report the backend test log
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "--- processes still around:"
+          Get-Process | Where-Object { $_.ProcessName -match 'python|node|winpty|conhost|OpenConsole|git|uv|pytest|cmd|powershell|pwsh|claude|codex' } | ForEach-Object { Write-Host ("{0} ({1})" -f $_.ProcessName, $_.Id) }
+          if (Test-Path pytest.log) {
+            $lines = @(Get-Content pytest.log)
+            Write-Host ("--- results so far: {0}" -f @($lines | Where-Object { $_ -match ' (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)' }).Count)
+            Write-Host "--- last 200 lines of pytest.log:"
+            $lines | Select-Object -Last 200 | ForEach-Object { Write-Host $_ }
+            $lines | Where-Object { $_ -match '^(FAILED|ERROR) ' } | Select-Object -First 100 | ForEach-Object { Write-Host $_ }
+          } else { Write-Host "(no pytest.log)" }
+      - name: Upload diagnostic artifacts
+        uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true
         with:
           name: backend-${{ matrix.artifact }}-diagnostics
           path: |
@@ -312,14 +370,18 @@ jobs:
             ci-windows-tests.done
           retention-days: 7
 
+  # The native speech sidecar uses the macOS Metal toolchain.
   stt-sidecar:
     name: Speech-to-text sidecar tests
     runs-on: macos-14
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: native/navide-stt
       # The model-backed transcribe test is explicitly ignored by default.
@@ -331,11 +393,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v7
+      - name: Set up uv and dependency cache
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: marketplace/registry/uv.lock
@@ -348,8 +413,10 @@ jobs:
         run: uv --project marketplace/registry run --locked pytest marketplace/registry/tests --junitxml=test-results/ci/registry.xml --durations=20
       - name: Plugin contract fixtures
         run: uv --project marketplace/registry run --locked python docs/plugin-contracts/validate-fixtures.py
-      - uses: actions/upload-artifact@v7
+      - name: Upload diagnostic artifacts
+        uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true
         with:
           name: registry-diagnostics
           path: test-results/ci/
@@ -363,11 +430,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
       - name: Require every check to succeed
+        shell: bash
         env:
-          CI_NEEDS: ${{ toJSON(needs) }}
-        run: node scripts/check-ci-results.mjs
+          STATIC_RESULT: ${{ needs.static.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BUILD_ARTIFACTS_RESULT: ${{ needs['build-artifacts'].result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          REGISTRY_RESULT: ${{ needs.registry.result }}
+          AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
+          STT_RESULT: ${{ needs['stt-sidecar'].result }}
+        run: |
+          for check in "static=$STATIC_RESULT" "frontend=$FRONTEND_RESULT" \
+            "build-artifacts=$BUILD_ARTIFACTS_RESULT" "backend=$BACKEND_RESULT" \
+            "registry=$REGISTRY_RESULT" "dependency-audit=$AUDIT_RESULT" \
+            "stt-sidecar=$STT_RESULT"; do
+            echo "$check"
+            test "${check#*=}" = success || exit 1
+          done
