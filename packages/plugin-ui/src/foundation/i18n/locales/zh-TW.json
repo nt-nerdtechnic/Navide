@@ -527,6 +527,7 @@
       "clipboard-copy-failed": "複製失敗 — 無法寫入剪貼簿",
       "clipboard-send-failed": "只有部分內容送達 {pane} — 其餘在傳送途中遺失",
       "clipboard-send-failed-all": "貼上的內容完全沒有送達 {pane} — {chars} 個字元在傳送途中遺失",
+      "open-file-failed": "無法開啟 {file} — 編輯器沒有回應",
       "idle-reclaimed": "已回收 {count} 個閒置的 CLI 以釋放記憶體 — 點一下即可繼續",
       "click-to-resume": "點擊以續接",
       "resuming": "續接中…",

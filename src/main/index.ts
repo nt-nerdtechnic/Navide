@@ -3284,6 +3284,11 @@ async function openCatalogContributionWindow(
     }
     return result
   }
+  // A reused window only had its query updated and was focused; whether the
+  // file then showed is the guest's business, so leave a trace for main.log.
+  if (!created && contributionKey === MINI_IDE_CONTRIBUTION) {
+    warnMain(`[main] mini-ide window reused; workspace=${workspacePath} filepath=${extraParams.filepath ?? ''}`)
+  }
   // Only a window this call created is tracked: the reopen path above focuses
   // an already-tracked window, and it is only now, past the failure branch,
   // that the window is one the user will actually see.
@@ -3640,6 +3645,9 @@ ipcMain.handle('window:openEditor', async (event, args: Record<string, string>) 
     return { ok: true }
   }
   const ok = await routeEditorOpen(BrowserWindow.fromWebContents(event.sender), params)
+  if (!ok) {
+    warnMain(`[main] window:openEditor failed workspace=${workspacePath} filepath=${filepath} file_ws=${params.file_ws ?? ''}`)
+  }
   return { ok }
 })
 

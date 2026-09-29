@@ -527,6 +527,7 @@
       "clipboard-copy-failed": "Copy failed — the clipboard could not be written",
       "clipboard-send-failed": "Only part of the paste reached {pane} — the rest was lost on the way",
       "clipboard-send-failed-all": "The paste never reached {pane} — {chars} characters were lost on the way",
+      "open-file-failed": "Could not open {file} — the editor did not respond",
       "idle-reclaimed": "Reclaimed {count} idle CLI pane(s) to free memory — click one to resume it",
       "click-to-resume": "Click to resume",
       "resuming": "Resuming…",

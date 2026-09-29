@@ -114,12 +114,14 @@ export interface TerminalDockPort {
   listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string }> }>>
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
+  /** `false` means the host could not open the file; `void` (older ports)
+   *  means unknown and is treated as success. */
   openFile(args: {
     workspacePath: string
     filepath: string
     fileWorkspace?: string
     line?: number
-  }): Promise<void>
+  }): Promise<boolean | void>
   openExternal(url: string): Promise<void>
   openPlan?(args: { workspacePath: string; relPath?: string }): Promise<void>
   reportSelection?(selection: string): void

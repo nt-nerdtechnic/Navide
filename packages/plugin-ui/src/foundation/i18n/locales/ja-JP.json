@@ -527,6 +527,7 @@
       "clipboard-copy-failed": "コピーに失敗しました。クリップボードに書き込めませんでした",
       "clipboard-send-failed": "貼り付けた内容の一部だけが {pane} に届きました。残りは送信中に失われました",
       "clipboard-send-failed-all": "貼り付けた内容が {pane} に届きませんでした。{chars} 文字が送信中に失われました",
+      "open-file-failed": "{file} を開けませんでした。エディタが応答しませんでした",
       "idle-reclaimed": "メモリを解放するため、待機中の CLI ペイン {count} 個を休止しました。クリックすると再開できます",
       "click-to-resume": "クリックして再開",
       "resuming": "再開中…",

@@ -373,17 +373,30 @@ function openInEditor(
   absPath: string,
   line: number | undefined,
   workspacePath?: string,
+  onFailure?: (filepath: string) => void,
 ): void {
   const slash = absPath.lastIndexOf('/')
   const dir = slash > 0 ? absPath.slice(0, slash) : '/'
   const root = workspacePath?.replace(/\/+$/, '')
   const inWorkspace = !!root && absPath.startsWith(`${root}/`)
-  void terminalPort.openFile({
-    workspacePath: root || dir,
-    filepath: inWorkspace ? absPath.slice(root.length + 1) : absPath.slice(slash + 1),
-    ...(root && !inWorkspace ? { fileWorkspace: dir } : {}),
-    ...(line !== undefined ? { line } : {}),
-  })
+  const filepath = inWorkspace ? absPath.slice(root.length + 1) : absPath.slice(slash + 1)
+  // Called synchronously so the request leaves at pick time; a sync throw is
+  // folded into the same failure path as a rejection.
+  let pending: Promise<boolean | void>
+  try {
+    pending = terminalPort.openFile({
+      workspacePath: root || dir,
+      filepath,
+      ...(root && !inWorkspace ? { fileWorkspace: dir } : {}),
+      ...(line !== undefined ? { line } : {}),
+    })
+  } catch (err) {
+    pending = Promise.reject(err)
+  }
+  // `void` (a port that reports nothing) is not a failure; only `false` or a throw is.
+  void pending
+    .then((opened) => { if (opened === false) onFailure?.(filepath) })
+    .catch(() => onFailure?.(filepath))
 }
 
 // '~/'-prefixed links (shell output loves them) resolve against the user's
@@ -494,6 +507,9 @@ interface UseTerminalOptions {
    *  knows the agent, the session id, and how to build the vendor's resume
    *  command. */
   onPtyLostWhileDisconnected?: () => void
+  /** A file picked from the ⌘-click picker that the host could not open.
+   *  Reported rather than shown here, like onClipboardFailure. */
+  onOpenFileFailure?: (filepath: string) => void
   /** Vendor-specific terminal behavior is supplied by the plugin-shell owner. */
   agentProfileFor?: TerminalAgentProfileResolver
 }
@@ -1799,7 +1815,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
           })
         } catch { return [] }
       },
-      onPick: (item, lineNum) => openInEditor(terminalPort, item.abs, lineNum, opts?.workspacePath),
+      onPick: (item, lineNum) => openInEditor(terminalPort, item.abs, lineNum, opts?.workspacePath, opts?.onOpenFileFailure),
       collapsePath: (dir) => collapseHomePath(dir, _homeDir) || '/',
     })
     _filePickerCloser = filePicker.close

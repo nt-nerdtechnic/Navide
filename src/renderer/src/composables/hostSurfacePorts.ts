@@ -318,13 +318,14 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
     async getHomeDirectory(): Promise<string> {
       return (await window.agentTeam?.getHomeDir?.()) || ''
     },
-    async openFile({ workspacePath, filepath, fileWorkspace, line }): Promise<void> {
-      await window.agentTeam?.openEditorWindow?.({
+    async openFile({ workspacePath, filepath, fileWorkspace, line }): Promise<boolean> {
+      const res = await window.agentTeam?.openEditorWindow?.({
         workspace_path: workspacePath,
         filepath,
         ...(fileWorkspace ? { file_ws: fileWorkspace } : {}),
         ...(line === undefined ? {} : { line }),
       })
+      return res?.ok === true
     },
     async openExternal(url: string): Promise<void> {
       await window.agentTeam?.openExternal?.(url)

@@ -220,3 +220,61 @@ describe('useTerminal — ⌘-click opens a path in the mini-IDE', () => {
     scope.stop()
   })
 })
+
+/**
+ * ⌘-click the path, then pick its row the way a mouse does: hover, then
+ * mousedown on the rendered row. (The Enter path above never touches a row.)
+ */
+async function cmdClickThenClickRow(
+  openEditorWindow: (params: OpenParams) => unknown,
+  onOpenFileFailure: (filepath: string) => void
+): Promise<{ rowClicked: boolean; scope: ReturnType<typeof withScope>['scope'] }> {
+  screen.line = '/ws/docs/adding-a-chat-channel.md'
+  Object.assign(window, { agentTeam: { openEditorWindow, getHomeDir: async () => '/Users/u' } })
+  const mock = createMockBackend()
+  mock.setResponse('fs.stat_path', { exists: true })
+  const { result, scope } = withScope(() => useTerminal('pane-1', mock.backend, { workspacePath: '/ws', onOpenFileFailure }))
+  const el = document.createElement('div')
+  document.body.appendChild(el)
+  result.mount(el)
+  el.dispatchEvent(new MouseEvent('mousedown', {
+    bubbles: true, cancelable: true, metaKey: true, button: 0, clientX: 5, clientY: 10,
+  }))
+  await flush()
+  await flush()
+  const row = document.querySelector<HTMLElement>('.term-file-picker-root input ~ div > div')
+  row?.dispatchEvent(new MouseEvent('mouseenter'))
+  const live = document.querySelector<HTMLElement>('.term-file-picker-root input ~ div > div') ?? row
+  live?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  await flush()
+  await flush()
+  return { rowClicked: !!row, scope }
+}
+
+describe('useTerminal — a mouse pick that opens nothing says so', () => {
+  it('opens through a real row click and closes the picker', async () => {
+    const open = vi.fn(async () => ({ ok: true }))
+    const failed = vi.fn()
+    const { rowClicked, scope } = await cmdClickThenClickRow(open, failed)
+    expect(rowClicked).toBe(true)
+    expect(open).toHaveBeenCalledOnce()
+    expect(open).toHaveBeenCalledWith({ workspace_path: '/ws', filepath: 'docs/adding-a-chat-channel.md' })
+    expect(document.querySelector('.term-file-picker-root')).toBeNull()
+    expect(failed).not.toHaveBeenCalled()
+    scope.stop()
+  })
+
+  it('reports the file when the host answers { ok: false }', async () => {
+    const failed = vi.fn()
+    const { scope } = await cmdClickThenClickRow(vi.fn(async () => ({ ok: false })), failed)
+    expect(failed).toHaveBeenCalledExactlyOnceWith('docs/adding-a-chat-channel.md')
+    scope.stop()
+  })
+
+  it('reports the file when the open call rejects', async () => {
+    const failed = vi.fn()
+    const { scope } = await cmdClickThenClickRow(vi.fn(async () => { throw new Error('ipc gone') }), failed)
+    expect(failed).toHaveBeenCalledExactlyOnceWith('docs/adding-a-chat-channel.md')
+    scope.stop()
+  })
+})
