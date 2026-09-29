@@ -551,6 +551,10 @@ async def test_outbox_submit_returns_ids_raises_errors_and_keeps_draining() -> N
 
 
 async def test_long_local_prompts_are_mirrored_whole_up_to_the_cap(env: Env) -> None:
+    # The capped prompt goes out as more messages than the outbox's burst, and the default
+    # pacing (1/s past the burst) would put its last chunk right at `_until`'s deadline.
+    # Pacing has its own test above; this one is about content, so the chat is fast.
+    env.tg.rate_per_min = 6000  # type: ignore[attr-defined]
     long_prompt = "詳細" * 1000  # 2000 chars: past the 500-char naming cap
     env.m.mirror.on_local_prompt("pane-1", long_prompt)
     await _until(lambda: sum(t.count("詳細") for t in env.tg.texts()) == 1000)
