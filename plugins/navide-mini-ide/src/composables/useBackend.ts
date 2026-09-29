@@ -132,7 +132,8 @@ const backend = {
     try {
       return { ok: true, payload: await request(type, payload) as T, error: null }
     } catch (error) {
-      return { ok: false, payload: null, error: { code: 'CAPABILITY_ERROR', message: error instanceof Error ? error.message : String(error) } }
+      const code = (error as { code?: unknown } | null)?.code
+      return { ok: false, payload: null, error: { code: typeof code === 'string' && code ? code : 'CAPABILITY_ERROR', message: error instanceof Error ? error.message : String(error) } }
     }
   },
   on(type: string, listener: (payload: unknown) => void): () => void {
