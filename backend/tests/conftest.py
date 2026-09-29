@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
+from pathlib import Path
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -10,6 +11,28 @@ import tempfile
 import time
 
 import pytest
+
+from tests.cli_regression.support.isolation import isolated_environment, real_cli_in
+
+pytest_plugins = ["tests.cli_regression.catalog"]
+
+# Isolate home/config as well as app data before importing modules with
+# process-wide stores. Per-test fixtures may override these isolated paths.
+_TEST_ROOT = Path(tempfile.mkdtemp(prefix="navide-test-home-"))
+_isolated_env = isolated_environment(_TEST_ROOT)
+for _key in ("HOME", "USERPROFILE", "ZDOTDIR", "APPDATA", "LOCALAPPDATA"):
+    os.environ[_key] = _isolated_env[_key]
+# Default XDG paths follow the isolated HOME. Keeping an explicit process-wide
+# XDG override would supersede a test's own home argument (for example a vault
+# rooted in tmp_path) and make independent credential fixtures share storage.
+# Tests of XDG precedence explicitly set their own override with monkeypatch.
+for _key in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+    os.environ.pop(_key, None)
+for _key in tuple(os.environ):
+    if _key in {"BASH_ENV", "ENV", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+                "GOOGLE_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY",
+                "OPENROUTER_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}:
+        os.environ.pop(_key)
 
 # Importing `app` below instantiates the module-level stores; since the SQLite
 # migration that import moves real JSON stores into navide.db (renaming the
@@ -28,6 +51,20 @@ os.environ["AGENT_TEAM_DATA_DIR"] = os.environ.get(
 ) or tempfile.mkdtemp(prefix="agent-team-tests-"
 )
 
+# Vendor metadata is import-safe after the base home/data isolation above.
+# Clear declared overrides before app creates its stores/readers; otherwise
+# e.g. inherited CODEX_HOME could still point at a real session tree even with
+# HOME isolated. Tests explicitly provide overrides when exercising them.
+from agent_team_backend.cli_vendors.registry import VENDORS
+
+for _spec in VENDORS.values():
+    for _key in (*_spec.home_env_vars, *_spec.data_dir_env_vars,
+                 *_spec.credential_path_env_vars, *_spec.network_override_env_vars):
+        if _key not in {"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"}:
+            os.environ.pop(_key, None)
+for _key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+    os.environ.pop(_key, None)
+
 from agent_team_backend import app, ws_handlers
 from agent_team_backend.credential_vault import CredentialVault
 
@@ -35,11 +72,6 @@ from agent_team_backend.credential_vault import CredentialVault
 # Executables of the agent CLIs this app drives. A test may start a fake one it
 # wrote under the temp dir; one found anywhere else is the developer's real
 # install, signed in to their real account.
-_REAL_CLI_NAMES = frozenset({
-    "claude", "codex", "gemini", "kimi", "grok", "qwen", "opencode", "kilo",
-    "kilocode", "cursor-agent", "copilot", "pi", "droid", "aider", "agy",
-    "antigravity", "muse", "mcode",
-})
 _TEMP_ROOTS = tuple({
     os.path.realpath(tempfile.gettempdir()) + os.sep,
     os.path.realpath("/tmp") + os.sep,
@@ -49,19 +81,8 @@ _TEMP_ROOTS = tuple({
 def _real_cli_in(args, env) -> str | None:
     """The real agent CLI `args` would start, or None.
 
-    Looks at the first few words, so `cmd /c claude` or `node claude` count."""
-    if isinstance(args, (str, bytes, os.PathLike)):
-        words = os.fsdecode(args).split()
-    else:
-        words = [os.fsdecode(a) for a in args]
-    for word in words[:3]:
-        stem = os.path.splitext(os.path.basename(word))[0].lower()
-        if stem not in _REAL_CLI_NAMES:
-            continue
-        found = word if os.path.dirname(word) else shutil.which(word, path=(env or os.environ).get("PATH"))
-        if found and not os.path.realpath(found).startswith(_TEMP_ROOTS):
-            return os.path.realpath(found)
-    return None
+    Includes shell command strings and native ConPTY launches."""
+    return real_cli_in(args, env, tuple(Path(root) for root in _TEMP_ROOTS))
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +124,17 @@ def _no_real_claude_cli(monkeypatch):
             super().__init__(args, *rest, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", _GuardedPopen)
+    from agent_team_backend import osplat
+    original_spawn = osplat.terminal_backend.spawn
+
+    def guarded_spawn(argv, **kwargs):
+        real = _real_cli_in(argv, kwargs.get("env"))
+        if real:
+            refused.append(f"a native real CLI spawn: {real}")
+            raise PermissionError(f"a test tried to start the real CLI {real}; use a fake under tmp_path")
+        return original_spawn(argv, **kwargs)
+
+    monkeypatch.setattr(osplat.terminal_backend, "spawn", guarded_spawn)
     yield refused
     if refused:
         pytest.fail("test reached a real agent CLI: " + "; ".join(refused), pytrace=False)
@@ -332,6 +364,7 @@ def pytest_addoption(parser):
         "--shard", default=None, metavar="K/N",
         help="run only every Nth collected test, starting at the Kth (1-based); CI splits the Windows suite this way",
     )
+    parser.addoption("--collection-report", default=None, help="write collected and selected node IDs as JSON")
 
 
 @pytest.hookimpl(trylast=True)
@@ -339,11 +372,21 @@ def pytest_collection_modifyitems(config, items):
     # Round-robin over the collected order, not whole files: the slow files
     # (real git, PTY and subprocess spawns) then land on every shard evenly
     # instead of on whichever shard drew them.
+    collected = sorted(item.nodeid for item in items)
     shard = config.getoption("--shard")
-    if not shard:
-        return
-    k, n = (int(part) for part in shard.split("/"))
-    if not 1 <= k <= n:
-        raise pytest.UsageError(f"--shard {shard}: want K/N with 1 <= K <= N")
-    config.hook.pytest_deselected(items=[item for i, item in enumerate(items) if i % n != k - 1])
-    items[:] = items[k - 1 :: n]
+    if shard:
+        try:
+            k, n = (int(part) for part in shard.split("/"))
+            if not 1 <= k <= n:
+                raise ValueError
+        except ValueError:
+            raise pytest.UsageError(f"--shard {shard}: want K/N with 1 <= K <= N") from None
+        items.sort(key=lambda item: item.nodeid)
+        config.hook.pytest_deselected(items=[item for i, item in enumerate(items) if i % n != k - 1])
+        items[:] = items[k - 1 :: n]
+    report = config.getoption("--collection-report")
+    if report:
+        path = Path(report)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"shard": shard, "collected": collected,
+                                    "selected": [item.nodeid for item in items]}, indent=2), encoding="utf-8")

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, inject, it } from 'vitest'
 import {
   cpSync,
   existsSync,
@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 type CommandResult = {
@@ -23,21 +23,6 @@ type CommandResult = {
 }
 
 const repositoryRoot = resolve(import.meta.dirname, '../../..')
-const packageRoots = {
-  contracts: join(repositoryRoot, 'packages/plugin-contracts'),
-  sdk: join(repositoryRoot, 'packages/plugin-sdk'),
-  ui: join(repositoryRoot, 'packages/plugin-ui'),
-}
-
-function packageManager(): { command: string; prefix: string[] } {
-  const inherited = process.env.npm_execpath ?? ''
-  const configured = process.env.NAVIDE_PNPM ?? (/pnpm/i.test(inherited) ? inherited : '')
-  if (!configured) return { command: 'pnpm', prefix: [] }
-  if (configured.endsWith('.js') || configured.endsWith('.cjs')) {
-    return { command: process.execPath, prefix: [configured] }
-  }
-  return { command: configured, prefix: [] }
-}
 
 function subprocessEnvironment(): NodeJS.ProcessEnv {
   const nodeDirectory = dirname(process.execPath)
@@ -48,7 +33,7 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
     // A newer pnpm than the repo's pinned 10.x enables verify-deps-before-run
     // by default and can wipe node_modules on a lockfile-config mismatch.
     npm_config_verify_deps_before_run: 'false',
-    PATH: `${nodeDirectory}:${process.env.PATH ?? ''}`,
+    PATH: `${nodeDirectory}${delimiter}${process.env.PATH ?? ''}`,
   }
 }
 
@@ -65,15 +50,6 @@ function run(command: string, args: string[], cwd: string, extraEnv: NodeJS.Proc
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
   }
-}
-
-function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
-  const invocation = packageManager()
-  const result = run(invocation.command, [...invocation.prefix, ...args], cwd)
-  if (result.status !== 0) {
-    throw new Error(`pnpm ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
-  }
-  return result
 }
 
 function runNodeEntryOrThrow(entry: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): CommandResult {
@@ -128,17 +104,6 @@ function resolveInstalledPackageBin(
   return join(packageDirectory, bin)
 }
 
-function packedPath(result: CommandResult, artifacts: string, packageName: string): string {
-  const reportedPath = result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.endsWith('.tgz'))
-  if (!reportedPath) throw new Error(`pnpm pack did not report a tarball for ${packageName}`)
-  const path = realpathSync(isAbsolute(reportedPath) ? reportedPath : join(artifacts, reportedPath))
-  expect(existsSync(path), packageName).toBe(true)
-  return path
-}
-
 function extractPackageTarball(tarball: string, packageDirectory: string, cwd: string): void {
   mkdirSync(packageDirectory, { recursive: true })
   runCommandOrThrow(
@@ -156,7 +121,7 @@ function linkThirdPartyPackage(repository: string, consumer: string, packageName
   const destination = join(consumer, 'node_modules', packageName)
   expect(existsSync(source), packageName).toBe(true)
   mkdirSync(dirname(destination), { recursive: true })
-  symlinkSync(realpathSync(source), destination)
+  symlinkSync(realpathSync(source), destination, 'junction')
   expect(lstatSync(destination).isSymbolicLink(), packageName).toBe(true)
 }
 
@@ -188,19 +153,12 @@ describe('navide Mini-IDE public package boundary', () => {
       // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
       // resolves inputs to the long form, so a short root puts index.html outside it.
       const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-mini-ide-external-')))
-      const artifacts = join(temporaryRoot, 'artifacts')
       const externalProject = join(temporaryRoot, 'consumer')
-      mkdirSync(artifacts)
       mkdirSync(externalProject)
       try {
-        runPnpmOrThrow(['run', 'build:public-packages'], repositoryRoot)
-
-        const packageTarballs: Record<string, string> = {}
-        for (const [key, packageDirectory] of Object.entries(packageRoots)) {
-          const packageName = (JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as { name: string }).name
-          const result = runPnpmOrThrow(['pack', '--pack-destination', artifacts], packageDirectory)
-          packageTarballs[packageName] = packedPath(result, artifacts, key)
-        }
+        // Shared immutable fixtures avoid deleting another worker's dists.
+        const packageTarballs = Object.fromEntries(Object.entries(inject('publicPackageTarballs'))
+          .filter(([name]) => name !== '@navide/navide-git'))
         expect(Object.keys(packageTarballs).sort()).toEqual([
           '@navide/plugin-contracts',
           '@navide/plugin-sdk',

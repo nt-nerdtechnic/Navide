@@ -37,6 +37,7 @@ The root [README](../../README.md) introduces the product and current distributi
 | [Contributing](../../CONTRIBUTING.md) | Set up a development environment and submit changes |
 | [Architecture](architecture.md) | Understand process boundaries, state ownership, and major services |
 | [Adding a CLI vendor](../adding-a-cli-vendor.md) | Add an AI coding CLI: the two spec files, registration, and the checks CI enforces |
+| [CI and CLI regressions](ci-and-cli-regression.md) | Run deterministic regression suites, maintain vendor contracts, and understand native platform guarantees |
 | [CLI extension guide](cli-extension-guide.md) | Per-vendor integration records: install routes, resume syntax, session storage formats |
 | [CLI vendor matrix](cli-vendor-matrix.md) | See every shipped CLI, the command it runs, and the capabilities its spec declares |
 | [Plugin development](plugin-development.md) | Build a frontend view plugin or a backend plugin, then package and sign it |

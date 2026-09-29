@@ -1,8 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, relative, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import type { TestProject } from 'vitest/node'
 
 // Vitest globalSetup. The tests that consume the public packages — as packed
@@ -23,7 +22,6 @@ declare module 'vitest' {
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const builtPackages = ['packages/plugin-contracts', 'packages/plugin-sdk', 'packages/plugin-ui']
 const packedPackages = [...builtPackages, 'plugins/navide-git']
-const stampFile = join(repositoryRoot, 'node_modules/.cache/navide-public-packages.stamp')
 
 function packageManager(): { command: string; prefix: string[] } {
   // `pnpm` alone is a .cmd shim on Windows that execFile cannot start; under
@@ -62,41 +60,25 @@ function pnpm(args: string[], cwd: string): string {
   })
 }
 
-function inputDigest(): string {
-  const hash = createHash('sha256')
-  const add = (path: string): void => {
-    hash.update(`${relative(repositoryRoot, path)}\0`).update(readFileSync(path)).update('\0')
-  }
-  const walk = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.name === 'dist' || entry.name === 'node_modules') continue
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) walk(path)
-      else if (entry.isFile()) add(path)
-    }
-  }
-  for (const packageDirectory of builtPackages) walk(join(repositoryRoot, packageDirectory))
-  for (const file of ['package.json', 'pnpm-lock.yaml', 'tsconfig.web.json']) add(join(repositoryRoot, file))
-  return hash.digest('hex')
-}
-
-function distsPresent(): boolean {
-  return builtPackages.every((packageDirectory) => {
-    const dist = join(repositoryRoot, packageDirectory, 'dist')
-    return existsSync(dist) && readdirSync(dist).length > 0
-  })
+export function missingArtifactInputs(root: string): string[] {
+  return [
+    ...builtPackages.map((directory) => `${directory}/dist/index.js`),
+    'packages/plugin-ui/dist/editor/index.js',
+    'dist-plugins/navide-mini-ide/manifest.json',
+    'dist-plugins/navide-mini-ide/frontend/window/index.html',
+  ].filter((file) => !existsSync(join(root, file)))
 }
 
 export default function setup(project: TestProject): () => void {
-  // Skipping an unchanged build keeps a single-file `pnpm test:run` fast; the
-  // stamp is removed first so an interrupted build is never trusted.
-  const digest = inputDigest()
-  const stamp = existsSync(stampFile) ? readFileSync(stampFile, 'utf8') : ''
-  if (stamp !== digest || !distsPresent()) {
-    rmSync(stampFile, { force: true })
+  // CI has just run the unconditional application build in this same job.
+  // Reuse those outputs without trusting a cache or rebuilding under Vitest's
+  // NODE_ENV. A standalone artifact test prepares only the inputs it needs.
+  if (process.env.NAVIDE_TEST_ARTIFACTS_PREBUILT === '1') {
+    const missing = missingArtifactInputs(repositoryRoot)
+    if (missing.length) throw new Error(`Prepared artifact inputs missing: ${missing.join(', ')}`)
+  } else {
     pnpm(['run', 'build:public-packages'], repositoryRoot)
-    mkdirSync(dirname(stampFile), { recursive: true })
-    writeFileSync(stampFile, digest)
+    pnpm(['run', 'build:mini-ide:v2'], repositoryRoot)
   }
 
   // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); tools

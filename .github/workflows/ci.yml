@@ -101,302 +101,191 @@ jobs:
             exit 1
           fi
 
+  static:
+    name: Static checks and test inventory
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+      - name: Typecheck every application and plugin surface
+        run: pnpm typecheck
+      - name: Backend correctness lint
+        run: uv --project backend run --locked ruff check backend
+      - name: Verify collection ownership and required gate
+        run: pnpm test:infrastructure --reporter=default --reporter=junit --outputFile.junit=test-results/ci/infrastructure.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: static-diagnostics
+          path: test-results/ci/
+          retention-days: 7
+
   frontend:
-    name: Frontend checks and build (macOS)
-    # Keep the desktop checks on the release platform.
-    runs-on: macos-14
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-          cache-suffix: frontend
-
-      - name: Install dependencies
-        run: |
-          pnpm install --frozen-lockfile
-          uv --project backend sync --locked
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Frontend tests
-        run: pnpm test:run
-
-      - name: Build application and bundled plugins
-        # The mini-IDE bundle (Monaco in one rollup graph) peaks above the
-        # runner's ~2GB default V8 heap and aborts with exit 134. Same cap the
-        # release build already uses.
-        env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
-
-  frontend-linux:
-    name: Frontend checks and build (Linux)
-    # Same gates as the macOS job, run where process.platform is "linux": the
-    # window controls, external terminal, login-shell PATH and menu code all
-    # branch on the platform, and vitest only exercises the Linux branches
-    # when the host actually is Linux. Ubuntu 22.04 to match backend-linux.
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-          cache-suffix: frontend-linux
-
-      - name: Install dependencies
-        run: |
-          pnpm install --frozen-lockfile
-          uv --project backend sync --locked
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Frontend tests
-        run: pnpm test:run
-
-      - name: Build application and bundled plugins
-        env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
-
-  frontend-windows:
-    name: Frontend checks and build (Windows)
-    # The same typecheck / vitest / build as the macOS and Linux jobs, run
-    # where process.platform is "win32".
-    runs-on: windows-latest
-    timeout-minutes: 40
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-          cache-suffix: frontend-windows
-
-      - name: Install dependencies
-        run: |
-          pnpm install --frozen-lockfile
-          uv --project backend sync --locked
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Frontend tests
-        run: pnpm test:run
-
-      - name: Build application and bundled plugins
-        env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
-
-  backend:
-    name: Backend checks (macOS)
-    # Backend tests exercise macOS PTY/zsh behavior.
-    runs-on: macos-14
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-          cache-suffix: backend
-
-      - name: Install dependencies
-        run: uv --project backend sync --locked
-
-      - name: Lint backend (event-loop guardrail)
-        run: uv --project backend run --locked ruff check backend
-
-      - name: Backend tests
-        run: uv --project backend run --locked pytest backend/tests
-
-  stt-sidecar:
-    name: Speech-to-text sidecar tests
-    # Unit tests for native/navide-stt; the model-backed integration test
-    # skips itself (no NAVIDE_STT_TEST_MODEL here). macOS exercises the Metal
-    # build the release ships.
-    runs-on: macos-14
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native/navide-stt
-
-      - name: Cargo tests
-        run: cargo test --locked --manifest-path native/navide-stt/Cargo.toml
-
-  backend-linux:
-    name: Backend checks (Linux)
-    # The macOS job above is the release platform; this one is what stops the
-    # Linux port from rotting between releases. Ubuntu 22.04 rather than
-    # latest, because PyInstaller links against the build machine's glibc and
-    # the oldest runner we support sets the floor for everyone.
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-          cache-suffix: backend-linux
-
-      - name: Install dependencies
-        run: uv --project backend sync --locked
-
-      - name: Lint backend (event-loop guardrail)
-        run: uv --project backend run --locked ruff check backend
-
-      - name: Backend tests
-        run: uv --project backend run --locked pytest backend/tests
-
-      # The suite runs without a terminal, so it never proves the app can open
-      # one. This does: a real PTY, a real /proc read, and a real /health.
-      - name: Linux runtime smoke test
-        run: uv --project backend run --locked python backend/linux_smoke.py
-
-  backend-windows:
-    name: Backend checks (Windows, shard ${{ matrix.shard }}/2)
-    # Same suite as the macOS and Linux jobs, where os.name is "nt". Import
-    # first: until the POSIX-only modules sit behind osplat the app does not
-    # even load here, and that is a clearer signal than a wall of collection
-    # errors. The suite does not run as a plain step: with pytest attached to
-    # the step's console and pipe the step never ended and the job timeout
-    # discarded the log (verified again after the suite was green detached),
-    # so backend/ci_windows_tests.py runs it detached under a Job Object.
-    # Two shards, round-robin over the collected tests: one runner took
-    # 1109-1880 s for the whole ~8400-test suite on 2026-09-25 depending on
-    # the host, so a single job no longer fit its 30-minute cap reliably.
+    name: Frontend tests (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
-    runs-on: windows-latest
-    timeout-minutes: 45
-
+        include:
+          - platform: macOS
+            runner: macos-14
+          - platform: Linux
+            runner: ubuntu-22.04
+          - platform: Windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      # backend-ws-token-parity.test.ts deliberately checks the Python seam.
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
-          cache-suffix: backend-windows
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+      - name: Complete unit and CLI suites
+        env:
+          NAVIDE_CLI_COVERAGE_REQUIRED: '1'
+        run: pnpm test:frontend --reporter=default --reporter=./tests/cli/contractReporter.ts --reporter=junit --reporter=json --outputFile.junit=test-results/ci/frontend.xml --outputFile.json=test-results/ci/frontend.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: frontend-${{ matrix.platform }}-diagnostics
+          path: test-results/ci/
+          retention-days: 7
 
-      - name: Install dependencies
+  build-artifacts:
+    name: Build and artifact contracts (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            runner: macos-14
+          - platform: Linux
+            runner: ubuntu-22.04
+          - platform: Windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-go@v7
+        if: runner.os == 'macOS'
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+      - name: Build application and all bundled plugins once
+        run: pnpm build
+      # Consumes this job's output. The macOS invocation additionally builds
+      # the test-only Plans fixtures and exercises the production backend.
+      - name: Complete artifact suite and packaged Plans contracts
+        run: pnpm test:artifacts:ci --reporter=default --reporter=junit --reporter=json --outputFile.junit=test-results/ci/artifacts.xml --outputFile.json=test-results/ci/artifacts.json
+      - name: Verify production Plans excludes fixtures
+        run: node scripts/verify-plans-production.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: artifacts-${{ matrix.platform }}-diagnostics
+          path: test-results/ci/
+          retention-days: 7
+
+  backend:
+    name: Backend tests (${{ matrix.platform }}, ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            runner: macos-14
+            shard: 1/1
+            artifact: macos
+          - platform: Linux
+            runner: ubuntu-22.04
+            shard: 1/1
+            artifact: linux
+          - platform: Windows
+            runner: windows-latest
+            shard: 1/2
+            artifact: windows-1
+          - platform: Windows
+            runner: windows-latest
+            shard: 2/2
+            artifact: windows-2
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install locked dependencies
         run: uv --project backend sync --locked
-
-      - name: Lint backend
-        run: uv --project backend run --locked ruff check backend
-
+      - name: Complete backend suite
+        if: runner.os != 'Windows'
+        run: uv --project backend run --locked pytest backend/tests --junitxml=test-results/ci/backend.xml --collection-report=test-results/ci/backend-collection.json --durations=30
+      - name: Linux runtime capabilities
+        if: runner.os == 'Linux'
+        run: uv --project backend run --locked python backend/linux_smoke.py
       - name: Backend imports on Windows
+        if: runner.os == 'Windows'
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
-
-      - name: Start the backend tests
-        # --detach starts a copy of the script with a log file as its only
-        # inherited handle and returns at once; the copy joins a kill-on-close
-        # Job Object, runs pytest, reports every minute and writes the exit
-        # code to ci-windows-tests.done.
+      # Preserve detached supervision: watchdog threads attached to the Actions
+      # console previously hung the step even after pytest had exited.
+      - name: Start detached Windows tests
+        if: runner.os == 'Windows'
         shell: pwsh
-        run: backend/.venv/Scripts/python.exe backend/ci_windows_tests.py --detach --shard ${{ matrix.shard }}/2
-
-      - name: Backend tests
-        # pwsh, not bash: Start-Sleep is in-process, so this step has no
-        # children at all and ends when the marker appears or at the cap.
+        run: backend/.venv/Scripts/python.exe backend/ci_windows_tests.py --detach --shard ${{ matrix.shard }} --junitxml test-results/ci/backend.xml --collection-report test-results/ci/backend-collection.json
+      - name: Wait for Windows verdict
+        if: runner.os == 'Windows'
         shell: pwsh
         timeout-minutes: 35
         run: |
@@ -409,145 +298,76 @@ jobs:
               if ($lines.Count -gt $seen) { $lines[$seen..($lines.Count - 1)] | ForEach-Object { Write-Host $_ }; $seen = $lines.Count }
             }
           }
-          Write-Host "--- full runner log:"
-          if (Test-Path ci-windows-tests.log) { Get-Content ci-windows-tests.log } else { Write-Host "(no ci-windows-tests.log)" }
-          if (-not (Test-Path ci-windows-tests.done)) { Write-Host "--- runner still going at the cap"; exit 1 }
+          if (Test-Path ci-windows-tests.log) { Get-Content ci-windows-tests.log }
+          if (-not (Test-Path ci-windows-tests.done)) { Write-Host 'Runner did not finish before deadline'; exit 1 }
           exit [int](Get-Content ci-windows-tests.done)
-
-      - name: Report the backend test log
-        # The job's log blob is uploaded when the job ends, so a hang in any
-        # step loses every step's output. This step must not hang either:
-        # pwsh, no children. Diagnostics only, and never the job's verdict:
-        # after a run that spawns thousands of processes the runner has
-        # failed to start pwsh at all (0xC0000142, DLL init), which must not
-        # turn a suite that passed into a red job.
+      - uses: actions/upload-artifact@v7
         if: always()
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          Write-Host "--- processes still around:"
-          Get-Process | Where-Object { $_.ProcessName -match 'python|node|winpty|conhost|OpenConsole|git|uv|pytest|cmd|powershell|pwsh|claude|codex' } | ForEach-Object { Write-Host ("{0} ({1})" -f $_.ProcessName, $_.Id) }
-          if (Test-Path pytest.log) {
-            $lines = @(Get-Content pytest.log)
-            Write-Host ("--- results so far: {0}" -f @($lines | Where-Object { $_ -match ' (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)' }).Count)
-            Write-Host "--- last 200 lines of pytest.log:"
-            $lines | Select-Object -Last 200 | ForEach-Object { Write-Host $_ }
-            $lines | Where-Object { $_ -match '^(FAILED|ERROR) ' } | Select-Object -First 100 | ForEach-Object { Write-Host $_ }
-          } else { Write-Host "(no pytest.log)" }
+        with:
+          name: backend-${{ matrix.artifact }}-diagnostics
+          path: |
+            test-results/ci/
+            pytest.log
+            ci-windows-tests.log
+            ci-windows-tests.done
+          retention-days: 7
 
-  plans:
-    name: Packaged Plans checks (macOS)
+  stt-sidecar:
+    name: Speech-to-text sidecar tests
     runs-on: macos-14
-    timeout-minutes: 20
-
+    timeout-minutes: 30
     steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.27.x'
-          cache: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-          cache-suffix: plans
-
-      - name: Install dependencies
-        # Electron 44 has no postinstall: its index.js downloads and unzips
-        # the binary on first require. The gate's parallel vitest workers
-        # would each do that into the same dist/ and collide (os error 17),
-        # so fetch it once here.
-        run: |
-          pnpm install --frozen-lockfile
-          node node_modules/electron/install.js
-          uv --project backend sync --locked
-
-      - name: Packaged Plans integration gate
-        run: pnpm run test:packaged-plans
-
-      - name: Verify production Plans bundle excludes fixture
-        run: |
-          pnpm run build:plans
-          node scripts/verify-plans-production.mjs
+          workspaces: native/navide-stt
+      # The model-backed transcribe test is explicitly ignored by default.
+      - name: Cargo tests
+        run: cargo test --locked --manifest-path native/navide-stt/Cargo.toml
 
   registry:
     name: Marketplace registry and contract checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: marketplace/registry/uv.lock
           cache-suffix: registry
-
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: uv --project marketplace/registry sync --locked
-
       - name: Lint marketplace registry
         run: uv --project marketplace/registry run --locked ruff check marketplace/registry/registry marketplace/registry/tests
-
       - name: Marketplace registry tests
-        run: uv --project marketplace/registry run --locked pytest marketplace/registry/tests
-
+        run: uv --project marketplace/registry run --locked pytest marketplace/registry/tests --junitxml=test-results/ci/registry.xml --durations=20
       - name: Plugin contract fixtures
         run: uv --project marketplace/registry run --locked python docs/plugin-contracts/validate-fixtures.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: registry-diagnostics
+          path: test-results/ci/
+          retention-days: 7
 
   lint-and-test:
-    # Preserve the existing required-check name for branch protection.
+    # Stable required-check name; missing, cancelled and skipped checks fail.
     name: Lint and test
     if: ${{ always() }}
-    needs: [frontend, frontend-linux, frontend-windows, backend, backend-linux, backend-windows, plans, registry, dependency-audit]
+    needs: [static, frontend, build-artifacts, backend, registry, dependency-audit, stt-sidecar]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - name: Require every check to succeed
         env:
-          FRONTEND_RESULT: ${{ needs.frontend.result }}
-          FRONTEND_LINUX_RESULT: ${{ needs['frontend-linux'].result }}
-          FRONTEND_WINDOWS_RESULT: ${{ needs['frontend-windows'].result }}
-          BACKEND_RESULT: ${{ needs.backend.result }}
-          BACKEND_LINUX_RESULT: ${{ needs['backend-linux'].result }}
-          BACKEND_WINDOWS_RESULT: ${{ needs['backend-windows'].result }}
-          PLANS_RESULT: ${{ needs.plans.result }}
-          REGISTRY_RESULT: ${{ needs.registry.result }}
-          AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
-        run: |
-          test "$FRONTEND_RESULT" = success
-          test "$FRONTEND_LINUX_RESULT" = success
-          test "$FRONTEND_WINDOWS_RESULT" = success
-          test "$BACKEND_RESULT" = success
-          test "$BACKEND_LINUX_RESULT" = success
-          test "$BACKEND_WINDOWS_RESULT" = success
-          test "$PLANS_RESULT" = success
-          test "$REGISTRY_RESULT" = success
-          test "$AUDIT_RESULT" = success
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/check-ci-results.mjs

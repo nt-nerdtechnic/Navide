@@ -1,0 +1,161 @@
+{
+  "vendor": "muse",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_muse.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.local/share/muse/sessions/2026/09/29/12345678-1234-4234-8234-123456789abc/session.jsonl",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "schema_version": 1,
+            "id": "env-1",
+            "stream": {
+              "kind": "session",
+              "id": "12345678-1234-4234-8234-123456789abc"
+            },
+            "sequence": 1,
+            "recorded_at": 1786491820000001,
+            "record_type": "event",
+            "payload_type": "runtime.session.metadata",
+            "payload": {
+              "kind": "metadata",
+              "record": {
+                "workspace_root": "${WORKSPACE}"
+              }
+            }
+          },
+          {
+            "schema_version": 1,
+            "id": "env-2",
+            "stream": {
+              "kind": "session",
+              "id": "12345678-1234-4234-8234-123456789abc"
+            },
+            "sequence": 2,
+            "recorded_at": 1786491820000002,
+            "record_type": "event",
+            "payload_type": "runtime.command_intake.received",
+            "payload": {
+              "kind": "command_intake",
+              "record": {
+                "kind": "received",
+                "command_id": "command-not-session",
+                "command": {
+                  "kind": "turn_submit",
+                  "prompt": "${MARKER} work"
+                }
+              }
+            }
+          }
+        ],
+        "append": false
+      }
+    ],
+    "response": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "schema_version": 1,
+            "id": "env-3",
+            "stream": {
+              "kind": "session",
+              "id": "12345678-1234-4234-8234-123456789abc"
+            },
+            "sequence": 3,
+            "recorded_at": 1786491820000003,
+            "record_type": "event",
+            "payload_type": "runtime.session",
+            "payload": {
+              "kind": "run",
+              "run_id": "command-not-session",
+              "event": {
+                "kind": "assistant_message_committed",
+                "message_id": "a1",
+                "text": "Regression reply: café 完成\n---MSG-END---"
+              }
+            }
+          },
+          {
+            "schema_version": 1,
+            "id": "env-4",
+            "stream": {
+              "kind": "session",
+              "id": "12345678-1234-4234-8234-123456789abc"
+            },
+            "sequence": 4,
+            "recorded_at": 1786491820000004,
+            "record_type": "event",
+            "payload_type": "runtime.session",
+            "payload": {
+              "kind": "run",
+              "run_id": "command-not-session",
+              "event": {
+                "kind": "goal_usage_attribution",
+                "record": {
+                  "usage_id": "usage1",
+                  "quantity": {
+                    "input_tokens": 12,
+                    "output_tokens": 3,
+                    "cached_tokens": 2,
+                    "reasoning_tokens": 1
+                  },
+                  "owner": {
+                    "requester_kind": "main",
+                    "session_id": "command-not-session"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "append": true
+      }
+    ],
+    "complete": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "schema_version": 1,
+            "id": "env-5",
+            "stream": {
+              "kind": "session",
+              "id": "12345678-1234-4234-8234-123456789abc"
+            },
+            "sequence": 5,
+            "recorded_at": 1786491820000005,
+            "record_type": "event",
+            "payload_type": "runtime.session",
+            "payload": {
+              "kind": "run",
+              "run_id": "command-not-session",
+              "event": {
+                "kind": "terminal",
+                "terminal": "completed"
+              }
+            }
+          }
+        ],
+        "append": true
+      }
+    ]
+  },
+  "binary": "muse",
+  "resumeCommand": "muse resume 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": []
+}

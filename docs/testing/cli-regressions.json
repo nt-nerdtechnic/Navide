@@ -1,0 +1,967 @@
+{
+  "schema_version": 1,
+  "description": "Historical CLI reliability regressions. Active backend nodeids are selected and validated against real pytest collection and reports. A base nodeid covers all of its parametrizations. Capability exclusions are explicit; source-only, superseded and manual evidence does not count as execution.",
+  "regressions": [
+    {
+      "id": "shared.tty-signal-inheritance",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "0f99c0ed",
+        "c0eff2e8"
+      ],
+      "guarantee": "Pane children own a controlling terminal; Ctrl-C raises SIGINT even when the backend inherited SIGINT ignored.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminals_ctty.py::test_child_owns_a_controlling_terminal",
+          "requires": [
+            "posix_pty"
+          ]
+        },
+        {
+          "nodeid": "tests/test_terminals_ctty.py::test_ctrl_c_raises_sigint_in_a_line_mode_child",
+          "requires": [
+            "posix_pty"
+          ]
+        },
+        {
+          "nodeid": "tests/test_terminals_ctty.py::test_kill_reaches_the_cli_in_its_own_foreground_group",
+          "requires": [
+            "posix_pty"
+          ]
+        }
+      ],
+      "provenance": {
+        "kind": "native-os",
+        "sources": [
+          "backend/tests/test_terminals_ctty.py",
+          "backend/agent_team_backend/osplat/_posix.py"
+        ],
+        "notes": "Small local Python/shell children use the shipped PTY spawn path; no vendor executable."
+      },
+      "limitations": [
+        "POSIX signal semantics do not establish Windows console-control behavior."
+      ]
+    },
+    {
+      "id": "shared.process-tree-cleanup",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "4f990891",
+        "dbcba5f3",
+        "da7a7a88"
+      ],
+      "guarantee": "Explicit close and natural child exit reap verified breakaway descendants without killing recycled or unverifiable PIDs.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminals_breakaway_kill.py::test_breakaway_grandchild_is_reaped_end_to_end",
+          "requires": [
+            "posix_pty"
+          ]
+        },
+        {
+          "nodeid": "tests/test_terminals_breakaway_kill.py::test_kill_breakaway_spares_a_recycled_or_unverifiable_pid",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_exit_orphan_reap.py::test_exit_orphan_reaped_end_to_end",
+          "requires": [
+            "posix_pty"
+          ]
+        },
+        {
+          "nodeid": "tests/test_terminals_exit_orphan_reap.py::test_reap_never_kills_an_unverifiable_descendant",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "native-os",
+        "sources": [
+          "backend/tests/test_terminals_breakaway_kill.py",
+          "backend/tests/test_terminals_exit_orphan_reap.py"
+        ],
+        "notes": "The shared setsid_grandchild fixture creates a real breakaway child; deterministic process snapshots cover PID reuse."
+      },
+      "limitations": [
+        "Native breakaway coverage requires setsid; Windows job semantics are recorded separately."
+      ]
+    },
+    {
+      "id": "shared.replacement-reap",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "3833f9be",
+        "da7a7a88",
+        "eb2e55e8"
+      ],
+      "guarantee": "A replacement cannot start after its predecessor's reap times out and cannot take another live window's pane.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminal_resume_dedup.py::test_resume_spawn_refuses_when_the_reap_times_out",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminal_replace_dedup.py::test_replaces_refuses_to_spawn_when_the_reap_times_out",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminal_replace_dedup.py::test_replaces_refuses_another_windows_live_pane",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_terminal_resume_dedup.py",
+          "backend/tests/test_terminal_replace_dedup.py"
+        ],
+        "notes": "Real terminal.create handlers with a controlled terminal-service boundary exercise refusal and ownership ordering."
+      },
+      "limitations": [
+        "These cases establish handler ordering; native process death is covered by shared.process-tree-cleanup."
+      ]
+    },
+    {
+      "id": "shared.reap-promise",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "eb2e55e8",
+        "c2fed6b5"
+      ],
+      "guarantee": "The reap promise completes independently of a slow descendant sweep, releases failed tasks, and reports an unfinished reap as false.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminals_graceful_shutdown.py::test_the_breakaway_ps_sweep_runs_outside_the_reap_wait",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_graceful_shutdown.py::test_a_reap_that_never_completes_still_reports_false",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_graceful_shutdown.py::test_group_of_raising_does_not_strand_the_session",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_terminals_graceful_shutdown.py"
+        ],
+        "notes": "Controlled process-tree failures and blocked snapshots exercise the real TerminalService reap orchestration."
+      },
+      "limitations": []
+    },
+    {
+      "id": "shared.windows-process-identity",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "316b9db3",
+        "b523ddfd",
+        "c2fed6b5"
+      ],
+      "guarantee": "ConPTY output EOF does not close a live child; recycled PIDs do not inherit old jobs; process snapshots read the parent table once.",
+      "cases": [
+        {
+          "nodeid": "tests/test_osplat_windows_terminal.py::TestHandle::test_pump_eof_under_a_live_child_waits_for_the_watcher",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_osplat_windows_terminal.py::TestHandle::test_close_of_an_exited_pane_spares_a_successor_on_the_same_pid",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_osplat_windows_terminal.py::TestIdentity::test_snapshot_reads_the_ppid_table_once_not_once_per_process",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_osplat_windows_terminal.py::TestIdentity::test_snapshot_ignores_process_iter_cache_of_a_recycled_pid",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_osplat_windows_terminal.py"
+        ],
+        "notes": "Stubbed Win32 bindings exercise the actual Windows handle/process-tree implementation on every host."
+      },
+      "limitations": []
+    },
+    {
+      "id": "shared.windows-native-terminal",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "83a39039",
+        "316b9db3"
+      ],
+      "guarantee": "A real ConPTY emits child output, signals EOF after exit, and closes its live process tree.",
+      "cases": [
+        {
+          "nodeid": "tests/test_windows_conpty_real.py::test_child_output_reaches_the_reader_callback",
+          "requires": [
+            "windows_conpty"
+          ]
+        },
+        {
+          "nodeid": "tests/test_windows_conpty_real.py::test_a_child_that_exits_reaches_eof",
+          "requires": [
+            "windows_conpty"
+          ]
+        },
+        {
+          "nodeid": "tests/test_windows_conpty_real.py::test_close_kills_the_whole_tree_of_a_running_child",
+          "requires": [
+            "windows_conpty"
+          ]
+        }
+      ],
+      "provenance": {
+        "kind": "native-os",
+        "sources": [
+          "backend/tests/test_windows_conpty_real.py",
+          "backend/agent_team_backend/osplat/_windows.py"
+        ],
+        "notes": "Local Python children run through the shipped Windows terminal seam and Job Object."
+      },
+      "limitations": [
+        "Must run on Windows with pywinpty; source tests do not prove packaged OpenConsole.exe is present."
+      ]
+    },
+    {
+      "id": "shared.io-backpressure",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "5482773c",
+        "df0c34d9"
+      ],
+      "guarantee": "Blocked input is reported with pending bytes; stalled output is bounded; resize barriers preserve ordered frames.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminals_input_blocked_events.py::test_write_reports_pending_bytes_until_the_writer_callback_drains",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_reader_pause_bound.py::test_reader_resumes_within_the_bound_while_emit_never_resolves",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_reader_pause_bound.py::test_stalled_drain_drops_oldest_output_at_cap_and_warns_once",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_reader_pause_bound.py::test_overlapping_resize_barriers_do_not_interleave_frames",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_e2e_input.py::test_text_then_enter_preserve_order",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_terminals_input_blocked_events.py",
+          "backend/tests/test_terminals_reader_pause_bound.py",
+          "backend/tests/test_terminals_e2e_input.py"
+        ],
+        "notes": "Controlled emit/write scheduling covers failures; a real local Python PTY child verifies content-before-Enter ordering."
+      },
+      "limitations": [
+        "Does not prove a vendor TUI submitted the input; acknowledgement and submission evidence remain distinct."
+      ]
+    },
+    {
+      "id": "shared.create-before-baseline",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "35bbf596"
+      ],
+      "guarantee": "terminal.create acknowledges a live PTY before a slow attribution scan finishes; a dead socket rolls back without reviving registration.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminal_create_ack_before_baseline.py::test_codex_create_acks_while_the_baseline_scan_is_still_running",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminal_create_ack_before_baseline.py::test_a_dead_socket_rolls_back_only_after_the_scan_and_leaves_no_registration",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_terminal_create_ack_before_baseline.py"
+        ],
+        "notes": "A gated reader scan reproduces issue #118 using the real create handler and Attribution."
+      },
+      "limitations": []
+    },
+    {
+      "id": "shared.websocket-disconnect-lock",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "4a4e4610"
+      ],
+      "guarantee": "Concurrent producers send to a closed WebSocket at most once, and disconnect cancels in-flight handlers.",
+      "cases": [
+        {
+          "nodeid": "tests/test_ws_dead_session.py::test_concurrent_sends_on_closed_socket_hit_it_once",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_ws_dead_session.py::test_disconnect_cancels_inflight_handler_tasks",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_ws_dead_session.py"
+        ],
+        "notes": "The yielding socket reproduces producers that passed the pre-lock dead check; a synchronous fake would miss the race."
+      },
+      "limitations": [
+        "Full reconnect/reattach I/O is owned by the new shared runtime harness."
+      ]
+    },
+    {
+      "id": "shared.session-attribution",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "d5219a14",
+        "a3f69ba8",
+        "501b2327"
+      ],
+      "guarantee": "Ambiguous same-workspace panes remain unbound; detected identity survives missing renderer records and later registration.",
+      "cases": [
+        {
+          "nodeid": "tests/test_attribution.py::test_two_unclaimed_panes_same_workspace_claim_nothing",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_attribution.py::test_rolled_session_id_never_claims_a_pinned_sibling",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_detected_session_persistence.py::test_detection_survives_missing_renderer_and_later_spawn",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_detected_session_persistence.py::test_history_empty_snapshot_keeps_detected_identity",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_attribution.py",
+          "backend/tests/test_detected_session_persistence.py"
+        ],
+        "notes": "Synthetic session files and isolated application storage exercise real attribution/persistence."
+      },
+      "limitations": []
+    },
+    {
+      "id": "shared.transcript-checkpoints",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "eb30fd64",
+        "a348570d"
+      ],
+      "guarantee": "Replaced files with reused inodes restart safely; partial writes retain progress; existing cold transcripts retain replay suppression.",
+      "cases": [
+        {
+          "nodeid": "tests/test_read_jsonl_tail.py::test_replacement_on_a_reused_inode_restarts_from_zero",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_activity_high_water.py::test_partial_write_does_not_re_emit_once_the_line_lands",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_watcher_activity_seen_sweep.py::test_cold_file_keeps_the_position_a_resume_reads",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_read_jsonl_tail.py",
+          "backend/tests/test_activity_high_water.py",
+          "backend/tests/test_watcher_activity_seen_sweep.py"
+        ],
+        "notes": "Temporary files recreate partial UTF-8 and checkpoint anchors; inode reuse is explicitly modeled."
+      },
+      "limitations": [
+        "Vendor-specific SQLite and Markdown checkpoints have separate entries."
+      ]
+    },
+    {
+      "id": "shared.watcher-recovery",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "2a2ec20f",
+        "dd398996"
+      ],
+      "guarantee": "A reader exception does not stop rescan, and watch roots created after startup are subscribed.",
+      "cases": [
+        {
+          "nodeid": "tests/test_watcher_resilience.py::test_rescan_loop_survives_reader_exception",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_watcher_resilience.py::test_rescan_cycle_subscribes_late_created_watch_dirs",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_watcher_resilience.py"
+        ],
+        "notes": "Temporary late-created watch roots and an explicitly failing reader drive the real watcher."
+      },
+      "limitations": []
+    },
+    {
+      "id": "shared.registry-data-directory",
+      "owner": "shared",
+      "status": "active",
+      "commits": [
+        "2e7017ea",
+        "b31ecd78"
+      ],
+      "guarantee": "Queued and inline PTY registry jobs persist into the service's original data directory.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminals_registry_data_dir.py::test_a_late_register_writes_to_the_data_dir_it_was_queued_under",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_registry_data_dir.py::test_the_inline_register_fallback_writes_to_the_services_data_dir",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminals_registry_data_dir.py::test_the_inline_failed_create_unregister_uses_the_services_data_dir",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_terminals_registry_data_dir.py"
+        ],
+        "notes": "A gated worker and two temporary SQLite stores expose ambient data-directory races."
+      },
+      "limitations": []
+    },
+    {
+      "id": "codex.turn-boundaries",
+      "owner": "codex",
+      "status": "active",
+      "commits": [
+        "19459bc8"
+      ],
+      "guarantee": "Codex 0.155 item_completed user prompts name turns; token_count never finishes a tool-running turn; task_complete/turn_aborted do.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_codex.py::test_parse_activity_item_completed_user_message_carries_prompt_text",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_codex.py::test_parse_activity_turn_ends_at_task_complete_not_token_count",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_codex.py::test_parse_activity_last_text_persists_across_poll_batches",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_codex.py",
+          "backend/agent_team_backend/cli_vendors/codex.py"
+        ],
+        "notes": "JSONL fixture models the Codex 0.155 log shape documented in the fix; parser runs unchanged."
+      },
+      "limitations": [
+        "Future vendor log format changes still require manual smoke and fixture refresh."
+      ]
+    },
+    {
+      "id": "codex.launch-attribution",
+      "owner": "codex",
+      "status": "active",
+      "commits": [
+        "501b2327",
+        "3911e831"
+      ],
+      "guarantee": "Delayed shared rollouts bind only the authenticated current launch; siblings and subagents cannot steal identity; no bootstrap prompt is needed.",
+      "cases": [
+        {
+          "nodeid": "tests/test_codex_session_start_flow.py::test_shared_rollouts_wait_for_flush_then_bind_exact_pane_without_marker",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_codex_session_start_flow.py::test_shared_rollout_requires_backend_auth_and_a_current_launch",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_codex_session_start_flow.py::test_authenticated_sibling_cannot_steal_a_confirmed_shared_session",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_codex_marker_free_attribution.py::test_marker_free_isolated_homes_bind_same_cwd_panes_after_delayed_meta",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_codex_session_start_flow.py",
+          "backend/tests/test_codex_marker_free_attribution.py"
+        ],
+        "notes": "Synthetic rollout headers and authenticated hook payloads exercise the actual hook/attribution path."
+      },
+      "limitations": [
+        "Native hook shell execution has its own existing test; this entry does not require curl or vendor installation."
+      ]
+    },
+    {
+      "id": "codex.hook-trust-fallback",
+      "owner": "codex",
+      "status": "active",
+      "commits": [
+        "d81624d4"
+      ],
+      "guarantee": "After the Hooks need review screen is reported, hook injection stops without bypassing Codex trust.",
+      "cases": [
+        {
+          "nodeid": "tests/test_codex_session_hooks.py::test_a_reported_trust_screen_stops_the_injection_entirely",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_codex_session_hooks.py::test_the_fallback_never_asks_codex_to_bypass_its_own_trust",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_codex_session_hooks.py"
+        ],
+        "notes": "Temporary machine verdict storage exercises command wiring."
+      },
+      "limitations": []
+    },
+    {
+      "id": "codex.home-reclamation",
+      "owner": "codex",
+      "status": "active",
+      "commits": [
+        "7afa41ed",
+        "253861f4"
+      ],
+      "guarantee": "Pane-home cleanup preserves a home still referenced by a rollout, Codex state database, or running process.",
+      "cases": [
+        {
+          "nodeid": "tests/test_codex_home_reclaim.py::test_reclaim_keeps_a_mirrored_home_the_state_db_still_keys_on",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_codex_home_reclaim.py::test_reclaim_keeps_a_mirrored_home_when_the_state_db_is_unreadable",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_codex_home_reclaim.py::test_sweep_orphans_skips_a_home_a_running_codex_uses",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_codex_home_reclaim.py"
+        ],
+        "notes": "Temporary SQLite state and homes plus controlled process identities reproduce retained-reference hazards."
+      },
+      "limitations": []
+    },
+    {
+      "id": "claude.graceful-exit",
+      "owner": "claude",
+      "status": "active",
+      "commits": [
+        "aa4b01f1",
+        "eb2e55e8"
+      ],
+      "guarantee": "Claude's declared shutdown spec sends SIGTERM before force termination, including explicit force requests.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminals_graceful_shutdown.py::test_claude_gets_sigterm_first_even_when_force_is_requested",
+          "requires": [
+            "posix_pty"
+          ]
+        }
+      ],
+      "provenance": {
+        "kind": "native-os",
+        "sources": [
+          "backend/tests/test_terminals_graceful_shutdown.py",
+          "CHANGELOG.md"
+        ],
+        "notes": "A real signal-trapping shell stands at the vendor process boundary."
+      },
+      "limitations": [
+        "Does not execute Claude's own fullscreenBootPending cleanup. Windows has no graceful equivalent yet; tracked by issue #120."
+      ]
+    },
+    {
+      "id": "cursor.wal-completion",
+      "owner": "cursor",
+      "status": "active",
+      "commits": [
+        "28f8d929",
+        "4b7f9cd7"
+      ],
+      "guarantee": "WAL/protobuf writes do not strand a completed turn; timestamps remain fresh and strictly increasing; capped text retains its closing sentinel.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_cursor.py::test_protobuf_only_writes_report_nothing",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_cursor.py::test_events_in_one_pass_get_strictly_increasing_timestamps",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_cursor.py::test_timestamp_falls_back_to_now_not_the_db_mtime",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_cursor.py::test_long_reply_keeps_its_closing_sentinel",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_cursor.py"
+        ],
+        "notes": "The SQLite fixture uses WAL as the live Cursor store did; journal_mode=delete previously produced a false green."
+      },
+      "limitations": []
+    },
+    {
+      "id": "kimi.streaming-completion",
+      "owner": "kimi",
+      "status": "active",
+      "commits": [
+        "97b705b8",
+        "0d78ab35"
+      ],
+      "guarantee": "Per-step usage is not completion; recent streaming delays inferred idle, final text survives polling, and cancelled turns cannot reopen.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_kimi.py::test_parse_activity_one_turn_many_usage_records_one_complete",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_kimi.py::test_recent_loop_content_keeps_an_old_prompt_active",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_kimi.py::test_activity_after_idle_flush_delivers_the_final_reply",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_kimi.py::test_cancelled_turn_is_not_reopened_by_late_stream_records",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_kimi.py"
+        ],
+        "notes": "Synthetic wire.jsonl records exercise the vendor's inferred completion contract across polls."
+      },
+      "limitations": [
+        "Idle completion is an inference; it cannot certify provider-side turn completion."
+      ]
+    },
+    {
+      "id": "antigravity.in-place-completion",
+      "owner": "antigravity",
+      "status": "active",
+      "commits": [
+        "0d78ab35",
+        "981110cd"
+      ],
+      "guarantee": "Assistant rows completed in place are rechecked across checkpoints; older pending rows cannot complete newer turns.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_antigravity_activity.py::test_unfinished_assistant_is_rechecked_until_it_finishes",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_antigravity_activity.py::test_older_pending_step_cannot_complete_a_newer_turn",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_antigravity_activity.py::test_pending_steps_survive_the_watcher_checkpoint_roundtrip",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_antigravity_activity.py"
+        ],
+        "notes": "SQLite steps update existing rows and round-trip through the real watcher checkpoint."
+      },
+      "limitations": []
+    },
+    {
+      "id": "grok.resume-command-boundary",
+      "owner": "grok",
+      "status": "active",
+      "commits": [
+        "0d78ab35",
+        "981110cd"
+      ],
+      "guarantee": "Only a real simple explicit-ID resume command may reap a duplicate Grok or Antigravity session; shell mentions preserve the live process.",
+      "cases": [
+        {
+          "nodeid": "tests/test_terminal_resume_dedup.py::test_resume_spawn_reaps_grok_and_antigravity_duplicates",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/test_terminal_resume_dedup.py::test_non_resume_command_preserves_running_vendor_session",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/test_terminal_resume_dedup.py",
+          "backend/tests/vendors/test_grok.py",
+          "backend/tests/vendors/test_antigravity.py"
+        ],
+        "notes": "Parameterized vendor commands run through real command parsers and the create handler."
+      },
+      "limitations": [
+        "Also covers Antigravity's same fix. Grok title-based resume is outside ID-based duplicate detection."
+      ]
+    },
+    {
+      "id": "droid.split-poll-text",
+      "owner": "droid",
+      "status": "active",
+      "commits": [
+        "0d78ab35"
+      ],
+      "guarantee": "Assistant text persists until a later outcome poll and is discarded when a new prompt starts an unfinished turn.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_droid.py::test_turn_text_survives_poll_boundary_and_is_consumed",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_droid.py::test_new_prompt_discards_unfinished_previous_turn_text",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_droid.py"
+        ],
+        "notes": "Incrementally appended JSONL isolates message and outcome into different polls."
+      },
+      "limitations": []
+    },
+    {
+      "id": "pi.workspace-resume",
+      "owner": "pi",
+      "status": "active",
+      "commits": [
+        "bdc57822",
+        "60579674",
+        "0d78ab35"
+      ],
+      "guarantee": "Resume identity follows the session header and a session existing only in another workspace is refused.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_pi.py::test_session_id_from_path_prefers_header_over_filename",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_pi.py::test_resume_preflight_requires_the_target_workspace",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_pi.py"
+        ],
+        "notes": "Temporary sessions with mismatching filenames, headers, and workspace directories."
+      },
+      "limitations": []
+    },
+    {
+      "id": "copilot.store-checkpoints",
+      "owner": "copilot",
+      "status": "active",
+      "commits": [
+        "eb30fd64"
+      ],
+      "guarantee": "Store replacement on a reused inode reanchors; split-poll assistant text and partial trailing JSONL survive; the SQLite source wins without double counting.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_copilot.py::test_store_replacement_on_a_reused_inode_resets_the_watermark",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_copilot.py::test_turn_text_survives_split_poll_batches",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_copilot.py::test_truncated_trailing_line_is_retried_once_complete",
+          "requires": []
+        },
+        {
+          "nodeid": "tests/vendors/test_copilot.py::test_store_wins_over_the_same_sessions_events_jsonl",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_copilot.py"
+        ],
+        "notes": "Temporary SQLite store and legacy events.jsonl model both supported storage layouts."
+      },
+      "limitations": []
+    },
+    {
+      "id": "aider.markdown-checkpoint",
+      "owner": "aider",
+      "status": "active",
+      "commits": [
+        "eb30fd64"
+      ],
+      "guarantee": "Aider's Markdown tail parser detects replacement even when the inode is reused.",
+      "cases": [
+        {
+          "nodeid": "tests/vendors/test_aider.py::test_parse_incremental_replacement_on_a_reused_inode_restarts_from_zero",
+          "requires": []
+        }
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "sources": [
+          "backend/tests/vendors/test_aider.py"
+        ],
+        "notes": "Synthetic Markdown history plus a forced inode identity collision."
+      },
+      "limitations": [
+        "The shared JSONL tail test cannot establish this Markdown-specific contract."
+      ]
+    },
+    {
+      "id": "shared.superseded-heartbeat-probe",
+      "owner": "shared",
+      "status": "superseded",
+      "commits": [
+        "2a6185e6",
+        "d7ce6e31"
+      ],
+      "guarantee": "Busy terminal output must not cause a false connection failure.",
+      "cases": [],
+      "provenance": {
+        "kind": "source-history",
+        "sources": [
+          "src/shared/wsClient.ts",
+          "src/shared/wsClient.test.ts"
+        ],
+        "notes": "The 2026-08-22 heartbeat grace fix was superseded by removal of active idle probes on 2026-08-24."
+      },
+      "limitations": [
+        "Do not reinstate the old heartbeat mechanism to satisfy this history. Current WebSocket tests assert no idle probing."
+      ],
+      "superseded_by": "d7ce6e31"
+    },
+    {
+      "id": "shared.packaged-conpty-host",
+      "owner": "shared",
+      "status": "manual",
+      "commits": [
+        "3410059e"
+      ],
+      "guarantee": "The packaged Windows backend must contain the OpenConsole.exe required by pywinpty.",
+      "cases": [],
+      "provenance": {
+        "kind": "source-history",
+        "sources": [
+          "backend/tests/test_pyinstaller_spec.py",
+          "backend/agent_team_backend.spec"
+        ],
+        "notes": "Source ConPTY tests passed while the frozen bundle omitted its console host."
+      },
+      "limitations": [
+        "Existing frozen --self-check conpty belongs to packaging/release validation. This task does not change release automation; source-only CI cannot prove the frozen artifact works."
+      ]
+    },
+    {
+      "id": "shared.source-only-orchestration",
+      "owner": "shared",
+      "status": "superseded",
+      "commits": [
+        "007d5462",
+        "f9035f31",
+        "219e7384",
+        "9369583b",
+        "e95cd7ab"
+      ],
+      "guarantee": "Late echoes must not duplicate prompts; session persistence must not flood retries; unavailable interrupt transport must not report success.",
+      "cases": [],
+      "provenance": {
+        "kind": "source-history",
+        "sources": [
+          "src/renderer/src/components/__tests__/App.injectResendGuards.test.ts",
+          "src/renderer/src/components/__tests__/App.manualPaneSessionRace.test.ts",
+          "src/renderer/src/components/__tests__/App.interruptCommand.test.ts",
+          "src/renderer/src/lib/__tests__/injectEcho.test.ts"
+        ],
+        "notes": "App source-string checks are wiring diagnostics, not executable integration evidence. Executable replacements are linked by frontend_contract_ids."
+      },
+      "limitations": [
+        "These source-only assertions never satisfy a required backend regression case."
+      ],
+      "superseded_by": "executable-frontend-contracts",
+      "frontend_contract_ids": [
+        "tests/cli/coordination.test.ts::does not resend a kickoff that reached the composer but failed to submit",
+        "tests/cli/coordination.test.ts::retries only empty failed injections and stops after three attempts",
+        "tests/cli/coordination.test.ts::deduplicates epoch timestamps before dispatch and rejects older turns",
+        "tests/cli/coordination.test.ts::deduplicates unreadable timestamps by text independently per pane and clears teardown state",
+        "tests/cli/coordination.test.ts::retries unconfirmed session writes after registration then caches only confirmation",
+        "tests/cli/coordination.test.ts::bounds a permanently missing session record at eight writes without suppressing other sessions",
+        "tests/cli/backendWire.test.ts::reconnects the production wsClient to the same PTY and decodes Unicode output"
+      ]
+    }
+  ]
+}

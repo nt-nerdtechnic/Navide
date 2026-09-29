@@ -28,7 +28,7 @@
     "build:plans:backend": "node scripts/build-plans-v2-backend.mjs",
     "build:plans": "pnpm run build:plans:legacy && pnpm run build:plans:v2 && pnpm run build:plans:backend",
     "build:plans:fixture": "node scripts/build-plans-backend.mjs",
-    "test:packaged-plans": "pnpm run build:public-packages && pnpm run build:plans:v2 && pnpm run build:plans:fixture && pnpm run build:plans:backend && pnpm run build:mini-ide:v2 && pnpm run build:git:v2 && node scripts/stage-official-plugin-artifacts.mjs && NAVIDE_TEST_PACKAGED_PLANS=1 NAVIDE_TEST_PRODUCTION_PLANS_BACKEND=1 pnpm test:run tests/integration/plansPackagedRoundtrip.test.ts src/main/plugins/pluginBackendHost.test.ts src/main/plugins/pluginBackendSupervisor.test.ts",
+    "test:packaged-plans": "node scripts/run-artifact-tests.mjs --packaged-plans",
     "build:git:legacy": "vite build --config vite.git.config.ts",
     "build:git:v2": "vite build --config plugins/navide-git/vite.config.ts",
     "build:git": "pnpm run build:git:legacy && pnpm run build:git:v2",
@@ -39,7 +39,7 @@
     "typecheck:public": "tsc --noEmit -p packages/plugin-contracts/tsconfig.json && tsc --noEmit -p packages/plugin-sdk/tsconfig.json && vue-tsc --noEmit -p packages/plugin-ui/tsconfig.json",
     "typecheck:plugin-git": "pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-git/tsconfig.json",
     "typecheck:plugin-plans": "pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-plans/tsconfig.json",
-    "typecheck": "pnpm run typecheck:node && pnpm run typecheck:integration && pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-git/tsconfig.json && vue-tsc --noEmit -p plugins/navide-plans/tsconfig.json && pnpm run typecheck:web && pnpm run typecheck:public",
+    "typecheck": "pnpm run typecheck:node && pnpm run typecheck:integration && pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-git/tsconfig.json && vue-tsc --noEmit -p plugins/navide-plans/tsconfig.json && vue-tsc --noEmit -p plugins/navide-mini-ide/tsconfig.json && pnpm run typecheck:web && pnpm run typecheck:public",
     "build:public-packages": "tsc -p packages/plugin-contracts/tsconfig.json && tsc -p packages/plugin-sdk/tsconfig.build.json && vite build --config packages/plugin-ui/vite.config.ts && vue-tsc -p packages/plugin-ui/tsconfig.build.json",
     "test": "vitest",
     "test:run": "vitest run",
@@ -48,7 +48,14 @@
     "package:local": "bash ./build.sh",
     "dist": "pnpm build && electron-builder",
     "release:check": "node scripts/verify-release-version.mjs",
-    "release:prepare": "bash ./release.sh"
+    "release:prepare": "bash ./release.sh",
+    "test:frontend": "vitest run --project unit --project cli",
+    "test:artifacts": "vitest run --project artifacts",
+    "test:artifacts:ci": "node scripts/run-artifact-tests.mjs --prepared",
+    "test:infrastructure": "vitest run --project unit tests/infrastructure",
+    "test:cli": "node scripts/run-cli-tests.mjs",
+    "test:cli:frontend": "node scripts/run-cli-tests.mjs --frontend-only",
+    "typecheck:plugin-mini-ide": "pnpm run build:public-packages && vue-tsc --noEmit -p plugins/navide-mini-ide/tsconfig.json"
   },
   "build": {
     "appId": "com.nerdtechnic.agent-team",

@@ -1,0 +1,81 @@
+{
+  "vendor": "cursor",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_cursor.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.cursor/chats/${CURSOR_CWD}/12345678-1234-4234-8234-123456789abc/store.db",
+  "expected": {
+    "tokens": [
+      0,
+      0
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "json",
+        "path": "${HOME}/.cursor/chats/${CURSOR_CWD}/12345678-1234-4234-8234-123456789abc/meta.json",
+        "value": {
+          "schemaVersion": 1,
+          "cwd": "${WORKSPACE}",
+          "createdAtMs": 1000,
+          "updatedAtMs": 1000
+        }
+      },
+      {
+        "kind": "sqlite",
+        "schema": "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs(id TEXT PRIMARY KEY,data BLOB);",
+        "statements": [
+          {
+            "sql": "INSERT INTO blobs VALUES ('u1',?)",
+            "params": [
+              {
+                "role": "user",
+                "content": "${MARKER} work"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "response": [
+      {
+        "kind": "sqlite",
+        "statements": [
+          {
+            "sql": "INSERT INTO blobs VALUES ('proto',?)",
+            "params": [
+              {
+                "$hex": "0a021001"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "complete": [
+      {
+        "kind": "sqlite",
+        "statements": [
+          {
+            "sql": "INSERT INTO blobs VALUES ('a1',?)",
+            "params": [
+              {
+                "role": "assistant",
+                "content": "Regression reply: café 完成\n---MSG-END---"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "binary": "agent",
+  "resumeCommand": "agent --resume 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": []
+}

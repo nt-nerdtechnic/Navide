@@ -2,10 +2,20 @@ import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'node:path'
 
-// Renderer-only unit/component tests. Pure functions (lib/, data/) run in the
-// default `node` environment; composable tests opt into happy-dom per-file via
-// `// @vitest-environment happy-dom`. We mirror the renderer's build-time global
-// (`__APP_BUILD__`) so importing modules that reference it doesn't throw.
+// Every source test has one owner. Artifact consumers build/pack once before
+// their workers start; ordinary tests and CLI contracts need no plugin build.
+const allTests = ['vitest.*.{test,spec}.ts', '{src,tests,packages,plugins}/**/*.{test,spec}.ts']
+const cliTests = ['tests/cli/**/*.{test,spec}.ts']
+const artifactTests = [
+  'tests/integration/**/*.{test,spec}.ts',
+  'plugins/*/tests/**/*.{test,spec}.ts',
+  // CLI subprocesses use Node's package exports, outside Vitest's source aliases.
+  'packages/plugin-sdk/bin/**/*.{test,spec}.ts',
+  'src/main/plugins/pluginExternalWorkspace.test.ts',
+  'src/main/plugins/pluginBackendHost.test.ts',
+  'src/main/plugins/pluginBackendSupervisor.test.ts',
+]
+const excludedTests = ['**/node_modules/**', '**/dist/**', '**/out/**', '**/coverage/**', 'e2e/**']
 export default defineConfig({
   // Mirrors electron.vite.config.ts: <webview> carries in-window plugin
   // contributions and is a built-in tag, not a Vue component.
@@ -31,28 +41,15 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    // Renderer tests plus electron-free main-process modules (e.g. window-registry).
-    include: [
-      'vitest.*.{test,spec}.ts',
-      'src/renderer/src/**/*.{test,spec}.ts',
-      'src/renderer/plugins/**/*.{test,spec}.ts',
-      'src/main/**/*.{test,spec}.ts',
-      'src/shared/**/*.{test,spec}.ts',
-      'tests/**/*.{test,spec}.ts',
-      'packages/plugin-sdk/src/**/*.{test,spec}.ts',
-      'packages/plugin-sdk/bin/**/*.{test,spec}.ts',
-      'packages/plugin-ui/src/**/*.{test,spec}.ts',
-      'plugins/navide-git/src/**/*.{test,spec}.ts',
-      'plugins/navide-git/tests/**/*.{test,spec}.ts',
-      'plugins/navide-mini-ide/src/**/*.{test,spec}.ts',
-      'plugins/navide-plans/src/**/*.{test,spec}.ts',
-      'plugins/navide-plans/tests/**/*.{test,spec}.ts'
-    ],
-    // Playwright E2E lives in e2e/ and is run by `test:e2e`, not Vitest.
-    exclude: ['e2e/**', 'node_modules/**'],
     globals: false,
-    // Builds and packs the public packages once for the whole run; see the file.
-    globalSetup: ['tests/support/publicPackagesSetup.ts'],
+    projects: [
+      { extends: true, test: { name: 'unit', include: allTests, exclude: [...excludedTests, ...cliTests, ...artifactTests] } },
+      { extends: true, test: { name: 'cli', include: cliTests, exclude: excludedTests } },
+      { extends: true, test: {
+        name: 'artifacts', include: artifactTests, exclude: excludedTests,
+        globalSetup: ['tests/support/publicPackagesSetup.ts'],
+      } },
+    ],
     server: {
       deps: {
         // pluginExternalWorkspace.test.ts imports the *built* plugin bundle out

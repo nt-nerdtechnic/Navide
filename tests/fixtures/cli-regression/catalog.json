@@ -1,0 +1,361 @@
+{
+  "schemaVersion": 1,
+  "vendors": {
+    "aider": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "unsupported_session"
+      ],
+      "fixture": "aider.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[aider]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[aider]"
+        },
+        "unsupported_session": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_unsupported_session[aider]"
+        }
+      }
+    },
+    "antigravity": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume"
+      ],
+      "fixture": "antigravity.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[antigravity]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[antigravity]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[antigravity]"
+        }
+      }
+    },
+    "claude": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "push",
+        "shutdown",
+        "hooks",
+        "login"
+      ],
+      "fixture": "claude.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[claude]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[claude]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[claude]"
+        },
+        "push": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_claude_spawn_authenticated_rewake_delivery"
+        },
+        "shutdown": {
+          "nodeid": "tests/test_terminals_graceful_shutdown.py::test_claude_gets_sigterm_first_even_when_force_is_requested",
+          "requires": [
+            "posix_pty"
+          ]
+        },
+        "hooks": {
+          "nodeid": "tests/test_cli_hook_endpoint.py::test_notification_forwards_the_type_that_distinguishes_waiting_from_done"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_login_subcommand_excludes_repl_wiring[claude]"
+        }
+      }
+    },
+    "codex": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "interrupt",
+        "login"
+      ],
+      "fixture": "codex.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[codex]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[codex]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[codex]"
+        },
+        "interrupt": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_interrupt_reaches_vendor_process[codex-27]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_login_subcommand_excludes_repl_wiring[codex]"
+        }
+      }
+    },
+    "copilot": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "hooks",
+        "login"
+      ],
+      "fixture": "copilot.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[copilot]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[copilot]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[copilot]"
+        },
+        "hooks": {
+          "nodeid": "tests/test_cli_hook_endpoint.py::test_copilots_camelcase_session_id_is_understood"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_login[copilot]"
+        }
+      }
+    },
+    "cursor": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume"
+      ],
+      "fixture": "cursor.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[cursor]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[cursor]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[cursor]"
+        }
+      }
+    },
+    "droid": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume"
+      ],
+      "fixture": "droid.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[droid]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[droid]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[droid]"
+        }
+      }
+    },
+    "grok": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "login"
+      ],
+      "fixture": "grok.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[grok]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[grok]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[grok]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_login[grok]"
+        }
+      }
+    },
+    "kilo": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "push",
+        "login"
+      ],
+      "fixture": "kilo.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[kilo]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[kilo]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[kilo]"
+        },
+        "push": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_http_spawn_delivery[kilo]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_managed_login_rejects_unverifiable_command[kilo]"
+        }
+      }
+    },
+    "kimi": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "login"
+      ],
+      "fixture": "kimi.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[kimi]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[kimi]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[kimi]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_login[kimi]"
+        }
+      }
+    },
+    "mcode": {
+      "capabilities": [
+        "launch",
+        "unsupported_session",
+        "login"
+      ],
+      "fixture": "mcode.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[mcode]"
+        },
+        "unsupported_session": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_unsupported_session[mcode]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_login[mcode]"
+        }
+      }
+    },
+    "muse": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "login"
+      ],
+      "fixture": "muse.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[muse]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[muse]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[muse]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_login_subcommand_excludes_repl_wiring[muse]"
+        }
+      }
+    },
+    "opencode": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "push",
+        "login"
+      ],
+      "fixture": "opencode.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[opencode]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[opencode]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[opencode]"
+        },
+        "push": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_http_spawn_delivery[opencode]"
+        },
+        "login": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_managed_login_rejects_unverifiable_command[opencode]"
+        }
+      }
+    },
+    "pi": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume"
+      ],
+      "fixture": "pi.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[pi]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[pi]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[pi]"
+        }
+      }
+    },
+    "qwen": {
+      "capabilities": [
+        "launch",
+        "reader",
+        "resume",
+        "push",
+        "hooks"
+      ],
+      "fixture": "qwen.json",
+      "cases": {
+        "launch": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[qwen]"
+        },
+        "reader": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[qwen]"
+        },
+        "resume": {
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[qwen]"
+        },
+        "push": {
+          "nodeid": "tests/cli_regression/test_vendor_transport.py::test_qwen_spawn_file_delivery"
+        },
+        "hooks": {
+          "nodeid": "tests/test_cli_hook_endpoint.py::test_other_vendors_reach_the_same_handler_and_keep_their_label[qwen]"
+        }
+      }
+    }
+  }
+}

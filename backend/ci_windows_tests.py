@@ -192,7 +192,7 @@ def _detach() -> int:
             os.remove(stale)
         except OSError:
             pass
-    runner = _spawn_detached("--run", WRAPPER_LOG, *_shard_args())
+    runner = _spawn_detached("--run", WRAPPER_LOG, *_pytest_args())
     print(f"--- detached runner pid {runner.pid}; log in {WRAPPER_LOG}, marker {DONE}")
     return 0
 
@@ -211,11 +211,13 @@ def _spawn_detached(mode: str, log_path: str, *extra: str) -> subprocess.Popen:
 
 
 
-def _shard_args() -> list[str]:
-    """`--shard K/N` from our own argv, passed on as-is."""
-    if "--shard" not in sys.argv:
-        return []
-    return ["--shard", sys.argv[sys.argv.index("--shard") + 1]]
+def _pytest_args() -> list[str]:
+    """Forward suite selection and reports through both detached processes."""
+    args = []
+    for option in ("--shard", "--junitxml", "--collection-report"):
+        if option in sys.argv:
+            args.extend([option, sys.argv[sys.argv.index(option) + 1]])
+    return args
 
 
 def main() -> int:
@@ -228,12 +230,12 @@ def main() -> int:
     args = [
         sys.executable, "-X", "faulthandler", "-m", "pytest", "backend/tests", "-v",
         "-p", "no:cacheprovider", "--timeout=90", "--timeout-method=thread",
-        "-o", "faulthandler_timeout=120", *_shard_args(),
+        "-o", "faulthandler_timeout=120", "--durations=30", *_pytest_args(),
     ]
     with open(LOG, "wb") as log:
         # close_fds restricts the child's handle list to exactly these three.
         child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True)
-    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s, {' '.join(_shard_args()) or 'no shard'}", flush=True)
+    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s, {' '.join(_pytest_args()) or 'no shard'}", flush=True)
 
     started = time.monotonic()
     rc: int | None = None

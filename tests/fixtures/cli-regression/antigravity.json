@@ -1,0 +1,79 @@
+{
+  "vendor": "antigravity",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_antigravity.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.gemini/antigravity-cli/conversations/12345678-1234-4234-8234-123456789abc.db",
+  "expected": {
+    "tokens": [
+      0,
+      0
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "sqlite",
+        "schema": "CREATE TABLE trajectory_metadata_blob(id TEXT PRIMARY KEY,data BLOB); CREATE TABLE steps(idx INTEGER PRIMARY KEY,step_type INTEGER,status INTEGER,metadata BLOB,step_payload BLOB);",
+        "statements": [
+          {
+            "sql": "INSERT INTO trajectory_metadata_blob VALUES ('main',?)",
+            "params": [
+              {
+                "$utf8": "${WORKSPACE_URI}\u0000${MARKER}"
+              }
+            ]
+          },
+          {
+            "sql": "INSERT INTO steps VALUES (-1,21,3,?,?)",
+            "params": [
+              {
+                "$hex": ""
+              },
+              {
+                "$hex": ""
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "response": [
+      {
+        "kind": "sqlite",
+        "statements": [
+          {
+            "sql": "INSERT INTO steps VALUES (0,15,5,?,?)",
+            "params": [
+              {
+                "$hex": ""
+              },
+              {
+                "$hex": "a2012e0a2c52656772657373696f6e207265706c793a20636166c3a920e5ae8ce688900a2d2d2d4d53472d454e442d2d2d"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "complete": [
+      {
+        "kind": "sqlite",
+        "statements": [
+          {
+            "sql": "UPDATE steps SET status=3 WHERE idx=0",
+            "params": []
+          }
+        ]
+      }
+    ]
+  },
+  "binary": "agy",
+  "resumeCommand": "agy --conversation 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": []
+}

@@ -37,7 +37,7 @@ function fnBody(header: string): string {
 
 describe('the 128KB buffer trim cannot silently move the scan window', () => {
   it('uses the shared re-base rule rather than open-coding the arithmetic', () => {
-    expect(appSource).toContain("from './lib/bufferCursor'")
+    expect(appSource).toMatch(/from '\.\/lib\/bufferCursor'/)
   })
 
   describe('the per-pane stage watcher', () => {
@@ -183,7 +183,7 @@ describe('the Manager router does not read its own kickoff echo as a result', ()
 
   describe('and the floor is taken in the one window where both risks are avoided', () => {
     const act = body('async function activateStage(', '\nasync function spawnPipelineStage(')
-    const inject = act.lastIndexOf('ok = await injectPane(pane.id, kickoff')
+    const inject = act.lastIndexOf('const ok = kickoffResult.sent')
     const arm = act.indexOf('armRouterCursors(router, pane.id)')
 
     it('after the kickoff injection, so the echo stays below the floor', () => {

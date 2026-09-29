@@ -1,0 +1,220 @@
+"""Fresh backend + authenticated wire client, shared by regression scenarios."""
+from __future__ import annotations
+
+import asyncio
+import codecs
+from collections import defaultdict
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import uuid
+
+import psutil
+import websockets
+
+from .isolation import isolated_environment
+
+
+class BackendProcess:
+    def __init__(self, root: Path):
+        self.root = root
+        self.env = isolated_environment(root)
+        self.env["NAVIDE_REGRESSION_ROOT"] = str(root)
+        self.env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3])
+        self.process = None
+        self.url = ""
+        self.events: list[dict] = []
+        self.output: dict[str, str] = defaultdict(str)
+        self.decoders = defaultdict(lambda: codecs.getincrementaldecoder("utf-8")())
+        self.children: set[int] = set()
+        self._owned_children: dict[int, psutil.Process] = {}
+        self.log_path = root / "backend.log"
+
+    async def __aenter__(self):
+        self._log = self.log_path.open("w", encoding="utf-8")
+        try:
+            self.process = subprocess.Popen(
+                [sys.executable, "-m", "tests.cli_regression.support.backend_entry",
+                 "--port", "0", "--log-level", "warning"],
+                env=self.env, cwd=Path(__file__).resolve().parents[3],
+                stdin=subprocess.PIPE, stdout=self._log, stderr=subprocess.STDOUT, text=True,
+            )
+            self.process.stdin.write("\n")
+            self.process.stdin.flush()
+            async with asyncio.timeout(30):
+                while True:
+                    if self.process.poll() is not None:
+                        raise AssertionError(self.log_path.read_text(encoding="utf-8"))
+                    candidate = self._discovery_url()
+                    if candidate:
+                        self.url = candidate
+                        try:
+                            async with self.connect():
+                                break
+                        except OSError:
+                            pass
+                    await asyncio.sleep(0.02)
+        except BaseException:
+            await self.__aexit__(*sys.exc_info())
+            raise
+        return self
+
+    def _discovery_url(self) -> str | None:
+        # File creation precedes write completion. Only attempt the real
+        # authenticated handshake after both discovery values are available.
+        try:
+            port = (self.root / "data" / "backend-port").read_text().strip()
+            token = (self.root / "data" / "backend-ws-token").read_text().strip()
+        except FileNotFoundError:
+            return None
+        if not port.isdecimal() or not 1 <= int(port) <= 65535 or not token:
+            return None
+        return f"ws://127.0.0.1:{port}/ws?t={token}"
+
+    async def __aexit__(self, *_exc):
+        exit_error = None
+        if self.process and (code := self.process.poll()) is not None:
+            exit_error = f"backend exited before requested shutdown (exit code {code}); see {self.log_path}"
+        # Capture descendants while ownership can still be established. A
+        # crashed backend reparents them, so walking only after exit misses
+        # precisely the orphan failure this harness must clean up.
+        if self.process and self.process.poll() is None:
+            try:
+                for child in psutil.Process(self.process.pid).children(recursive=True):
+                    self.track_child(child.pid)
+            except psutil.NoSuchProcess:
+                pass
+        survivors = []
+        try:
+            if self.process and exit_error is None:
+                try:
+                    self.process.stdin.write("shutdown\n")
+                    self.process.stdin.flush()
+                except BrokenPipeError:
+                    exit_error = f"backend exited before shutdown request was delivered; see {self.log_path}"
+                try:
+                    code = await asyncio.to_thread(self.process.wait, timeout=15)
+                    if code != 0:
+                        exit_error = f"backend shutdown failed (exit code {code}); see {self.log_path}"
+                except subprocess.TimeoutExpired:
+                    try:
+                        process = psutil.Process(self.process.pid)
+                        for child in process.children(recursive=True):
+                            try:
+                                child.kill()
+                            except psutil.NoSuchProcess:
+                                pass
+                        process.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                    await asyncio.to_thread(self.process.wait, timeout=5)
+                    raise AssertionError(f"backend shutdown timed out; see {self.log_path}")
+        finally:
+            survivors = await asyncio.to_thread(self._reap_surviving_children)
+            self._log.close()
+            if self.process and self.process.stdin:
+                try:
+                    self.process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            (self.root / "scenario.json").write_text(json.dumps({
+                "events": self.events, "children": sorted(self.children), "survivors": survivors,
+                "backend_exit_code": self.process.returncode if self.process else None,
+                "backend_exit_error": exit_error,
+                "output": {key: value[-8192:] for key, value in self.output.items()},
+            }, indent=2), encoding="utf-8")
+            # Never archive the token or isolated credential files. Each
+            # process gets its own directory even inside a parameterized test.
+            process_id = self.process.pid if self.process else "not-started"
+            destination = Path(__file__).resolve().parents[4] / "test-results" / "ci" / "cli-regression" / f"{self.root.parent.name}-{process_id}"
+            destination.mkdir(parents=True, exist_ok=True)
+            for name in ("backend.log", "scenario.json", "refusals.jsonl"):
+                source = self.root / name
+                if source.exists():
+                    shutil.copyfile(source, destination / name)
+        assert not survivors, f"PTY children survived backend shutdown (harness cleaned them): {survivors}; {self.log_path}"
+        refusals = self.root / "refusals.jsonl"
+        assert not refusals.exists(), f"external boundary reached: {refusals.read_text()}"
+        assert exit_error is None, exit_error
+
+    def connect(self):
+        return websockets.connect(self.url, proxy=None, max_size=4 * 1024 * 1024)
+
+    def fake_command(self) -> list[str]:
+        return [sys.executable, "-u", str(Path(__file__).with_name("fake_cli.py"))]
+
+    def track_child(self, pid: int) -> None:
+        try:
+            process = psutil.Process(pid)
+            process.create_time()  # retain identity, never kill a reused PID
+            descendants = process.children(recursive=True)
+        except psutil.NoSuchProcess:
+            return
+        for child in [process, *descendants]:
+            try:
+                child.create_time()
+                self.children.add(child.pid)
+                previous = self._owned_children.get(child.pid)
+                if previous is None or not previous.is_running():
+                    self._owned_children[child.pid] = child
+            except psutil.NoSuchProcess:
+                pass
+
+    def _reap_surviving_children(self) -> list[int]:
+        survivors = []
+        for process in self._owned_children.values():
+            # psutil.is_running compares cached (pid, creation time). The
+            # public kill method repeats that identity check before signalling.
+            if process.is_running():
+                survivors.append(process)
+                try:
+                    process.kill()
+                except psutil.NoSuchProcess:
+                    pass
+        psutil.wait_procs(survivors, timeout=5)
+        return [process.pid for process in survivors]
+
+    async def receive(self, ws) -> dict | None:
+        frame = await ws.recv()
+        if isinstance(frame, bytes):
+            assert frame[0] == 1
+            sid_len = frame[5]
+            sid = frame[6:6 + sid_len].decode()
+            pane_len = frame[6 + sid_len]
+            data = frame[7 + sid_len + pane_len:]
+            self.output[sid] += self.decoders[sid].decode(data)
+            return None
+        message = json.loads(frame)
+        self.events.append(message)
+        return message
+
+    async def request(self, ws, kind: str, payload: dict, *, ok: bool = True) -> dict:
+        request_id = str(uuid.uuid4())
+        await ws.send(json.dumps({"id": request_id, "type": kind, "payload": payload}))
+        async with asyncio.timeout(15):
+            while True:
+                response = await self.receive(ws)
+                if response and response.get("id") == request_id:
+                    if ok:
+                        assert response.get("ok"), response
+                    if kind == "terminal.create" and response.get("ok"):
+                        self.track_child(response["payload"]["pid"])
+                    return response
+
+    async def expect_output(self, ws, terminal_id: str, text: str) -> str:
+        async with asyncio.timeout(15):
+            while text not in self.output[terminal_id]:
+                await self.receive(ws)
+        for pid in tuple(self.children):
+            owned = self._owned_children.get(pid)
+            if owned is not None and owned.is_running():
+                self.track_child(pid)
+        return self.output[terminal_id]
+
+    async def create(self, ws, pane_id="regression-pane", **overrides) -> dict:
+        payload = {"pane_id": pane_id, "agent_key": "terminal", "cwd": str(self.root),
+                   "command": self.fake_command(), "cols": 100, "rows": 30,
+                   "create_generation": str(uuid.uuid4()), **overrides}
+        return (await self.request(ws, "terminal.create", payload))["payload"]

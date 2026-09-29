@@ -1,0 +1,113 @@
+{
+  "vendor": "grok",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_grok.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.grok/sessions/${GROK_CWD}/12345678-1234-4234-8234-123456789abc/updates.jsonl",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "method": "session/update",
+            "timestamp": 1789379453,
+            "params": {
+              "sessionId": "12345678-1234-4234-8234-123456789abc",
+              "_meta": {
+                "eventId": "12345678-1234-4234-8234-123456789abc-1",
+                "agentTimestampMs": 1789379453001
+              },
+              "update": {
+                "sessionUpdate": "user_message_chunk",
+                "content": {
+                  "type": "text",
+                  "text": "${MARKER} work"
+                }
+              }
+            }
+          }
+        ],
+        "append": false
+      }
+    ],
+    "response": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "method": "session/update",
+            "timestamp": 1789379453,
+            "params": {
+              "sessionId": "12345678-1234-4234-8234-123456789abc",
+              "_meta": {
+                "eventId": "12345678-1234-4234-8234-123456789abc-2",
+                "agentTimestampMs": 1789379453002
+              },
+              "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {
+                  "type": "text",
+                  "text": "Regression reply: café 完成\n---MSG-END---"
+                }
+              }
+            }
+          }
+        ],
+        "append": true
+      }
+    ],
+    "complete": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "method": "session/update",
+            "timestamp": 1789379453,
+            "params": {
+              "sessionId": "12345678-1234-4234-8234-123456789abc",
+              "_meta": {
+                "eventId": "12345678-1234-4234-8234-123456789abc-3",
+                "agentTimestampMs": 1789379453003
+              },
+              "update": {
+                "sessionUpdate": "turn_completed",
+                "stop_reason": "end_turn",
+                "usage": {
+                  "inputTokens": 12,
+                  "outputTokens": 3,
+                  "modelUsage": {
+                    "fixture": {
+                      "inputTokens": 12,
+                      "outputTokens": 3
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "append": true
+      }
+    ]
+  },
+  "binary": "grok",
+  "resumeCommand": "grok --resume 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": [
+    "GROK_HOME",
+    "GROK_BACKGROUND_CHILD",
+    "GROK_DAEMON_CHILD"
+  ],
+  "loginCommand": "grok login"
+}
