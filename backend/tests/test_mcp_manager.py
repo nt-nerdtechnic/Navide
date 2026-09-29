@@ -402,3 +402,40 @@ class TestMCPManager:
             assert len(manager._clients) == 1
             await manager.shutdown()
             assert len(manager._clients) == 0
+
+    @pytest.mark.asyncio
+    async def test_shutdown_does_not_wait_for_a_server_still_starting(self, tmp_path):
+        # The app starts MCP servers in a background task at launch, and the
+        # default one is `npx -y @upstash/context7-mcp`: a download plus a 15 s
+        # initialize budget. A shutdown in that window (a quit right after
+        # launch, or the parent-watch seeing the app die) queued behind the
+        # startup on the lifecycle lock, and the backend outlived its parent by
+        # the whole start time. Shutdown must cancel the start instead.
+        cfg_path = tmp_path / "mcp_servers.json"
+        cfg_path.write_text(json.dumps([
+            {"name": "fast", "command": "echo", "args": [], "env": {}, "enabled": True},
+            {"name": "slow", "command": "echo", "args": [], "env": {}, "enabled": True},
+        ]))
+        slow_cancelled = asyncio.Event()
+
+        async def start(client):
+            if client.name == "slow":
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    slow_cancelled.set()
+                    raise
+
+        manager = MCPManager()
+        with patch.object(MCPClient, "start", start), \
+             patch.object(MCPClient, "stop", new_callable=AsyncMock) as stop:
+            startup = asyncio.create_task(manager.startup(cfg_path))
+            while "fast" not in manager._clients:
+                await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(manager.shutdown(), timeout=1.0)
+
+            assert slow_cancelled.is_set()
+            assert startup.cancelled()
+            assert manager._clients == {}
+            stop.assert_awaited_once()  # the server that did start is stopped

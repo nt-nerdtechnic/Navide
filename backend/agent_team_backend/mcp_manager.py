@@ -168,19 +168,30 @@ class MCPManager:
         self._clients: dict[str, MCPClient] = {}
         self._lifecycle_lock = asyncio.Lock()
         self._config_path: Path | None = None
+        self._starting: asyncio.Task[Any] | None = None
 
     async def startup(self, config_path: Path | None = None) -> None:
         async with self._lifecycle_lock:
-            self._config_path = config_path
-            await self._shutdown_unlocked()
-            configs = load_mcp_config(config_path)
-            for cfg in configs:
-                client = MCPClient(cfg)
-                await client.start()
-                self._clients[cfg.name] = client
-            log.info("MCPManager: %d server(s) initialised", len(self._clients))
+            self._starting = asyncio.current_task()
+            try:
+                self._config_path = config_path
+                await self._shutdown_unlocked()
+                configs = load_mcp_config(config_path)
+                for cfg in configs:
+                    client = MCPClient(cfg)
+                    await client.start()
+                    self._clients[cfg.name] = client
+                log.info("MCPManager: %d server(s) initialised", len(self._clients))
+            finally:
+                self._starting = None
 
     async def shutdown(self) -> None:
+        # A start can take as long as an `npx` download plus the 15 s handshake,
+        # and the backend cannot exit until this returns: cancel it rather than
+        # queue behind it on the lock. MCPClient.start stops its own half-started
+        # server on cancellation; the ones already up are stopped below.
+        if self._starting is not None:
+            self._starting.cancel()
         async with self._lifecycle_lock:
             await self._shutdown_unlocked()
 
