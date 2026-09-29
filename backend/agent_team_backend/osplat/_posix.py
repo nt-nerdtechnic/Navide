@@ -183,7 +183,18 @@ def _claim_ctty() -> None:
     setsid() has already run by this point, so we are a session leader and the
     ioctl is legal. Keep this minimal: only async-signal-safe work is valid
     after fork(), so no logging and no allocation beyond the call itself.
+
+    It also resets the signals the tty line discipline raises (^C, ^\\, ^Z) to
+    SIG_DFL. An ignored disposition survives exec, so a backend that was itself
+    started as a background job or under nohup would otherwise hand every pane
+    child SIGINT=SIG_IGN, and ^C would silently do nothing to a `sleep`, a `cat`
+    or an interpreter (which then skips installing its own handler).
     """
+    for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP):
+        try:
+            signal.signal(sig, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass
     try:
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
     except OSError:

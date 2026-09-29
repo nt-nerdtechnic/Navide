@@ -119,13 +119,22 @@ async def test_child_stays_its_own_session_and_group_leader():
         )
 
 
-async def test_ctrl_c_raises_sigint_in_a_line_mode_child():
+@pytest.mark.parametrize("parent_sigint", ["default", "ignored"])
+async def test_ctrl_c_raises_sigint_in_a_line_mode_child(parent_sigint):
     """^C must reach a child that leaves ISIG on (a plain shell, `cat`, `sleep`).
+
+    The "ignored" case is a backend started as a background job or under nohup:
+    SIGINT stays SIG_IGN across exec, and a child that inherits it never sees
+    ^C (Python does not even install its KeyboardInterrupt handler). It is what
+    made this test fail whenever pytest itself was launched in the background.
 
     Raw-mode TUIs read the 0x03 byte themselves and are unaffected either way,
     which is precisely why the missing ctty went unnoticed for so long: every
     CLI Navide ships masks it.
     """
+    previous = signal.getsignal(signal.SIGINT)
+    if parent_sigint == "ignored":
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     received: list[str] = []
     svc = TerminalService(_collect(received))
     session = svc.create(
@@ -160,6 +169,7 @@ async def test_ctrl_c_raises_sigint_in_a_line_mode_child():
             f"expected death by SIGINT, got returncode={session.proc.returncode}"
         )
     finally:
+        signal.signal(signal.SIGINT, previous)
         await svc.kill(session.id)
 
 
