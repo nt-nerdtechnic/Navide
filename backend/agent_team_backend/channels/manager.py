@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import importlib
 import json
 import logging
 import time
@@ -30,12 +29,12 @@ from typing import Any, Awaitable, Callable
 from . import redact, relay
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
+from .registry import PLATFORMS, load_module
 from .store import Binding, ChannelStore
 from .text import chunk_for
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = ("telegram", "discord", "slack", "feishu", "dingtalk", "matrix", "mattermost", "imessage")
 STOP_WORDS = {"stop", "停止", "/stop", "esc"}
 DEDUP_MAX = 5000
 MAX_QUEUED_PER_PANE = 20
@@ -113,9 +112,8 @@ def _bot_key(adapter: ChannelAdapter) -> str:
 def default_adapter_factory(platform: str) -> AdapterFactory | None:
     """``channels.<platform>.create_adapter(config, secret, *, store)``, else the
     module's ``<Platform>Adapter(token, account=...)`` for single-token platforms."""
-    try:
-        mod = importlib.import_module(f"{__package__}.{platform}")
-    except ImportError:
+    mod = load_module(platform)
+    if mod is None:
         return None
     create = getattr(mod, "create_adapter", None)
     if create is not None:

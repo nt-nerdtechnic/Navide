@@ -63,7 +63,7 @@ def test_every_chat_channel_adapter_is_a_hidden_import():
     # channels/manager.py loads each platform with importlib.import_module, which
     # PyInstaller's graph walk cannot see: a platform missing here is absent from
     # the packaged app and configuring it fails with "not available in this build".
-    from agent_team_backend.channels.manager import PLATFORMS
+    from agent_team_backend.channels.registry import PLATFORMS
 
     listed = set(_keyword("hiddenimports"))
     missing = [p for p in PLATFORMS if f"agent_team_backend.channels.{p}" not in listed]

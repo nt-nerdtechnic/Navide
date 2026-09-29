@@ -3,13 +3,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import type { useBackend } from '../../composables/useBackend'
-import {
-  CHANNEL_PLATFORMS,
-  useChannels,
-  type ChannelPlatform,
-  type ChannelPlatformSpec,
-  type ChannelPlatformState,
-} from '../../composables/useChannels'
+import { useChannels, type ChannelPlatform, type ChannelPlatformState } from '../../composables/useChannels'
+import { CHANNEL_PLATFORM_SPECS, channelPlatform, type RegisteredChannelPlatform } from '../../platform/channels'
 import ChannelLinkGuide from '../ChannelLinkGuide.vue'
 import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
@@ -28,28 +23,12 @@ const props = defineProps<{
 const { t, te } = useI18n()
 const store = useChannels(props.backend)
 
-/** Short letter mark per platform: no brand images, theme tokens only. */
-const MARKS: Record<ChannelPlatform, string> = {
-  telegram: 'TG',
-  discord: 'DC',
-  slack: 'SL',
-  feishu: 'FS',
-  dingtalk: 'DT',
-  matrix: 'MX',
-  mattermost: 'MM',
-  imessage: 'iM',
-}
-
-/** Platforms whose inbound connection (long polling / socket) takes messages
- *  away from any other program receiving for the same bot. */
-const SINGLE_RECEIVER = new Set<ChannelPlatform>(['telegram', 'discord', 'slack', 'feishu', 'dingtalk'])
-
 // Configured platforms first; otherwise the declared display order.
-const specs = computed<ChannelPlatformSpec[]>(() => {
-  const visible = CHANNEL_PLATFORMS.filter((s) => !s.macOnly || isMacPlatform())
+const specs = computed<RegisteredChannelPlatform[]>(() => {
+  const visible = CHANNEL_PLATFORM_SPECS.filter((s) => !s.macOnly || isMacPlatform())
   return [
-    ...visible.filter((s) => stateOf(s.platform)?.configured),
-    ...visible.filter((s) => !stateOf(s.platform)?.configured),
+    ...visible.filter((s) => stateOf(s.id)?.configured),
+    ...visible.filter((s) => !stateOf(s.id)?.configured),
   ]
 })
 
@@ -61,6 +40,10 @@ const listError = ref('')
 
 function stateOf(platform: ChannelPlatform): ChannelPlatformState | null {
   return store.platformState(platform)
+}
+
+function badgeOf(platform: string): string {
+  return channelPlatform(platform)?.badge ?? platform.slice(0, 2).toUpperCase()
 }
 
 function platformName(platform: string): string {
@@ -79,8 +62,8 @@ function pendingCount(platform: ChannelPlatform): number {
   return store.pairing.value.filter((r) => r.platform === platform).length
 }
 
-function needsText(spec: ChannelPlatformSpec): string {
-  if (!spec.fields.length) return t('channels.imessage-note')
+function needsText(spec: RegisteredChannelPlatform): string {
+  if (!spec.fields.length && spec.configNoteKey) return t(spec.configNoteKey)
   const fields = spec.fields.filter((f) => !f.optional).map((f) => t(`channels.field.${f.key}`))
   return t('channels.needs', { fields: fields.join(' + ') })
 }
@@ -107,7 +90,7 @@ function toggleExpanded(platform: ChannelPlatform): void {
     return
   }
   const st = stateOf(platform)
-  const spec = CHANNEL_PLATFORMS.find((s) => s.platform === platform)!
+  const spec = channelPlatform(platform)!
   const draft: Record<string, string> = {}
   for (const f of spec.fields) {
     const v = f.secret ? '' : st?.config[f.key]
@@ -131,8 +114,8 @@ async function run(platform: ChannelPlatform | null, op: () => Promise<{ ok: boo
   }
 }
 
-async function save(spec: ChannelPlatformSpec): Promise<void> {
-  const platform = spec.platform
+async function save(spec: RegisteredChannelPlatform): Promise<void> {
+  const platform = spec.id
   const st = stateOf(platform)
   const draft = drafts[platform] ?? {}
   const config: Record<string, unknown> = { ...(st?.config ?? {}) }
@@ -179,7 +162,7 @@ const chatCounts = reactive<Partial<Record<ChannelPlatform, number>>>({})
 // silently dropping the linking guide.
 const chatCountErrors = reactive<Partial<Record<ChannelPlatform, string>>>({})
 const linkOpen = ref<ChannelPlatform | null>(null)
-const connectedKey = computed(() => specs.value.filter((s) => isConnected(s.platform)).map((s) => s.platform).join(','))
+const connectedKey = computed(() => specs.value.filter((s) => isConnected(s.id)).map((s) => s.id).join(','))
 
 // Loads overlap (every status patch re-runs this); only the latest may write.
 let chatCountLoad = 0
@@ -188,15 +171,15 @@ async function loadChatCounts(): Promise<void> {
   const load = ++chatCountLoad
   await Promise.all(
     specs.value
-      .filter((s) => isConnected(s.platform))
+      .filter((s) => isConnected(s.id))
       .map(async (s) => {
-        const res = await store.locations(s.platform)
+        const res = await store.locations(s.id)
         if (load !== chatCountLoad) return
         if (res.ok) {
-          chatCounts[s.platform] = res.data?.locations?.length ?? 0
-          delete chatCountErrors[s.platform]
+          chatCounts[s.id] = res.data?.locations?.length ?? 0
+          delete chatCountErrors[s.id]
         } else {
-          chatCountErrors[s.platform] = res.error ?? t('channels.error.generic')
+          chatCountErrors[s.id] = res.error ?? t('channels.error.generic')
         }
       })
   )
@@ -236,107 +219,107 @@ function formatTime(ts: number | null | undefined): string {
       <SettingsCard>
         <div
           v-for="spec in specs"
-          :key="spec.platform"
+          :key="spec.id"
           class="ch-row"
-          :class="{ open: expanded === spec.platform }"
-          :data-platform="spec.platform"
+          :class="{ open: expanded === spec.id }"
+          :data-platform="spec.id"
         >
           <div class="ch-row-head">
-            <span class="ch-mark" :class="{ on: stateOf(spec.platform)?.configured }" aria-hidden="true">{{ MARKS[spec.platform] }}</span>
+            <span class="ch-mark" :class="{ on: stateOf(spec.id)?.configured }" aria-hidden="true">{{ spec.badge }}</span>
             <div class="ch-row-text">
               <div class="ch-row-title">
-                <span class="ch-row-name">{{ platformName(spec.platform) }}</span>
-                <span class="ch-pill" :class="statusTone(spec.platform)" data-testid="channel-status">{{ statusText(spec.platform) }}</span>
+                <span class="ch-row-name">{{ platformName(spec.id) }}</span>
+                <span class="ch-pill" :class="statusTone(spec.id)" data-testid="channel-status">{{ statusText(spec.id) }}</span>
                 <span
-                  v-if="pendingCount(spec.platform)"
+                  v-if="pendingCount(spec.id)"
                   class="ch-pill pending"
                   data-testid="channel-pending"
-                >{{ t('channels.pending-count', { n: pendingCount(spec.platform) }) }}</span>
+                >{{ t('channels.pending-count', { n: pendingCount(spec.id) }) }}</span>
               </div>
-              <div class="ch-row-desc">{{ t(`channels.desc.${spec.platform}`) }}</div>
+              <div class="ch-row-desc">{{ t(`channels.desc.${spec.id}`) }}</div>
               <div
-                v-if="stateOf(spec.platform)?.status.last_error"
+                v-if="stateOf(spec.id)?.status.last_error"
                 class="ch-row-error"
-                :class="statusTone(spec.platform)"
-                :title="stateOf(spec.platform)?.status.last_error"
+                :class="statusTone(spec.id)"
+                :title="stateOf(spec.id)?.status.last_error"
                 data-testid="channel-last-error"
-              >{{ stateOf(spec.platform)?.status.last_error }}</div>
+              >{{ stateOf(spec.id)?.status.last_error }}</div>
             </div>
             <div class="ch-row-actions">
               <ToggleSwitch
-                v-if="stateOf(spec.platform)?.configured"
-                :model-value="stateOf(spec.platform)?.enabled === true"
+                v-if="stateOf(spec.id)?.configured"
+                :model-value="stateOf(spec.id)?.enabled === true"
                 :disabled="busy || !store.enabled.value"
-                :aria-label="t('channels.enable-platform', { platform: platformName(spec.platform) })"
-                @update:model-value="(v: boolean) => run(spec.platform, () => store.setEnabled(spec.platform, v))"
+                :aria-label="t('channels.enable-platform', { platform: platformName(spec.id) })"
+                @update:model-value="(v: boolean) => run(spec.id, () => store.setEnabled(spec.id, v))"
               />
-              <button type="button" class="ch-btn ghost sm" data-testid="channel-manage" @click="toggleExpanded(spec.platform)">
-                {{ stateOf(spec.platform)?.configured ? t('channels.manage') : t('channels.connect') }}
+              <button type="button" class="ch-btn ghost sm" data-testid="channel-manage" @click="toggleExpanded(spec.id)">
+                {{ stateOf(spec.id)?.configured ? t('channels.manage') : t('channels.connect') }}
               </button>
             </div>
           </div>
 
           <div
-            v-if="isConnected(spec.platform) && (chatCounts[spec.platform] !== undefined || chatCountErrors[spec.platform])"
+            v-if="isConnected(spec.id) && (chatCounts[spec.id] !== undefined || chatCountErrors[spec.id])"
             class="ch-link"
-            :class="{ next: !chatCounts[spec.platform] }"
+            :class="{ next: !chatCounts[spec.id] }"
             data-testid="channel-link-block"
           >
-            <div v-if="chatCountErrors[spec.platform]" class="ch-link-summary">
-              <span class="ch-link-error" role="alert">{{ t('channels.link.count-failed', { error: chatCountErrors[spec.platform] }) }}</span>
+            <div v-if="chatCountErrors[spec.id]" class="ch-link-summary">
+              <span class="ch-link-error" role="alert">{{ t('channels.link.count-failed', { error: chatCountErrors[spec.id] }) }}</span>
               <button type="button" class="ch-btn ghost sm" data-testid="channel-link-retry" @click="loadChatCounts">{{ t('action.retry') }}</button>
             </div>
-            <template v-else-if="!chatCounts[spec.platform]">
+            <template v-else-if="!chatCounts[spec.id]">
               <div class="ch-link-title" data-testid="channel-next-step">{{ t('channels.link.next-step') }}</div>
-              <p class="ch-link-desc">{{ t('channels.link.next-step-desc', { platform: platformName(spec.platform) }) }}</p>
-              <ChannelLinkGuide :store="store" :platform="spec.platform" @linked="loadChatCounts" />
+              <p class="ch-link-desc">{{ t('channels.link.next-step-desc', { platform: platformName(spec.id) }) }}</p>
+              <ChannelLinkGuide :store="store" :platform="spec.id" @linked="loadChatCounts" />
             </template>
             <template v-else>
               <div class="ch-link-summary">
-                <span data-testid="channel-linked-summary">{{ t('channels.link.linked-summary', { n: chatCounts[spec.platform] }) }}</span>
+                <span data-testid="channel-linked-summary">{{ t('channels.link.linked-summary', { n: chatCounts[spec.id] }) }}</span>
                 <button
                   type="button"
                   class="ch-btn ghost sm"
                   data-testid="channel-link-account"
-                  :aria-expanded="linkOpen === spec.platform"
-                  @click="linkOpen = linkOpen === spec.platform ? null : spec.platform"
+                  :aria-expanded="linkOpen === spec.id"
+                  @click="linkOpen = linkOpen === spec.id ? null : spec.id"
                 >{{ t('channels.link.link-account') }}</button>
               </div>
-              <ChannelLinkGuide v-if="linkOpen === spec.platform" :store="store" :platform="spec.platform" @linked="loadChatCounts" />
+              <ChannelLinkGuide v-if="linkOpen === spec.id" :store="store" :platform="spec.id" @linked="loadChatCounts" />
             </template>
           </div>
 
-          <form v-if="expanded === spec.platform" class="ch-form" @submit.prevent="save(spec)">
+          <form v-if="expanded === spec.id" class="ch-form" @submit.prevent="save(spec)">
             <div class="ch-form-notes">
               <p class="ch-form-needs" data-testid="channel-needs">{{ needsText(spec) }}</p>
-              <p v-if="te(`channels.hint.${spec.platform}`)" class="ch-form-hint" data-testid="channel-hint">{{ t(`channels.hint.${spec.platform}`) }}</p>
-              <p v-if="SINGLE_RECEIVER.has(spec.platform)" class="ch-form-hint" data-testid="channel-single-receiver">{{ t('channels.single-receiver-hint') }}</p>
+              <p v-if="te(`channels.hint.${spec.id}`)" class="ch-form-hint" data-testid="channel-hint">{{ t(`channels.hint.${spec.id}`) }}</p>
+              <p v-if="spec.singleReceiver" class="ch-form-hint" data-testid="channel-single-receiver">{{ t('channels.single-receiver-hint') }}</p>
             </div>
             <label v-for="f in spec.fields" :key="f.key" class="ch-field">
               <span class="ch-field-label">{{ t(`channels.field.${f.key}`) }}<template v-if="f.optional"> {{ t('channels.optional') }}</template></span>
-              <select v-if="f.options" v-model="drafts[spec.platform]![f.key]" class="ch-input" :name="f.key">
+              <select v-if="f.options" v-model="drafts[spec.id]![f.key]" class="ch-input" :name="f.key">
                 <option v-for="o in f.options" :key="o" :value="o">{{ t(`channels.option.${o}`) }}</option>
               </select>
               <input
                 v-else
-                v-model="drafts[spec.platform]![f.key]"
+                v-model="drafts[spec.id]![f.key]"
                 class="ch-input"
                 :type="f.secret ? 'password' : 'text'"
                 :name="f.key"
                 autocomplete="off"
                 spellcheck="false"
-                :placeholder="f.secret && stateOf(spec.platform)?.configured ? t('channels.secret-stored') : ''"
+                :placeholder="f.secret && stateOf(spec.id)?.configured ? t('channels.secret-stored') : ''"
               />
             </label>
-            <p v-if="errorByPlatform[spec.platform]" class="ch-error" role="alert">{{ errorByPlatform[spec.platform] }}</p>
+            <p v-if="errorByPlatform[spec.id]" class="ch-error" role="alert">{{ errorByPlatform[spec.id] }}</p>
             <div class="ch-form-actions">
               <button
-                v-if="stateOf(spec.platform)?.configured"
+                v-if="stateOf(spec.id)?.configured"
                 type="button"
                 class="ch-btn danger-ghost sm"
                 :disabled="busy"
                 data-testid="channel-remove"
-                @click="removePlatform(spec.platform)"
+                @click="removePlatform(spec.id)"
               >{{ t('channels.remove') }}</button>
               <span class="ch-spacer"></span>
               <button type="button" class="ch-btn ghost sm" :disabled="busy" @click="expanded = null">{{ t('channels.cancel') }}</button>
@@ -351,7 +334,7 @@ function formatTime(ts: number | null | undefined): string {
       <p class="ch-section-hint">{{ t('channels.pairing.hint') }}</p>
       <SettingsCard>
         <div v-for="req in store.pairing.value" :key="`${req.platform}:${req.code}`" class="ch-item" data-testid="pairing-row">
-          <span class="ch-mark sm" aria-hidden="true">{{ MARKS[req.platform] }}</span>
+          <span class="ch-mark sm" aria-hidden="true">{{ badgeOf(req.platform) }}</span>
           <div class="ch-item-text">
             <span class="ch-item-name">{{ req.sender_name || req.sender_id }}</span>
             <span class="ch-item-meta">{{ platformName(req.platform) }} · {{ formatTime(req.created_at) }}</span>
@@ -368,7 +351,7 @@ function formatTime(ts: number | null | undefined): string {
     <SettingsSection v-if="store.allow.value.length" :label="t('channels.allow.title')">
       <SettingsCard>
         <div v-for="entry in store.allow.value" :key="`${entry.platform}:${entry.sender_id}`" class="ch-item" data-testid="allow-row">
-          <span class="ch-mark sm" aria-hidden="true">{{ MARKS[entry.platform] }}</span>
+          <span class="ch-mark sm" aria-hidden="true">{{ badgeOf(entry.platform) }}</span>
           <div class="ch-item-text">
             <span class="ch-item-name">{{ entry.sender_name || entry.sender_id }}</span>
             <span class="ch-item-meta">{{ platformName(entry.platform) }} · {{ entry.sender_id }}</span>

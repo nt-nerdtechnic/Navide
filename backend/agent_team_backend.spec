@@ -73,7 +73,7 @@ a = Analysis(
         'agent_team_backend.plugins.builtin.navide_skills.skills_tools',
         # Chat channel adapters: channels/manager.py imports each platform by
         # name (importlib.import_module), so the graph walk never sees them.
-        # test_pyinstaller_spec.py holds this list to channels.manager.PLATFORMS.
+        # test_pyinstaller_spec.py holds this list to channels.registry.PLATFORMS.
         'agent_team_backend.channels.telegram',
         'agent_team_backend.channels.discord',
         'agent_team_backend.channels.slack',
