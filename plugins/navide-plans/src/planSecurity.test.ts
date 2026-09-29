@@ -71,6 +71,16 @@ describe('planSecurity', () => {
       expect(html).toContain(`<script nonce="${nonce}">${TRUSTED_SCRIPT} /* bound:${documentToken} */</script>`)
     })
 
+    it('keeps a leading doctype first so the preview does not fall into quirks mode', () => {
+      const { html } = preparePlanDocHtml('<!DOCTYPE html>\n<html><body>Hi</body></html>', {
+        buildTrustedRuntimeScript: () => TRUSTED_SCRIPT,
+        nonce: VALID_NONCE,
+      })
+
+      expect(html.startsWith('<!DOCTYPE html>')).toBe(true)
+      expect(html.indexOf('Content-Security-Policy')).toBeGreaterThan(html.indexOf('<!DOCTYPE html>'))
+    })
+
     it('rejects invalid nonces', () => {
       for (const invalid of [
         'bad',

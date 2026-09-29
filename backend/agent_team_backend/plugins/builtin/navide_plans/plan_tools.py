@@ -575,8 +575,10 @@ async def plan_create(
 ) -> dict[str, Any]:
     """Create a new plan document in the workspace's .agent-team/plans/ directory.
 
-    The file is copied from the provisioned _template.html (auto-provisioned
-    if missing), named <kebab-slug>_<6-hex>.html per the plan spec. Each todos
+    The file is copied from the provisioned _template.html, named
+    <kebab-slug>_<6-hex>.html per the plan spec. The Plans backend fails when
+    the template is missing; only the degraded fallback provisions it first.
+    Each todos
     item is either a plain string (the todo content; id auto-assigned as t1,
     t2, ...) or a {"id": "<kebab-case>", "content": "...", "owner": "user"}
     object. Set `owner: "user"` on anything only the user can do — a manual

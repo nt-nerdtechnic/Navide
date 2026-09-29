@@ -134,11 +134,6 @@ const collapsedSections = ref<Set<string>>(new Set(['archived']))
 const loading = ref(false)
 const error = ref('')
 const busy = ref(false)
-const newName = ref('')
-const newOverview = ref('')
-const newTodos = ref('')
-const todoStatus = ref('pending')
-const selectedTodoId = ref('')
 const recentPaths = ref<string[]>([])
 const pinnedPaths = ref<string[]>([])
 const sidebarCollapsed = ref(false)
@@ -150,7 +145,6 @@ const contextMenu = ref<{ x: number; y: number; relPath: string } | null>(null)
 const renameInput = ref<HTMLInputElement | null>(null)
 const renameTarget = ref<string | null>(null)
 const renameValue = ref('')
-const showCreateForm = ref(false)
 let stopTarget: (() => void) | null = null
 let plansSubscription: ReturnType<typeof plansBackend.subscribe> | null = null
 /** One saved document produces several plans.changed events and a file storm
@@ -622,8 +616,6 @@ function applySelected(document: PlanDocument, relPath: string): void {
   previewAnchorCounts = countNoteAnchors(document.meta?.reviewNotes ?? [])
   selected.value = { ...document, rel_path: document.rel_path || relPath }
   selectedPath.value = relPath
-  selectedTodoId.value = document.meta?.todos[0]?.id ?? ''
-  todoStatus.value = document.meta?.todos[0]?.status ?? 'pending'
   markdownRefresh.value++
   persistLastOpened(relPath)
 }
@@ -654,7 +646,6 @@ function openHtmlPreview(target: { path: string; name: string }): void {
   documentLoadError.value = null
   selected.value = null
   selectedPath.value = ''
-  selectedTodoId.value = ''
   htmlPreviewTarget.value = target
 }
 
@@ -782,46 +773,7 @@ async function loadPlans(openSelected = true): Promise<void> {
   }
 }
 
-async function createPlan(): Promise<void> {
-  if (!newName.value.trim()) return
-  busy.value = true
-  try {
-    const result = await plansBackend.call<{ rel_path: string }>('plans.create', {
-      name: newName.value,
-      overview: newOverview.value,
-      todos: newTodos.value.split('\n').map((line) => line.trim()).filter(Boolean),
-    })
-    newName.value = ''
-    newOverview.value = ''
-    newTodos.value = ''
-    await loadPlans(false)
-    await openPlan(result.rel_path)
-    toast(t('pane.plans.v2.plan-created'), { type: 'success' })
-  } catch (cause) {
-    toast(formatBackendError(cause), { type: 'error' })
-  } finally {
-    busy.value = false
-  }
-}
 
-
-async function updateTodo(): Promise<void> {
-  if (!selectedPath.value || !selectedTodoId.value) return
-  busy.value = true
-  try {
-    await plansBackend.call('plans.update_todo', {
-      rel_path: selectedPath.value,
-      todo_id: selectedTodoId.value,
-      status: todoStatus.value,
-    })
-    await loadPlans(false)
-    await refreshSelected()
-  } catch (cause) {
-    toast(formatBackendError(cause), { type: 'error' })
-  } finally {
-    busy.value = false
-  }
-}
 
 interface ReviewTarget {
   path: string
@@ -915,6 +867,8 @@ async function archiveAllDone(): Promise<void> {
     await refreshSelected()
   } catch (cause) {
     toast(formatBackendError(cause), { type: 'error' })
+    // Earlier items already took effect; show what is really left.
+    await loadPlans(false)
   } finally {
     busy.value = false
   }
@@ -966,6 +920,8 @@ async function deleteCompleted(): Promise<void> {
     }
   } catch (cause) {
     toast(formatBackendError(cause), { type: 'error' })
+    // Earlier items already took effect; show what is really left.
+    await loadPlans(false)
   } finally {
     busy.value = false
   }
@@ -1245,7 +1201,7 @@ async function submitRename(): Promise<void> {
   try {
     const result = await plansBackend.call<{ to: string }>('plans.rename', {
       from: target,
-      to: `.agent-team/plans/${nextName}`,
+      to: `${target.includes('/') ? target.slice(0, target.lastIndexOf('/') + 1) : '.agent-team/plans/'}${nextName}`,
     })
     if (selectedPath.value === target) selectedPath.value = result.to
     await loadPlans(false)

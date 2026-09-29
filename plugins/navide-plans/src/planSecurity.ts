@@ -83,7 +83,13 @@ export function preparePlanDocHtml(
   }
 
   const cspMeta = buildPlanCspMeta(nonce)
-  const sanitizedContent = cspMeta + stripExecutableScripts(content)
+  const stripped = stripExecutableScripts(content)
+  // A doctype must stay the first thing in the document or the frame renders
+  // in quirks mode; the CSP meta goes right after it.
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(stripped)
+  const sanitizedContent = doctype
+    ? stripped.slice(0, doctype[0].length) + cspMeta + stripped.slice(doctype[0].length)
+    : cspMeta + stripped
   const runtimeTag = `<script nonce="${nonce}">${trustedRuntimeScript}</scr` + 'ipt>'
 
   const bodyClose = sanitizedContent.search(/<\/body>/i)

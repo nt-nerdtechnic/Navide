@@ -694,6 +694,18 @@ describe('PlanReviewToolbar – external refresh', () => {
     expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--approved')
   })
 
+  it('re-reads when the broadcast names the enclosing project root of the window workspace', async () => {
+    // The Host reports the plan root (the git root), which is an ancestor of a
+    // window opened on a repository subdirectory.
+    const { wrapper, setContent, emitBackend } = await mountToolbar(planDoc(baseMeta()))
+    setContent(planDoc(baseMeta({ stage: 'approved', approvedAt: '2026-07-19T00:00:00Z' })))
+
+    emitBackend('plans.changed', { workspace_path: '/' })
+    await flushPromises()
+
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+
   it('ignores plans.changed broadcasts for other workspaces', async () => {
     const { wrapper, setContent, emitBackend } = await mountToolbar(planDoc(baseMeta()))
     setContent(planDoc(baseMeta({ stage: 'approved', approvedAt: '2026-07-19T00:00:00Z' })))

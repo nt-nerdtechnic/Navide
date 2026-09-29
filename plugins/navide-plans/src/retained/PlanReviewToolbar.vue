@@ -170,14 +170,25 @@ async function loadContent(notifyHost = false): Promise<void> {
   }
 }
 
-// No fs-watch exists in the app; re-read on window focus so external edits
-// (e.g. by an agent) refresh the toolbar and, via `updated`, the preview.
+// Re-read on window focus as a last resort, so external edits (e.g. by an
+// agent) refresh the toolbar and, via `updated`, the preview.
 function onWindowFocus(): void {
   void loadContent(true)
 }
 
 // Primary live-refresh path: the backend broadcasts plans.changed when any
 // plan document changes on disk; the focus listener stays as a last resort.
+// The Host names the plan root (the git root), which is an ancestor of a window
+// opened on a repository subdirectory, so match on ancestry rather than equality.
+// Deliberately loose (either side may be the ancestor): tightening it back to
+// equality reintroduces the missed live refresh for subdirectory workspaces.
+function isSameProject(root: unknown, workspacePath: string): boolean {
+  if (typeof root !== 'string' || !root) return false
+  const dir = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '') + '/'
+  const a = dir(root)
+  const b = dir(workspacePath)
+  return a === b || b.startsWith(a) || a.startsWith(b)
+}
 let offPlansChanged: (() => void) | null = null
 let offExecutionResult: (() => void) | null = null
 onMounted(() => {
@@ -185,7 +196,7 @@ onMounted(() => {
   window.addEventListener('focus', onWindowFocus)
   offPlansChanged = props.backend.on('plans.changed', (payload) => {
     const p = payload as { workspace_path?: unknown } | null
-    if (p && p.workspace_path === props.workspacePath) void loadContent(true)
+    if (p && isSameProject(p.workspace_path, props.workspacePath)) void loadContent(true)
   })
   offExecutionResult = plansShell.onPlanExecutionResult(onExecutionResult) ?? null
 })

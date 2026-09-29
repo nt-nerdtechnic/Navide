@@ -1017,6 +1017,51 @@ describe('PlansApp', () => {
     })
   })
 
+  it('renames a plan inside the directory it lives in instead of moving it', async () => {
+    const docsPath = 'docs/plans/elsewhere_a1b2c3.html'
+    state.list[0].rel_path = docsPath
+    state.documents[docsPath] = state.documents[existingPath]
+    const view = await mountPlans()
+    await view.get('.plan-row').trigger('contextmenu', { clientX: 50, clientY: 50 })
+    await view.findAll('.context-menu button').find(button => button.text() === 'action.rename')!.trigger('click')
+    await view.get('.rename-dialog input').setValue('renamed_a1b2c3.html')
+    await view.get('.rename-dialog').trigger('submit')
+    await flushPromises()
+
+    expect(state.calls).toContainEqual({
+      name: 'plans.rename',
+      args: { from: docsPath, to: 'docs/plans/renamed_a1b2c3.html' },
+    })
+  })
+
+  it('reloads the list when a bulk delete fails part-way', async () => {
+    const donePlan = (name: string) => {
+      const relPath = `.agent-team/plans/${name}_a1b2c3.html`
+      const meta = { schemaVersion: 1, name, overview: '', stage: 'done', todos: [], reviewNotes: [] }
+      state.documents[relPath] = { rel_path: relPath, meta, html: '<html />' }
+      return { rel_path: relPath, name, stage: 'done', meta }
+    }
+    const first = donePlan('first')
+    const second = donePlan('second')
+    state.list = [...state.list, first, second]
+    const original = (window as any).nav.callBackend
+    ;(window as any).nav.callBackend = async (reqId: string, name: string, args: Record<string, unknown>) => {
+      if (name === 'plans.delete' && args.rel_path === second.rel_path) {
+        state.calls.push({ name, args })
+        return { reqId, ok: false, error: { code: 'BACKEND_ERROR', message: 'nope' } }
+      }
+      return original(reqId, name, args)
+    }
+    const view = await mountPlans()
+    const listCalls = () => state.calls.filter(call => call.name === 'plans.list').length
+    const before = listCalls()
+    await view.findAll('button').find(button => button.text() === 'pane.plans.delete-all')!.trigger('click')
+    await flushPromises()
+
+    expect(state.calls.some(call => call.name === 'plans.delete' && call.args.rel_path === first.rel_path)).toBe(true)
+    expect(listCalls()).toBeGreaterThan(before)
+  })
+
   it('confirms Plan deletion through the application confirmation service', async () => {
     const view = await mountPlans()
     const nativeConfirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
