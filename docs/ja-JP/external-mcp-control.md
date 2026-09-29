@@ -388,7 +388,7 @@ Host Wiring — だけです。Navide の CLI Pane から、その Pane 自身�
 | `ui.pane.interrupt` | `{paneId}` | その Pane の割り込みキーを押す。`{sent, status, advisories?}` を返す — `status` は押す**前**に読まれます。押すこと自体が、報告しようとしているその状態を変えてしまうためです |
 | `ui.tab.switch` | `{tabId}` | Active な Stage/Run-group タブを切り替え |
 | `ui.preview.show` | `{kind, …}` | 右レールのプレビューパネルにファイル・diff・インラインスニペットを表示 |
-| `ui.window.openPlans` | — | Plan ウィンドウを開く |
+| `ui.window.openPlans` | `{rel_path?}` | Plan ウィンドウを開く。`rel_path`（`.agent-team/plans/<name>.html`、相対パス、`..` 不可）を渡すとその Plan 1 件に絞って開く |
 | `ui.window.openResourceManager` | — | Resource Manager を開く（CPU／メモリ／ディスク使用量とストレージ整理） |
 | `ui.window.openTurnStats` | — | Turn Stats を開く（CLI ペイン 1 つのターンごとのトークン使用量） |
 | `ui.window.openGit` | — | 現在の Workspace の Git ウィンドウを開く |

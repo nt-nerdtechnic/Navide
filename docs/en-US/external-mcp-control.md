@@ -398,7 +398,7 @@ documented argument shapes.
 | `ui.pane.place` | `{paneId, runGroupId?, spawnedBy?}` | Move a pane to a tab group and/or make it a child of another pane. Each key is optional and independent; `""` is a value (ungrouped tab / root), an absent key is left alone. Group first, then parent. Returns `{paneId, applied, runGroupId, spawnedBy}`. The action behind `cli_place_pane` |
 | `ui.tab.switch` | `{tabId}` | Switch the active stage/run-group tab |
 | `ui.preview.show` | `{kind, …}` | Show a file, diff or inline snippet in the right rail's preview panel |
-| `ui.window.openPlans` | — | Open the Plan window |
+| `ui.window.openPlans` | `{rel_path?}` | Open the Plan window; with `rel_path` (`.agent-team/plans/<name>.html`, relative, no `..`) it opens focused on that one plan document |
 | `ui.window.openResourceManager` | — | Open the Resource Manager (CPU, memory and disk usage, with storage cleanup) |
 | `ui.window.openTurnStats` | — | Open Turn Stats (per-turn token usage of one CLI pane) |
 | `ui.window.openGit` | — | Open the Git window for the current workspace |

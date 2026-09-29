@@ -340,7 +340,7 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 | `ui.pane.interrupt` | `{paneId}` | 對該 Pane 按下它的中斷鍵。回傳 `{sent, status, advisories?}` —— `status` 是在按下**之前**讀的，因為這一按會改變它自己要回報的那個狀態 |
 | `ui.tab.switch` | `{tabId}` | 切換作用中的 Stage／Run-group 分頁 |
 | `ui.preview.show` | `{kind, …}` | 在右側 rail 的預覽面板顯示檔案、diff 或內嵌片段 |
-| `ui.window.openPlans` | — | 開啟 Plan 視窗 |
+| `ui.window.openPlans` | `{rel_path?}` | 開啟 Plan 視窗；帶 `rel_path`（`.agent-team/plans/<name>.html`，相對路徑、不含 `..`）則聚焦開啟該份 plan |
 | `ui.window.openResourceManager` | — | 開啟 Resource Manager（CPU／記憶體／磁碟用量與儲存清理） |
 | `ui.window.openTurnStats` | — | 開啟 Turn Stats（單一 CLI pane 的每輪 token 用量） |
 | `ui.window.openGit` | — | 為目前 Workspace 開啟 Git 視窗 |
