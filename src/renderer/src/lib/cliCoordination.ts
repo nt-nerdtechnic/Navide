@@ -1,6 +1,9 @@
 import { parseEventMs, turnTextFingerprint } from './completion'
 import type { EchoEvidence } from './injectEcho'
 
+export const MAX_KICKOFF_ATTEMPTS = 3
+export const MAX_PERSIST_PANE_ATTEMPTS = 8
+
 /** Retry only an injection that left the composer empty. A failed submit with
  * an observed echo must never append a second copy of the kickoff. */
 export async function runPipelineKickoff(input: {
@@ -10,14 +13,14 @@ export async function runPipelineKickoff(input: {
   onHeld?: () => void
   onRetry?: (attempt: number) => void
 }): Promise<{ sent: boolean; cancelled: boolean }> {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= MAX_KICKOFF_ATTEMPTS; attempt++) {
     const result = await input.inject()
     if (result.injected) return { sent: true, cancelled: false }
     if (result.echo != null) {
       input.onHeld?.()
       break
     }
-    if (attempt < 3) {
+    if (attempt < MAX_KICKOFF_ATTEMPTS) {
       input.onRetry?.(attempt)
       await input.sleep(3000)
       if (!input.paneAlive()) return { sent: false, cancelled: true }
@@ -67,7 +70,7 @@ export function createPaneSessionPersistence() {
     } else {
       const count = (attempts.get(key) ?? 0) + 1
       attempts.set(key, count)
-      if (count >= 8) persisted.add(key)
+      if (count >= MAX_PERSIST_PANE_ATTEMPTS) persisted.add(key)
     }
   }
 }

@@ -481,8 +481,11 @@ async def test_reply_to_a_childs_message_routes_to_that_child(env: Env) -> None:
     assert env.fake.delivered[-1][0] == "pane-1"
 
 
-async def test_high_risk_child_prompt_still_cannot_be_approved_from_the_chat(env: Env) -> None:
+async def test_high_risk_child_prompt_still_cannot_be_approved_from_the_chat(env: Env, tmp_path) -> None:
     env.tg.capabilities = NO_THREADS
+    # Classify the prompt in its pane's workspace. Falling back to HOME makes
+    # the result depend on whether the runner's home is a temporary directory.
+    env.m._seams.pane_workspace = lambda _pane_id: str(tmp_path / "workspace")
     env.fake.prompt = "Allow Bash(rm -rf ./dist ../cache)?"
     _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
     env.fake.states["pane-2"] = {"exists": True, "busy": True, "display_status": "awaiting"}

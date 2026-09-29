@@ -35,6 +35,26 @@ function fnBody(header: string): string {
   return appSource.slice(start, end)
 }
 
+function kickoffCompletion(act: string): number {
+  const call = /const kickoffResult = await runPipelineKickoff\(\{[\s\S]*?\n    \}\)/.exec(act)
+  expect(call, 'the awaited kickoff call').not.toBeNull()
+  return call!.index + call![0].length
+}
+
+function assertImmediateRouterArm(act: string): void {
+  const completed = kickoffCompletion(act)
+  const arm = act.indexOf('armRouterCursors(router, pane.id)')
+  expect(arm, 'the arm after kickoff completion').toBeGreaterThan(completed)
+  const between = act.slice(completed, arm).replace(/\/\/[^\n]*/g, '')
+  // Start at the actual await completion, before cancellation and the local
+  // result assignment. Neither may hide a new round trip or render pass.
+  expect(between).toContain('if (kickoffResult.cancelled)')
+  expect(between).toContain('const ok = kickoffResult.sent')
+  expect(between, 'an await inside the window').not.toMatch(/\bawait\b/)
+  expect(between, 'a render pass inside the window').not.toContain('syncViews()')
+  expect(arm).toBeLessThan(act.indexOf("pane.kickoffStatus = ok ? 'sent' : 'failed'"))
+}
+
 describe('the 128KB buffer trim cannot silently move the scan window', () => {
   it('uses the shared re-base rule rather than open-coding the arithmetic', () => {
     expect(appSource).toMatch(/from '\.\/lib\/bufferCursor'/)
@@ -183,7 +203,7 @@ describe('the Manager router does not read its own kickoff echo as a result', ()
 
   describe('and the floor is taken in the one window where both risks are avoided', () => {
     const act = body('async function activateStage(', '\nasync function spawnPipelineStage(')
-    const inject = act.lastIndexOf('const ok = kickoffResult.sent')
+    const inject = kickoffCompletion(act)
     const arm = act.indexOf('armRouterCursors(router, pane.id)')
 
     it('after the kickoff injection, so the echo stays below the floor', () => {
@@ -200,10 +220,21 @@ describe('the Manager router does not read its own kickoff echo as a result', ()
       // land below the floor, and the router has no fallback for one — it is
       // simply never routed to the Manager. Two WS round trips and a syncViews
       // used to sit in there.
-      const between = act.slice(inject, arm)
-      expect(between, 'a backend round trip inside the window').not.toContain('await sendQuiet')
-      expect(between, 'a render pass inside the window').not.toContain('syncViews()')
-      expect(arm).toBeLessThan(act.indexOf("pane.kickoffStatus = ok ? 'sent' : 'failed'"))
+      assertImmediateRouterArm(act)
+    })
+
+    it.each(['await sendQuiet("test")', 'syncViews()'])(
+      'detects %s inserted before the local result assignment', (statement) => {
+        const mutant = act.replace('const ok = kickoffResult.sent', `${statement}\n    const ok = kickoffResult.sent`)
+        expect(mutant).not.toBe(act)
+        expect(() => assertImmediateRouterArm(mutant)).toThrow()
+      },
+    )
+
+    it('detects a round trip inserted before the cancellation check', () => {
+      const mutant = act.replace('if (kickoffResult.cancelled)', 'await sendQuiet("test")\n    if (kickoffResult.cancelled)')
+      expect(mutant).not.toBe(act)
+      expect(() => assertImmediateRouterArm(mutant)).toThrow()
     })
 
     it('…but only when the injection verified its echo', () => {

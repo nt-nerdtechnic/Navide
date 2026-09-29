@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { transformWithEsbuild } from 'vite'
-import { runPipelineKickoff } from '../../lib/cliCoordination'
+import { MAX_KICKOFF_ATTEMPTS, runPipelineKickoff } from '../../lib/cliCoordination'
 
 // A pipeline used to pre-spawn EVERY stage the moment Start was pressed, so an
 // N-stage run held N×M CLIs at once and paid the ~190MB-per-claude floor for
@@ -240,6 +240,7 @@ async function loadActivate(over: { stageCount?: number } = {}) {
     'roleLabel',
     'ROLE_STANDBY_SUFFIX',
     'runPipelineKickoff',
+    'MAX_KICKOFF_ATTEMPTS',
     code,
   )
   const api = factory(
@@ -277,6 +278,7 @@ async function loadActivate(over: { stageCount?: number } = {}) {
     () => '',
     '',
     runPipelineKickoff,
+    MAX_KICKOFF_ATTEMPTS,
   )
   return {
     api,

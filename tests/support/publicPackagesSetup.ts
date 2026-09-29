@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import type { TestProject } from 'vitest/node'
 
 // Vitest globalSetup. The tests that consume the public packages — as packed
@@ -69,17 +70,74 @@ export function missingArtifactInputs(root: string): string[] {
   ].filter((file) => !existsSync(join(root, file)))
 }
 
-export default function setup(project: TestProject): () => void {
+function artifactDigest(root: string, paths: string[], source = false): string {
+  const hash = createHash('sha256')
+  const visit = (path: string): void => {
+    hash.update(`${relative(root, path)}\0`)
+    if (!existsSync(path)) { hash.update('missing\0'); return }
+    if (statSync(path).isDirectory()) {
+      for (const entry of readdirSync(path).sort()) {
+        if (source && ['node_modules', 'dist', 'out', 'coverage', '.git'].includes(entry)) continue
+        visit(join(path, entry))
+      }
+    } else hash.update(readFileSync(path)).update('\0')
+  }
+  for (const path of paths.sort()) visit(join(root, path))
+  if (source) {
+    // NODE_ENV is deliberately removed by pnpm() above. Include the toolchain
+    // and build overrides that can otherwise change output without a source edit.
+    hash.update(JSON.stringify({
+      node: process.version, executable: process.execPath, platform: process.platform, arch: process.arch,
+      environment: Object.entries(process.env).filter(([key]) =>
+        key.startsWith('VITE_') || ['NAVIDE_PLUGIN_ARTIFACT_VERSION', 'NAVIDE_MINI_IDE_DIST_DIR',
+          'NAVIDE_PNPM', 'npm_execpath', 'npm_config_user_agent', 'NODE_OPTIONS',
+          'SOURCE_DATE_EPOCH', 'LANG', 'LC_ALL', 'TZ'].includes(key)).sort(),
+    }))
+  }
+  return hash.digest('hex')
+}
+
+export function prepareArtifactInputs(root: string, build: () => void, prepared = false): void {
   // CI has just run the unconditional application build in this same job.
   // Reuse those outputs without trusting a cache or rebuilding under Vitest's
   // NODE_ENV. A standalone artifact test prepares only the inputs it needs.
-  if (process.env.NAVIDE_TEST_ARTIFACTS_PREBUILT === '1') {
-    const missing = missingArtifactInputs(repositoryRoot)
+  if (prepared) {
+    const missing = missingArtifactInputs(root)
     if (missing.length) throw new Error(`Prepared artifact inputs missing: ${missing.join(', ')}`)
-  } else {
+    return
+  }
+
+  const stamp = join(root, 'node_modules/.cache/navide-artifact-inputs.json')
+  const inputs = artifactDigest(root, [
+    ...builtPackages, 'plugins/navide-mini-ide', 'tests/support/publicPackagesSetup.ts',
+    'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc',
+    ...readdirSync(root).filter((file) => /^tsconfig.*\.json$/.test(file) || /^\.env(?:\.|$)/.test(file)),
+    ...['typescript', 'vue-tsc', 'vite', '@vitejs/plugin-vue'].map((name) => `node_modules/${name}/package.json`),
+  ], true)
+  const outputs = () => artifactDigest(root, [
+    ...builtPackages.map((directory) => `${directory}/dist`), 'dist-plugins/navide-mini-ide',
+  ])
+  let cached: { inputs?: string; outputs?: string } | null = null
+  if (existsSync(stamp)) {
+    try { cached = JSON.parse(readFileSync(stamp, 'utf8')) }
+    catch { /* An interrupted stamp write must rebuild. */ }
+  }
+  if (cached?.inputs === inputs && missingArtifactInputs(root).length === 0 && cached.outputs === outputs()) return
+
+  // Never leave a previous success marker behind a partial or failed build.
+  rmSync(stamp, { force: true })
+  build()
+  const missing = missingArtifactInputs(root)
+  if (missing.length) throw new Error(`Built artifact inputs missing: ${missing.join(', ')}`)
+  mkdirSync(dirname(stamp), { recursive: true })
+  writeFileSync(stamp, JSON.stringify({ inputs, outputs: outputs() }))
+}
+
+export default function setup(project: TestProject): () => void {
+  prepareArtifactInputs(repositoryRoot, () => {
     pnpm(['run', 'build:public-packages'], repositoryRoot)
     pnpm(['run', 'build:mini-ide:v2'], repositoryRoot)
-  }
+  }, process.env.NAVIDE_TEST_ARTIFACTS_PREBUILT === '1')
 
   // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); tools
   // downstream resolve to the long form.

@@ -146,7 +146,7 @@ import {
 } from '@navide/terminal'
 import { planDropPrompt, type PlanDragRef } from './lib/planDrag'
 import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, clearProvisionalStall, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, loopBackoffMs, loopContinueReady, loopSettleMs, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
-import { createPaneSessionPersistence, createTurnTextGate, runPipelineKickoff } from './lib/cliCoordination'
+import { createPaneSessionPersistence, createTurnTextGate, MAX_KICKOFF_ATTEMPTS, runPipelineKickoff } from './lib/cliCoordination'
 import { reorderByIds, reorderStrings, sortByIdOrder } from './lib/paneOrder'
 import { computeRangeSelection } from './lib/paneSelection'
 import { resolveDragBatch, reorderBatchByIds, withFoldedSubtree } from './lib/paneBatchDrag'
@@ -6148,7 +6148,6 @@ function scheduleInjection(pane: ActivePane): void {
       // Use bracketed-paste so newlines in the context header (prior-stage
       // documents) are preserved — without it they become Enter keypresses
       // and fragment the prompt into multiple partial submissions.
-      const MAX_KICKOFF_ATTEMPTS = 3
       const kickoffResult = await runPipelineKickoff({
         inject: async () => {
           const evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
@@ -12051,7 +12050,6 @@ async function activateStage(index: number): Promise<void> {
       }) +
       sessionMarkerLine(pane.sessionMarker)
     pipelineLog(`${tag} ➜ injecting kickoff (${kickoff.length} chars)`)
-    const MAX_KICKOFF_ATTEMPTS = 3
     const kickoffResult = await runPipelineKickoff({
       inject: async () => {
         const evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
