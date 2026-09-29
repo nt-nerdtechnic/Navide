@@ -276,6 +276,34 @@ async def test_prewarm_logs_its_outcome_at_info(
     assert lines()[2] == "voice.prewarm: not ready reason=model-missing"
 
 
+async def test_status_reports_the_engine_starting_and_why_a_start_failed(
+    voice: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session()
+    status = await call(session, "voice.status")
+    assert status["starting"] is False and status["error"] is None
+    task = asyncio.create_task(call(session, "voice.prewarm"))
+    await asyncio.sleep(0)
+    await task
+    status = await call(session, "voice.status")
+    assert status["running"] is True and status["starting"] is False and status["error"] is None
+
+    await call(session, "voice.shutdown")
+    real = stt_service.SttSidecar._await_ready
+
+    async def broken(self, proc):  # noqa: ANN001
+        raise stt_service.SidecarError("sidecar exited before ready (code 1)")
+
+    monkeypatch.setattr(stt_service.SttSidecar, "_await_ready", broken)
+    assert (await call(session, "voice.prewarm")) == {"ok": False, "reason": "sidecar-failed"}
+    status = await call(session, "voice.status")
+    assert status["running"] is False and status["error"] == "sidecar exited before ready (code 1)"
+
+    monkeypatch.setattr(stt_service.SttSidecar, "_await_ready", real)
+    assert (await call(session, "voice.prewarm")) == {"ok": True}
+    assert (await call(session, "voice.status"))["error"] is None
+
+
 async def test_a_cold_start_is_logged(voice: Path, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("INFO", logger=voice_handlers.__name__):
         assert (await call(_Session(), "voice.start"))["ok"] is True

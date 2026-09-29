@@ -240,13 +240,28 @@ class SttSidecar:
         self._idle_task: asyncio.Task | None = None
         self._next_id = 0
         self.gpu: bool | None = None
+        # Why the latest start failed; cleared by a successful one. Shown in
+        # Settings so a broken engine says so instead of looking merely idle.
+        self.last_error: str | None = None
 
     @property
     def running(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
 
+    @property
+    def starting(self) -> bool:
+        return self._start_lock.locked() and not self.running
+
     async def ensure_started(self) -> None:
         """Spawn the sidecar and wait for ``ready``. Raises SidecarError."""
+        try:
+            await self._ensure_started()
+        except SidecarError as err:
+            self.last_error = str(err)
+            raise
+        self.last_error = None
+
+    async def _ensure_started(self) -> None:
         async with self._start_lock:
             if self.running:
                 self._touch()

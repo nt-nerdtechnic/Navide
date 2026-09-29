@@ -1489,7 +1489,16 @@
       "download-starting": "ダウンロードを開始しています…",
       "download-progress": "{done} / {total} MB（{pct}%）",
       "download-done": "ダウンロード完了",
-      "download-failed": "ダウンロードに失敗しました：{error}"
+      "download-failed": "ダウンロードに失敗しました：{error}",
+      "engine": "音声エンジン",
+      "engine-starting": "起動中…（初回は最大 1 分ほどかかります）",
+      "engine-ready": "実行中 · {device}",
+      "engine-idle": "停止中 — ショートカットを押すと自動で起動します",
+      "engine-needs-model": "音声モデルのダウンロードを待っています",
+      "engine-failed": "起動できませんでした：{reason}",
+      "engine-start": "今すぐ起動",
+      "engine-retry": "再試行",
+      "download-retry": "ダウンロードを再試行"
     },
     "general": {
       "auto-resume-reconnect": "バックエンドの再起動後にセッションを再開",

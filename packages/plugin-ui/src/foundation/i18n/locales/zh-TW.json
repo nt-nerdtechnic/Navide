@@ -1489,7 +1489,16 @@
       "download-starting": "開始下載…",
       "download-progress": "{done} / {total} MB（{pct}%）",
       "download-done": "下載完成",
-      "download-failed": "下載失敗：{error}"
+      "download-failed": "下載失敗：{error}",
+      "engine": "語音引擎",
+      "engine-starting": "啟動中…（第一次啟動最久可能要一分鐘）",
+      "engine-ready": "執行中 · {device}",
+      "engine-idle": "未執行 — 按下快捷鍵時會自動啟動",
+      "engine-needs-model": "等待語音模型下載完成",
+      "engine-failed": "無法啟動：{reason}",
+      "engine-start": "立即啟動",
+      "engine-retry": "重試",
+      "download-retry": "重新下載"
     },
     "general": {
       "auto-resume-reconnect": "後端重啟後自動接回工作階段",

@@ -1489,7 +1489,16 @@
       "download-starting": "Starting download…",
       "download-progress": "{done} / {total} MB ({pct}%)",
       "download-done": "Download complete",
-      "download-failed": "Download failed: {error}"
+      "download-failed": "Download failed: {error}",
+      "engine": "Speech engine",
+      "engine-starting": "Starting… (the first start can take up to a minute)",
+      "engine-ready": "Running · {device}",
+      "engine-idle": "Not running — it starts automatically when you press the shortcut",
+      "engine-needs-model": "Waiting for the speech model to be downloaded",
+      "engine-failed": "Could not start: {reason}",
+      "engine-start": "Start now",
+      "engine-retry": "Retry",
+      "download-retry": "Retry download"
     },
     "general": {
       "auto-resume-reconnect": "Resume sessions after a backend restart",

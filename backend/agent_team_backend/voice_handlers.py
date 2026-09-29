@@ -230,6 +230,8 @@ async def voice_status(session: "Session", msg_id: str, msg_type: str, payload: 
         "model": await stt_service.run_blocking(stt_service.model_info),
         "running": bool(sidecar and sidecar.running),
         "gpu": sidecar.gpu if sidecar is not None else None,
+        "starting": bool(sidecar and sidecar.starting),
+        "error": sidecar.last_error if sidecar is not None else None,
     })
 
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { voiceErrorI18nKey } from '../../composables/useVoiceInput'
 import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingRow from './SettingRow.vue'
@@ -16,9 +17,11 @@ import {
 } from '../../voice/voiceSettings'
 import type { useBackend } from '../../composables/useBackend'
 
-// Settings → Voice Input. The model status is only asked for while
-// voice input is on: with it off this section is one switch and nothing is
-// sent to the backend.
+// Settings → Voice Input. Two separate statuses: the Model (a file on disk)
+// and the Engine (the sidecar process that loads it). A downloaded model says
+// nothing about whether the engine is running. Both are asked for only while
+// voice input is on and this section is shown: with it off this section is
+// one switch and nothing is sent to the backend.
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
 defineEmits<{ 'open-shortcuts': [command: string] }>()
@@ -40,6 +43,9 @@ interface VoiceStatus {
   sidecar?: 'ok' | 'missing'
   model?: { present?: boolean; bytes?: number; path?: string }
   gpu?: boolean | null
+  running?: boolean
+  starting?: boolean
+  error?: string | null
 }
 interface Progress { bytes: number; total: number; done: boolean; error?: string }
 
@@ -47,6 +53,12 @@ const status = ref<VoiceStatus | null>(null)
 const statusError = ref(false)
 const progress = ref<Progress | null>(null)
 let offProgress: (() => void) | null = null
+// The engine is polled while the section is shown and voice input is on.
+const ENGINE_POLL_MS = 2_000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+/** A "Start now" / "Retry" request is in flight (the load can take a minute). */
+const enginePending = ref(false)
+const engineFailure = ref('')
 
 async function refreshStatus(): Promise<void> {
   try {
@@ -70,6 +82,34 @@ function subscribeProgress(): void {
 function unsubscribeProgress(): void {
   offProgress?.()
   offProgress = null
+}
+
+function startPolling(): void {
+  if (pollTimer !== null) return
+  pollTimer = setInterval(() => void refreshStatus(), ENGINE_POLL_MS)
+}
+
+function stopPolling(): void {
+  if (pollTimer !== null) clearInterval(pollTimer)
+  pollTimer = null
+}
+
+async function startEngine(): Promise<void> {
+  if (enginePending.value) return
+  enginePending.value = true
+  engineFailure.value = ''
+  try {
+    const res = await props.backend.send<{ ok?: boolean; reason?: string }>('voice.prewarm', {}, 125_000)
+    // 'disabled' is voice switched off while it loaded: not a failure.
+    if ((!res.ok || res.payload?.ok === false) && res.payload?.reason !== 'disabled') {
+      engineFailure.value = t(voiceErrorI18nKey(`start-${res.payload?.reason ?? 'failed'}`), { code: res.payload?.reason ?? 'failed' })
+    }
+  } catch {
+    engineFailure.value = t(voiceErrorI18nKey('backend'), { code: 'backend' })
+  } finally {
+    enginePending.value = false
+    void refreshStatus()
+  }
 }
 
 // ── Microphone device ─────────────────────────────────────────────────────────
@@ -149,10 +189,12 @@ watch(
     if (on) {
       subscribeProgress()
       void refreshStatus()
+      startPolling()
       listenDevices()
       void refreshDevices()
     } else {
       unsubscribeProgress()
+      stopPolling()
       unlistenDevices()
     }
   },
@@ -160,6 +202,7 @@ watch(
 )
 onBeforeUnmount(() => {
   unsubscribeProgress()
+  stopPolling()
   unlistenDevices()
 })
 
@@ -187,11 +230,40 @@ const modelLine = computed(() => {
   if (statusError.value) return t('settings.voice.status-unavailable')
   const s = status.value
   if (!s) return t('settings.voice.status-checking')
-  if (s.sidecar === 'missing') return t('settings.voice.sidecar-missing')
   if (!s.model?.present) return t('settings.voice.model-missing')
-  const gpu = s.gpu === true ? t('settings.voice.gpu-on') : s.gpu === false ? t('settings.voice.gpu-off') : ''
-  return [t('settings.voice.model-ready', { size: mb(s.model.bytes ?? 0) }), gpu].filter(Boolean).join(' · ')
+  return t('settings.voice.model-ready', { size: mb(s.model.bytes ?? 0) })
 })
+
+// The engine row, from what the backend reports (voice.status) plus this
+// page's own start request.
+type EngineState = 'checking' | 'unavailable' | 'missing' | 'needs-model' | 'starting' | 'ready' | 'failed' | 'idle'
+const engineState = computed<EngineState>(() => {
+  if (statusError.value) return 'unavailable'
+  const s = status.value
+  if (!s) return 'checking'
+  if (s.sidecar === 'missing') return 'missing'
+  if (!s.model?.present) return 'needs-model'
+  if (enginePending.value || s.starting) return 'starting'
+  if (s.running) return 'ready'
+  if (s.error || engineFailure.value) return 'failed'
+  return 'idle'
+})
+
+const engineLine = computed(() => {
+  const s = status.value
+  switch (engineState.value) {
+    case 'checking': return t('settings.voice.status-checking')
+    case 'unavailable': return t('settings.voice.status-unavailable')
+    case 'missing': return t('settings.voice.sidecar-missing')
+    case 'needs-model': return t('settings.voice.engine-needs-model')
+    case 'starting': return t('settings.voice.engine-starting')
+    case 'ready': return t('settings.voice.engine-ready', { device: s?.gpu === true ? t('settings.voice.gpu-on') : t('settings.voice.gpu-off') })
+    case 'failed': return t('settings.voice.engine-failed', { reason: s?.error || engineFailure.value })
+    default: return t('settings.voice.engine-idle')
+  }
+})
+
+const canStartEngine = computed(() => engineState.value === 'idle' || engineState.value === 'failed')
 
 const progressLine = computed(() => {
   const p = progress.value
@@ -306,10 +378,23 @@ const canDownload = computed(
             :max="progress.total"
           />
           <button class="voice-btn" :disabled="!canDownload" @click="download">
-            {{ downloading ? t('settings.voice.downloading') : t('settings.voice.download') }}
+            {{ downloading ? t('settings.voice.downloading') : progress?.error ? t('settings.voice.download-retry') : t('settings.voice.download') }}
           </button>
           <button class="voice-btn" :disabled="downloading" @click="refreshStatus">
             {{ t('settings.voice.recheck') }}
+          </button>
+        </template>
+      </SettingRow>
+
+      <SettingRow
+        v-if="voiceInputEnabled"
+        data-settings-section="voice-engine"
+        :title="t('settings.voice.engine')"
+        :description="engineLine"
+      >
+        <template #control>
+          <button v-if="canStartEngine" class="voice-btn" @click="startEngine">
+            {{ engineState === 'failed' ? t('settings.voice.engine-retry') : t('settings.voice.engine-start') }}
           </button>
         </template>
       </SettingRow>
