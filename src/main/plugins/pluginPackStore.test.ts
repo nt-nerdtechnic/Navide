@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PluginPackStore, type InstalledPackRecord } from './pluginPackStore'
+import { packOnlyMembers, PluginPackStore, type InstalledPackRecord } from './pluginPackStore'
 
 const FILE = '.navide-plugin-packs.json'
 
@@ -87,5 +87,24 @@ describe('PluginPackStore', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('invalid extension pack records'))
       warn.mockRestore()
     })
+  })
+})
+
+describe('packOnlyMembers', () => {
+  const a: InstalledPackRecord = { id: 'acme.a', version: '1.0.0', members: ['acme.x', 'acme.y'], installedByPack: ['acme.x', 'acme.y'] }
+  const b: InstalledPackRecord = { id: 'acme.b', version: '1.0.0', members: ['acme.x', 'acme.z'], installedByPack: ['acme.z'] }
+
+  it('offers only installed members that no other installed pack lists', () => {
+    const installed = new Set(['acme.x', 'acme.y', 'acme.z'])
+    expect(packOnlyMembers(a, [a, b], installed)).toEqual(['acme.y'])
+    expect(packOnlyMembers(b, [a, b], installed)).toEqual(['acme.z'])
+  })
+
+  it('offers a formerly shared member again once the other pack is gone', () => {
+    expect(packOnlyMembers(a, [a], new Set(['acme.x', 'acme.y']))).toEqual(['acme.x', 'acme.y'])
+  })
+
+  it('drops members the user already removed on their own', () => {
+    expect(packOnlyMembers(a, [a, b], new Set(['acme.x']))).toEqual([])
   })
 })

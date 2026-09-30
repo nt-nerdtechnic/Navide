@@ -438,7 +438,7 @@ declare global {
         preparePack: (args: { namespace: string; name: string }) => Promise<PreparedPackSummary>
         finishPack: (id: string) => Promise<{ recorded: boolean; pack?: InstalledPackRecord }>
         listPacks: () => Promise<InstalledPackRecord[]>
-        removePack: (id: string) => Promise<{ removed: boolean }>
+        removePack: (id: string, members: string[]) => Promise<{ removed: boolean }>
       }
     }
   }
@@ -528,7 +528,8 @@ declare global {
     displayName?: string
     version: string
     members: string[]
-    /** Members installed only because of this pack (still installed). */
+    /** Members installed only because of this pack (still installed, and not
+     *  listed by any other installed pack). */
     installedByPack: string[]
   }
 

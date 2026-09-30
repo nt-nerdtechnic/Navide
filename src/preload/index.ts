@@ -195,7 +195,8 @@ export interface InstalledPackRecord {
   displayName?: string
   version: string
   members: string[]
-  /** Members installed only because of this pack (still installed). */
+  /** Members installed only because of this pack (still installed, and not
+   *  listed by any other installed pack). */
   installedByPack: string[]
 }
 
@@ -1037,7 +1038,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
     finishPack: (id: string): Promise<{ recorded: boolean; pack?: InstalledPackRecord }> =>
       ipcRenderer.invoke('plugins:finishPack', { id }),
     listPacks: (): Promise<InstalledPackRecord[]> => ipcRenderer.invoke('plugins:listPacks'),
-    removePack: (id: string): Promise<{ removed: boolean }> => ipcRenderer.invoke('plugins:removePack', { id }),
+    removePack: (id: string, members: string[]): Promise<{ removed: boolean }> =>
+      ipcRenderer.invoke('plugins:removePack', { id, members }),
     restoreFactoryPackage: (id: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('plugins:restoreFactoryPackage', { id }),
   },

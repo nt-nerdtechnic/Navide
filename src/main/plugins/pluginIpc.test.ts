@@ -30,6 +30,7 @@ import { projectBackendPluginActivationCatalog } from './pluginBackendActivation
 import { makeZip } from './zipFixture'
 import { readZipEntries } from './pluginPackage'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
+import { PluginPackStore } from './pluginPackStore'
 import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
 const { handlers, browserWindowFromWebContents } = vi.hoisted(() => ({
@@ -4395,8 +4396,12 @@ describe('Extension Pack (Phase 5)', () => {
           FrontendPluginManager['listInstalledPackages']
         >
     )
+    vi.spyOn(manager, 'removeInstalledPlugin').mockImplementation((id: string) => {
+      current.splice(current.indexOf(id), 1)
+    })
     registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
       appVersion: () => '0.2.13',
+      cleanupPluginStorage: async () => undefined,
       ...TEST_PREFLIGHT_OPTIONS,
     })
     return current
@@ -4491,6 +4496,49 @@ describe('Extension Pack (Phase 5)', () => {
     expect(((await handlers.get('plugins:listPacks')!(null)) as Array<{ installedByPack: string[] }>)[0].installedByPack).toEqual([])
     expect(await handlers.get('plugins:removePack')!(null, { id: 'acme.pack' })).toEqual({ removed: true })
     expect(await handlers.get('plugins:listPacks')!(null)).toEqual([])
+  })
+
+  // Pack A installed acme.x; pack B, installed later, lists acme.x too.
+  function twoPacksSharingX(): void {
+    const store = new PluginPackStore(root)
+    store.put({ id: 'acme.a', version: '1.0.0', members: ['acme.x', 'acme.y'], installedByPack: ['acme.x', 'acme.y'] })
+    store.put({ id: 'acme.b', version: '1.0.0', members: ['acme.x', 'acme.z'], installedByPack: ['acme.z'] })
+    for (const id of ['acme.x', 'acme.y', 'acme.z']) mkdirSync(join(root, id))
+  }
+
+  it('does not offer a member that another installed pack also uses', async () => {
+    twoPacksSharingX()
+    setup(['acme.x', 'acme.y', 'acme.z'])
+    const listed = (await handlers.get('plugins:listPacks')!(null)) as Array<{ id: string; installedByPack: string[] }>
+    expect(listed.map((pack) => [pack.id, pack.installedByPack])).toEqual([
+      ['acme.a', ['acme.y']],
+      ['acme.b', ['acme.z']],
+    ])
+  })
+
+  it('refuses to remove a shared member with the pack, and removes nothing', async () => {
+    twoPacksSharingX()
+    const installed = setup(['acme.x', 'acme.y', 'acme.z'])
+    await expect(
+      handlers.get('plugins:removePack')!(null, { id: 'acme.a', members: ['acme.y', 'acme.x'] })
+    ).rejects.toThrow('acme.x is not removable with acme.a')
+    expect(installed).toEqual(['acme.x', 'acme.y', 'acme.z'])
+    expect(existsSync(join(root, 'acme.y'))).toBe(true)
+    expect(new PluginPackStore(root).get('acme.a')).not.toBeNull()
+  })
+
+  it('removes the chosen pack-only members together with the pack', async () => {
+    twoPacksSharingX()
+    const installed = setup(['acme.x', 'acme.y', 'acme.z'])
+    expect(await handlers.get('plugins:removePack')!(null, { id: 'acme.a', members: ['acme.y'] })).toEqual({
+      removed: true,
+    })
+    expect(installed).toEqual(['acme.x', 'acme.z'])
+    expect(existsSync(join(root, 'acme.y'))).toBe(false)
+    expect(new PluginPackStore(root).get('acme.a')).toBeNull()
+    // With pack A gone, acme.x is no longer offered by pack B either (B did not install it).
+    const listed = (await handlers.get('plugins:listPacks')!(null)) as Array<{ id: string; installedByPack: string[] }>
+    expect(listed).toEqual([expect.objectContaining({ id: 'acme.b', installedByPack: ['acme.z'] })])
   })
 
   it('records nothing when no member ended up installed', async () => {

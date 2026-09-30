@@ -196,7 +196,8 @@ async function refreshPacks(): Promise<void> {
   }
 }
 
-// D8: remove the pack; remove only the members the user ticked.
+// D8: remove the pack and only the members the user ticked; the Host removes
+// those members and refuses one another installed pack still uses.
 async function uninstallPack(members: string[]): Promise<void> {
   const api = pluginsApi()
   const pack = uninstallingPack.value
@@ -204,8 +205,7 @@ async function uninstallPack(members: string[]): Promise<void> {
   busy.value = true
   error.value = ''
   try {
-    for (const id of members) await api.remove(id)
-    await api.removePack(pack.id)
+    await api.removePack(pack.id, members)
     uninstallingPack.value = null
   } catch (err) {
     error.value = pluginErrorMessage(err)

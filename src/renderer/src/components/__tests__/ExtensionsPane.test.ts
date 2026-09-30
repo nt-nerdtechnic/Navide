@@ -127,7 +127,7 @@ describe('ExtensionsPane', () => {
     await dialog.get('.pack-uninstall-confirm').trigger('click')
     await flushPromises()
     expect(api.remove).not.toHaveBeenCalled()
-    expect(api.removePack).toHaveBeenCalledWith('acme.web-dev-pack')
+    expect(api.removePack).toHaveBeenCalledWith('acme.web-dev-pack', [])
     expect(wrapper.find('.pack-uninstall-dialog').exists()).toBe(false)
     expect(wrapper.find('[data-pack-id]').exists()).toBe(false)
   })
@@ -175,9 +175,10 @@ describe('ExtensionsPane', () => {
     expect(wrapper.get('.pack-uninstall-confirm').text()).toBe('Uninstall pack and 1 extension(s)')
     await wrapper.get('.pack-uninstall-confirm').trigger('click')
     await flushPromises()
-    expect(api.remove).toHaveBeenCalledWith('acme.lint')
-    expect(api.remove).toHaveBeenCalledTimes(1)
-    expect(api.removePack).toHaveBeenCalledWith('acme.web-dev-pack')
+    // The Host removes the chosen members itself, so it can refuse a member
+    // another installed pack still uses.
+    expect(api.removePack).toHaveBeenCalledWith('acme.web-dev-pack', ['acme.lint'])
+    expect(api.remove).not.toHaveBeenCalled()
   })
 
   it('renders the installed list with sensitive-capability badges', async () => {

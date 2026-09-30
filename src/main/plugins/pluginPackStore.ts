@@ -28,6 +28,17 @@ export interface InstalledPackRecord {
   installedByPack: string[]
 }
 
+/** The members uninstalling `pack` may offer to remove: those it installed
+ *  that are still installed and that no other installed pack lists. */
+export function packOnlyMembers(
+  pack: InstalledPackRecord,
+  packs: InstalledPackRecord[],
+  installed: Set<string>
+): string[] {
+  const shared = new Set(packs.filter((other) => other.id !== pack.id).flatMap((other) => other.members))
+  return pack.installedByPack.filter((member) => installed.has(member) && !shared.has(member))
+}
+
 interface PersistedPackState {
   schemaVersion: 1
   packs: InstalledPackRecord[]

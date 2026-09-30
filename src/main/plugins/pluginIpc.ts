@@ -59,7 +59,7 @@ import { assertEngineCompatible, isEngineCompatible, minNavideVersion } from './
 import { compareSemver } from './pluginManifestV2'
 import { MAX_EXTENSION_PACK_MEMBERS } from '../../../packages/plugin-contracts/src/index'
 import { PluginPrereleaseStore } from './pluginPrereleaseStore'
-import { PluginPackStore, type InstalledPackRecord } from './pluginPackStore'
+import { packOnlyMembers, PluginPackStore, type InstalledPackRecord } from './pluginPackStore'
 import type {
   FrontendPluginManager,
   PluginLaunchDescriptor,
@@ -1078,19 +1078,30 @@ export function registerPluginIpc(
   ipcMain.handle('plugins:listPacks', (event): InstalledPackRecord[] => {
     assertAuthorized(event)
     const installed = installedPluginIds()
-    // A member the user already removed on its own is not offered again.
-    return packs.list().map((pack) => ({
-      ...pack,
-      installedByPack: pack.installedByPack.filter((member) => installed.has(member)),
-    }))
+    const all = packs.list()
+    // A member the user already removed on its own, or that another installed
+    // pack still uses, is not offered.
+    return all.map((pack) => ({ ...pack, installedByPack: packOnlyMembers(pack, all, installed) }))
   })
 
-  // D8: uninstalling a pack removes only the pack record. The renderer
-  // removes any members the user chose, one by one, through plugins:remove.
-  ipcMain.handle('plugins:removePack', (event, args: { id?: unknown } | null) => {
+  // D8: uninstalling a pack removes the pack record and only the members the
+  // user chose. The Host removes those members itself, so no caller can take
+  // out a member this pack did not install or another pack still uses.
+  ipcMain.handle('plugins:removePack', async (event, args: { id?: unknown; members?: unknown } | null) => {
     assertAuthorized(event)
-    if (!isValidManifestV2PluginId(args?.id)) throw new Error('invalid extension pack id')
-    return { removed: packs.remove(args.id) !== null }
+    const id = args?.id
+    if (!isValidManifestV2PluginId(id)) throw new Error('invalid extension pack id')
+    const members = args?.members ?? []
+    if (!Array.isArray(members) || !members.every(isValidManifestV2PluginId)) {
+      throw new Error('invalid extension pack members')
+    }
+    const all = packs.list()
+    const pack = all.find((record) => record.id === id)
+    const removable = pack ? packOnlyMembers(pack, all, installedPluginIds()) : []
+    const refused = members.find((member) => !removable.includes(member))
+    if (refused) throw new Error(`${refused} is not removable with ${id}`)
+    for (const member of new Set(members)) await uninstallPlugin(member)
+    return { removed: packs.remove(id) !== null }
   })
 
   ipcMain.handle('plugins:checkUpdates', async (event) => {
@@ -2020,9 +2031,8 @@ export function registerPluginIpc(
     }
   })
 
-  ipcMain.handle('plugins:remove', async (event, args: { id?: unknown } | null) => {
-    assertAuthorized(event)
-    const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
+  const uninstallPlugin = async (rawId: unknown): Promise<{ ok: true }> => {
+    const id = assertPluginRemovalTarget(pluginsRoot, rawId)
     if (activeTransactions.has(id)) {
       throw new Error(`plugin transaction already in progress for ${id}`)
     }
@@ -2075,6 +2085,11 @@ export function registerPluginIpc(
     } finally {
       activeTransactions.delete(id)
     }
+  }
+
+  ipcMain.handle('plugins:remove', async (event, args: { id?: unknown } | null) => {
+    assertAuthorized(event)
+    return uninstallPlugin(args?.id)
   })
 
   return {
