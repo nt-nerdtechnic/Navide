@@ -14,6 +14,9 @@ import uuid
 import psutil
 import websockets
 
+from agent_team_backend import pty_registry
+from agent_team_backend.applog import in_data_dir
+
 from .isolation import isolated_environment
 
 
@@ -112,6 +115,14 @@ class BackendProcess:
                     await asyncio.to_thread(self.process.wait, timeout=5)
                     raise AssertionError(f"backend shutdown timed out; see {self.log_path}")
         finally:
+            registry_reaped = []
+            try:
+                # The response may never have delivered the child PID to this
+                # harness; reuse Navide's durable crash-recovery ownership.
+                registry_reaped = await self._reap_registry_children()
+            except Exception as err:  # noqa: BLE001
+                detail = f"PTY registry cleanup failed: {err}"
+                exit_error = f"{exit_error}; {detail}" if exit_error else detail
             survivors = await asyncio.to_thread(self._reap_surviving_children)
             self._log.close()
             if self.process and self.process.stdin:
@@ -121,6 +132,7 @@ class BackendProcess:
                     pass
             (self.root / "scenario.json").write_text(json.dumps({
                 "events": self.events, "children": sorted(self.children), "survivors": survivors,
+                "registry_reaped": registry_reaped,
                 "backend_exit_code": self.process.returncode if self.process else None,
                 "backend_exit_error": exit_error,
                 "output": {key: value[-8192:] for key, value in self.output.items()},
@@ -138,6 +150,12 @@ class BackendProcess:
         refusals = self.root / "refusals.jsonl"
         assert not refusals.exists(), f"external boundary reached: {refusals.read_text()}"
         assert exit_error is None, exit_error
+
+    async def _reap_registry_children(self) -> list[int]:
+        """Apply Navide's crash-recovery registry to this isolated data dir."""
+        return await asyncio.to_thread(
+            in_data_dir(self.root / "data", pty_registry.reap_stale)
+        )
 
     def connect(self):
         return websockets.connect(self.url, proxy=None, max_size=4 * 1024 * 1024)

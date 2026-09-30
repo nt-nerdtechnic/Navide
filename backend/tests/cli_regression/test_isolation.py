@@ -5,8 +5,12 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 import pytest
+
+from agent_team_backend import osplat, pty_registry
+from agent_team_backend.applog import in_data_dir
 
 from .support.isolation import isolated_environment, real_cli_in
 from .support.backend_process import BackendProcess
@@ -203,6 +207,71 @@ def test_failure_cleanup_reaps_a_tracked_orphan(tmp_path):
             child.kill()
         child.wait(timeout=5)
         child.stdin.close()
+
+
+async def test_failure_cleanup_reaps_registry_child_before_create_ack(tmp_path):
+    backend = BackendProcess(tmp_path / "backend")
+    child_pids = []
+    child_start_times = {}
+    alive_before_cleanup = []
+    with pytest.raises(AssertionError, match="backend exited before requested shutdown"):
+        async with backend:
+            async with backend.connect() as ws:
+                await ws.send(json.dumps({
+                    "id": str(uuid.uuid4()),
+                    "type": "terminal.create",
+                    "payload": {
+                        "pane_id": "regression-pane",
+                        "agent_key": "terminal",
+                        "cwd": str(backend.root),
+                        "command": [
+                            sys.executable,
+                            "-c",
+                            "import signal, time; s = getattr(signal, 'SIGHUP', None); "
+                            "s is not None and signal.signal(s, signal.SIG_IGN); "
+                            "from pathlib import Path; Path('child.ready').write_text('ready'); "
+                            "time.sleep(60)",
+                        ],
+                        "cols": 100,
+                        "rows": 30,
+                        "create_generation": str(uuid.uuid4()),
+                    },
+                }))
+                # Read the real backend's durable spawn record without reading
+                # the terminal.create response that would teach the harness
+                # which PID to track.
+                async with asyncio.timeout(15):
+                    while not child_pids:
+                        entries = await asyncio.to_thread(
+                            in_data_dir(backend.root / "data", pty_registry._load)
+                        )
+                        child_start_times = {
+                            int(pid): entry.get("lstart", "")
+                            for pid, entry in entries.items()
+                        }
+                        child_pids = list(child_start_times)
+                        if not child_pids:
+                            await asyncio.sleep(0.02)
+                async with asyncio.timeout(15):
+                    while not (backend.root / "child.ready").exists():
+                        await asyncio.sleep(0.02)
+                assert backend.children == set()
+                backend.process.kill()
+                await asyncio.to_thread(backend.process.wait, timeout=5)
+                alive_before_cleanup = [
+                    pid for pid in child_pids if osplat.process_tree.is_alive(pid)
+                ]
+
+    scenario = json.loads((backend.root / "scenario.json").read_text(encoding="utf-8"))
+    assert set(alive_before_cleanup).issubset(scenario["registry_reaped"])
+    assert scenario["children"] == []
+    assert all(child_start_times.values())
+    async with asyncio.timeout(5):
+        while any(
+            osplat.process_tree.start_time(pid) == start_time
+            for pid, start_time in child_start_times.items()
+        ):
+            await asyncio.sleep(0.02)
 
 
 def test_readiness_waits_for_discovery_file_contents(tmp_path):
