@@ -84,7 +84,7 @@ describe('ControlPane – the heading count pill carries a status', () => {
 
   it('paints the workspace tally with the loudest status under it', () => {
     wrapper = mountWith({ panes: [pane('p1', 'running'), pane('p2', 'error')] })
-    expect(wsPill(wrapper).text()).toBe('2')
+    expect(wsPill(wrapper).text()).toBe('2 / 2')
     expect(wsPill(wrapper).attributes('data-state')).toBe('error')
   })
 
@@ -118,10 +118,17 @@ describe('ControlPane – the heading count pill carries a status', () => {
         }),
       ],
     })
-    expect(wsPill(wrapper).text()).toBe('2')
+    expect(wsPill(wrapper).text()).toBe('2 / 2')
     expect(wsPill(wrapper).attributes('data-state')).toBe('error')
     // Still folded: this is about the heading, not about unfolding.
     expect(wrapper.findAll('.agent-item')).toHaveLength(1)
+  })
+
+  it('reads live over total, like the status bar pill', () => {
+    // A reclaimed or cold-restored placeholder holds no process and is the
+    // only pane whose status is 'waiting'; it is listed but not live.
+    wrapper = mountWith({ panes: [pane('p1', 'running'), pane('p2', 'waiting')] })
+    expect(wsPill(wrapper).text()).toBe('1 / 2')
   })
 
   it('leaves an empty workspace tally neutral rather than inventing a status', () => {
