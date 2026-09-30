@@ -170,6 +170,28 @@ STATUS_NOT_OPENED = "not-opened"
 MESSAGE_MEMORY_MAX = 500
 MESSAGE_MEMORY_TTL_S = 3600.0
 
+#: How long a message this device relayed may go unanswered before it asks the
+#: server what became of it, and how often it asks again after that. The
+#: server pushes `messages.acked` exactly once, to whatever connection is open
+#: at that moment, so an ack that lands during a reconnect is otherwise gone;
+#: `messages.get` is the contract's answer to that, and nothing called it.
+RECONCILE_AFTER_S = 60.0
+RECONCILE_INTERVAL_S = 60.0
+
+#: Acked by a receiver whose own handling of the message failed. Retrying may
+#: well succeed, which is why it is "failed" and not "rejected".
+REASON_RECEIVER_ERROR = "receiver-error"
+
+#: Hold keys for a relayed message the far side has not answered yet, as
+#: cli_check_message reports them. They tell "its pane is mid-turn, the message
+#: waits for it" apart from "nothing over there has said anything", which were
+#: one indistinguishable "queued".
+HOLD_REMOTE_BUSY = "remote-busy"
+HOLD_REMOTE_UNREPORTED = "remote-unreported"
+
+#: The three answers a receiver can give (the server's own ACK_STATES).
+_ACK_STATES = ("delivered", "failed", "rejected")
+
 #: Error codes this module answers ``send_message`` with when a server *is*
 #: configured but the message cannot leave this machine. They are deliberately
 #: not server codes — the request never reached one — and they exist so that a
@@ -627,6 +649,9 @@ class ServerLink:
         # arrive twice. Keyed on msgKey rather than inferred from timestamps —
         # a timestamp that fails to parse falls through and injects twice.
         self._inbound: dict[str, dict[str, Any]] = {}
+        #: Messages this device relayed that the far side has not answered:
+        #: msgKey -> {sent_at, to}. What the reconciler asks the server about.
+        self._outbound: dict[str, dict[str, Any]] = {}
         # Receiver-side pane policy, cached with the revision it came at. None
         # means "never fetched"; the cache is deliberately kept across
         # reconnects so an authorization decision does not depend on the
@@ -915,6 +940,11 @@ class ServerLink:
                 # spawned rather than awaited, because a large first sync must
                 # not hold the session open before its reader starts.
                 self._spawn(self._sync_all())
+                # Messages in both directions whose answer the dropped
+                # connection may have swallowed: acks this device could not send,
+                # and acks for its own sends that were pushed while it was away.
+                self._spawn(self._resend_unsent_acks())
+                reconciler = asyncio.create_task(self._reconcile_loop())
                 reporter = asyncio.create_task(self._report_loop())
                 # Deliberately *not* in the wait below. That set means "the
                 # connection is over when any of these finishes", and this task
@@ -936,6 +966,8 @@ class ServerLink:
                     await _quiet(reporter)
                     verifier.cancel()
                     await _quiet(verifier)
+                    reconciler.cancel()
+                    await _quiet(reconciler)
             finally:
                 reader.cancel()
                 await _quiet(reader)
@@ -2443,7 +2475,10 @@ class ServerLink:
         if sender:
             payload["from"] = sender
         try:
-            return await self._request("messages.send", payload)
+            reply = await self._request("messages.send", payload)
+            if reply.get("ok"):
+                self._note_outbound(msg_key, to)
+            return reply
         except Exception as err:  # noqa: BLE001
             log.warning("navide-server messages.send failed: %s", err)
             return {
@@ -3166,20 +3201,45 @@ class ServerLink:
         return rows
 
     async def _on_message_pending(self, payload: Any) -> None:
-        """A message for a pane on this machine.
+        """A message for a pane on this machine: handled, and always answered.
+
+        This runs as a spawned task, and nothing reads a spawned task's
+        exception. So before this wrapper, anything that raised part-way — a
+        trust-store read, a Keychain write, the thread pool — left no log line
+        and no ack: the sender sat on "queued" for good, and because the key
+        had already been claimed, the server re-sending it was dropped as a
+        duplicate. Now the failure is logged here and the sender is told.
+        """
+        data = payload if isinstance(payload, dict) else {}
+        msg_key = str(data.get("msgKey") or "")
+        try:
+            await self._receive_message(data, msg_key)
+        except Exception:  # noqa: BLE001 - the one place this task's failure is seen
+            log.exception("could not handle relayed message %s", msg_key)
+            entry = self._inbound.get(msg_key)
+            if entry is not None and not entry["acked"]:
+                await self._ack(msg_key, "failed", reason=REASON_RECEIVER_ERROR)
+
+    async def _receive_message(self, data: dict[str, Any], msg_key: str) -> None:
+        """Dedupe, authorize, resolve and hand over one relayed message.
 
         Order matters: dedupe, then authorize, then resolve. Authorizing before
         resolving is what keeps an unauthorized sender from using the ack as a
         probe — "no such pane" and "policy denied" would otherwise map out which
         panes this machine is running.
         """
-        data = payload if isinstance(payload, dict) else {}
-        msg_key = str(data.get("msgKey") or "")
         if not msg_key:
             log.warning("navide-server pushed a message with no msgKey; ignoring it")
             return
         if not await self._note_inbound(msg_key):
             log.info("navide-server re-sent message %s; ignoring the duplicate", msg_key)
+            # The server only re-sends a key when the sender sent it again, and
+            # a sender only does that when it never heard back. If this side
+            # already answered, the answer was lost on the way: say it again.
+            entry = self._inbound.get(msg_key)
+            ack = entry.get("ack") if entry is not None else None
+            if ack is not None:
+                await self._send_ack(msg_key, ack)
             return
         if self._trust_locked:
             # Nothing here can be told apart from anything else while the pins
@@ -3469,9 +3529,6 @@ class ServerLink:
     async def _ack(
         self, msg_key: str, state: str, *, reason: str = "", pane_id: str = ""
     ) -> None:
-        entry = self._inbound.get(msg_key)
-        if entry is not None:
-            entry["acked"] = True
         payload: dict[str, Any] = {"msgKey": msg_key, "state": state}
         if reason:
             payload["reason"] = reason
@@ -3479,28 +3536,141 @@ class ServerLink:
         # the sender learns the pane id its cached hint should become.
         if pane_id:
             payload["paneId"] = pane_id
+        entry = self._inbound.get(msg_key)
+        if entry is not None:
+            entry["acked"] = True
+            # Kept so the answer can be given again: after a dropped connection
+            # (see _resend_unsent_acks) or when the sender asks again.
+            entry["ack"] = payload
+        await self._send_ack(msg_key, payload)
+
+    async def _send_ack(self, msg_key: str, payload: dict[str, Any]) -> None:
+        entry = self._inbound.get(msg_key)
         try:
             reply = await self._request("messages.ack", payload)
         except Exception as err:  # noqa: BLE001
+            # The connection went, most likely. The sender cannot learn the
+            # outcome any other way, so this is retried on the next connection
+            # rather than dropped with a log line nobody reads.
             log.warning("navide-server messages.ack for %s failed: %s", msg_key, err)
+            if entry is not None:
+                entry["ack_unsent"] = True
             return
+        if entry is not None:
+            entry["ack_unsent"] = False
         if not reply.get("ok"):
+            # An answer, not a lost frame: resending would get the same one.
             log.warning(
                 "navide-server rejected messages.ack for %s: %s", msg_key, reply.get("error")
             )
+
+    async def _resend_unsent_acks(self) -> None:
+        """Deliver the acks a dropped connection swallowed. Once per connection."""
+        for msg_key, entry in list(self._inbound.items()):
+            ack = entry.get("ack")
+            if ack is not None and entry.get("ack_unsent"):
+                await self._send_ack(msg_key, ack)
 
     async def _ensure_policy(self) -> None:
         if self._policy_revision is None:
             await self._refresh_policy()
 
+    def _note_outbound(self, msg_key: str, to: dict[str, Any]) -> None:
+        now = time.monotonic()
+        for key, entry in list(self._outbound.items()):
+            if now - entry["sent_at"] >= MESSAGE_MEMORY_TTL_S:
+                del self._outbound[key]
+        while len(self._outbound) >= MESSAGE_MEMORY_MAX:
+            self._outbound.pop(next(iter(self._outbound)))
+        self._outbound[msg_key] = {"sent_at": now, "to": dict(to)}
+
+    async def _reconcile_loop(self) -> None:
+        """Ask the server about relayed messages the far side has not answered.
+
+        Once as soon as the connection is up — every ack pushed while this
+        device was away was missed — and then every RECONCILE_INTERVAL_S for
+        messages older than RECONCILE_AFTER_S.
+        """
+        min_age_s = 0.0
+        while True:
+            try:
+                await self._reconcile(min_age_s=min_age_s)
+            except Exception:  # noqa: BLE001 - nothing awaits this task; keep it alive
+                log.exception("reconciling relayed messages failed")
+            min_age_s = RECONCILE_AFTER_S
+            await asyncio.sleep(RECONCILE_INTERVAL_S)
+
+    async def _reconcile(self, *, min_age_s: float) -> None:
+        from .mcp_server import server as plan_mcp
+
+        now = time.monotonic()
+        for msg_key, entry in list(self._outbound.items()):
+            if now - entry["sent_at"] < min_age_s:
+                continue
+            try:
+                reply = await self._request("messages.get", {"msgKey": msg_key})
+            except Exception as err:  # noqa: BLE001 - the next round asks again
+                log.info("navide-server messages.get for %s failed: %s", msg_key, err)
+                return
+            if not reply.get("ok"):
+                # Past the server's retention, or never stored: nothing left to
+                # learn, and asking every minute until the TTL would be noise.
+                self._outbound.pop(msg_key, None)
+                continue
+            message = (reply.get("payload") or {}).get("message") or {}
+            if message.get("state") in _ACK_STATES:
+                self._on_message_acked(message)
+                continue
+            # Still pending: the far side has not answered. Say which kind of
+            # silence it is, from the one thing this side can see of that pane.
+            plan_mcp.record_message_hold(
+                msg_key, {"key": self._silence_kind(entry["to"])}
+            )
+
+    @staticmethod
+    def _silence_kind(to: dict[str, Any]) -> str:
+        device = str(to.get("deviceId") or "")
+        name = str(to.get("paneName") or "")
+        workspace = str(to.get("workspace") or "")
+        for pane in remote_roster.list_panes():
+            if pane.device_id == device and pane.pane_name == name and pane.workspace == workspace:
+                return HOLD_REMOTE_BUSY if pane.busy else HOLD_REMOTE_UNREPORTED
+        return HOLD_REMOTE_UNREPORTED
+
     def _on_message_acked(self, payload: Any) -> None:
         """The far side reported what became of a message this device sent."""
+        from . import app
+        from .ipc import make_event
         from .mcp_server import server as plan_mcp
 
         data = payload if isinstance(payload, dict) else {}
         msg_key = str(data.get("msgKey") or "")
         if not msg_key:
             return
+        self._outbound.pop(msg_key, None)
+        state = str(data.get("state") or "")
+        reason = str(data.get("reason") or "")
+        if state == "delivered":
+            window_reason = ""
+        else:
+            window_reason = f"{state or 'failed'}: {reason}" if reason else state or "failed"
+        # The sending window's own row as well, not only cli_check_message's
+        # table: this broadcast is what settles a local delivery, and without it
+        # a message relayed from a printed MSG block sat on "awaiting the target
+        # window's report" until the 30-minute backstop failed it — delivered or
+        # not. Windows that did not send this key ignore it.
+        self._spawn(
+            app.broadcast(
+                make_event(
+                    "agent_msg.delivery_result",
+                    {
+                        "msg_key": msg_key,
+                        "ok": state == "delivered",
+                        "reason": window_reason,
+                    },
+                )
+            )
+        )
         # `ackPaneId` is the pane id the receiver resolved to. Nothing here
         # caches a remote pane id — cli_send resolves the address every call —
         # so it is only logged; a sender that starts caching would read it here.
@@ -3510,9 +3680,7 @@ class ServerLink:
             data.get("state"),
             data.get("ackPaneId") or "",
         )
-        plan_mcp.record_remote_ack(
-            msg_key, str(data.get("state") or ""), str(data.get("reason") or "")
-        )
+        plan_mcp.record_remote_ack(msg_key, state, reason)
 
 
 # ---- process-wide link ------------------------------------------------------

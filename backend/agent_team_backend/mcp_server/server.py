@@ -2613,6 +2613,15 @@ async def cli_check_message(msg_key: str, ctx: Context) -> dict[str, Any]:
     keys are absent once the message settles, and while no window has reported
     a hold at all — a message queued with no hold is simply on its way in.
 
+    A message to another device that has gone a minute without an answer is
+    asked about through the server, and its hold then says which silence it is:
+    "remote-busy" (the target pane is mid-turn by the roster, so the message is
+    waiting for that turn to end — wait, or ask whoever runs that machine to
+    let it finish) or "remote-unreported" (the pane is not working and the far
+    side has still said nothing — waiting longer is unlikely to help). An answer
+    the far side gave while this machine was disconnected is picked up the same
+    way, so a message never stays "queued" just because its ack was missed.
+
     `stale` is true once a queued message has been waiting more than two
     minutes. It is not a failure and nothing has given up on it — it is the
     point at which waiting longer is probably not the answer, so read `hold`

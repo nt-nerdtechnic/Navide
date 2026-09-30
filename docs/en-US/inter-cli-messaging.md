@@ -849,7 +849,19 @@ it would be told about a failure.
 | `paused` | Delivery is paused for the window |
 | `gone` | Target pane no longer exists |
 | `remote-ack` | Sent to another window; awaiting its report |
+| `remote-busy` | Sent to another device, unanswered for over a minute, and its target pane is mid-turn (`cli_check_message` only) |
+| `remote-unreported` | Sent to another device, unanswered for over a minute, and its target pane is not working (`cli_check_message` only) |
 | `cancelling` | Withdrawal asked of another window; awaiting its answer |
+
+A message to another device is always answered. The receiving backend acks
+every message it was handed — including one it failed to handle
+(`receiver-error`) — and retries an ack its connection lost on the next
+connection. The sending backend settles the sending window's row from that ack
+(a message from a printed block included), and asks the server with
+`messages.get` about any message still unanswered: once when its own connection
+comes back, and every minute for messages older than a minute. Failed or
+refused remote messages carry the far side's reason as `<state>: <reason>`, for
+example `rejected: not-paired`.
 
 A message that came in through `cli_send` reports its hold back to the backend
 as well, so the agent that sent it can read the same reason without a Messages
@@ -870,6 +882,7 @@ still never persisted.
 | `inject-failed` / `inject-error` | Typing it into the pane did not take |
 | `window-reloaded` | The window reloaded while it was in flight |
 | `no-report` | The other window never reported an outcome |
+| `receiver-error` | Another device received it but failed while handling it; its backend log has the traceback. Retrying may succeed |
 | `unknown-workspace` / `ambiguous-workspace` | A `<folder>/<pane>` address that matched no open workspace, or several |
 | `unknown-target-in-workspace` / `ambiguous-target` | The workspace resolved, but the pane name did not — or matched twice |
 | `unknown-pane-id` | A `pane_id` that names no pane on this machine — read a fresh one from `cli_list_targets` |
