@@ -305,11 +305,17 @@ describe('TaskerPanel', () => {
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
+    vi.useRealTimers()
   })
 
   // ── grouping ─────────────────────────────────────────────────────────────
 
   it('scans on mount and sorts every row into the group its schedule allows', async () => {
+    // The order below holds only while both 02:30 and 03:00 are still ahead
+    // today; between them (CI ran at 02:44) 02:30 rolls over to tomorrow and
+    // the rows swap. Pin the clock to midday so the expectation is exact.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0))
     wrapper = await mountPanel()
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
 
