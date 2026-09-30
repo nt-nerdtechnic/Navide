@@ -113,11 +113,21 @@ export const WHATS_NEW: WhatsNewEntry[] = [
   {
     version: '0.2.13',
     title: {
-      'zh-TW': 'Channels 雙向同步、綁定時選擇送出範圍、大型 Plan 與穩定性修正',
-      'en-US': 'Two-Way Channels, a Choice of What Chats Receive, Large Plans and Stability Fixes',
-      'ja-JP': 'Channels の双方向同期、送信範囲の選択、大きな Plan と安定性の修正',
+      'zh-TW': '擴充套件市集、Channels 雙向同步與連線監控、大型 Plan',
+      'en-US': 'An Extension Marketplace, Two-Way Channels with a Monitor, and Large Plans',
+      'ja-JP': '拡張機能マーケットプレイス、Channels の双方向同期と接続モニター、大きな Plan',
     },
     highlights: [
+      {
+        'zh-TW': '擴充套件市集上線：可以瀏覽、安裝第三方擴充套件與擴充套件包，也能為個別擴充套件開啟預覽版。開發者可以自行登入、驗證網域並發布，上架前會經過審核與密鑰掃描。navide:// 連結會在 App 內開啟擴充套件頁面，安裝一定要你確認。',
+        'en-US': 'The extension Marketplace is here: browse and install third-party extensions and extension packs, and opt into pre-releases per extension. Publishers sign in, verify their domain and publish themselves, and every release is reviewed and scanned for secrets before it is listed. navide:// links open an extension\'s page in the app, and installing always asks you first.',
+        'ja-JP': '拡張機能マーケットプレイスを公開しました。サードパーティの拡張機能や拡張機能パックを閲覧・インストールでき、拡張機能ごとにプレリリースも選べます。公開者は自分でサインインし、ドメインを検証して公開でき、掲載前に審査とシークレットスキャンが行われます。navide:// リンクはアプリ内で拡張機能のページを開き、インストールには必ず確認が必要です。',
+      },
+      {
+        'zh-TW': '標題列新增 Channels 連線監控：一眼看到哪些 pane 綁定了聊天室，可以直接跳過去或中斷連線。',
+        'en-US': 'A Channels monitor in the titlebar shows which panes are bound to a chat, and lets you jump to one or disconnect it.',
+        'ja-JP': 'タイトルバーに Channels の接続モニターを追加しました。どのペインがチャットにバインドされているかを確認し、ペインへの移動や切断ができます。',
+      },
       {
         'zh-TW': 'Channels 可以把綁定 pane 的活動同步到聊天室，聊天室的回覆也會回到 pane。綁定時先選擇聊天室會收到什麼，預設「只回覆聊天室」，本機輸入不會送出；之後可隨時在 pane 的連接選單更改。',
         'en-US': 'Channels can mirror a bound pane\'s activity to its chat and bring replies back. When you bind, you choose what the chat receives; the default, “Chat replies only”, sends nothing typed locally. You can change it any time from the pane\'s channel menu.',

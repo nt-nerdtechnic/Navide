@@ -8,6 +8,9 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Added
 
+- **Marketplace for third-party extensions**: a Discover page, a publisher self-service flow (sign in, claim a namespace, verify a domain by DNS, publish from the CLI), review before listing with secret scanning, name-similarity and blocklist checks, a pre-release channel you can opt into per extension, and extension packs that install a set of extensions together. `navide://` links open an extension's page in the app; installing always needs your confirmation.
+- **Channel monitor**: a titlebar button with a status dot opens a window listing every pane bound to a chat, where you can jump to the pane or disconnect it. Automatic child topics are grouped under their parent binding.
+- Workspace headings in the sidebar show live panes over total panes.
 - **Channels two-way mirror**: a pane bound to a chat can mirror its activity there, and replies in the chat come back to the pane. A child pane opens its own topic under the parent's chat, and moving a pane to another chat moves its child topics with it.
 - **Choose what a chat receives when you bind**: the bind dialog asks for a mirror level first, with a line on what each one sends. "Chat replies only" is preselected and sends nothing typed locally; Standard, Minimal and Full add local activity step by step. Bindings made before this release stay at chat replies only. Redaction only masks the channel's own bot credentials, and the dialog says so.
 - The Plan window can open on one document via `ui.window.openPlans`.
@@ -22,6 +25,7 @@ All notable released changes to Navide will be documented in this file. The form
 - `Ctrl+C`, `Ctrl+\` and `Ctrl+Z` work in panes even when the backend was started in the background.
 - On Windows, the backend exits promptly when the app closes instead of waiting up to about 15 seconds for an MCP server to start.
 - A staging file swapped for a symlink during a chunked write is refused on every platform.
+- Marketplace review signs only the artifacts the reviewer saw and refuses a decision that lost a race with another reviewer; uninstalling a pack never removes a member another installed pack still uses.
 - Long mirrored messages are no longer split into a tiny first chunk.
 - Dependency updates: electron 44.4.5, koffi 3.3.1, html-to-text 10, anthropic 1.8.0, and security fixes for pyjwt, brace-expansion and fast-uri.
 
