@@ -1027,6 +1027,30 @@ def test_store_marker_binds_pane_end_to_end(
     assert binding.workspace_path == "/ws"
 
 
+def test_store_marker_confirms_a_usage_claim_by_the_same_pane(
+    copilot_attr: tuple[Attribution, Path],
+) -> None:
+    """A store created after the pane registered is outside its baseline, so
+    the in-turn usage row claims the session silently before the turn row
+    carrying the marker lands. The marker must still announce that binding
+    once, or the pane never learns its resume id."""
+    attr, root = copilot_attr
+    attr.register_pane("p1", vendor="copilot", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p1")
+    db = _store(root)
+    _add_session(db, sid="sess-one", cwd="/ws")
+    _add_usage(db, sid="sess-one")
+    for usage in CopilotLogReader().parse_session_file(db, set()):
+        attr.attribute(usage)
+    assert attr.pane_for_session("sess-one")[0] == "p1"
+
+    _add_turn(db, sid="sess-one", user="hi <!-- agent-team-session: at-pane:p1 -->")
+    binding = attr.maybe_announce_session(_usage("session-store", db, cwd=""))
+    assert binding is not None
+    assert (binding.pane_id, binding.resume_id) == ("p1", "sess-one")
+    assert attr.maybe_announce_session(_usage("session-store", db, cwd="")) is None
+
+
 # ─────────────────────────── failure tolerance ───────────────────────────────
 
 def test_store_failures_never_raise_and_fall_back_to_events_jsonl(

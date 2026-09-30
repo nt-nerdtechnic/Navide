@@ -478,3 +478,23 @@ def test_reader_binding_flags() -> None:
     assert DroidLogReader.emits_session_sink is True
     assert DroidLogReader.binds_by_marker_file is True
     assert DroidLogReader.binds_new_session_single_candidate is True
+
+
+# ---- attribution hooks ----------------------------------------------------
+
+def test_events_attribute_to_the_pane_workspace_by_cwd(sessions_root: Path, tmp_path: Path) -> None:
+    """Without workspace_match/pane_cwd_match every Droid activity and usage
+    event resolved to no workspace and was silently dropped."""
+    from agent_team_backend.log_readers.attribution import Attribution
+    from agent_team_backend.log_readers.base import TokenUsage
+
+    path = _write_session(sessions_root, "/w/proj", "a", [_session_start("a", "/w/proj")])
+    attr = Attribution([DroidLogReader()], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane("p1", vendor="droid", cwd="/w/proj", workspace_path="/w/proj")
+
+    def usage(cwd: str) -> TokenUsage:
+        return TokenUsage(vendor="droid", input_tokens=1, output_tokens=1, cwd=cwd,
+                          session_id="a", file_path=str(path), dedup_key="")
+
+    assert attr.attribute(usage("/w/proj")).workspace_path == "/w/proj"
+    assert attr.attribute(usage("/w/other")).workspace_path is None

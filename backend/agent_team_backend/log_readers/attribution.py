@@ -653,8 +653,16 @@ class Attribution:
                 continue
             with self._lock:
                 pane_id = self._unbound_markers.get(marker)
-                if pane_id is None or session_id in self._session_owner:
+                owner = self._session_owner.get(session_id)
+                if pane_id is None or owner not in (None, pane_id):
                     continue  # bound meanwhile / pane killed
+                # A usage row can claim the session for this same pane before
+                # the turn carrying the marker lands; the marker then confirms
+                # that claim and announces it once.
+                key = f"{vendor}:{session_id}:{session_id}"
+                if owner == pane_id and key in self._announced_session_keys:
+                    self._unbound_markers.pop(marker, None)
+                    continue
                 reg = self._panes.get(pane_id)
                 if reg is None or reg.vendor != vendor:
                     continue
@@ -668,6 +676,7 @@ class Attribution:
                 self._session_owner[session_id] = pane_id
                 reg.claimed_session_ids.add(session_id)
                 self._unbound_markers.pop(marker, None)
+                self._announced_session_keys.add(key)
                 binding = SessionBinding(
                     pane_id=pane_id,
                     resume_id=session_id,

@@ -446,6 +446,27 @@ def test_parse_activity_item_completed_user_message_carries_prompt_text(
     ]
 
 
+def test_parse_activity_later_batch_keeps_session_meta_cwd(
+    fake_codex_session: Path,
+) -> None:
+    """session_meta is the first record, so every poll after the first starts
+    below it; the turn_complete must still carry the header's cwd or
+    attribution drops it."""
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/home/x/work"}},
+        {"timestamp": "2026-09-18T15:00:00Z", "type": "event_msg",
+         "payload": {"type": "task_started", "turn_id": "u1"}},
+    ])
+    reader = CodexLogReader()
+    seen: set[str] = set()
+    reader.parse_activity(fake_codex_session, seen)
+    with fake_codex_session.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(_task_complete_event("done")) + "\n")
+    turns = [e for e in reader.parse_activity(fake_codex_session, seen)
+             if e.event_type == "turn_complete"]
+    assert [e.cwd for e in turns] == ["/home/x/work"]
+
+
 def test_parse_activity_turn_ends_at_task_complete_not_token_count(
     fake_codex_session: Path,
 ) -> None:
