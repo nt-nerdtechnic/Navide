@@ -29,7 +29,9 @@ def chunk_text(text: str, limit: int) -> list[str]:
     """Split ``text`` into pieces of at most ``limit`` chars.
 
     Prefers a newline boundary, then whitespace, and only hard-cuts a single
-    token longer than the limit. Empty input yields no chunks.
+    token longer than the limit. A whitespace boundary in the first half of the
+    window is not used: it would send a runt message (a lone "🖥" label) before
+    the rest. Empty input yields no chunks.
     """
     if limit <= 0:
         raise ValueError("limit must be positive")
@@ -43,8 +45,8 @@ def chunk_text(text: str, limit: int) -> list[str]:
         cut = window.rfind("\n")
         if cut <= 0:
             cut = max(window.rfind(" "), window.rfind("\t"))
-        if cut <= 0:
-            cut = limit
+            if cut <= limit // 2:
+                cut = limit
         piece = rest[:cut].rstrip()
         if piece:
             out.append(piece)

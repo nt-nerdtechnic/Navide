@@ -29,6 +29,22 @@ def test_chunk_text_prefers_newline_then_space_then_hard_cut() -> None:
     assert chunk_text("short", 4000) == ["short"]
 
 
+def test_chunk_text_never_splits_off_a_runt_before_a_long_token() -> None:
+    # A mirrored prompt is "🖥 你：<prompt>": the only space sits right after the label, and
+    # cutting there sent a lone "🖥" message — one more message through a paced chat.
+    text = "🖥 你：" + "x" * 16000
+    chunks = chunk_text(text, 4000)
+    assert [len(c) for c in chunks] == [4000, 4000, 4000, 4000, 4]
+    assert "".join(chunks) == text
+    assert chunk_text("a b" + "c" * 10, 6) == ["a bccc", "cccccc", "c"]
+    assert chunk_text("a\n" + "b" * 10, 6) == ["a", "bbbbbb", "bbbb"]  # a newline still wins
+
+
+def test_chunk_text_cuts_two_paragraphs_between_them() -> None:
+    first, second = "a" * 1499 + " z", "b " * 1749 + "bb"
+    assert chunk_text(first + "\n" + second, 4000) == [first, second]
+
+
 def test_discord_char_and_line_limits() -> None:
     text = "\n".join(f"row {i}" for i in range(60))
     chunks = chunk_discord(text)
