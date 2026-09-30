@@ -125,6 +125,8 @@ export interface BindRequest {
   chat_id: string
   thread_id?: string
   title?: string
+  /** Mirror level the user chose; the backend uses replies when it is missing. */
+  verbosity?: ChannelVerbosity
 }
 
 type Backend = Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>

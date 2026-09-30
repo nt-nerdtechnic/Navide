@@ -89,7 +89,9 @@ def _v4(cur: sqlite3.Cursor) -> None:
 
 # "replies": only answers to turns the chat started (the pre-mirror behaviour).
 VERBOSITIES = ("replies", "minimal", "standard", "full")
-DEFAULT_VERBOSITY = "full"
+# A bind that names no level mirrors nothing the chat did not ask for; the user
+# picks a louder level explicitly when binding or later from the pane's chip.
+DEFAULT_VERBOSITY = "replies"
 
 
 @dataclass

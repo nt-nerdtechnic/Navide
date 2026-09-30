@@ -31,7 +31,7 @@ from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summa
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
-from .store import VERBOSITIES, Binding, ChannelStore
+from .store import DEFAULT_VERBOSITY, VERBOSITIES, Binding, ChannelStore
 from .text import chunk_for
 
 log = logging.getLogger(__name__)
@@ -574,10 +574,15 @@ class ChannelManager:
         return {"ok": True, "locations": list(merged.values())}
 
     async def bind(self, pane_id: str, pane_name: str, platform: str, mode: str,
-                   chat_id: str, thread_id: str = "", title: str = "") -> dict[str, Any]:
+                   chat_id: str, thread_id: str = "", title: str = "", *, verbosity: str = "") -> dict[str, Any]:
+        """``verbosity`` is the level the user chose; without one a re-bind keeps the
+        pane's level and a new binding gets DEFAULT_VERBOSITY (replies only)."""
         _check_platform(platform)
         if not pane_id or not chat_id:
             return {"ok": False, "error": "pane_id and chat_id are required"}
+        level = normalize_verbosity(verbosity) if verbosity else None
+        if verbosity and level is None:
+            return {"ok": False, "error": f"verbosity must be one of {', '.join(VERBOSITIES)} (got {verbosity!r})"}
         # Restore placeholders are registered too, so they still resolve and bind.
         current = self._seams.resolve_pane(pane_id)
         if not current:
@@ -607,7 +612,8 @@ class ChannelManager:
         else:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
         previous = next((b for b in self.store.bindings() if b.pane_id == pane_id), None)
-        binding = self.store.bind(pane_id, loc, **({"verbosity": previous.verbosity} if previous else {}))
+        level = level or (previous.verbosity if previous else DEFAULT_VERBOSITY)
+        binding = self.store.bind(pane_id, loc, verbosity=level)
         if previous is not None and previous.location().key() != loc.key():
             # Moved to another chat: child topics left in the old one would keep
             # posting there and let its members drive the children.

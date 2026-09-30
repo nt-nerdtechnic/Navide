@@ -93,6 +93,9 @@ async def test_start_code_from_a_stranger_links_their_dm(env: Env) -> None:
     assert ("channels.changed", {}) in env.fake.events
     locs = env.m.locations("telegram")["locations"]
     assert {"chat_id": "99", "kind": "direct"}.items() <= next(c for c in locs if c["chat_id"] == "99").items()
+    # Linking from the chat only admits the sender: no pane is bound, so nothing is
+    # mirrored until someone binds a pane in Navide and chooses its level there.
+    assert [b.pane_id for b in env.store.bindings()] == ["pane-1"]
     # Linked means allowed: the next message goes through the normal pipeline.
     env.store.bind("pane-dm", Location("telegram", "default", "99", ""))
     await env.inbound("hello", sender="99", chat="99", thread="", direct=True)

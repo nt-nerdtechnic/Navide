@@ -209,7 +209,8 @@ async def _make_env(tmp_path, clock=time.monotonic) -> Env:
     await e.m.start()
     assert (await e.m.configure("telegram", {}, {"token": "tok-A"}))["ok"]
     e.store.add_allow("telegram", "7", "alice", 1)
-    e.store.bind("pane-1", Location("telegram", "default", "-100", "50", "api"))
+    # Full, so the suites see everything a pane can mirror; the default is covered on its own.
+    e.store.bind("pane-1", Location("telegram", "default", "-100", "50", "api"), verbosity="full")
     return e
 
 

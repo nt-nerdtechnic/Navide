@@ -66,8 +66,8 @@ def test_store_v4_gives_old_bindings_the_pre_mirror_replies_level(tmp_path) -> N
     assert s.bindings()[0].public() == {
         "pane_id": "p1", "platform": "telegram", "account": "default", "chat_id": "-1", "thread_id": "5",
         "title": "t", "verbosity": "replies", "parent_pane_id": "", "auto": False}
-    # A binding made after the upgrade still gets the chosen default.
-    assert s.bind("p2", Location("telegram", "default", "-2", "", "u")).verbosity == "full"
+    # A binding made after the upgrade with no level named gets the conservative one too.
+    assert s.bind("p2", Location("telegram", "default", "-2", "", "u")).verbosity == "replies"
     db.close()
 
 
@@ -82,6 +82,25 @@ async def test_set_binding_options_shape_and_validation(env: Env) -> None:
     assert not bad["ok"] and "minimal" in bad["error"]
     assert not (await env.m.set_binding_options("nobody", "full"))["ok"]
     assert ("channels.changed", {}) in env.fake.events
+
+
+async def test_bind_uses_the_level_the_user_chose_and_defaults_to_replies(env: Env) -> None:
+    chosen = await ws_api._dispatch(env.m, "channels.bind", {
+        "pane_id": "pane-7", "pane_name": "a", "platform": "telegram", "mode": "existing",
+        "chat_id": "-700", "verbosity": "full"})
+    assert chosen["ok"] and chosen["binding"]["verbosity"] == "full"
+    unnamed = await ws_api._dispatch(env.m, "channels.bind", {
+        "pane_id": "pane-8", "pane_name": "b", "platform": "telegram", "mode": "existing", "chat_id": "-800"})
+    assert unnamed["ok"] and unnamed["binding"]["verbosity"] == "replies"
+    bad = await env.m.bind("pane-8", "b", "telegram", "existing", "-800", verbosity="loud")
+    assert not bad["ok"] and "replies" in bad["error"]
+    assert next(b for b in env.store.bindings() if b.pane_id == "pane-8").verbosity == "replies"
+
+
+async def test_moving_a_binding_takes_the_newly_chosen_level(env: Env) -> None:
+    await env.m.set_binding_options("pane-1", "minimal")
+    result = await env.m.bind("pane-1", "api", "telegram", "existing", "-100", "51", verbosity="standard")
+    assert result["binding"]["verbosity"] == "standard"
 
 
 async def test_rebinding_a_pane_keeps_its_verbosity(env: Env) -> None:
@@ -447,7 +466,7 @@ async def test_rebinding_the_same_pane_after_unbind_reopens_its_child_topics(env
     await env.m.mirror.sync_lineage()
     assert {b.pane_id for b in env.store.bindings()} == {"pane-1", "pane-2", "pane-3"}
     await env.m.unbind("pane-1")
-    assert (await env.m.bind("pane-1", "main", "telegram", "existing", "-100", "50"))["ok"]
+    assert (await env.m.bind("pane-1", "main", "telegram", "existing", "-100", "50", verbosity="full"))["ok"]
     await _until(lambda: {b.pane_id for b in env.store.bindings()} == {"pane-1", "pane-2", "pane-3"})
 
 
