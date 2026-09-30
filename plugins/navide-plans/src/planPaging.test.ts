@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { listAllPlans, needsChunkedWrite, readWholeDocument, writeDocumentChunked } from './planPaging'
+import { listAllPlans, needsChunkedWrite, readWholeDocument, SINGLE_WRITE_MAX_JSON_BYTES, writeDocumentChunked } from './planPaging'
 
 describe('readWholeDocument', () => {
   it('returns a single-page reply untouched', async () => {
@@ -87,6 +87,19 @@ describe('listAllPlans', () => {
 })
 
 describe('writeDocumentChunked', () => {
+  it('chunks a CJK-heavy document whose UTF-8 frame is over the limit though its code units are not', () => {
+    const content = 'a'.repeat(100_000) + '計'.repeat(55_000)
+    expect(JSON.stringify(content).length).toBeLessThan(160_000)
+    expect(new TextEncoder().encode(JSON.stringify(content)).length).toBeGreaterThan(256 * 1024)
+    expect(needsChunkedWrite(content)).toBe(true)
+  })
+
+  it('writes a document in one request up to the byte limit and in parts past it', () => {
+    const atLimit = 'a'.repeat(SINGLE_WRITE_MAX_JSON_BYTES - 2)
+    expect(needsChunkedWrite(atLimit)).toBe(false)
+    expect(needsChunkedWrite(`${atLimit}a`)).toBe(true)
+  })
+
   it('sends a small document as one part and a large one as ordered parts, then commits with expected_mtime', async () => {
     const content = 'é✓'.repeat(200_000) // ~1 MB of multi-byte text
     expect(needsChunkedWrite('small')).toBe(false)
