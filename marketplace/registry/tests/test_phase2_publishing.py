@@ -26,6 +26,7 @@ from tests.phase2_helpers import (
     new_token,
     package_for,
     publish,
+    queued_artifacts,
     register_official,
     sign_in,
 )
@@ -147,7 +148,10 @@ def test_approve_signs_and_publishes(client):
     queue = client.get("/api/admin/review", headers=ADMIN_HEADERS).json()["items"]
     assert [(i["identity"], i["version"]) for i in queue] == [("acme-tools.lint-guard", "1.0.0")]
 
-    resp = client.post("/api/admin/review/acme-tools/lint-guard/1.0.0/approve", headers=ADMIN_HEADERS)
+    artifacts = queued_artifacts(client, "acme-tools", "lint-guard")
+    resp = client.post(
+        "/api/admin/review/acme-tools/lint-guard/1.0.0/approve", json={"artifacts": artifacts}, headers=ADMIN_HEADERS
+    )
     assert resp.status_code == 200, resp.text
     detail = client.get("/api/extensions/acme-tools/lint-guard").json()
     (version,) = detail["versions"]
@@ -160,10 +164,17 @@ def test_approve_signs_and_publishes(client):
     assert client.get("/api/extensions/acme-tools/lint-guard/1.0.0/download").status_code == 200
     assert client.get("/api/admin/review", headers=ADMIN_HEADERS).json()["items"] == []
     # Final: neither approve nor reject applies any more.
-    assert client.post("/api/admin/review/acme-tools/lint-guard/1.0.0/approve", headers=ADMIN_HEADERS).status_code == 409
     assert (
         client.post(
-            "/api/admin/review/acme-tools/lint-guard/1.0.0/reject", json={"reason": "late"}, headers=ADMIN_HEADERS
+            "/api/admin/review/acme-tools/lint-guard/1.0.0/approve", json={"artifacts": artifacts}, headers=ADMIN_HEADERS
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            "/api/admin/review/acme-tools/lint-guard/1.0.0/reject",
+            json={"reason": "late", "artifacts": artifacts},
+            headers=ADMIN_HEADERS,
         ).status_code
         == 409
     )
@@ -173,25 +184,40 @@ def test_reject_needs_a_reason_and_shows_it_to_the_publisher(client):
     token = _claimed_with_token(client)
     publish(client, token, package_for("acme-tools", "notes", "0.5.0"))
     url = "/api/admin/review/acme-tools/notes/0.5.0/reject"
-    assert client.post(url, json={"reason": "  "}, headers=ADMIN_HEADERS).status_code == 409
-    assert client.post(url, json={"reason": "secret found in dist/config.js"}, headers=ADMIN_HEADERS).status_code == 200
+    artifacts = queued_artifacts(client, "acme-tools", "notes", "0.5.0")
+    assert client.post(url, json={"reason": "  ", "artifacts": artifacts}, headers=ADMIN_HEADERS).status_code == 409
+    resp = client.post(
+        url, json={"reason": "secret found in dist/config.js", "artifacts": artifacts}, headers=ADMIN_HEADERS
+    )
+    assert resp.status_code == 200
     assert "Reason: secret found in dist/config.js" in client.get("/publisher/acme-tools").text
     assert client.get("/api/extensions/acme-tools/notes").status_code == 404
-    assert client.post("/api/admin/review/acme-tools/notes/0.5.0/approve", headers=ADMIN_HEADERS).status_code == 409
+    assert (
+        client.post(
+            "/api/admin/review/acme-tools/notes/0.5.0/approve", json={"artifacts": artifacts}, headers=ADMIN_HEADERS
+        ).status_code
+        == 409
+    )
     # The rejected version stays taken; a fixed build ships as a new version.
     assert publish(client, token, package_for("acme-tools", "notes", "0.5.0")).status_code == 409
     assert publish(client, token, package_for("acme-tools", "notes", "0.5.1")).status_code == 201
 
 
+def _approve(client, name: str, version: str) -> None:
+    artifacts = queued_artifacts(client, "acme-tools", name, version)
+    url = f"/api/admin/review/acme-tools/{name}/{version}/approve"
+    assert client.post(url, json={"artifacts": artifacts}, headers=ADMIN_HEADERS).status_code == 200
+
+
 def test_pending_update_does_not_change_the_public_listing(client):
     token = _claimed_with_token(client)
     publish(client, token, package_for("acme-tools", "lint-guard", "1.0.0", description="Old text"))
-    client.post("/api/admin/review/acme-tools/lint-guard/1.0.0/approve", headers=ADMIN_HEADERS)
+    _approve(client, "lint-guard", "1.0.0")
     publish(client, token, package_for("acme-tools", "lint-guard", "1.1.0", description="New text"))
     detail = client.get("/api/extensions/acme-tools/lint-guard").json()
     assert detail["description"] == "Old text"
     assert detail["latest_version"] == "1.0.0"
-    client.post("/api/admin/review/acme-tools/lint-guard/1.1.0/approve", headers=ADMIN_HEADERS)
+    _approve(client, "lint-guard", "1.1.0")
     detail = client.get("/api/extensions/acme-tools/lint-guard").json()
     assert (detail["description"], detail["latest_version"]) == ("New text", "1.1.0")
 
@@ -212,7 +238,11 @@ def test_similarity_block_prevents_approval(client):
     publish(client, token, package_for("zzz-tools", "navide-git"))
     (item,) = client.get("/api/admin/review", headers=ADMIN_HEADERS).json()["items"]
     assert item["similarity_blocked"] is True
-    resp = client.post("/api/admin/review/zzz-tools/navide-git/1.0.0/approve", headers=ADMIN_HEADERS)
+    resp = client.post(
+        "/api/admin/review/zzz-tools/navide-git/1.0.0/approve",
+        json={"artifacts": item["artifacts"]},
+        headers=ADMIN_HEADERS,
+    )
     assert resp.status_code == 409
     assert "similarity" in resp.json()["detail"]
 
@@ -229,8 +259,10 @@ def test_secret_scan_reports_location_never_the_value(client, tmp_path):
     assert FAKE_AWS_KEY not in client.get("/admin/review").text
     # Approval needs an explicit false-positive acknowledgement.
     url = "/api/admin/review/acme-tools/leaky/1.0.0/approve"
-    assert client.post(url, headers=ADMIN_HEADERS).status_code == 409
-    assert client.post(url, json={"acknowledge_secret_findings": True}, headers=ADMIN_HEADERS).status_code == 200
+    artifacts = item["artifacts"]
+    assert client.post(url, json={"artifacts": artifacts}, headers=ADMIN_HEADERS).status_code == 409
+    resp = client.post(url, json={"acknowledge_secret_findings": True, "artifacts": artifacts}, headers=ADMIN_HEADERS)
+    assert resp.status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -276,8 +308,9 @@ def test_admin_web_queue_is_admin_only_and_uses_the_form_token(client):
     assert "<code>acme-tools.lint-guard</code> 1.0.0" in page.text
     assert "target: 3 business days" in page.text
     url = "/admin/review/acme-tools/lint-guard/1.0.0/approve"
-    assert client.post(url, data={"csrf": "x"}).status_code == 403
-    assert client.post(url, data={"csrf": csrf_of(client, "/admin/review")}).status_code == 303
+    artifacts = queued_artifacts(client, "acme-tools", "lint-guard")
+    assert client.post(url, data={"csrf": "x", "artifact": artifacts}).status_code == 403
+    assert client.post(url, data={"csrf": csrf_of(client, "/admin/review"), "artifact": artifacts}).status_code == 303
     assert client.get("/api/extensions/acme-tools/lint-guard").status_code == 200
 
 

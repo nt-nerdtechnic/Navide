@@ -12,6 +12,7 @@ review-required, so their publishes are approved at submission as before.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
@@ -126,6 +127,23 @@ def _pending_rows(session: Session, extension: Extension, version: str) -> list[
     )
 
 
+def _reviewed_rows(
+    session: Session, extension: Extension, version: str, artifacts: Sequence[str]
+) -> list[ExtensionVersion]:
+    """The pending rows of `extension@version`, provided they are exactly the
+    artifacts (package digests) the reviewer was shown. A target uploaded
+    after the review page loaded must not ride along on the decision."""
+    rows = _pending_rows(session, extension, version)
+    if not rows:
+        raise ReviewError("no pending submission for this version")
+    if sorted(row.package_digest for row in rows) != sorted(artifacts):
+        raise ReviewError(
+            "the pending artifacts for this version changed since the review "
+            "was loaded; reload and review again"
+        )
+    return rows
+
+
 def approve(
     session: Session,
     signer: RegistryTrustSigner,
@@ -133,12 +151,12 @@ def approve(
     extension: Extension,
     version: str,
     reviewer: str,
+    artifacts: Sequence[str],
     acknowledge_secret_findings: bool = False,
 ) -> list[ExtensionVersion]:
-    """Sign and publish every pending artifact of `extension@version`."""
-    rows = _pending_rows(session, extension, version)
-    if not rows:
-        raise ReviewError("no pending submission for this version")
+    """Sign and publish the pending artifacts of `extension@version`, which
+    must be exactly `artifacts` (the package digests the reviewer saw)."""
+    rows = _reviewed_rows(session, extension, version, artifacts)
     publisher = session.get(Publisher, extension.publisher_id)
     publisher_id = publisher.name if publisher else extension.namespace
     reason = signer.block_reason(
@@ -214,15 +232,14 @@ def reject(
     version: str,
     reviewer: str,
     reason: str,
+    artifacts: Sequence[str],
 ) -> list[ExtensionVersion]:
     reason = reason.strip()
     if not reason:
         raise ReviewError("a rejection needs a reason")
     if len(reason) > MAX_REASON_LENGTH:
         raise ReviewError(f"reason is longer than {MAX_REASON_LENGTH} characters")
-    rows = _pending_rows(session, extension, version)
-    if not rows:
-        raise ReviewError("no pending submission for this version")
+    rows = _reviewed_rows(session, extension, version, artifacts)
     now = _now()
     for row in rows:
         row.review_status = REJECTED
@@ -260,10 +277,12 @@ def review_queue(session: Session, now: datetime | None = None) -> list[dict]:
                 "deadline": deadline,
                 "overdue": now > deadline,
                 "targets": [],
+                "artifacts": [],
                 "reports": [],
             }
             groups[key] = group
         group["targets"].append(row.target)
+        group["artifacts"].append(row.package_digest)
         group["reports"].append(row.review_report)
     return list(groups.values())
 

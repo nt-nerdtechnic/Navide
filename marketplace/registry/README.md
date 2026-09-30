@@ -410,6 +410,9 @@ settings below are set; without them the registry behaves exactly as before
   scan (file and line only, never the value), requested permissions and size.
   A similarity block cannot be approved; secret findings need an explicit
   false-positive acknowledgement. Target: 3 business days, no auto-approve.
+  A decision carries the package digests the queue showed (`artifacts` in the
+  JSON body, `artifact` form fields); if the pending set differs — a target was
+  uploaded meanwhile — it is refused with 409 and the reviewer reloads.
 - **Dashboard** (`/publisher/{ns}`): versions with review status and reasons,
   short-lived revocable tokens (≤ 90 days, stored as sha256), the signing
   public key, and optional DNS TXT verification

@@ -26,6 +26,7 @@ from tests.phase2_helpers import (
     new_token,
     package_for,
     publish,
+    queued_artifacts,
     register_official,
     sign_in,
 )
@@ -75,7 +76,11 @@ def test_domain_verification_uses_the_injected_resolver(client, dns):
     # The badge shows on the public page once something is approved.
     token = new_token(client, "acme-tools")
     publish(client, token, package_for("acme-tools", "lint-guard"))
-    client.post("/api/admin/review/acme-tools/lint-guard/1.0.0/approve", headers=ADMIN_HEADERS)
+    client.post(
+        "/api/admin/review/acme-tools/lint-guard/1.0.0/approve",
+        json={"artifacts": queued_artifacts(client, "acme-tools", "lint-guard")},
+        headers=ADMIN_HEADERS,
+    )
     detail = client.get("/extensions/acme-tools/lint-guard").text
     assert "✓ verified · acme.example" in detail
     assert '<span class="badge badge-verified" title="Publisher proved control of acme.example (DNS)">' in detail

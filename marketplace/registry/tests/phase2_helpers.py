@@ -144,6 +144,16 @@ def publish(client: TestClient, token: str, data: bytes, target: str = "universa
 ADMIN_HEADERS = {"X-Admin-Token": ADMIN_TOKEN}
 
 
+def queued_artifacts(client: TestClient, namespace: str, name: str, version: str = "1.0.0") -> list[str]:
+    """The package digests the review queue shows for a submission, which an
+    approve or reject must carry back."""
+    items = client.get("/api/admin/review", headers=ADMIN_HEADERS).json()["items"]
+    for item in items:
+        if (item["namespace"], item["name"], item["version"]) == (namespace, name, version):
+            return item["artifacts"]
+    return []
+
+
 def register_official(client: TestClient, name: str = "navide", token: str = "official-token") -> str:
     resp = client.post(
         "/api/publishers",

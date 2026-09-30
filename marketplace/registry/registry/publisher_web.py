@@ -63,9 +63,12 @@ class CliTokenRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     acknowledge_secret_findings: bool = False
+    # Package digests from the review queue: the decision applies to exactly these.
+    artifacts: list[str] = []
 
 class RejectRequest(BaseModel):
     reason: str
+    artifacts: list[str] = []
 
 
 class BlockRequest(BaseModel):
@@ -524,6 +527,7 @@ def create_publisher_router() -> APIRouter:
                     "name": group["extension"].name,
                     "version": group["version"],
                     "targets": group["targets"],
+                    "artifacts": group["artifacts"],
                     "publisher": group["publisher"].name if group["publisher"] else None,
                     "publisher_domain": verified_domain(group["publisher"]),
                     "submitted_at": group["submitted_at"],
@@ -556,7 +560,7 @@ def create_publisher_router() -> APIRouter:
             {"items": items, "oldest": oldest, "sla_days": review.SLA_BUSINESS_DAYS},
         )
 
-    def _decide(request: Request, namespace: str, name: str, version: str, reviewer: str, action: str, *, reason: str = "", acknowledge: bool = False) -> None:
+    def _decide(request: Request, namespace: str, name: str, version: str, reviewer: str, action: str, artifacts: list[str], *, reason: str = "", acknowledge: bool = False) -> None:
         state = request.app.state.registry
         with _session(request) as session:
             repo = RegistryRepository(session)
@@ -571,31 +575,39 @@ def create_publisher_router() -> APIRouter:
                         extension=extension,
                         version=version,
                         reviewer=reviewer,
+                        artifacts=artifacts,
                         acknowledge_secret_findings=acknowledge,
                     )
                 else:
-                    review.reject(session, extension=extension, version=version, reviewer=reviewer, reason=reason)
+                    review.reject(
+                        session, extension=extension, version=version, reviewer=reviewer, reason=reason, artifacts=artifacts
+                    )
             except review.ReviewError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/admin/review/{namespace}/{name}/{version}/approve")
     @guarded
     def admin_approve(
-        request: Request, namespace: str, name: str, version: str, csrf: str = Form(""), acknowledge: str = Form("")
+        request: Request, namespace: str, name: str, version: str, csrf: str = Form(""), acknowledge: str = Form(""),
+        artifact: list[str] = Form([]),
     ) -> Response:
         viewer = _require_admin(request)
         _check_csrf(request, viewer, csrf)
-        _decide(request, namespace, name, version, f"member:{viewer.member_id}", "approve", acknowledge=acknowledge == "yes")
+        _decide(
+            request, namespace, name, version, f"member:{viewer.member_id}", "approve", artifact,
+            acknowledge=acknowledge == "yes",
+        )
         return _redirect(request, "/admin/review")
 
     @router.post("/admin/review/{namespace}/{name}/{version}/reject")
     @guarded
     def admin_reject(
-        request: Request, namespace: str, name: str, version: str, csrf: str = Form(""), reason: str = Form("")
+        request: Request, namespace: str, name: str, version: str, csrf: str = Form(""), reason: str = Form(""),
+        artifact: list[str] = Form([]),
     ) -> Response:
         viewer = _require_admin(request)
         _check_csrf(request, viewer, csrf)
-        _decide(request, namespace, name, version, f"member:{viewer.member_id}", "reject", reason=reason)
+        _decide(request, namespace, name, version, f"member:{viewer.member_id}", "reject", artifact, reason=reason)
         return _redirect(request, "/admin/review")
 
     @router.get("/admin/review/{namespace}/{name}/{version}/{target}/package")
@@ -720,6 +732,7 @@ def create_publisher_router() -> APIRouter:
             version,
             "admin-token",
             "approve",
+            body.artifacts if body else [],
             acknowledge=bool(body and body.acknowledge_secret_findings),
         )
         return JSONResponse({"identity": f"{namespace}.{name}", "version": version, "review_status": review.APPROVED})
@@ -734,7 +747,7 @@ def create_publisher_router() -> APIRouter:
         x_admin_token: str | None = Header(default=None),
     ) -> JSONResponse:
         _require_admin_token(request, x_admin_token)
-        _decide(request, namespace, name, version, "admin-token", "reject", reason=body.reason)
+        _decide(request, namespace, name, version, "admin-token", "reject", body.artifacts, reason=body.reason)
         return JSONResponse({"identity": f"{namespace}.{name}", "version": version, "review_status": review.REJECTED})
 
     @router.post("/api/admin/blocklist", status_code=201)

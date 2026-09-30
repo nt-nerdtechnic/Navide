@@ -29,6 +29,7 @@ from tests.phase2_helpers import (
     new_token,
     package_for,
     publish,
+    queued_artifacts,
     sign_in,
     start_login,
 )
@@ -55,7 +56,11 @@ def _v2(ident: str, version: str, description: str) -> bytes:
 
 
 def _approve(client, namespace, name, version="1.0.0"):
-    return client.post(f"/api/admin/review/{namespace}/{name}/{version}/approve", headers=ADMIN_HEADERS)
+    return client.post(
+        f"/api/admin/review/{namespace}/{name}/{version}/approve",
+        json={"artifacts": queued_artifacts(client, namespace, name, version)},
+        headers=ADMIN_HEADERS,
+    )
 
 
 # -- M1 ----------------------------------------------------------------------------
