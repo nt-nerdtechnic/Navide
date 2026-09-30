@@ -111,6 +111,36 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.13',
+    title: {
+      'zh-TW': 'Channels 雙向同步、綁定時選擇送出範圍、大型 Plan 與穩定性修正',
+      'en-US': 'Two-Way Channels, a Choice of What Chats Receive, Large Plans and Stability Fixes',
+      'ja-JP': 'Channels の双方向同期、送信範囲の選択、大きな Plan と安定性の修正',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Channels 可以把綁定 pane 的活動同步到聊天室，聊天室的回覆也會回到 pane。綁定時先選擇聊天室會收到什麼，預設「只回覆聊天室」，本機輸入不會送出；之後可隨時在 pane 的連接選單更改。',
+        'en-US': 'Channels can mirror a bound pane\'s activity to its chat and bring replies back. When you bind, you choose what the chat receives; the default, “Chat replies only”, sends nothing typed locally. You can change it any time from the pane\'s channel menu.',
+        'ja-JP': 'Channels でバインドしたペインのアクティビティをチャットに同期し、返信をペインに戻せます。バインド時にチャットが受け取る内容を選べ、既定の「チャットへの返信のみ」ではローカル入力は送信されません。ペインのチャンネルメニューからいつでも変更できます。',
+      },
+      {
+        'zh-TW': 'Plans 可以開啟並儲存任何大小的文件，包含大量中文的 plan。',
+        'en-US': 'Plans opens and saves documents of any size, including plans with a lot of CJK text.',
+        'ja-JP': 'Plans で任意のサイズのドキュメントを開いて保存できます。CJK 文字の多い plan も含みます。',
+      },
+      {
+        'zh-TW': '語音輸入在連線與模型下載完成時先暖機，第一次說話就有即時字幕；設定頁分開顯示模型與引擎狀態。',
+        'en-US': 'Voice input warms up on connect and after the model downloads, so the first take shows live text; Settings shows the model and the engine as separate rows.',
+        'ja-JP': '音声入力は接続時とモデルのダウンロード後に準備されるため、最初の発話からリアルタイムに文字が表示されます。設定ではモデルとエンジンの状態を分けて表示します。',
+      },
+      {
+        'zh-TW': '修正：Git 遠端操作不再提早逾時或在輸入密碼時關閉視窗；終端機與 mini-IDE 開檔失敗會提示；pane 內 Ctrl+C 恢復作用；Windows 上關閉 App 後後端會立即結束。',
+        'en-US': 'Fixes: Git remote operations no longer time out early or close the password prompt; opening a file from the terminal or the mini-IDE says so when it fails; Ctrl+C works in panes again; on Windows the backend exits promptly when the app closes.',
+        'ja-JP': '修正：Git のリモート操作が早すぎるタイムアウトやパスワード入力中のダイアログ終了を起こさなくなりました。ターミナルと mini-IDE でのファイルオープン失敗が通知されます。ペイン内の Ctrl+C が再び機能します。Windows でアプリ終了時にバックエンドがすぐ終了します。',
+      },
+    ],
+  },
+  {
     version: '0.2.12',
     title: {
       'zh-TW': 'Channels 一鍵連結、側欄 Free 模式、擴充套件可回滾',

@@ -4,6 +4,27 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.13] — 2026-09-30 — signed release
+
+### Added
+
+- **Channels two-way mirror**: a pane bound to a chat can mirror its activity there, and replies in the chat come back to the pane. A child pane opens its own topic under the parent's chat, and moving a pane to another chat moves its child topics with it.
+- **Choose what a chat receives when you bind**: the bind dialog asks for a mirror level first, with a line on what each one sends. "Chat replies only" is preselected and sends nothing typed locally; Standard, Minimal and Full add local activity step by step. Bindings made before this release stay at chat replies only. Redaction only masks the channel's own bot credentials, and the dialog says so.
+- The Plan window can open on one document via `ui.window.openPlans`.
+- Voice settings show the model and the engine as separate status rows.
+
+### Fixed
+
+- Plans lists, opens and saves documents of any size, including plans heavy in CJK text, which used to fail to save above about 85,000 characters.
+- Voice input pre-warms on connect and after the model downloads, so the first take shows live partials instead of cold-starting mid-take.
+- Git remote operations get the time they need instead of timing out after 10 seconds and closing the credential prompt while you type.
+- Opening a file from the terminal file picker or the mini-IDE says so when it fails, and the mini-IDE no longer opens duplicate tabs for one file.
+- `Ctrl+C`, `Ctrl+\` and `Ctrl+Z` work in panes even when the backend was started in the background.
+- On Windows, the backend exits promptly when the app closes instead of waiting up to about 15 seconds for an MCP server to start.
+- A staging file swapped for a symlink during a chunked write is refused on every platform.
+- Long mirrored messages are no longer split into a tiny first chunk.
+- Dependency updates: electron 44.4.5, koffi 3.3.1, html-to-text 10, anthropic 1.8.0, and security fixes for pyjwt, brace-expansion and fast-uri.
+
 ## [0.2.12] — 2026-09-28 — signed release
 
 ### Added
