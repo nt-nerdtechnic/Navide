@@ -53,7 +53,7 @@ def _set_verbosity(env: Env, level: str) -> None:
 # --- store / WS ------------------------------------------------------------------
 
 
-def test_store_v4_keeps_old_bindings_with_default_options(tmp_path) -> None:
+def test_store_v4_gives_old_bindings_the_pre_mirror_replies_level(tmp_path) -> None:
     from agent_team_backend.channels import store as store_mod
 
     db = Database(tmp_path / "n.db")
@@ -65,7 +65,9 @@ def test_store_v4_keeps_old_bindings_with_default_options(tmp_path) -> None:
     assert db.schema_version("channels") == 4
     assert s.bindings()[0].public() == {
         "pane_id": "p1", "platform": "telegram", "account": "default", "chat_id": "-1", "thread_id": "5",
-        "title": "t", "verbosity": "full", "parent_pane_id": "", "auto": False}
+        "title": "t", "verbosity": "replies", "parent_pane_id": "", "auto": False}
+    # A binding made after the upgrade still gets the chosen default.
+    assert s.bind("p2", Location("telegram", "default", "-2", "", "u")).verbosity == "full"
     db.close()
 
 
@@ -195,6 +197,30 @@ async def test_minimal_verbosity_sends_only_the_result(env: Env) -> None:
     assert env.tg.texts() == [] and env.tg.typing == 0 and env.tg.edits == []
     env.turn_complete("pane-1", "done")
     await _until(lambda: "✅ 完成 · 🖥 本機\ndone" in env.tg.texts())
+
+
+async def test_replies_level_sends_only_answers_to_what_the_chat_started(env: Env) -> None:
+    _topics(env)
+    _set_verbosity(env, "replies")
+    _use_directory(env, [_pane("pane-1", "main"), _pane("pane-9", "planner"), _pane("pane-2", "tester", "pane-1")])
+    env.m.mirror.on_local_prompt("pane-1", "local secret prompt")
+    env.m.mirror.on_message_rows([_row("u1", "planner", "main", "delegated secret")])
+    env.turn_complete("pane-1", "local secret result")
+    env.turn_complete("pane-2", "child secret result")
+    env.fake.states["pane-1"] = {"exists": True, "busy": True, "display_status": "awaiting"}
+    env.m.mirror.on_status("pane-1")
+    await env.m.mirror.sync_lineage()
+    await asyncio.sleep(0.2)
+    assert env.tg.texts() == [] and env.tg.typing == 0 and env.tg.edits == []
+    assert [b.pane_id for b in env.store.bindings()] == ["pane-1"]  # no child topic either
+    env.fake.states["pane-1"] = {"exists": True, "busy": False, "display_status": "idle"}
+    env.m.mirror.on_status("pane-1")
+    await env.inbound("what changed?")
+    env.fake.verdicts["k1"] = {"status": "delivered"}
+    await asyncio.sleep(0.1)
+    env.turn_complete("pane-1", "the chat's answer")
+    await _until(lambda: _said(env, "the chat's answer"))
+    assert not _said(env, "secret")
 
 
 async def test_a_chat_message_coming_back_as_the_prompt_is_not_echoed(env: Env) -> None:

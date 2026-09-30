@@ -201,7 +201,7 @@ async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new'
   else error.value = res.error ?? t('channels.error.generic')
 }
 
-const VERBOSITIES: ChannelVerbosity[] = ['minimal', 'standard', 'full']
+const VERBOSITIES: ChannelVerbosity[] = ['replies', 'minimal', 'standard', 'full']
 const menuOpen = ref(false)
 const chipRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
@@ -340,6 +340,7 @@ function openSettings(): void {
           <span class="pch-loc-title pch-ellipsis">{{ t(`channels.pane.verbosity-${v}`) }}</span>
           <span class="pch-kind pch-ellipsis">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
         </button>
+        <p class="pch-sub pch-note" data-testid="channel-redact-note">{{ t('channels.pane.redact-note') }}</p>
         <template v-if="children.length">
           <div class="pch-pop-head pch-children-head">{{ t('channels.pane.children') }}</div>
           <div v-for="c in children" :key="c.pane_id" class="pch-sub pch-ellipsis" data-testid="channel-child">↳ {{ c.title || c.pane_id }}</div>
@@ -421,6 +422,7 @@ function openSettings(): void {
 .pch-pop { position: fixed; z-index: 300; box-sizing: border-box; width: 300px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; display: flex; flex-direction: column; gap: 4px; background: var(--bg-overlay); border: 1px solid var(--border-default); border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); font-size: var(--font-2xs); color: var(--text-secondary); }
 .pch-pop-head { font-weight: 600; color: var(--text-bright); margin-bottom: 2px; }
 .pch-sub { color: var(--text-secondary); }
+.pch-note { margin: 0; font-size: var(--font-3xs); }
 .pch-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pch-link { font: inherit; text-align: left; color: var(--accent-fg); background: transparent; border: none; padding: 2px 0; cursor: pointer; }
 .pch-foot { margin-top: 2px; padding-top: 6px; border-top: 1px solid var(--border-muted); }

@@ -80,12 +80,15 @@ def _v3(cur: sqlite3.Cursor) -> None:
 def _v4(cur: sqlite3.Cursor) -> None:
     # Two-way mirroring: how much of a pane's activity its chat receives, and
     # which bindings were auto-created for a child pane (parent_pane_id set).
-    cur.execute("ALTER TABLE channel_bindings ADD COLUMN verbosity TEXT NOT NULL DEFAULT 'full'")
+    # Bindings made before mirroring keep what they agreed to: replies to the chat only.
+    # New bindings always pass their level, so this default only reaches existing rows.
+    cur.execute("ALTER TABLE channel_bindings ADD COLUMN verbosity TEXT NOT NULL DEFAULT 'replies'")
     cur.execute("ALTER TABLE channel_bindings ADD COLUMN parent_pane_id TEXT NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE channel_bindings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
 
 
-VERBOSITIES = ("minimal", "standard", "full")
+# "replies": only answers to turns the chat started (the pre-mirror behaviour).
+VERBOSITIES = ("replies", "minimal", "standard", "full")
 DEFAULT_VERBOSITY = "full"
 
 

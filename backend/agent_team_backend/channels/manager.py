@@ -31,7 +31,7 @@ from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summa
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
-from .store import Binding, ChannelStore
+from .store import VERBOSITIES, Binding, ChannelStore
 from .text import chunk_for
 
 log = logging.getLogger(__name__)
@@ -153,8 +153,8 @@ class _Pending:
     # child name when the pane rides its ancestor's chat, and how much of the run to show.
     source: str = ""
     child: str = ""
-    quiet: bool = False  # no typing / status message (minimal verbosity, or a child in the parent chat)
-    silent: bool = False  # no result either (a child at minimal verbosity)
+    quiet: bool = False  # no typing / status message (replies/minimal, or a child in the parent chat)
+    silent: bool = False  # no result either (replies, or a child at minimal verbosity)
     summary: bool = False  # child result in the parent chat below full: a short excerpt
     owner: str = ""  # pane whose messages these are, for reply-to routing
 
@@ -655,7 +655,7 @@ class ChannelManager:
         """How much of the pane's activity its chat receives; auto child topics follow."""
         level = normalize_verbosity(verbosity)
         if level is None:
-            return {"ok": False, "error": f"verbosity must be one of minimal, standard, full (got {verbosity!r})"}
+            return {"ok": False, "error": f"verbosity must be one of {', '.join(VERBOSITIES)} (got {verbosity!r})"}
         pane_id = self._seams.resolve_pane(pane_id) or pane_id
         binding = self.store.set_verbosity(pane_id, level)
         if binding is None:
@@ -741,8 +741,8 @@ class ChannelManager:
         rides_parent = not route.own
         return _Pending(
             loc=route.binding.location(), source=source, child=route.child, owner=pane_id,
-            quiet=level == "minimal" or rides_parent,
-            silent=rides_parent and level == "minimal",
+            quiet=level in ("replies", "minimal") or rides_parent,
+            silent=level == "replies" or (rides_parent and level == "minimal"),
             summary=rides_parent and level != "full",
         )
 

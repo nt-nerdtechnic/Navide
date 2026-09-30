@@ -880,6 +880,14 @@ a bound chat topic is delivered to the pane exactly like a `cli_send`, and the
 pane's reply at the end of its turn is posted back to the same topic. Everything
 runs on this machine — no public IP and no Navide-Server are needed.
 
+The chip's mirror level decides what else the chat sees. **Chat replies only**
+answers messages sent from the chat and nothing else; Minimal, Standard and Full
+also mirror turns started at the keyboard, by another pane or by a child pane
+(Full includes the local prompt and delegation text). A new binding starts at
+Full; a binding made before mirroring existed was migrated to Chat replies only.
+Mirrored text is sent as is: redaction only masks the channel's own bot
+credentials, not API keys or other secrets in prompts or results.
+
 ### Platforms
 
 | Platform | Connection | A pane maps to | Edit status | Typing | Buttons |

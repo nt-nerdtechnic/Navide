@@ -496,6 +496,32 @@ describe('PaneChannelButton', () => {
     })
   })
 
+  it('offers the replies-only level and says redaction covers channel credentials only', async () => {
+    seed({
+      configured: true,
+      bindings: [{ pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'replies' }],
+    })
+    mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
+    const w = await render()
+    await w.get('[data-testid="channel-chip-menu"]').trigger('click')
+    await flushPromises()
+    expect(qa('[role="menuitemradio"]').map((e) => e.getAttribute('data-testid'))).toEqual([
+      'channel-verbosity-replies',
+      'channel-verbosity-minimal',
+      'channel-verbosity-standard',
+      'channel-verbosity-full',
+    ])
+    expect(q('[data-testid="channel-verbosity-replies"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(q('[data-testid="channel-verbosity-replies"]')?.textContent).toContain('Chat replies only')
+    expect(q('[data-testid="channel-redact-note"]')?.textContent).toContain('only masks this channel')
+    q('[data-testid="channel-verbosity-full"]')!.click()
+    await flushPromises()
+    expect(mock.sent.find((m) => m.type === 'channels.set_binding_options')?.payload).toEqual({
+      pane_id: 'p1',
+      verbosity: 'full',
+    })
+  })
+
   it('reflects the binding verbosity and lists auto-bound child topics', async () => {
     seed({
       configured: true,

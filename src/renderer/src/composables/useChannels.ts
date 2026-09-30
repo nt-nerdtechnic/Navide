@@ -74,7 +74,7 @@ export interface ChannelBinding {
   auto?: boolean
 }
 
-export type ChannelVerbosity = 'minimal' | 'standard' | 'full'
+export type ChannelVerbosity = 'replies' | 'minimal' | 'standard' | 'full'
 
 export interface ChannelLocation {
   chat_id: string
