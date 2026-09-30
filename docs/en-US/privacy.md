@@ -50,6 +50,7 @@ A future portability feature should use explicit local export/import with redact
 | Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
 | CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP servers | The configured MCP server and any service it uses | Depends entirely on that server's tools and configuration |
+| Chat channels | The chat platform a pane is bound to (Telegram, Slack, Discord, ...) and everyone in that chat | Replies to messages sent from the chat; above the "Chat replies only" mirror level also local prompts, turn results, delegation text and child panes. Redaction only masks the channel's own bot credentials — API keys or other secrets in prompts or results are sent as is |
 
 Read each provider's policy before sending private code or regulated data.
 

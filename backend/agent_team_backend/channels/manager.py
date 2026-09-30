@@ -31,7 +31,7 @@ from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summa
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
-from .store import Binding, ChannelStore
+from .store import DEFAULT_VERBOSITY, VERBOSITIES, Binding, ChannelStore
 from .text import chunk_for
 
 log = logging.getLogger(__name__)
@@ -153,8 +153,8 @@ class _Pending:
     # child name when the pane rides its ancestor's chat, and how much of the run to show.
     source: str = ""
     child: str = ""
-    quiet: bool = False  # no typing / status message (minimal verbosity, or a child in the parent chat)
-    silent: bool = False  # no result either (a child at minimal verbosity)
+    quiet: bool = False  # no typing / status message (replies/minimal, or a child in the parent chat)
+    silent: bool = False  # no result either (replies, or a child at minimal verbosity)
     summary: bool = False  # child result in the parent chat below full: a short excerpt
     owner: str = ""  # pane whose messages these are, for reply-to routing
 
@@ -574,10 +574,15 @@ class ChannelManager:
         return {"ok": True, "locations": list(merged.values())}
 
     async def bind(self, pane_id: str, pane_name: str, platform: str, mode: str,
-                   chat_id: str, thread_id: str = "", title: str = "") -> dict[str, Any]:
+                   chat_id: str, thread_id: str = "", title: str = "", *, verbosity: str = "") -> dict[str, Any]:
+        """``verbosity`` is the level the user chose; without one a re-bind keeps the
+        pane's level and a new binding gets DEFAULT_VERBOSITY (replies only)."""
         _check_platform(platform)
         if not pane_id or not chat_id:
             return {"ok": False, "error": "pane_id and chat_id are required"}
+        level = normalize_verbosity(verbosity) if verbosity else None
+        if verbosity and level is None:
+            return {"ok": False, "error": f"verbosity must be one of {', '.join(VERBOSITIES)} (got {verbosity!r})"}
         # Restore placeholders are registered too, so they still resolve and bind.
         current = self._seams.resolve_pane(pane_id)
         if not current:
@@ -607,7 +612,12 @@ class ChannelManager:
         else:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
         previous = next((b for b in self.store.bindings() if b.pane_id == pane_id), None)
-        binding = self.store.bind(pane_id, loc, **({"verbosity": previous.verbosity} if previous else {}))
+        level = level or (previous.verbosity if previous else DEFAULT_VERBOSITY)
+        binding = self.store.bind(pane_id, loc, verbosity=level)
+        if previous is not None and previous.location().key() != loc.key():
+            # Moved to another chat: child topics left in the old one would keep
+            # posting there and let its members drive the children.
+            await self.mirror.release_children(pane_id)
         await self._changed()
         self.mirror.schedule_sync()  # children the pane already has get their topics now
         # Tell the chat which pane it now drives; off the request path like unbind,
@@ -655,7 +665,7 @@ class ChannelManager:
         """How much of the pane's activity its chat receives; auto child topics follow."""
         level = normalize_verbosity(verbosity)
         if level is None:
-            return {"ok": False, "error": f"verbosity must be one of minimal, standard, full (got {verbosity!r})"}
+            return {"ok": False, "error": f"verbosity must be one of {', '.join(VERBOSITIES)} (got {verbosity!r})"}
         pane_id = self._seams.resolve_pane(pane_id) or pane_id
         binding = self.store.set_verbosity(pane_id, level)
         if binding is None:
@@ -741,8 +751,8 @@ class ChannelManager:
         rides_parent = not route.own
         return _Pending(
             loc=route.binding.location(), source=source, child=route.child, owner=pane_id,
-            quiet=level == "minimal" or rides_parent,
-            silent=rides_parent and level == "minimal",
+            quiet=level in ("replies", "minimal") or rides_parent,
+            silent=level == "replies" or (rides_parent and level == "minimal"),
             summary=rides_parent and level != "full",
         )
 

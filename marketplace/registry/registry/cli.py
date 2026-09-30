@@ -8,23 +8,35 @@ and signing primitives (`signing`). Commands:
     navide-plugin sign    <package> --key <privkey> [--out SIG]
     navide-plugin publish <package> --registry URL [--token TOKEN] [--signature SIG]
                           [--target TARGET]
+    navide-plugin login   --registry URL [--label LABEL]
 
-`publish` reads the bearer token from NAVIDE_PLUGIN_TOKEN when --token is
-omitted, which keeps it out of the process list.
+`publish` reads the bearer token from --token, then NAVIDE_PLUGIN_TOKEN, then
+the token `login` stored for that registry, which keeps it out of the process
+list. `login` never asks for a password: it opens the registry in the browser
+(Navide Cloud sign-in), receives a one-time code on a 127.0.0.1 loopback
+redirect checked against a random `state`, and exchanges it with a PKCE
+verifier for a short-lived publish token.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Callable
 
 from .package import (
     DuplicateJsonKeyError,
@@ -36,6 +48,8 @@ from .signing import generate_keypair, read_private_key_file, sign_digest
 
 
 TOKEN_ENV = "NAVIDE_PLUGIN_TOKEN"
+CONFIG_DIR_ENV = "NAVIDE_PLUGIN_CONFIG_DIR"
+LOGIN_TIMEOUT_SECONDS = 300
 
 
 def _digest(data: bytes) -> str:
@@ -165,15 +179,174 @@ def cmd_publish(args: argparse.Namespace) -> int:
         signature = (
             sig_path.read_text().strip() if sig_path.is_file() else args.signature
         )
-    token = args.token or os.environ.get(TOKEN_ENV)
+    token = args.token or os.environ.get(TOKEN_ENV) or stored_token(args.registry)
     if not token:
-        print(f"publish needs --token or {TOKEN_ENV}", file=sys.stderr)
+        print(
+            f"publish needs --token, {TOKEN_ENV} or `navide-plugin login`",
+            file=sys.stderr,
+        )
         return 2
     status, text = post_package(
         args.registry, args.package, token, signature, target=args.target
     )
     print(f"{status} {text}")
     return 0 if 200 <= status < 300 else 1
+
+
+# -- login ----------------------------------------------------------------
+def _config_dir() -> Path:
+    override = os.environ.get(CONFIG_DIR_ENV)
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "navide-plugin"
+
+
+def _credentials_path() -> Path:
+    return _config_dir() / "credentials.json"
+
+
+def _registry_key(registry_url: str) -> str:
+    return registry_url.rstrip("/")
+
+
+def _read_credentials() -> dict:
+    try:
+        value = json.loads(_credentials_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def stored_token(registry_url: str) -> str | None:
+    entry = _read_credentials().get(_registry_key(registry_url))
+    if isinstance(entry, dict) and isinstance(entry.get("token"), str):
+        return entry["token"]
+    return None
+
+
+def store_credentials(registry_url: str, entry: dict) -> Path:
+    """Write the token owner-only (0600) and atomically."""
+    path = _credentials_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    data = _read_credentials()
+    data[_registry_key(registry_url)] = entry
+    temporary = path.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(data, stream, indent=2)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return path
+
+
+def pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+class LoginError(RuntimeError):
+    pass
+
+
+def _loopback_server() -> tuple[HTTPServer, dict, threading.Event]:
+    received: dict = {}
+    done = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server API
+            parsed = urllib.parse.urlsplit(self.path)
+            if parsed.path != "/callback" or done.is_set():
+                self.send_response(404)
+                self.end_headers()
+                return
+            received.update(urllib.parse.parse_qsl(parsed.query))
+            done.set()
+            body = b"navide-plugin: you can close this tab and return to the terminal.\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    return HTTPServer(("127.0.0.1", 0), Handler), received, done
+
+
+def _post_json(url: str, payload: dict) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as resp:  # noqa: S310 - operator-supplied URL
+            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:  # pragma: no cover - network path
+        return exc.code, {"detail": exc.read().decode("utf-8", "replace")}
+
+
+def run_login(
+    registry_url: str,
+    *,
+    label: str = "navide-plugin CLI",
+    open_browser: Callable[[str], object] = webbrowser.open,
+    post_json: Callable[[str, dict], tuple[int, dict]] = _post_json,
+    timeout: float = LOGIN_TIMEOUT_SECONDS,
+) -> dict:
+    """Browser sign-in; returns {token, namespace, expires_at}."""
+    base = _registry_key(registry_url)
+    verifier = secrets.token_urlsafe(48)
+    state = secrets.token_urlsafe(24)
+    server, received, done = _loopback_server()
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        query = urllib.parse.urlencode(
+            {
+                "port": port,
+                "state": state,
+                "code_challenge": pkce_challenge(verifier),
+                "label": label,
+            }
+        )
+        url = f"{base}/cli/authorize?{query}"
+        print(f"Opening {url}\nIf the browser does not open, visit that URL.")
+        open_browser(url)
+        if not done.wait(timeout):
+            raise LoginError("timed out waiting for the browser")
+    finally:
+        server.shutdown()
+        server.server_close()
+    if not hmac.compare_digest(received.get("state", "").encode(), state.encode()):
+        raise LoginError("state mismatch; start `navide-plugin login` again")
+    if received.get("error") == "access_denied":
+        raise LoginError("the request was cancelled in the browser")
+    code = received.get("code")
+    if not code:
+        raise LoginError("the registry did not return a code")
+    status, body = post_json(f"{base}/api/cli/token", {"code": code, "code_verifier": verifier})
+    if status != 200 or not isinstance(body.get("token"), str):
+        raise LoginError(f"token exchange failed ({status}): {body.get('detail', '')}")
+    return {"token": body["token"], "namespace": body.get("namespace"), "expires_at": body.get("expires_at")}
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    try:
+        entry = run_login(args.registry, label=args.label)
+    except LoginError as exc:
+        print(f"login failed: {exc}", file=sys.stderr)
+        return 1
+    path = store_credentials(args.registry, entry)
+    print(
+        f"Logged in as {entry['namespace']}; token expires {entry['expires_at']} "
+        f"(saved to {path})."
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -212,6 +385,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pub.add_argument("--signature", help="signature string or a file path")
     p_pub.set_defaults(func=cmd_publish)
+
+    p_login = sub.add_parser(
+        "login", help="sign in with Navide Cloud and store a publish token"
+    )
+    p_login.add_argument("--registry", required=True)
+    p_login.add_argument("--label", default="navide-plugin CLI")
+    p_login.set_defaults(func=cmd_login)
 
     return parser
 

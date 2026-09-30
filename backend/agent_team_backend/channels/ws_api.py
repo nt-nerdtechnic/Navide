@@ -54,7 +54,7 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
         return m.locations(_s(p, "platform"))
     if msg_type == "channels.bind":
         return await m.bind(_s(p, "pane_id"), _s(p, "pane_name"), _s(p, "platform"), _s(p, "mode"),
-                            _s(p, "chat_id"), _s(p, "thread_id"), _s(p, "title"))
+                            _s(p, "chat_id"), _s(p, "thread_id"), _s(p, "title"), verbosity=_s(p, "verbosity"))
     if msg_type == "channels.unbind":
         return await m.unbind(_s(p, "pane_id"), reason=_s(p, "reason"), pane_name=_s(p, "pane_name"))
     if msg_type == "channels.rebind":

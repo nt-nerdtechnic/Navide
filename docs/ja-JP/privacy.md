@@ -38,6 +38,7 @@ Navide は Project Telemetry Service を運営せず、Navide Account を必要�
 | Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
 | CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP Server | 設定された MCP Server と、それが利用する Service | Server の Tool と Configuration に全面的に依存 |
+| チャットチャンネル | pane を紐付けたチャットプラットフォーム（Telegram、Slack、Discord など）とそのチャットの全メンバー | チャットから送られたメッセージへの返信。ミラーの詳細度が「チャットへの返信のみ」より上なら、ローカル入力、各ターンの結果、委任内容、子 pane も含む。マスクされるのはそのチャンネル自身のボット認証情報だけで、プロンプトや結果に含まれる API キーなどの秘密情報はそのまま送信される |
 
 Private Code や規制対象 Data を送信する前に、各 Provider の Policy を確認してください。
 

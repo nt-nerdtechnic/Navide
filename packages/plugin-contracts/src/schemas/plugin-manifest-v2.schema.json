@@ -16,7 +16,13 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["navide"],
-      "properties": { "navide": { "type": "string", "minLength": 1 } }
+      "properties": {
+        "navide": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Lowest Navide release the package supports. ^X.Y.Z, ~X.Y.Z, >=X.Y.Z and a bare X.Y.Z all mean X.Y.Z or newer (no upper bound is enforced); * means any release. Any other form is treated as unknown and does not block installation."
+        }
+      }
     },
     "permissions": {
       "type": "object",
@@ -46,12 +52,26 @@
         }
       }
     },
-    "backend": { "$ref": "#/$defs/backend" }
+    "backend": { "$ref": "#/$defs/backend" },
+    "extensionPack": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)+$" },
+      "description": "Extension Pack member ids. A pack declares no contributes, backend or permissions; each member is installed, verified and confirmed on its own, and a member may not itself be a pack."
+    }
   },
   "anyOf": [
     { "required": ["contributes"] },
-    { "required": ["backend"] }
+    { "required": ["backend"] },
+    { "required": ["extensionPack"] }
   ],
+  "if": { "required": ["extensionPack"] },
+  "then": {
+    "not": { "anyOf": [{ "required": ["contributes"] }, { "required": ["backend"] }] },
+    "properties": { "permissions": { "maxProperties": 0 } }
+  },
   "$defs": {
     "marketplace": {
       "type": "object",

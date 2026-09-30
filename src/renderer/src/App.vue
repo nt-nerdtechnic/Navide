@@ -6,6 +6,8 @@ import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import VoiceCapsule from './components/VoiceCapsule.vue'
 import { setupVoiceInput } from './voice/voiceWiring'
+import { requestMarketplaceDetail } from './marketplaceDeepLink'
+import type { DeepLinkExtensionTarget } from '../../shared/deepLink'
 import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
 import { buildPaneLineage, effectiveParents, withDescendants } from './lib/paneLineage'
@@ -327,6 +329,7 @@ const loadSettingsModal = () => import('./components/SettingsModal.vue')
 const loadAccountModal = () => import('./components/AccountModal.vue')
 const SettingsModal = defineAsyncComponent(loadSettingsModal)
 const AccountModal = defineAsyncComponent(loadAccountModal)
+const ChannelMonitorModal = defineAsyncComponent(() => import('./components/ChannelMonitorModal.vue'))
 // Not lazy: it has to be listening before anybody asks to pair, and a request
 // expires in five minutes — too short to wait for a chunk to be fetched because
 // somebody happened to open a window.
@@ -8160,6 +8163,34 @@ async function loadP2pAccount(): Promise<void> {
     if (resp.ok && resp.payload?.status) p2pAccount.value = resp.payload.status
   } catch { /* non-fatal: the titlebar keeps its last value */ }
 }
+// Channel connection monitor (titlebar, left of the account button). The dot
+// mirrors the account badge: blocked > recovering > any platform connected;
+// no dot while nothing is configured and enabled.
+const showChannelMonitor = ref(false)
+const channelMonitorEverOpened = ref(false)
+const channelsStore = useChannels(backend)
+const channelMonitorDotClass = computed(() => {
+  let tone = ''
+  for (const p of channelsStore.platforms.value) {
+    if (!p.configured || !p.enabled) continue
+    if (p.status.lifecycle === 'blocked') return 'err'
+    if (p.status.lifecycle === 'recovering') tone = 'warn'
+    else if (p.status.lifecycle === 'ready' && tone !== 'warn') tone = 'ok'
+  }
+  return tone
+})
+function openChannelMonitor(): void {
+  channelMonitorEverOpened.value = true
+  showChannelMonitor.value = true
+}
+function channelMonitorPaneLabel(paneId: string): string {
+  const p = panes.value.find((x) => x.id === paneId)
+  return p ? p.customName || p.autoName || p.agentLabel : paneId
+}
+function onChannelMonitorFocusPane(paneId: string): void {
+  showChannelMonitor.value = false
+  void focusPaneFromNotification(paneId)
+}
 function openAccountModal(): void {
   accountModalEverOpened.value = true
   showAccount.value = true
@@ -8287,7 +8318,7 @@ watch(currentWorkspace, (workspacePath) => {
 // alone is not enough: asking for the tab you are already on leaves the prop
 // unchanged, so the modal's watcher never fires and the request is dropped.
 const settingsTabRequest = ref(0)
-const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels' | 'voice'>('general')
+const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels' | 'voice' | 'marketplace'>('general')
 // Needed to retarget an already-open modal: initialTab is only honoured on mount
 // and by its own watcher, so re-issuing the same tab is a no-op without this.
 const settingsModalRef = ref<{
@@ -8299,6 +8330,22 @@ function openSettingsAt(tab: typeof settingsInitialTab.value): void {
   if (showSettings.value) settingsModalRef.value?.setTab(tab)
   else showSettings.value = true
 }
+// navide://extension/<id> (src/main/deep-link.ts): show that extension's
+// Marketplace detail page. Only opens the page — installing still takes the
+// user's own Install press and the trust dialog.
+function openMarketplaceDetail(target: DeepLinkExtensionTarget): void {
+  requestMarketplaceDetail(target)
+  openSettingsAt('marketplace')
+}
+let stopDeepLinks: (() => void) | null = null
+onMounted(() => {
+  const api = window.agentTeam?.deepLink
+  if (!api) return
+  stopDeepLinks = api.onOpenExtension(openMarketplaceDetail)
+  // Links that arrived before this window could show them (cold start).
+  void api.ready().then((queued) => queued.forEach(openMarketplaceDetail))
+})
+onUnmounted(() => stopDeepLinks?.())
 // Workspaces the Resource Manager's storage scan walks: the open one first, then the recents that
 // still exist on disk.
 const knownWorkspacePaths = computed<string[]>(() => {
@@ -8818,6 +8865,7 @@ registerCommand('workbench.action.closeModal', () => {
   else if (showRestoreScopeModal.value) settleRestoreScope(null)
   else if (showSettings.value) showSettings.value = false
   else if (showAccount.value) showAccount.value = false
+  else if (showChannelMonitor.value) showChannelMonitor.value = false
   else if (showDebug.value) showDebug.value = false
   else if (showPipelineManager.value) {
     // The modal owns nested confirm dialogs — let it close its own top layer first.
@@ -9546,9 +9594,9 @@ function mainModalOpen(): boolean {
   return showSettings.value || showCompletionModal.value || showRestoreScopeModal.value ||
     showPipelineManager.value || showDebug.value || showHistory.value || previewLogOpen.value ||
     reconnectPickerOpen.value || !!cliInstallRequest.value || !!whatsNewEntry.value ||
-    showAccount.value || !!activeTourVersion.value
+    showAccount.value || showChannelMonitor.value || !!activeTourVersion.value
 }
-watch([showSettings, showAccount, showCompletionModal, showRestoreScopeModal, showPipelineManager, showDebug, showHistory], () => setContext('modalOpen', mainModalOpen()))
+watch([showSettings, showAccount, showChannelMonitor, showCompletionModal, showRestoreScopeModal, showPipelineManager, showDebug, showHistory], () => setContext('modalOpen', mainModalOpen()))
 
 /** Breadcrumb for a view change nobody clicked for: which tab or pane the
  *  window jumped to, and which code path did it. Every path that can switch
@@ -19537,6 +19585,20 @@ function paneIsCommander(p: ActivePane): boolean {
         @click="reattachThisWindow"
         :title="$t('action.reattach-group')"
       >⇲</button>
+      <button
+        class="titlebar-account titlebar-channels"
+        type="button"
+        data-testid="titlebar-channel-monitor"
+        @mousedown.stop
+        @click="openChannelMonitor"
+        :title="$t('channels.monitor.open')"
+      >
+        <svg class="titlebar-channels-mark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3 8.7 8.7 0 0 1-3.8-.9L3 21l1.8-5.1a8.1 8.1 0 0 1-.8-3.6A8.4 8.4 0 0 1 12.5 4 8.4 8.4 0 0 1 21 11.5z" />
+          <path d="M8.5 12h.01M12.5 12h.01M16.5 12h.01" />
+        </svg>
+        <span v-if="channelMonitorDotClass" class="titlebar-account-dot" :class="channelMonitorDotClass"></span>
+      </button>
       <!-- Account: sits immediately before the gear so the gear keeps its
            edge position (see the plugin-cluster note above). -->
       <button
@@ -19775,6 +19837,14 @@ function paneIsCommander(p: ActivePane): boolean {
          record and the way back in, this is what somebody actually sees. Both
          read one snapshot — see usePairingState. -->
     <PairingPrompt :backend="backend" />
+    <ChannelMonitorModal
+      v-if="channelMonitorEverOpened"
+      :open="showChannelMonitor"
+      :store="channelsStore"
+      :pane-label="channelMonitorPaneLabel"
+      @close="showChannelMonitor = false"
+      @focus-pane="onChannelMonitorFocusPane"
+    />
     <AccountModal
       v-if="accountModalEverOpened"
       :open="showAccount"
@@ -21249,6 +21319,10 @@ function paneIsCommander(p: ActivePane): boolean {
   background: var(--text-secondary);
   box-shadow: 0 0 0 1.5px var(--bg-base);
 }
+/* Channel entry: same box and stroke weight as the cloud mark, in its own hue. */
+.titlebar-channels { color: var(--done-fg); }
+.titlebar-channels:hover { color: var(--done-fg); }
+.titlebar-channels:has(.titlebar-account-dot.ok) { color: var(--done-fg); }
 .titlebar-account-dot.ok { background: var(--success-fg); }
 .titlebar-account-dot.err { background: var(--danger-fg); }
 .titlebar-account-dot.warn { background: var(--attention-fg); }

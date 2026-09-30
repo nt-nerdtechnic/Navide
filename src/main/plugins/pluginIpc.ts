@@ -55,6 +55,11 @@ import {
   isPluginTargetCompatible,
   selectPluginArtifact,
 } from './pluginTarget'
+import { assertEngineCompatible, isEngineCompatible, minNavideVersion } from './pluginEngineCompat'
+import { compareSemver } from './pluginManifestV2'
+import { MAX_EXTENSION_PACK_MEMBERS } from '../../../packages/plugin-contracts/src/index'
+import { PluginPrereleaseStore } from './pluginPrereleaseStore'
+import { packOnlyMembers, PluginPackStore, type InstalledPackRecord } from './pluginPackStore'
 import type {
   FrontendPluginManager,
   PluginLaunchDescriptor,
@@ -134,6 +139,13 @@ interface InstalledSummary {
   pendingCandidateVersion?: string
   rollbackKind?: 'factory' | 'previous'
   rollbackToVersion?: string
+  /** Lowest Navide release the installed version needs (label only). */
+  minNavideVersion?: string
+  /** False when this Navide release is older than that; the Host still runs
+   *  the package — the Extensions page only labels it. */
+  engineCompatible?: boolean
+  /** The user's per-extension "Get pre-releases" switch (default off). */
+  getsPrereleases?: boolean
 }
 
 export interface FactoryPackageSummary {
@@ -144,23 +156,97 @@ export interface FactoryPackageSummary {
 }
 
 const MARKETPLACE_SORTS = new Set(['updated', 'downloads', 'rating'])
+const MARKETPLACE_CATEGORY_RE = /^[a-z0-9][a-z0-9-]{0,39}$/
 
 /**
  * Newest non-yanked version with an artifact this Host can install. The
  * Registry's `latest_version` ignores targets, so a platform-only release for
- * another OS must not count as an installable update here.
+ * another OS must not count as an installable update here. With `appVersion`,
+ * a version whose `engines.navide` this Navide release does not meet is
+ * skipped too (an unknown requirement is not). A pre-release (`2.5.0-beta.1`)
+ * counts only with `includePrerelease`, the user's per-extension opt-in.
  */
 function newestInstallableVersion(
-  versions: ReadonlyArray<{ version?: unknown; target?: unknown; yanked?: unknown }>,
-  hostTarget: string
+  versions: ReadonlyArray<{
+    version?: unknown
+    target?: unknown
+    yanked?: unknown
+    engines_navide?: unknown
+  }>,
+  hostTarget: string,
+  appVersion?: string,
+  includePrerelease = false
 ): string | null {
   let newest: string | null = null
   for (const row of versions) {
     if (row.yanked === true || typeof row.version !== 'string') continue
+    if (!includePrerelease && isPrereleaseVersion(row.version)) continue
     if (!isPluginTargetCompatible(row.target, hostTarget)) continue
+    if (appVersion !== undefined && isEngineCompatible(row.engines_navide, appVersion) === false) continue
     if (newest === null || isUpdateAvailable(newest, row.version)) newest = row.version
   }
   return newest
+}
+
+/** SemVer prerelease suffix ⇒ pre-release channel (build metadata is not one). */
+export function isPrereleaseVersion(version: string): boolean {
+  return version.split('+', 1)[0].includes('-')
+}
+
+/** A Registry-supplied link, kept only when it is an https URL. */
+function httpsLink(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 2048) return null
+  try {
+    return new URL(value).protocol === 'https:' ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** Largest icon the Marketplace will display; bigger ones fall back to the
+ *  letter placeholder. */
+export const MARKETPLACE_ICON_MAX_BYTES = 256 * 1024
+const ICON_PATH_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/
+
+/** Read a response body, giving up (and cancelling the stream) as soon as it
+ *  passes `cap` bytes, so a chunked or lying response never lands in memory
+ *  whole. A response without a stream (a test double) is read directly. */
+async function readBodyCapped(res: Response, cap: number): Promise<Uint8Array | null> {
+  const body = res.body
+  if (!body) {
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    return bytes.byteLength <= cap ? bytes : null
+  }
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > cap) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
+/** Raster type by magic bytes; the Registry's Content-Type is not trusted. */
+function sniffIconMime(bytes: Uint8Array): string | null {
+  const starts = (sig: number[], at = 0): boolean => sig.every((b, i) => bytes[at + i] === b)
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png'
+  if (starts([0xff, 0xd8, 0xff])) return 'image/jpeg'
+  if (starts([0x47, 0x49, 0x46, 0x38])) return 'image/gif'
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp'
+  return null
 }
 
 /** Validate one Registry URL path segment supplied by the renderer. */
@@ -169,6 +255,20 @@ function marketplacePathSegment(value: unknown): string {
     throw new Error('invalid marketplace extension identifier')
   }
   return encodeURIComponent(value)
+}
+
+export interface PackMemberSummary {
+  id: string
+  /** ready: will be offered for install; installed: already on this device;
+   *  missing: not in the Registry; nested: itself a pack (refused);
+   *  unavailable: no artifact for this platform; incompatible: needs a newer
+   *  Navide; error: the Registry could not be read for it. */
+  status: 'ready' | 'installed' | 'missing' | 'nested' | 'unavailable' | 'incompatible' | 'error'
+  display_name: string | null
+  version: string | null
+  capabilities: string[]
+  sensitive_capabilities: string[]
+  min_navide_version: string | null
 }
 
 export interface PluginUpdateInfo {
@@ -221,6 +321,8 @@ export interface PluginIpcOptions {
   preflightCandidateFrontend?: (descriptor: PluginLaunchDescriptor) => Promise<void>
   /** Host-only standalone backend health check with no production bridge route. */
   preflightCandidateBackend?: (activation: PluginActivationCatalogEntry) => Promise<void>
+  /** The running Navide release that `engines.navide` is checked against. */
+  appVersion?: () => string
 }
 
 function errorText(error: unknown): string {
@@ -316,6 +418,15 @@ export function registerPluginIpc(
   const activeTransactions = new Set<string>()
   const capabilityGrants = new PluginCapabilityGrantStore(pluginsRoot)
   const lifecycleSelector = new PluginActivationSelector(pluginsRoot)
+  const hostAppVersion = options.appVersion ?? ((): string => app.getVersion())
+  const prereleases = new PluginPrereleaseStore(pluginsRoot)
+  const packs = new PluginPackStore(pluginsRoot)
+  // Pack installs in progress, keyed by pack id: the verified member list and
+  // which members were installed before the pack flow started.
+  const packSessions = new Map<
+    string,
+    { version: string; displayName: string | null; members: string[]; preInstalled: Set<string> }
+  >()
 
   /** Post-write verification of an installed package tree, shared by the staged
    *  (v2) and legacy (v1) commit paths. */
@@ -375,6 +486,7 @@ export function registerPluginIpc(
         manifestPermissions?: ManifestPermissionsSummary
         provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
         warning?: string
+        enginesNavide?: string
       }
     >()
     for (const descriptor of manager.listDescriptors()) {
@@ -406,6 +518,7 @@ export function registerPluginIpc(
         // A malformed candidate remains unavailable; its selector is not a grant.
       }
     }
+    const optedIn = new Set(prereleases.list())
     return [...summaries.values()].map((summary) => {
       const candidate = lifecycleSelector.read(summary.id)?.candidate
       return {
@@ -444,6 +557,16 @@ export function registerPluginIpc(
       ...(summary.provenance ? { provenance: summary.provenance } : {}),
       ...(summary.warning ? { warning: summary.warning } : {}),
       ...(candidate ? { pendingCandidateVersion: candidate.packageVersion } : {}),
+      ...(() => {
+        const floor = minNavideVersion(summary.enginesNavide)
+        const compatible = isEngineCompatible(summary.enginesNavide, hostAppVersion())
+        return floor !== null && compatible !== null
+          ? { minNavideVersion: floor, engineCompatible: compatible }
+          : {}
+      })(),
+      ...(summary.provenance === 'official-registry'
+        ? { getsPrereleases: optedIn.has(summary.id) }
+        : {}),
       ...(() => {
         const rollback = rollbackTargetFor(summary.id)
         if (!rollback) return {}
@@ -485,31 +608,141 @@ export function registerPluginIpc(
     }
   )
 
-  ipcMain.handle('plugins:marketplaceSearch', async (event, query?: string, sort?: string) => {
+  ipcMain.handle(
+    'plugins:marketplaceSearch',
+    async (
+      event,
+      query?: string,
+      sort?: string,
+      options?: { category?: unknown; offset?: unknown; limit?: unknown; hideIncompatible?: unknown } | null
+    ) => {
+      assertAuthorized(event)
+      const marketplace = resolveConfiguredMarketplace(trust)
+      const appVersion = hostAppVersion()
+      // Resolve relative to the base path: the Registry may be served under a
+      // path prefix (the Official Registry lives at `/registry`).
+      const url = new URL(`${marketplace.registryUrl.replace(/\/+$/, '')}/api/extensions`)
+      if (query) url.searchParams.set('q', query)
+      if (sort && MARKETPLACE_SORTS.has(sort)) url.searchParams.set('sort', sort)
+      if (typeof options?.category === 'string' && MARKETPLACE_CATEGORY_RE.test(options.category)) {
+        url.searchParams.set('category', options.category)
+      }
+      if (Number.isSafeInteger(options?.offset) && (options?.offset as number) > 0) {
+        url.searchParams.set('offset', String(options?.offset))
+      }
+      if (Number.isSafeInteger(options?.limit) && (options?.limit as number) > 0) {
+        url.searchParams.set('limit', String(Math.min(options?.limit as number, 100)))
+      }
+      // The Registry only needs the client release to filter; the per-item
+      // verdict below is computed here from `engines_navide`.
+      if (options?.hideIncompatible === true) {
+        url.searchParams.set('navide_version', appVersion)
+        url.searchParams.set('compatible_only', 'true')
+      }
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`marketplace search failed: HTTP ${res.status}`)
+      const body = (await res.json()) as { items?: Array<Record<string, unknown>> }
+      // Target and engine compatibility are decided here, with the same rules
+      // install uses, so the renderer never re-derives them. A Registry that
+      // predates per-target artifacts sends no `latest_targets`; those stay
+      // installable, and one without `engines_navide` reports compatibility
+      // as unknown (null), which never blocks.
+      const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+      return {
+        ...body,
+        items: (body.items ?? []).map((item) => ({
+          ...item,
+          installable: Array.isArray(item.latest_targets)
+            ? item.latest_targets.some((target) => isPluginTargetCompatible(target, hostTarget))
+            : true,
+          compatible: isEngineCompatible(item.engines_navide, appVersion),
+          min_navide_version: minNavideVersion(item.engines_navide),
+          app_version: appVersion,
+          license: typeof item.license === 'string' ? item.license : null,
+          repository: httpsLink(item.repository),
+          homepage: httpsLink(item.homepage),
+          icon_path: typeof item.icon_path === 'string' ? item.icon_path : null,
+        })),
+      }
+    }
+  )
+
+  // The closed category list; a Registry that predates it yields none, and
+  // the renderer then shows no category chips.
+  ipcMain.handle('plugins:marketplaceCategories', async (event) => {
     assertAuthorized(event)
     const marketplace = resolveConfiguredMarketplace(trust)
-    // Resolve relative to the base path: the Registry may be served under a
-    // path prefix (the Official Registry lives at `/registry`).
-    const url = new URL(`${marketplace.registryUrl.replace(/\/+$/, '')}/api/extensions`)
-    if (query) url.searchParams.set('q', query)
-    if (sort && MARKETPLACE_SORTS.has(sort)) url.searchParams.set('sort', sort)
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`marketplace search failed: HTTP ${res.status}`)
+    const res = await fetch(`${marketplace.registryUrl.replace(/\/+$/, '')}/api/categories`)
+    if (res.status === 404) return []
+    if (!res.ok) throw new Error(`marketplace categories failed: HTTP ${res.status}`)
     const body = (await res.json()) as { items?: Array<Record<string, unknown>> }
-    // Target compatibility is decided here, with the same rule install uses,
-    // so the renderer never re-derives it. A Registry that predates
-    // per-target artifacts sends no `latest_targets`; those stay installable.
-    const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
-    return {
-      ...body,
-      items: (body.items ?? []).map((item) => ({
-        ...item,
-        installable: Array.isArray(item.latest_targets)
-          ? item.latest_targets.some((target) => isPluginTargetCompatible(target, hostTarget))
-          : true,
-      })),
-    }
+    return (body.items ?? [])
+      .filter((item) => typeof item.slug === 'string' && MARKETPLACE_CATEGORY_RE.test(item.slug))
+      .map((item) => ({
+        slug: item.slug as string,
+        label: typeof item.label === 'string' ? item.label : (item.slug as string),
+        count: typeof item.count === 'number' ? item.count : 0,
+      }))
   })
+
+  // Marketplace icons are display-only bytes that the signed package digest
+  // does not cover on this path, so they are treated as untrusted: fetched
+  // from the configured Registry origin only (no redirects), capped in size,
+  // typed by magic bytes (raster only, never SVG) and handed to the renderer
+  // as a data: URL for an <img>. Any failure yields null (letter placeholder).
+  const iconCache = new Map<string, string | null>()
+  ipcMain.handle(
+    'plugins:marketplaceIcon',
+    async (event, args: { namespace?: unknown; name?: unknown; version?: unknown; path?: unknown } | null) => {
+      assertAuthorized(event)
+      const namespace = marketplacePathSegment(args?.namespace)
+      const name = marketplacePathSegment(args?.name)
+      const version = args?.version
+      const path = args?.path
+      if (typeof version !== 'string' || compareSemver(version, version) !== 0) return null
+      if (typeof path !== 'string' || path.length > 256 || !ICON_PATH_RE.test(path)) return null
+      if (path.split('/').some((segment) => segment === '.' || segment === '..')) return null
+      const key = `${namespace}/${name}/${version}/${path}`
+      if (iconCache.has(key)) return iconCache.get(key) ?? null
+      const marketplace = resolveConfiguredMarketplace(trust)
+      const encodedPath = path.split('/').map(encodeURIComponent).join('/')
+      let dataUrl: string | null = null
+      try {
+        const res = await fetch(
+          `${marketplace.registryUrl.replace(/\/+$/, '')}/extensions/${namespace}/${name}/${encodeURIComponent(version)}/assets/${encodedPath}`,
+          { redirect: 'error' }
+        )
+        const declared = Number(res.headers.get('content-length') ?? '0')
+        if (res.ok && declared <= MARKETPLACE_ICON_MAX_BYTES) {
+          const bytes = await readBodyCapped(res, MARKETPLACE_ICON_MAX_BYTES)
+          const mime = bytes ? sniffIconMime(bytes) : null
+          if (bytes && mime) dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`
+        }
+      } catch {
+        dataUrl = null
+      }
+      if (iconCache.size >= 256) iconCache.clear()
+      iconCache.set(key, dataUrl)
+      return dataUrl
+    }
+  )
+
+  // Raw CHANGELOG markdown of the latest version; rendered as text nodes.
+  ipcMain.handle(
+    'plugins:marketplaceChangelog',
+    async (event, args: { namespace?: unknown; name?: unknown } | null) => {
+      assertAuthorized(event)
+      const namespace = marketplacePathSegment(args?.namespace)
+      const name = marketplacePathSegment(args?.name)
+      const marketplace = resolveConfiguredMarketplace(trust)
+      const res = await fetch(
+        `${marketplace.registryUrl.replace(/\/+$/, '')}/api/extensions/${namespace}/${name}/changelog`
+      )
+      if (!res.ok) throw new Error(`marketplace changelog failed: HTTP ${res.status}`)
+      const body = (await res.json()) as { markdown?: unknown }
+      return typeof body.markdown === 'string' ? body.markdown : null
+    }
+  )
 
   // Read-only detail for the Marketplace detail view. Trust metadata and
   // signed envelopes stay main-side: the renderer only needs display fields,
@@ -522,7 +755,11 @@ export function registerPluginIpc(
       const name = marketplacePathSegment(args?.name)
       const marketplace = resolveConfiguredMarketplace(trust)
       const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+      const appVersion = hostAppVersion()
+      const getsPrereleases = prereleases.has(`${args?.namespace}.${args?.name}`)
       const base = `${marketplace.registryUrl.replace(/\/+$/, '')}/api/extensions/${namespace}/${name}`
+      // Compatibility is computed here from each row's `engines_navide`, so
+      // the Registry's own verdict (and its `navide_version` input) is unused.
       const res = await fetch(base)
       if (!res.ok) throw new Error(`marketplace detail failed: HTTP ${res.status}`)
       const detail = (await res.json()) as Record<string, unknown> & {
@@ -555,7 +792,28 @@ export function registerPluginIpc(
         featured: detail.featured ?? false,
         publisher: detail.publisher ?? detail.namespace,
         host_target: hostTarget,
-        latest_installable_version: newestInstallableVersion(detail.versions ?? [], hostTarget),
+        app_version: appVersion,
+        latest_installable_version: newestInstallableVersion(detail.versions ?? [], hostTarget, undefined, getsPrereleases),
+        latest_compatible_version: newestInstallableVersion(
+          detail.versions ?? [],
+          hostTarget,
+          appVersion,
+          getsPrereleases
+        ),
+        latest_prerelease_version: typeof detail.latest_prerelease_version === 'string'
+          ? detail.latest_prerelease_version
+          : null,
+        gets_prereleases: getsPrereleases,
+        compatible: isEngineCompatible(detail.engines_navide, appVersion),
+        min_navide_version: minNavideVersion(detail.engines_navide),
+        license: typeof detail.license === 'string' ? detail.license : null,
+        repository: httpsLink(detail.repository),
+        homepage: httpsLink(detail.homepage),
+        icon_path: typeof detail.icon_path === 'string' ? detail.icon_path : null,
+        has_changelog: detail.has_changelog === true,
+        extension_pack: Array.isArray(detail.extension_pack)
+          ? detail.extension_pack.filter((member): member is string => typeof member === 'string')
+          : null,
         versions: (detail.versions ?? []).map((v) => ({
           version: v.version,
           published_at: v.published_at,
@@ -566,6 +824,9 @@ export function registerPluginIpc(
           sensitive_capabilities: v.sensitive_capabilities ?? [],
           download_count: v.download_count ?? 0,
           installable: isPluginTargetCompatible(v.target, hostTarget),
+          compatible: isEngineCompatible(v.engines_navide, appVersion),
+          min_navide_version: minNavideVersion(v.engines_navide),
+          channel: typeof v.version === 'string' && isPrereleaseVersion(v.version) ? 'pre-release' : 'stable',
         })),
         readme,
       }
@@ -588,6 +849,8 @@ export function registerPluginIpc(
     const marketplace = resolveConfiguredMarketplace(trust)
     const base = marketplace.registryUrl.replace(/\/+$/, '')
     const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+    const appVersion = hostAppVersion()
+    const optedIn = new Set(prereleases.list())
     const checked = await Promise.all(
       candidates.map(async (pkg) => {
         const dot = pkg.id.indexOf('.')
@@ -600,9 +863,22 @@ export function registerPluginIpc(
           )
           if (!res.ok) return null
           const detail = (await res.json()) as {
-            versions?: Array<{ version?: unknown; target?: unknown; yanked?: unknown }>
+            versions?: Array<{
+              version?: unknown
+              target?: unknown
+              yanked?: unknown
+              engines_navide?: unknown
+            }>
           }
-          const latestVersion = newestInstallableVersion(detail.versions ?? [], hostTarget)
+          // A stable user is never offered a pre-release. Switching the opt-in
+          // off again never downgrades: a newer stable release is offered
+          // once it exists.
+          const latestVersion = newestInstallableVersion(
+            detail.versions ?? [],
+            hostTarget,
+            appVersion,
+            optedIn.has(pkg.id)
+          )
           if (!latestVersion || !isUpdateAvailable(pkg.packageVersion!, latestVersion)) return null
           return {
             id: pkg.id,
@@ -621,6 +897,213 @@ export function registerPluginIpc(
     return pendingUpdates
   }
 
+  // D2: the per-extension "Get pre-releases" switch, default off. Turning it
+  // on or off only changes which versions count as candidates; nothing is
+  // installed until the user runs the normal update/install flow.
+  ipcMain.handle(
+    'plugins:setPrerelease',
+    async (event, args: { id?: unknown; enabled?: unknown } | null) => {
+      assertAuthorized(event)
+      if (!isValidManifestV2PluginId(args?.id)) throw new Error('invalid plugin id')
+      if (typeof args?.enabled !== 'boolean') throw new Error('invalid pre-release setting')
+      prereleases.set(args.id, args.enabled)
+      return { id: args.id, enabled: args.enabled }
+    }
+  )
+
+  /** Every plugin id this Host has installed, including staged candidates. */
+  const installedPluginIds = (): Set<string> => {
+    const ids = new Set<string>()
+    for (const descriptor of manager.listDescriptors()) ids.add(descriptor.id)
+    for (const pkg of manager.listInstalledPackages()) ids.add(pkg.id)
+    for (const record of lifecycleSelector.list()) if (record.candidate) ids.add(record.pluginId)
+    return ids
+  }
+
+  /** What installing each pack member would do, from the Registry listing.
+   *  Display only: every member is still verified by prepareInstall before
+   *  anything is written, and a member that is itself a pack is refused. */
+  const resolvePackMembers = async (memberIds: readonly string[]): Promise<PackMemberSummary[]> => {
+    const marketplace = resolveConfiguredMarketplace(trust)
+    const base = marketplace.registryUrl.replace(/\/+$/, '')
+    const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+    const appVersion = hostAppVersion()
+    const installed = installedPluginIds()
+    const optedIn = new Set(prereleases.list())
+    return Promise.all(
+      memberIds.map(async (id): Promise<PackMemberSummary> => {
+        const none: PackMemberSummary = {
+          id,
+          status: 'missing',
+          display_name: null,
+          version: null,
+          capabilities: [],
+          sensitive_capabilities: [],
+          min_navide_version: null,
+        }
+        if (!isValidManifestV2PluginId(id)) return none
+        const dot = id.indexOf('.')
+        let detail: Record<string, unknown> & { versions?: Array<Record<string, unknown>> }
+        try {
+          const res = await fetch(
+            `${base}/api/extensions/${encodeURIComponent(id.slice(0, dot))}/${encodeURIComponent(id.slice(dot + 1))}`
+          )
+          if (res.status === 404) return none
+          if (!res.ok) return { ...none, status: 'error' }
+          detail = (await res.json()) as typeof detail
+        } catch {
+          return { ...none, status: 'error' }
+        }
+        const versions = detail.versions ?? []
+        const displayName = typeof detail.display_name === 'string' ? detail.display_name : null
+        if (Array.isArray(detail.extension_pack) && detail.extension_pack.length > 0) {
+          return { ...none, status: 'nested', display_name: displayName }
+        }
+        const pick = (version: string | null) =>
+          versions.find((v) => v.version === version && !v.yanked && isPluginTargetCompatible(v.target, hostTarget))
+        const compatibleVersion = newestInstallableVersion(versions, hostTarget, appVersion, optedIn.has(id))
+        const targetVersion = newestInstallableVersion(versions, hostTarget, undefined, optedIn.has(id))
+        const row = pick(compatibleVersion) ?? pick(targetVersion)
+        const summary: PackMemberSummary = {
+          ...none,
+          display_name: displayName,
+          version: typeof row?.version === 'string' ? row.version : null,
+          capabilities: Array.isArray(row?.capabilities) ? (row.capabilities as string[]) : [],
+          sensitive_capabilities: Array.isArray(row?.sensitive_capabilities)
+            ? (row.sensitive_capabilities as string[])
+            : [],
+          min_navide_version: minNavideVersion(row?.engines_navide),
+        }
+        if (installed.has(id)) return { ...summary, status: 'installed' }
+        if (targetVersion === null) return { ...summary, status: 'unavailable' }
+        if (compatibleVersion === null) return { ...summary, status: 'incompatible' }
+        return { ...summary, status: 'ready' }
+      })
+    )
+  }
+
+  // Pack detail: each member's name, version and permissions before install.
+  ipcMain.handle('plugins:marketplacePackMembers', async (event, args: { members?: unknown } | null) => {
+    assertAuthorized(event)
+    const members = args?.members
+    if (!Array.isArray(members) || members.length > MAX_EXTENSION_PACK_MEMBERS) {
+      throw new Error('invalid extension pack members')
+    }
+    return resolvePackMembers(members.filter((id): id is string => typeof id === 'string'))
+  })
+
+  // D5: start a pack install. The pack package itself is downloaded and
+  // verified like any Registry package, so its member list is the signed
+  // one, but it is never written: the renderer then installs each "ready"
+  // member through plugins:prepareInstall/commitInstall, each with its own
+  // confirmation. A pack carries no permissions (Manifest v2 refuses them),
+  // so it can never widen what a member is granted.
+  ipcMain.handle(
+    'plugins:preparePack',
+    async (event, args: { namespace?: unknown; name?: unknown } | null) => {
+      assertAuthorized(event)
+      const namespace = marketplacePathSegment(args?.namespace)
+      const name = marketplacePathSegment(args?.name)
+      const packId = `${String(args?.namespace)}.${String(args?.name)}`
+      if (!isValidManifestV2PluginId(packId)) throw new Error('invalid extension pack id')
+      const marketplace = resolveConfiguredMarketplace(trust)
+      const base = marketplace.registryUrl.replace(/\/+$/, '')
+      const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+      const detailRes = await fetch(`${base}/api/extensions/${namespace}/${name}`)
+      if (!detailRes.ok) throw new Error(`extension not found: HTTP ${detailRes.status}`)
+      const detail = (await detailRes.json()) as { display_name?: unknown; versions?: Array<Record<string, unknown>> }
+      const version = newestInstallableVersion(
+        detail.versions ?? [],
+        hostTarget,
+        hostAppVersion(),
+        prereleases.has(packId)
+      )
+      if (!version) throw new Error(`no installable version of ${packId} found`)
+      const verified = await verifyRegistryPackage({
+        namespace: String(args?.namespace),
+        name: String(args?.name),
+        version,
+      })
+      const members = isManifestV2(verified.manifest) ? verified.manifest.extensionPack : undefined
+      if (!members) throw new Error(`${packId} is not an extension pack`)
+      const displayName = typeof detail.display_name === 'string' ? detail.display_name : null
+      packSessions.set(packId, {
+        version: verified.version,
+        displayName,
+        members: [...members],
+        preInstalled: installedPluginIds(),
+      })
+      return {
+        id: packId,
+        version: verified.version,
+        display_name: displayName,
+        trustTier: verified.trustTier,
+        publisherId: verified.publisherId,
+        members: await resolvePackMembers(members),
+      }
+    }
+  )
+
+  // End a pack install (finished, or cancelled part-way): record the pack
+  // when any member is installed, remembering which members this pack
+  // installed. Members already installed before the flow are never counted.
+  ipcMain.handle('plugins:finishPack', async (event, args: { id?: unknown } | null) => {
+    assertAuthorized(event)
+    const id = args?.id
+    if (!isValidManifestV2PluginId(id)) throw new Error('invalid extension pack id')
+    const session = packSessions.get(id)
+    if (!session) throw new Error(`no extension pack install in progress for ${id}`)
+    packSessions.delete(id)
+    const installed = installedPluginIds()
+    const previous = packs.get(id)
+    const installedByPack = session.members.filter(
+      (member) =>
+        installed.has(member) &&
+        (!session.preInstalled.has(member) || previous?.installedByPack.includes(member) === true)
+    )
+    if (!session.members.some((member) => installed.has(member))) {
+      return { recorded: false }
+    }
+    const record: InstalledPackRecord = {
+      id,
+      ...(session.displayName ? { displayName: session.displayName } : {}),
+      version: session.version,
+      members: session.members,
+      installedByPack,
+    }
+    packs.put(record)
+    return { recorded: true, pack: record }
+  })
+
+  ipcMain.handle('plugins:listPacks', (event): InstalledPackRecord[] => {
+    assertAuthorized(event)
+    const installed = installedPluginIds()
+    const all = packs.list()
+    // A member the user already removed on its own, or that another installed
+    // pack still uses, is not offered.
+    return all.map((pack) => ({ ...pack, installedByPack: packOnlyMembers(pack, all, installed) }))
+  })
+
+  // D8: uninstalling a pack removes the pack record and only the members the
+  // user chose. The Host removes those members itself, so no caller can take
+  // out a member this pack did not install or another pack still uses.
+  ipcMain.handle('plugins:removePack', async (event, args: { id?: unknown; members?: unknown } | null) => {
+    assertAuthorized(event)
+    const id = args?.id
+    if (!isValidManifestV2PluginId(id)) throw new Error('invalid extension pack id')
+    const members = args?.members ?? []
+    if (!Array.isArray(members) || !members.every(isValidManifestV2PluginId)) {
+      throw new Error('invalid extension pack members')
+    }
+    const all = packs.list()
+    const pack = all.find((record) => record.id === id)
+    const removable = pack ? packOnlyMembers(pack, all, installedPluginIds()) : []
+    const refused = members.find((member) => !removable.includes(member))
+    if (refused) throw new Error(`${refused} is not removable with ${id}`)
+    for (const member of new Set(members)) await uninstallPlugin(member)
+    return { removed: packs.remove(id) !== null }
+  })
+
   ipcMain.handle('plugins:checkUpdates', async (event) => {
     assertAuthorized(event)
     return checkInstalledUpdates()
@@ -631,54 +1114,81 @@ export function registerPluginIpc(
     return pendingUpdates
   })
 
+  /** Download and verify one Registry package (digest, Registry signature,
+   *  trust metadata, target and engine) without writing anything. */
+  const verifyRegistryPackage = async (args: {
+    namespace: string
+    name: string
+    version?: string
+  }): Promise<PreparedInstall> => {
+    const marketplace = resolveConfiguredMarketplace(trust)
+    const base = marketplace.registryUrl.replace(/\/+$/, '')
+    const detailRes = await fetch(`${base}/api/extensions/${args.namespace}/${args.name}`)
+    if (!detailRes.ok) throw new Error(`extension not found: HTTP ${detailRes.status}`)
+    const detail = (await detailRes.json()) as {
+      latest_version: string | null
+      trust_metadata: RegistryTrustMetadata
+      trust_metadata_signature: string
+      versions: Array<{
+        version: string
+        package_digest: string
+        target: string
+        registry_envelope: RegistryPackageEnvelope
+        registry_signature: string
+        trust_tier: string
+        yanked: boolean
+        engines_navide?: string | null
+      }>
+    }
+    const wanted = args.version ?? detail.latest_version
+    const artifacts = detail.versions.filter((v) => v.version === wanted && !v.yanked)
+    if (artifacts.length === 0) throw new Error(`no installable version ${wanted ?? '(latest)'} found`)
+    // One row per target artifact: take this Host's platform build, else the
+    // universal one.
+    const versionRow = selectPluginArtifact(
+      artifacts,
+      marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+    )
+    // Engine compatibility is checked before anything is downloaded, from
+    // the listing, and again below on the verified manifest itself.
+    const appVersion = hostAppVersion()
+    assertEngineCompatible(
+      `${args.namespace}.${args.name}`,
+      versionRow.version,
+      { engines: { navide: versionRow.engines_navide ?? undefined } },
+      appVersion
+    )
+
+    // The selected Registry envelope and current root-signed trust metadata
+    // are verified against the Host-owned root pin before any install write.
+    const result = await prepareInstall({
+      registryUrl: marketplace.registryUrl,
+      namespace: args.namespace,
+      name: args.name,
+      version: versionRow.version,
+      expectedDigest: versionRow.package_digest,
+      target: versionRow.target,
+      registryEnvelope: versionRow.registry_envelope,
+      registrySignature: versionRow.registry_signature,
+      trustMetadata: detail.trust_metadata,
+      trustMetadataSignature: detail.trust_metadata_signature,
+      claimedTrustTier: versionRow.trust_tier,
+      provenance: 'official-registry',
+    }, undefined, marketplace.trust)
+    assertEngineCompatible(result.id, result.version, result.manifest, appVersion)
+    return result
+  }
+
   ipcMain.handle(
     'plugins:prepareInstall',
     async (event, args: { namespace: string; name: string; version?: string }) => {
       assertAuthorized(event)
-      const marketplace = resolveConfiguredMarketplace(trust)
-      const base = marketplace.registryUrl.replace(/\/+$/, '')
-      const detailRes = await fetch(`${base}/api/extensions/${args.namespace}/${args.name}`)
-      if (!detailRes.ok) throw new Error(`extension not found: HTTP ${detailRes.status}`)
-      const detail = (await detailRes.json()) as {
-        latest_version: string | null
-        trust_metadata: RegistryTrustMetadata
-        trust_metadata_signature: string
-        versions: Array<{
-          version: string
-          package_digest: string
-          target: string
-          registry_envelope: RegistryPackageEnvelope
-          registry_signature: string
-          trust_tier: string
-          yanked: boolean
-        }>
+      const result = await verifyRegistryPackage(args)
+      // A pack is never installed as a package: its members are installed one
+      // by one through plugins:preparePack and the ordinary install flow.
+      if (isManifestV2(result.manifest) && result.manifest.extensionPack) {
+        throw new Error(`${result.id} is an extension pack; install it from its Marketplace page`)
       }
-      const wanted = args.version ?? detail.latest_version
-      const artifacts = detail.versions.filter((v) => v.version === wanted && !v.yanked)
-      if (artifacts.length === 0) throw new Error(`no installable version ${wanted ?? '(latest)'} found`)
-      // One row per target artifact: take this Host's platform build, else the
-      // universal one.
-      const versionRow = selectPluginArtifact(
-        artifacts,
-        marketplace.trust.expectedTarget ?? currentPluginHostTarget()
-      )
-
-      // The selected Registry envelope and current root-signed trust metadata
-      // are verified against the Host-owned root pin before any install write.
-      const result = await prepareInstall({
-        registryUrl: marketplace.registryUrl,
-        namespace: args.namespace,
-        name: args.name,
-        version: versionRow.version,
-        expectedDigest: versionRow.package_digest,
-        target: versionRow.target,
-        registryEnvelope: versionRow.registry_envelope,
-        registrySignature: versionRow.registry_signature,
-        trustMetadata: detail.trust_metadata,
-        trustMetadataSignature: detail.trust_metadata_signature,
-        claimedTrustTier: versionRow.trust_tier,
-        provenance: 'official-registry',
-      }, undefined, marketplace.trust)
       prepared.set(result.id, { pkg: result })
       return {
         id: result.id,
@@ -1521,9 +2031,8 @@ export function registerPluginIpc(
     }
   })
 
-  ipcMain.handle('plugins:remove', async (event, args: { id?: unknown } | null) => {
-    assertAuthorized(event)
-    const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
+  const uninstallPlugin = async (rawId: unknown): Promise<{ ok: true }> => {
+    const id = assertPluginRemovalTarget(pluginsRoot, rawId)
     if (activeTransactions.has(id)) {
       throw new Error(`plugin transaction already in progress for ${id}`)
     }
@@ -1576,6 +2085,11 @@ export function registerPluginIpc(
     } finally {
       activeTransactions.delete(id)
     }
+  }
+
+  ipcMain.handle('plugins:remove', async (event, args: { id?: unknown } | null) => {
+    assertAuthorized(event)
+    return uninstallPlugin(args?.id)
   })
 
   return {

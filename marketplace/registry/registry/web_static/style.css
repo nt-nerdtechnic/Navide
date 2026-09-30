@@ -168,7 +168,6 @@ main.wrap { padding-top: 28px; padding-bottom: 48px; }
 .crumbs { margin-bottom: 16px; }
 .crumbs a { color: var(--accent); text-decoration: none; }
 .detail-head { display: flex; gap: 18px; align-items: flex-start; }
-.detail-icon { width: 72px; height: 72px; border-radius: 14px; object-fit: cover; border: 1px solid var(--border); }
 .detail-head-text h1 { margin: 0 0 6px; font-size: 26px; }
 .detail-sub { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); }
 .detail-sub .pub { font-weight: 600; color: var(--text); }
@@ -216,3 +215,163 @@ main.wrap { padding-top: 28px; padding-bottom: 48px; }
 .tag { background: var(--warn-bg); color: var(--warn-fg); border-radius: 5px; padding: 1px 6px; font-size: 11px; }
 
 .site-footer { border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; padding: 24px 0; margin-top: 32px; }
+
+/* Install in Navide (navide:// deep link) */
+.install-cta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.install-button {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.install-button:hover { filter: brightness(1.08); }
+.install-cta .muted { font-size: 13px; }
+.deeplink-copy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.deeplink {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  user-select: all;
+  word-break: break-all;
+}
+.install-fallback {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.install-fallback summary { cursor: pointer; color: var(--accent); }
+.install-fallback a { color: var(--accent); }
+
+/* Phase 2: publisher sign-in, dashboard, review queue, blocklist. */
+.site-nav { display: flex; align-items: center; gap: 14px; margin-left: auto; font-size: 14px; }
+.site-nav a { color: var(--text); text-decoration: none; }
+.site-nav a:hover { color: var(--accent); }
+.inline-form { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+.link-button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin: 24px 0; }
+.panel.narrow { max-width: 560px; }
+.panel h1 { font-size: 22px; margin: 0 0 8px; }
+.stack { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.panel input, .panel select, .panel textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+.panel textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.panel button:not(.link-button):not(.install-button) { font: inherit; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--chip-bg); color: var(--text); cursor: pointer; }
+.ok-line { color: var(--signed-fg); }
+.ns-row, .token-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.ns-name { font-weight: 600; }
+.ns-head { display: flex; align-items: center; gap: 14px; }
+.ns-avatar { width: 44px; height: 44px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 20px; }
+.review-item { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 16px; }
+.review-item.overdue .section-title { color: var(--warn-fg); }
+@media (max-width: 640px) {
+  .site-nav { margin-left: 0; width: 100%; }
+  .version-table { display: block; overflow-x: auto; }
+}
+
+/* Phase 2 screenshot-review fixes: themed links, red danger badges, stable
+   review table columns, ids in their own case, inputs wide enough for their
+   placeholders. */
+a { color: var(--accent); }
+.site-footer a { color: var(--muted); text-decoration: underline; }
+:root { --danger-bg: #fde8e8; --danger-fg: #b42318; }
+@media (prefers-color-scheme: dark) {
+  :root { --danger-bg: #3a1618; --danger-fg: #ff8a80; }
+}
+.badge-danger { background: var(--danger-bg); color: var(--danger-fg); }
+.panel .section-title { margin-top: 28px; }
+.ns-head { flex-wrap: wrap; }
+.ns-publish { margin-left: auto; }
+.nowrap { white-space: nowrap; }
+.table-scroll { overflow-x: auto; }
+.review-status-table td:last-child { min-width: 14rem; }
+.review-title { font-size: 16px; font-weight: 600; margin: 0 0 10px; text-transform: none; letter-spacing: normal; }
+.review-item.overdue .review-title { color: var(--warn-fg); }
+.review-table { table-layout: fixed; }
+.review-table .col-check { width: 13rem; }
+.review-table .col-result { width: 9rem; }
+.review-table td { overflow-wrap: anywhere; }
+.wide-input { min-width: 18rem; flex: 1 1 18rem; }
+.cli-request { margin: 12px 0; }
+.cli-request th { width: 9rem; }
+
+/* Release channel and minimum Navide version */
+.badge-prerelease { background: var(--warn-bg); color: var(--warn-fg); }
+.channel-stable { color: var(--muted); font-size: 13px; }
+.requires { color: var(--muted); }
+
+/* Phase 2 polish: primary <button>s look like the primary links, full-width
+   stacks keep natural-width buttons, publisher-verified is an outline badge
+   distinct from the filled signed-verified badge. */
+button.install-button { border: 0; font: inherit; font-weight: 600; cursor: pointer; }
+.install-button:focus { outline: none; }
+.install-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stack > button { align-self: flex-start; }
+.badge-verified { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* Extension icon box: fixed size, clips anything inside it. The initial sits
+   underneath; a loaded icon covers it. A broken image has an empty alt, so it
+   has no text to overflow, and where the browser renders pseudo-elements on a
+   broken <img> (Chromium, Firefox) the initial is drawn over it again. */
+.ext-icon {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+.ext-icon-lg { width: 72px; height: 72px; border-radius: 14px; }
+.ext-icon-initial { font-weight: 700; font-size: 16px; line-height: 1; }
+.ext-icon-lg .ext-icon-initial { font-size: 32px; }
+.ext-icon-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--surface);
+  color: transparent;
+  font-size: 0;
+}
+.ext-icon-img::after {
+  content: attr(data-initial);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 16px;
+}
+.ext-icon-lg .ext-icon-img::after { font-size: 32px; }
+.card-head .ext-icon { margin-right: 2px; }
+.card-head .card-title { flex: 1; min-width: 0; }
+.detail-targets { margin-top: 6px; }
+
+/* Direct package downloads: a real link per target, the API call secondary */
+.download-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; }
+.download-list li { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.download-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.download-link:hover { text-decoration: underline; }
+.download-url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+
+/* Phase 2 final polish: primary + secondary buttons on one row; the signed-in
+   user menu and Sign out share one link style in both themes. */
+.button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.site-nav .link-button { color: var(--text); font-size: 14px; }
+.site-nav a:hover, .site-nav .link-button:hover { color: var(--accent); }
+.site-nav a:focus-visible, .site-nav .link-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

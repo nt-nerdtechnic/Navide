@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Claim a namespace — Navide Marketplace{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ base }}/publisher">← Publisher dashboard</a></nav>
+<section class="panel narrow">
+  <h1>Claim a namespace</h1>
+  <p class="muted">The namespace is the first half of every extension id
+    (<code>namespace.name</code>). It cannot be changed later.</p>
+  <form method="get" action="{{ base }}/publisher/claim" class="stack">
+    <label for="ns-check">Namespace</label>
+    <div class="row">
+      <input id="ns-check" name="namespace" value="{{ namespace }}" placeholder="your-namespace" required
+             pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]" autocomplete="off">
+      <button type="submit">Check</button>
+    </div>
+  </form>
+  {% if verdict %}
+    {% if verdict.ok %}
+      <p class="ok-line">✓ “{{ namespace }}” is available. {{ verdict.message }}</p>
+      <form method="post" action="{{ base }}/publisher/claim">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="namespace" value="{{ namespace }}">
+        <button type="submit" class="install-button">Claim “{{ namespace }}”</button>
+      </form>
+    {% else %}
+      <p class="warn warn-block" role="alert">⚠ {{ verdict.message }}</p>
+    {% endif %}
+  {% endif %}
+  <p class="muted">First come, first served. Reserved names (such as
+    <code>navide</code>) and look-alikes of reserved or existing namespaces are
+    blocked. After claiming you can prove a domain you own to show a verified
+    badge — optional.</p>
+</section>
+{% endblock %}

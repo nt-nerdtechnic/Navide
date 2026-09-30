@@ -32,6 +32,10 @@ export interface DialogState {
    *  the host renders the confirm button as a danger action. Absent means the
    *  default rendering. */
   danger?: boolean
+  /** Confirm only: a literal (a URL, a path) shown on its own line in
+   *  monospace, with the message then rendered as prose. Absent means the
+   *  default rendering. */
+  detail?: string
   /** alert/confirm resolve with a boolean; prompt with the entered string (or
    *  null when cancelled). */
   resolve: (value: boolean | string | null) => void
@@ -116,6 +120,8 @@ function confirm(
     checkboxLabel?: string
     /** Destructive action: rendered as a danger confirm. */
     danger?: boolean
+    /** A literal shown in monospace under a prose message. */
+    detail?: string
   } = {}
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
@@ -130,6 +136,7 @@ function confirm(
       checkboxLabel: opts.checkboxLabel,
       // Only set when asked for, so every existing confirm stays identical.
       ...(opts.danger ? { danger: true } : {}),
+      ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
       resolve: resolve as (v: boolean | string | null) => void
     }
   })

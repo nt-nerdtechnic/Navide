@@ -4,6 +4,14 @@
 {% macro card(e) %}
 <a class="card" href="{{ base }}/extensions/{{ e.namespace }}/{{ e.name }}">
   <div class="card-head">
+    {% set initial = (e.display_name or e.name)[:1]|upper %}
+    <div class="ext-icon" aria-hidden="true">
+      <span class="ext-icon-initial">{{ initial }}</span>
+      {% if e.icon_path and e.latest_version %}
+      <img class="ext-icon-img" alt="" loading="lazy" data-initial="{{ initial }}"
+           src="{{ base }}/extensions/{{ e.namespace }}/{{ e.name }}/{{ e.latest_version }}/assets/{{ e.icon_path }}">
+      {% endif %}
+    </div>
     <h3 class="card-title">{{ e.display_name }}</h3>
     {% if e.trust_tier == 'signed-verified' %}
       <span class="badge badge-signed" title="Signature produced by the registry signer">✓ signed</span>
@@ -14,7 +22,7 @@
   <div class="card-pub">{{ e.namespace }}{% if e.latest_version %} · v{{ e.latest_version }}{% endif %}</div>
   <p class="card-desc">{{ e.description }}</p>
   <div class="card-cats">
-    {% for c in e.categories %}<span class="chip">{{ c }}</span>{% endfor %}
+    {% for c in e.categories %}<span class="chip">{{ c|category_label }}</span>{% endfor %}
   </div>
   {% if e.latest_targets %}
   <div class="card-targets" title="Platforms v{{ e.latest_version }} is published for">
@@ -28,6 +36,7 @@
   </div>
   {% endif %}
   <div class="card-meta">
+    {% if e.min_navide_version %}<span class="requires" title="engines.navide: {{ e.engines_navide }}">Requires Navide ≥ {{ e.min_navide_version }}</span>{% endif %}
     <span title="Downloads">⬇ {{ e.download_count }}</span>
     {% if e.rating_count %}
       <span title="{{ e.rating_count }} ratings">★ {{ '%.1f'|format(e.rating_average) }} ({{ e.rating_count }})</span>
@@ -57,7 +66,7 @@
         <select name="category" onchange="this.form.submit()">
           <option value="">All</option>
           {% for c in categories %}
-          <option value="{{ c }}" {% if c == active_category %}selected{% endif %}>{{ c }}</option>
+          <option value="{{ c }}" {% if c == active_category %}selected{% endif %}>{{ c|category_label }}</option>
           {% endfor %}
         </select>
       </label>

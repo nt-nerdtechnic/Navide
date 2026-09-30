@@ -61,7 +61,7 @@ MSG_SUMMARY_TAIL = "\n完整內容請在 Navide 查看"
 MSG_LOCAL_NOTICE = "🖥 本機下了新指令"
 MSG_PROMPT_CUT = "…\n（完整內容請在 Navide 查看）"
 
-_LEVEL = {"minimal": 0, "standard": 1, "full": 2}
+_LEVEL = {"replies": 0, "minimal": 1, "standard": 2, "full": 3}
 _STATUS_WORDS = {
     "running": "🔄 執行中", "starting": "🔄 執行中", "awaiting": "⚠️ 等確認",
     "idle": "💤 閒置", "exited": "⏹ 已結束", "stopped": "⏹ 已結束", "error": "❗ 錯誤",
@@ -460,7 +460,7 @@ class Mirror:
         if snippet.lstrip().startswith(ENVELOPE_PREFIX) or self.echo.consume(pane_id, snippet):
             return  # a message: chat and delegations are mirrored on their own path
         route = self.route(pane_id)
-        if route is None:
+        if route is None or not shows(route.binding.verbosity, "minimal"):
             return
         verbosity = route.binding.verbosity
         self.m._begin_run(pane_id, route, SRC_LOCAL)
@@ -511,7 +511,7 @@ class Mirror:
         sent: set[str] = set()
         for pane in ([dst_id] + ([str(src["pane_id"])] if src else [])):
             route = self.route(pane, directory)
-            if route is None:
+            if route is None or not shows(route.binding.verbosity, "minimal"):
                 continue
             loc = route.binding.location()
             if loc.key() in sent:
@@ -531,7 +531,8 @@ class Mirror:
             if pane_id in self.m._awaiting_posted:
                 return
             route = self.route(pane_id)
-            if route is not None:
+            # At "replies" only a turn the chat started relays its prompt (_check_awaiting).
+            if route is not None and shows(route.binding.verbosity, "minimal"):
                 self.m._awaiting_posted.add(pane_id)
                 self.m._spawn(self.m._post_awaiting(pane_id, route.binding.location(), route.child))
         elif pane_id in self.m._awaiting_posted:
@@ -594,13 +595,15 @@ class Mirror:
                 cid = str(child["pane_id"])
                 if cid in self._seen_children:
                     continue
-                self._seen_children.add(cid)
                 parent_id = str(child.get("spawned_by") or b.pane_id)
-                parent = directory.get(parent_id) or directory.get(b.pane_id) or {"name": b.title or b.pane_id}
                 try:
                     self.m._seams.inherit_taint(cid, parent_id)
                 except Exception:  # noqa: BLE001
                     log.warning("channels: could not inherit taint for %s", cid)
+                if not shows(b.verbosity, "minimal"):
+                    continue  # children are not announced at "replies"; adopted if the level rises
+                self._seen_children.add(cid)
+                parent = directory.get(parent_id) or directory.get(b.pane_id) or {"name": b.title or b.pane_id}
                 await self._adopt_child(b, parent, child)
         for b in self.m.store.bindings():
             if b.auto:
@@ -656,9 +659,14 @@ class Mirror:
                       parent.pane_id)
 
     async def release_children(self, pane_id: str) -> None:
-        """A parent binding went away: its auto topics have no parent to follow any more."""
+        """A parent binding went away or moved: its auto topics have no parent to follow
+        any more, and its descendants are adopted afresh by the pane's next chat."""
+        for _, child in self.descendants(pane_id):
+            self._seen_children.discard(str(child["pane_id"]))
+            self._topic_failed.discard(str(child["pane_id"]))
         for b in self.m.store.bindings():
             if b.auto and b.parent_pane_id == pane_id:
+                self._seen_children.discard(b.pane_id)
                 await self.m.unbind(b.pane_id, pane_name=b.title.removeprefix("↳ "))
 
     # --- inbound: commands and routing ----------------------------------------------

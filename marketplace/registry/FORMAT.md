@@ -54,7 +54,7 @@ needed for discovery — these are an additive superset, not a divergent schema.
 |---|---|---|---|
 | `id` | string | yes | `<namespace>.<name>`, lowercase; regex `^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$`. This is the registry identity. |
 | `name` | string | yes | Non-empty. Human name (as in the app manifest). |
-| `version` | string | yes | Strict semver `MAJOR.MINOR.PATCH` (no pre-release/build). |
+| `version` | string | yes | Manifest v1: strict semver `MAJOR.MINOR.PATCH` (no pre-release/build). Manifest v2 accepts full SemVer 2.0.0; see [Release channels](#release-channels). |
 | `publisher` | string | yes | Non-empty publisher id. |
 | `engines` | object | yes | Non-empty `{host: range}`; host-API compat lives here, e.g. `{"navide": "^0.1.0"}`. |
 | `entry` | string | no | Plugin entry file. |
@@ -65,6 +65,22 @@ needed for discovery — these are an additive superset, not a divergent schema.
 | `description` | string | no | *marketplace* — used by search. |
 | `categories` | string[] | no | *marketplace* — used by search/filter. |
 | `icon` | string | no | *marketplace* — archive-relative path to an icon asset. |
+
+## Release channels
+
+Manifest v1 versions are always `MAJOR.MINOR.PATCH`, so every v1 release is
+stable. Manifest v2 `version` accepts SemVer 2.0.0, including a prerelease
+suffix and build metadata:
+
+- A version with a prerelease suffix (`2.5.0-beta.1`) is a **pre-release**;
+  every other version, including one with only build metadata
+  (`2.5.0+build.7`), is **stable**. The API reports this per version as
+  `channel` (`stable` or `pre-release`).
+- `latest_version` names the newest **stable** version. Only an extension with
+  no stable version at all reports its newest pre-release there.
+- `latest_prerelease_version` names the newest pre-release when it is newer
+  than `latest_version`, and is `null` otherwise.
+- Build metadata is ignored for ordering.
 
 ## Signing
 

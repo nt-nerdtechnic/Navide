@@ -27,6 +27,18 @@ class Publisher(SQLModel, table=True):
     """Registered Ed25519 public key (PEM); used to verify package signatures."""
     token_hash: str | None = Field(default=None, index=True)
     """sha256 of the publisher's bearer token; None until a token is issued."""
+    navide_member_id: str | None = Field(default=None, index=True)
+    """Navide Cloud account that claimed this namespace (None: admin-created).
+    Not unique: one account may own up to MAX_NAMESPACES_PER_ACCOUNT."""
+    review_required: bool = Field(default=False)
+    """Submissions wait for admin review. True for self-claimed namespaces;
+    admin-created (official) publishers stay auto-approved."""
+    verified_domain: str | None = None
+    """Domain the publisher asked to verify (DNS TXT), verified or not."""
+    domain_token: str | None = None
+    """Random value expected in `_navide-verify.<domain>` TXT."""
+    domain_verified_at: datetime | None = None
+    """Set once the TXT record matched; cleared when the domain changes."""
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -88,6 +100,16 @@ class ExtensionVersion(SQLModel, table=True):
     """Number of times this specific version's package was downloaded."""
     yanked: bool = Field(default=False, index=True)
     published_at: datetime = Field(default_factory=_now)
+    review_status: str = Field(default="approved", index=True)
+    """'pending' | 'approved' | 'rejected' (review.py). Only approved rows are
+    registry-signed and visible through public reads."""
+    review_reason: str | None = None
+    """Rejection reason shown to the publisher."""
+    reviewed_at: datetime | None = None
+    reviewed_by: str | None = None
+    review_report: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    """Automatic checks run at submission (similarity, secret scan, limits).
+    Holds locations and rule names only, never a matched secret value."""
 
 
 class ExtensionAsset(SQLModel, table=True):
@@ -99,3 +121,59 @@ class ExtensionAsset(SQLModel, table=True):
     """Archive-relative path."""
     size: int
     content_type: str
+
+
+class PublisherToken(SQLModel, table=True):
+    """Short-lived, revocable publish token scoped to one namespace."""
+
+    __tablename__ = "publisher_token"
+
+    id: int | None = Field(default=None, primary_key=True)
+    publisher_id: int = Field(foreign_key="publisher.id", index=True)
+    label: str
+    token_hash: str = Field(index=True, unique=True)
+    created_at: datetime = Field(default_factory=_now)
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
+class BlocklistEntry(SQLModel, table=True):
+    """Admin-managed removal, merged with the trust config's blocklists."""
+
+    __tablename__ = "blocklist_entry"
+    __table_args__ = (UniqueConstraint("kind", "value", name="uq_blocklist_entry"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    kind: str
+    """'publisher' (a namespace) or 'package' (`ns.name` or `ns.name@version`)."""
+    value: str
+    reason: str
+    created_at: datetime = Field(default_factory=_now)
+    created_by: str | None = None
+
+
+class CliAuthCode(SQLModel, table=True):
+    """One-time code handed to `navide-plugin login` through its loopback
+    redirect and exchanged, with the PKCE verifier, for a publish token."""
+
+    __tablename__ = "cli_auth_code"
+
+    id: int | None = Field(default=None, primary_key=True)
+    code_hash: str = Field(index=True, unique=True)
+    publisher_id: int = Field(foreign_key="publisher.id")
+    code_challenge: str
+    label: str
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class MemberSession(SQLModel, table=True):
+    """Per-account session generation. A session cookie carries the version
+    it was issued under; signing out bumps it, which revokes every session of
+    that account at once (cookies are otherwise stateless for 12 h)."""
+
+    __tablename__ = "member_session"
+
+    member_id: str = Field(primary_key=True)
+    version: int = Field(default=0)

@@ -93,9 +93,12 @@ export async function listAllPlans(call: BackendCall): Promise<unknown[]> {
 
 // ── Writing a document of any size ──────────────────────────────────────────
 
-/** A request the Host sends the backend is bounded (256 KiB per frame), so a
- * document whose JSON encoding is larger than this is written in parts. */
-const SINGLE_WRITE_MAX_JSON_CHARS = 160_000
+/** The Host sends the backend UTF-8 frames through a 256 KiB input queue; a
+ * frame over it is refused, and an overflow while other frames are queued
+ * stops the child. A document whose JSON encoding exceeds half the queue, in
+ * UTF-8 bytes, is therefore written in parts, leaving room for the envelope and
+ * concurrent traffic. A test pins this to the Host limit. */
+export const SINGLE_WRITE_MAX_JSON_BYTES = 128 * 1024
 /** File bytes per part: 96 KiB is the most one Host Bridge call carries. */
 const WRITE_PART_BYTES = 96 * 1024
 
@@ -109,7 +112,7 @@ function toBase64(bytes: Uint8Array): string {
 
 /** Whether `content` is too large for the single `plans.write_document` call. */
 export function needsChunkedWrite(content: string): boolean {
-  return JSON.stringify(content).length > SINGLE_WRITE_MAX_JSON_CHARS
+  return new TextEncoder().encode(JSON.stringify(content)).length > SINGLE_WRITE_MAX_JSON_BYTES
 }
 
 /**

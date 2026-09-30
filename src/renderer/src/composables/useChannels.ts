@@ -74,7 +74,7 @@ export interface ChannelBinding {
   auto?: boolean
 }
 
-export type ChannelVerbosity = 'minimal' | 'standard' | 'full'
+export type ChannelVerbosity = 'replies' | 'minimal' | 'standard' | 'full'
 
 export interface ChannelLocation {
   chat_id: string
@@ -125,6 +125,8 @@ export interface BindRequest {
   chat_id: string
   thread_id?: string
   title?: string
+  /** Mirror level the user chose; the backend uses replies when it is missing. */
+  verbosity?: ChannelVerbosity
 }
 
 type Backend = Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>

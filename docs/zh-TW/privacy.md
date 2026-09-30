@@ -46,6 +46,7 @@ Consumer：Git Preference 使用驗證過的 Package／Workspace Storage Partiti
 | Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
 | CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP Server | 設定的 MCP Server 與它使用的服務 | 完全取決於該 Server 的 Tool 與設定 |
+| 聊天頻道 | pane 綁定的聊天平台（Telegram、Slack、Discord 等）與該聊天室的所有成員 | 對聊天室傳來訊息的回覆；鏡像詳細度高於「只回覆聊天室」時，另含本機輸入、每回合結果、委派內容與子視窗。遮蔽只涵蓋該頻道自己的機器人憑證，指令或結果中的 API 金鑰等其他機密會原樣送出 |
 
 傳送私人程式碼或受規範資料前，請先閱讀各 Provider 政策。
 

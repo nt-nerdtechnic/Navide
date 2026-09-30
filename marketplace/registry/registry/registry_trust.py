@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 from .config import SIGNER_STATUSES, Settings, TrustedSignerConfig
 from .signing import (
@@ -174,6 +175,18 @@ class RegistryTrustSigner:
     trusted_signers: tuple[TrustedSignerConfig, ...]
     blocked_publishers: tuple[str, ...]
     blocked_packages: tuple[str, ...]
+    extra_blocklist: Callable[[], tuple[tuple[str, ...], tuple[str, ...]]] | None = None
+    """Admin-managed (publishers, packages) read at call time and merged with
+    the config lists (blocklist.py); None = config lists only."""
+
+    def _blocklists(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        if self.extra_blocklist is None:
+            return self.blocked_publishers, self.blocked_packages
+        publishers, packages = self.extra_blocklist()
+        return (
+            tuple(dict.fromkeys((*self.blocked_publishers, *publishers))),
+            tuple(dict.fromkeys((*self.blocked_packages, *packages))),
+        )
 
     @classmethod
     def from_settings(cls, settings: Settings) -> RegistryTrustSigner:
@@ -265,9 +278,10 @@ class RegistryTrustSigner:
     def block_reason(
         self, *, publisher_id: str, package_id: str, version: str
     ) -> str | None:
-        if publisher_id in self.blocked_publishers:
+        blocked_publishers, blocked_packages = self._blocklists()
+        if publisher_id in blocked_publishers:
             return "publisher is blocked"
-        for blocked in self.blocked_packages:
+        for blocked in blocked_packages:
             blocked_id, separator, blocked_version = blocked.partition("@")
             if blocked_id == package_id and (
                 not separator or blocked_version == version
@@ -279,6 +293,7 @@ class RegistryTrustSigner:
 
     def signed_metadata(self, now: datetime | None = None) -> tuple[dict, str]:
         generated_at = now or datetime.now(timezone.utc)
+        blocked_publishers, blocked_packages = self._blocklists()
         metadata = {
             "schemaVersion": 1,
             "registryProfile": self.registry_profile,
@@ -304,9 +319,9 @@ class RegistryTrustSigner:
                     for signer in self.trusted_signers
                 ],
             ],
-            "blockedPublishers": list(self.blocked_publishers),
+            "blockedPublishers": list(blocked_publishers),
             "blockedPackages": [
-                _blocked_package(value) for value in self.blocked_packages
+                _blocked_package(value) for value in blocked_packages
             ],
         }
         return metadata, sign_json(self.root_private_key, metadata)

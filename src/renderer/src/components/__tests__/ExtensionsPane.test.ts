@@ -19,6 +19,9 @@ function mockPlugins(overrides: Record<string, unknown> = {}) {
     rollback: vi.fn().mockResolvedValue({ id: '', packageVersion: '', restoredInstances: 0, skippedDestroyedHostWindows: 0 }),
     checkUpdates: vi.fn().mockResolvedValue([]),
     remove: vi.fn().mockResolvedValue({ ok: true }),
+    setPrerelease: vi.fn().mockResolvedValue({ id: '', enabled: false }),
+    listPacks: vi.fn().mockResolvedValue([]),
+    removePack: vi.fn().mockResolvedValue({ removed: true }),
     ...overrides,
   }
   ;(window as unknown as Record<string, unknown>).agentTeam = { plugins: api }
@@ -31,6 +34,151 @@ describe('ExtensionsPane', () => {
   afterEach(() => {
     wrapper?.unmount()
     delete (window as unknown as Record<string, unknown>).agentTeam
+  })
+
+  it('offers a per-extension pre-release switch for Registry installs, off by default', async () => {
+    const listInstalled = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.2.0', provenance: 'official-registry', getsPrereleases: false },
+        { id: 'local.dev', requires: [], sensitive: [], provenance: 'developer-local-unpacked' },
+      ])
+      .mockResolvedValue([
+        { id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.2.0', provenance: 'official-registry', getsPrereleases: true },
+        { id: 'local.dev', requires: [], sensitive: [], provenance: 'developer-local-unpacked' },
+      ])
+    const checkUpdates = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        { id: 'acme.demo', namespace: 'acme', name: 'demo', installedVersion: '1.2.0', latestVersion: '1.3.1-beta.2' },
+      ])
+    const api = mockPlugins({
+      listInstalled,
+      checkUpdates,
+      setPrerelease: vi.fn().mockResolvedValue({ id: 'acme.demo', enabled: true }),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+    const toggle = wrapper.get('[data-id="acme.demo"] .ext-prerelease-toggle input')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    // Only Registry installs have a channel to choose.
+    expect(wrapper.find('[data-id="local.dev"] .ext-prerelease-toggle').exists()).toBe(false)
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(api.setPrerelease).toHaveBeenCalledWith('acme.demo', true)
+    const row = wrapper.get('[data-id="acme.demo"]')
+    expect((row.get('.ext-prerelease-toggle input').element as HTMLInputElement).checked).toBe(true)
+    // Opting in changes the offer; installing it is still the user's press.
+    expect(row.get('.ext-update-badge').text()).toContain('1.3.1-beta.2')
+  })
+
+  it('labels an installed version this Navide release is too old for, without disabling it', async () => {
+    mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        {
+          id: 'contoso.native',
+          requires: [],
+          sensitive: [],
+          packageVersion: '0.9.0',
+          provenance: 'official-registry',
+          minNavideVersion: '0.3.0',
+          engineCompatible: false,
+        },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+    const row = wrapper.get('[data-id="contoso.native"]')
+    expect(row.get('.ext-incompatible').text()).toBe('Needs Navide ≥ 0.3.0')
+    expect(row.get('.ext-incompatible-reason').text()).toContain('It stays enabled')
+    expect(row.get('.ext-remove').attributes('disabled')).toBeUndefined()
+  })
+
+  it('lists an installed pack and by default uninstalls only the pack (D8)', async () => {
+    let records = [
+      { id: 'acme.web-dev-pack', displayName: 'Web Dev Pack', version: '1.0.0', members: ['acme.hello', 'acme.lint', 'acme.notes'], installedByPack: ['acme.lint', 'acme.notes'] },
+    ]
+    const api = mockPlugins({
+      listPacks: vi.fn(async () => records),
+      removePack: vi.fn(async () => {
+        records = []
+        return { removed: true }
+      }),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+    const row = wrapper.get('[data-pack-id="acme.web-dev-pack"]')
+    expect(row.get('.ext-pack-badge').text()).toBe('Pack · 3 members')
+    expect(row.get('.ext-pack-includes').text()).toBe('Includes: acme.hello · acme.lint · acme.notes')
+    await row.get('.ext-pack-remove').trigger('click')
+    await flushPromises()
+    expect(row.get('.ext-id').text()).toBe('Web Dev Pack')
+    expect(row.get('.ext-pack-id').text()).toBe('acme.web-dev-pack')
+    const dialog = wrapper.get('.pack-uninstall-dialog')
+    // The name leads; the id is secondary.
+    expect(dialog.get('h4').text()).toBe('Uninstall “Web Dev Pack”?')
+    expect(dialog.get('.pack-uninstall-id').text()).toBe('acme.web-dev-pack')
+    // Only the members this pack installed are offered, and none is ticked.
+    const boxes = dialog.findAll('.pack-uninstall-member input')
+    expect(dialog.findAll('.pack-uninstall-member').map((m) => m.attributes('data-member'))).toEqual(['acme.lint', 'acme.notes'])
+    expect(boxes.every((b) => !(b.element as HTMLInputElement).checked)).toBe(true)
+    expect(dialog.get('.pack-uninstall-confirm').text()).toBe('Uninstall pack only')
+    await dialog.get('.pack-uninstall-confirm').trigger('click')
+    await flushPromises()
+    expect(api.remove).not.toHaveBeenCalled()
+    expect(api.removePack).toHaveBeenCalledWith('acme.web-dev-pack', [])
+    expect(wrapper.find('.pack-uninstall-dialog').exists()).toBe(false)
+    expect(wrapper.find('[data-pack-id]').exists()).toBe(false)
+  })
+
+  it('closes the uninstall-pack dialog on Escape without letting it reach Settings', async () => {
+    const api = mockPlugins({
+      listPacks: vi.fn().mockResolvedValue([
+        { id: 'acme.web-dev-pack', version: '1.0.0', members: ['acme.lint'], installedByPack: ['acme.lint'] },
+      ]),
+    })
+    const settingsClose = vi.fn()
+    const settingsEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) settingsClose()
+    }
+    window.addEventListener('keydown', settingsEsc)
+    try {
+      wrapper = mountExtensions()
+      await flushPromises()
+      await wrapper.get('.ext-pack-remove').trigger('click')
+      await flushPromises()
+      // No display name: the title falls back to the id, with no duplicate line.
+      expect(wrapper.get('.pack-uninstall-dialog h4').text()).toBe('Uninstall “acme.web-dev-pack”?')
+      expect(wrapper.find('.pack-uninstall-id').exists()).toBe(false)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+      await flushPromises()
+      expect(settingsClose).not.toHaveBeenCalled()
+      expect(wrapper.find('.pack-uninstall-dialog').exists()).toBe(false)
+      expect(api.removePack).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', settingsEsc)
+    }
+  })
+
+  it('removes the members the user ticks together with the pack', async () => {
+    const api = mockPlugins({
+      listPacks: vi.fn().mockResolvedValue([
+        { id: 'acme.web-dev-pack', version: '1.0.0', members: ['acme.hello', 'acme.lint'], installedByPack: ['acme.lint'] },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+    await wrapper.get('.ext-pack-remove').trigger('click')
+    await flushPromises()
+    await wrapper.get('.pack-uninstall-member input').setValue(true)
+    expect(wrapper.get('.pack-uninstall-confirm').text()).toBe('Uninstall pack and 1 extension(s)')
+    await wrapper.get('.pack-uninstall-confirm').trigger('click')
+    await flushPromises()
+    // The Host removes the chosen members itself, so it can refuse a member
+    // another installed pack still uses.
+    expect(api.removePack).toHaveBeenCalledWith('acme.web-dev-pack', ['acme.lint'])
+    expect(api.remove).not.toHaveBeenCalled()
   })
 
   it('renders the installed list with sensitive-capability badges', async () => {

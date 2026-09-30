@@ -41,6 +41,8 @@ const guard = props.guardStore ?? inject(guardKey, null)
 const binding = computed(() => store?.bindingFor(props.paneId) ?? null)
 const open = ref(false)
 const busy = ref(false)
+// The mirror level the next bind asks for: chosen in the popover before any chat is picked.
+const bindLevel = ref<ChannelVerbosity>('replies')
 const error = ref('')
 interface PlatformGroup {
   platform: ChannelPlatform
@@ -152,6 +154,7 @@ async function toggle(): Promise<void> {
     return
   }
   error.value = ''
+  bindLevel.value = binding.value?.verbosity ?? 'replies'
   unguardedYolo.value =
     !!props.agentKey && guard?.hookSupportFor(props.agentKey) === 'none' && vendorRunsYolo(props.agentKey)
   open.value = true
@@ -195,18 +198,19 @@ async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new'
     mode,
     chat_id: loc.chat_id,
     ...(mode === 'new' ? { title: props.paneName } : {}),
+    verbosity: bindLevel.value,
   })
   busy.value = false
   if (res.ok) close()
   else error.value = res.error ?? t('channels.error.generic')
 }
 
-const VERBOSITIES: ChannelVerbosity[] = ['minimal', 'standard', 'full']
+const VERBOSITIES: ChannelVerbosity[] = ['replies', 'minimal', 'standard', 'full']
 const menuOpen = ref(false)
 const chipRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
 const menuStyle = ref<Record<string, string>>({})
-const verbosity = computed<ChannelVerbosity>(() => binding.value?.verbosity ?? 'full')
+const verbosity = computed<ChannelVerbosity>(() => binding.value?.verbosity ?? 'replies')
 const children = computed(() => store?.childrenOf(props.paneId) ?? [])
 
 async function toggleMenu(): Promise<void> {
@@ -328,7 +332,7 @@ function openSettings(): void {
           v-for="v in VERBOSITIES"
           :key="v"
           type="button"
-          class="pch-row"
+          class="pch-level"
           :class="{ 'pch-row-active': v === verbosity }"
           role="menuitemradio"
           :aria-checked="v === verbosity"
@@ -337,9 +341,10 @@ function openSettings(): void {
           :title="t(`channels.pane.verbosity-${v}-hint`)"
           @click="pickVerbosity(v)"
         >
-          <span class="pch-loc-title pch-ellipsis">{{ t(`channels.pane.verbosity-${v}`) }}</span>
-          <span class="pch-kind pch-ellipsis">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
+          <span class="pch-level-name">{{ t(`channels.pane.verbosity-${v}`) }}</span>
+          <span class="pch-level-hint">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
         </button>
+        <p class="pch-sub pch-note" data-testid="channel-redact-note">{{ t('channels.pane.redact-note') }}</p>
         <template v-if="children.length">
           <div class="pch-pop-head pch-children-head">{{ t('channels.pane.children') }}</div>
           <div v-for="c in children" :key="c.pane_id" class="pch-sub pch-ellipsis" data-testid="channel-child">↳ {{ c.title || c.pane_id }}</div>
@@ -359,6 +364,25 @@ function openSettings(): void {
       >
         <div class="pch-pop-head">{{ t('channels.pane.where') }}</div>
         <p v-if="unguardedYolo" class="pch-warn" role="note" data-testid="channel-guard-warning">{{ t('guard.pane.no-hook-warning') }}</p>
+        <div class="pch-levels" role="radiogroup" :aria-label="t('channels.pane.bind-level-label')" data-testid="channel-bind-levels">
+          <div class="pch-levels-head">{{ t('channels.pane.bind-level-label') }}</div>
+          <button
+            v-for="v in VERBOSITIES"
+            :key="v"
+            type="button"
+            class="pch-level"
+            :class="{ 'pch-row-active': v === bindLevel }"
+            role="radio"
+            :aria-checked="v === bindLevel"
+            :data-testid="`channel-bind-level-${v}`"
+            :disabled="busy"
+            @click="bindLevel = v"
+          >
+            <span class="pch-level-name">{{ t(`channels.pane.verbosity-${v}`) }}</span>
+            <span class="pch-level-hint">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
+          </button>
+          <p class="pch-sub pch-note" data-testid="channel-redact-note">{{ t('channels.pane.redact-note') }}</p>
+        </div>
         <section v-for="g in groups" :key="g.platform" class="pch-group" data-testid="channel-group">
           <div class="pch-group-head">
             <span class="pch-mark" aria-hidden="true">{{ platformName(g.platform).charAt(0) }}</span>
@@ -421,6 +445,13 @@ function openSettings(): void {
 .pch-pop { position: fixed; z-index: 300; box-sizing: border-box; width: 300px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; display: flex; flex-direction: column; gap: 4px; background: var(--bg-overlay); border: 1px solid var(--border-default); border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); font-size: var(--font-2xs); color: var(--text-secondary); }
 .pch-pop-head { font-weight: 600; color: var(--text-bright); margin-bottom: 2px; }
 .pch-sub { color: var(--text-secondary); }
+.pch-note { margin: 0; font-size: var(--font-3xs); }
+.pch-levels { display: flex; flex-direction: column; gap: 3px; padding: 2px 0 6px; border-bottom: 1px solid var(--border-muted); }
+.pch-levels-head { font-size: var(--font-3xs); color: var(--text-secondary); }
+.pch-level { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; font: inherit; text-align: left; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); padding: 4px 8px; cursor: pointer; }
+.pch-level:hover:not(:disabled) { border-color: var(--border-default); }
+.pch-level:disabled { opacity: 0.5; cursor: default; }
+.pch-level-hint { font-size: var(--font-3xs); color: var(--text-secondary); line-height: 1.35; }
 .pch-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pch-link { font: inherit; text-align: left; color: var(--accent-fg); background: transparent; border: none; padding: 2px 0; cursor: pointer; }
 .pch-foot { margin-top: 2px; padding-top: 6px; border-top: 1px solid var(--border-muted); }

@@ -17,6 +17,7 @@ PACKAGE_ID_RE = re.compile(rf"^{PACKAGE_ID_BODY_PATTERN}$")
 _V2_DISPLAY_TEXT_RE = r"^[^\r\n<>]+$"
 V2_SYSTEM_NAMESPACES: frozenset[str] = frozenset({"fs", "ui", "aiCli"})
 V2_SHELL_MODES: frozenset[str] = frozenset({"allowlist", "full"})
+MAX_EXTENSION_PACK_MEMBERS = 20
 # Manifest-level guard for recognizable source/script filenames. Proving that
 # archive bytes are the correct target executable belongs to the B8 packager.
 _KNOWN_SOURCE_BACKEND_SCRIPT_EXTENSIONS = frozenset(
@@ -234,10 +235,34 @@ class ManifestV2(ManifestV2Model):
     marketplace: ManifestV2Marketplace
     contributes: ManifestV2Contributes | None = None
     backend: ManifestV2Backend | None = None
+    extensionPack: list[str] | None = Field(
+        default=None, min_length=1, max_length=MAX_EXTENSION_PACK_MEMBERS
+    )
+    """Extension Pack member ids. A pack has no runtime surface and no
+    permissions of its own; each member is installed and confirmed alone."""
+
+    @field_validator("extensionPack")
+    @classmethod
+    def _check_extension_pack(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        if len(set(value)) != len(value):
+            raise ValueError("must contain unique values")
+        bad = [member for member in value if not PACKAGE_ID_RE.fullmatch(member)]
+        if bad:
+            raise ValueError(f"contains invalid package ids {bad}")
+        return value
 
     @model_validator(mode="after")
     def _check_runtime_surface(self) -> ManifestV2:
-        if self.contributes is None and self.backend is None:
+        if self.extensionPack is not None:
+            if self.id in self.extensionPack:
+                raise ValueError("extensionPack must not list the pack itself")
+            if self.contributes is not None or self.backend is not None:
+                raise ValueError("an extension pack must not declare contributes or backend")
+            if self.permissions.system is not None or self.permissions.shell is not None:
+                raise ValueError("an extension pack must not request permissions")
+        elif self.contributes is None and self.backend is None:
             raise ValueError("manifest must declare contributes or backend")
         if self.publisher != self.namespace:
             raise ValueError("publisher must match id namespace")

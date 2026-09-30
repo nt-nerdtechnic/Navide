@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
@@ -15,13 +15,31 @@ from sqlmodel import Session
 
 from .auth import PublisherIdentity, get_publisher_identity
 from .config import VERIFIER_ACCEPTING, Settings, load_settings
+from . import review
+from .blocklist import db_blocklists
 from .db import create_db_engine
+from .dns_verify import TxtResolver, doh_txt_resolver
+from .discovery import (
+    CATEGORIES,
+    PACK_CATEGORY,
+    engine_compatible,
+    engine_requirement,
+    in_category,
+    is_navide_version,
+    marketplace_links,
+    min_navide_version,
+    pack_members,
+)
 from .models import Extension, ExtensionVersion, Publisher
-from .manifest import ManifestV2, manifest_capabilities
-from .package import PackageError, read_package
+from .manifest import ManifestV2, manifest_capabilities, manifest_icon
+from .package import MAX_ARCHIVE_SIZE, PackageError, read_package
+from .packs import pack_conflict
 from .repository import RegistryRepository, rating_average
 from .registry_trust import RegistryTrustSigner
 from .schemas import (
+    CategoryInfo,
+    CategoryListResponse,
+    ChangelogResponse,
     ExtensionDetail,
     ExtensionListResponse,
     ExtensionSummary,
@@ -44,8 +62,8 @@ from .signing import (
 )
 from .storage import LocalStorageBackend, StorageBackend, StorageError
 from .trust import compute_trust_tier, sensitive_capabilities
-from .versions import latest_version
-from .web import readme_text
+from .versions import latest_prerelease_version, latest_stable_version, version_channel
+from .web import CHANGELOG_NAMES, SAFE_ASSET_TYPES, changelog_text, readme_text
 
 
 @dataclass
@@ -55,6 +73,8 @@ class RegistryState:
     verifier: SignatureVerifier
     settings: Settings
     trust_signer: RegistryTrustSigner
+    txt_resolver: TxtResolver
+    """DNS TXT lookup for publisher domain verification (injected in tests)."""
 
 
 def _make_verifier(settings: Settings) -> SignatureVerifier:
@@ -63,14 +83,23 @@ def _make_verifier(settings: Settings) -> SignatureVerifier:
     return Ed25519SignatureVerifier()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, txt_resolver: TxtResolver | None = None
+) -> FastAPI:
     settings = settings or load_settings()
+    engine = create_db_engine(settings.db_path)
     state = RegistryState(
-        engine=create_db_engine(settings.db_path),
+        engine=engine,
         storage=LocalStorageBackend(settings.storage_root),
         verifier=_make_verifier(settings),
         settings=settings,
-        trust_signer=RegistryTrustSigner.from_settings(settings),
+        # Admin blocklist entries join the config lists in publish refusal and
+        # in the signed trust metadata (blocklist.py).
+        trust_signer=replace(
+            RegistryTrustSigner.from_settings(settings),
+            extra_blocklist=lambda: db_blocklists(engine),
+        ),
+        txt_resolver=txt_resolver or doh_txt_resolver,
     )
 
     # root_path lets the registry sit under a reverse-proxy path prefix. Routing
@@ -94,6 +123,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     static_dir = Path(__file__).parent / "web_static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.include_router(create_web_router())
+    # Phase 2: Navide Cloud sign-in, publisher dashboard, CLI login, review
+    # queue, blocklist and the removed-extensions list.
+    from .publisher_web import create_publisher_router
+
+    app.include_router(create_publisher_router())
     return app
 
 
@@ -169,8 +203,23 @@ def _publish_conflict(
     return None
 
 
-def _version_info(row: ExtensionVersion) -> VersionInfo:
+def _pack_conflict(repo: RegistryRepository, manifest: object) -> str | None:
+    """Why this publish would nest one Extension Pack inside another
+    (packs.py). Pending submissions count, so two packs waiting for review
+    cannot list each other; the App re-checks each member's verified
+    manifest at install time."""
+    if not isinstance(manifest, ManifestV2):
+        return None
+    return pack_conflict(
+        repo, manifest.id, manifest.extensionPack, include_pending=True
+    )
+
+
+def _version_info(
+    row: ExtensionVersion, navide_version: str | None = None
+) -> VersionInfo:
     capabilities = manifest_capabilities(row.manifest)
+    requirement = engine_requirement(row.manifest)
     return VersionInfo(
         version=row.version,
         package_digest=row.package_digest,
@@ -184,12 +233,45 @@ def _version_info(row: ExtensionVersion) -> VersionInfo:
         capabilities=capabilities,
         sensitive_capabilities=sensitive_capabilities(capabilities),
         download_count=row.download_count,
+        engines_navide=requirement,
+        min_navide_version=min_navide_version(requirement),
+        compatible=engine_compatible(requirement, navide_version),
+        channel=version_channel(row.version),
     )
 
 
-def _summary(extension: Extension, versions: list[ExtensionVersion]) -> ExtensionSummary:
+def _icon_path(repo: RegistryRepository, row: ExtensionVersion | None) -> str | None:
+    """The row's manifest icon when the package stores it as a safe raster
+    asset (the same allowlist the website asset route serves)."""
+    if row is None:
+        return None
+    icon = manifest_icon(row.manifest)
+    if icon is None:
+        return None
+    for asset in repo.list_assets(row.id):
+        if asset.path == icon and asset.content_type in SAFE_ASSET_TYPES:
+            return icon
+    return None
+
+
+def _summary(
+    extension: Extension,
+    versions: list[ExtensionVersion],
+    repo: RegistryRepository,
+    navide_version: str | None = None,
+) -> ExtensionSummary:
     active = [v.version for v in versions if not v.yanked]
-    latest = latest_version(active)
+    # Stable-only by default (p4-channel-rule); a newer pre-release is named
+    # separately so a client can offer it to users who opted in.
+    latest = latest_stable_version(active)
+    # Target-independent facts (engines, links, icon) come from any artifact of
+    # the latest version; the manifest is identical across its targets.
+    latest_row = next(
+        (v for v in sorted(versions, key=lambda v: v.target) if v.version == latest and not v.yanked),
+        None,
+    )
+    manifest = latest_row.manifest if latest_row is not None else {}
+    requirement = engine_requirement(manifest)
     return ExtensionSummary(
         namespace=extension.namespace,
         name=extension.name,
@@ -198,6 +280,7 @@ def _summary(extension: Extension, versions: list[ExtensionVersion]) -> Extensio
         description=extension.description,
         categories=extension.categories,
         latest_version=latest,
+        latest_prerelease_version=latest_prerelease_version(active),
         latest_targets=sorted(
             v.target for v in versions if v.version == latest and not v.yanked
         ),
@@ -206,7 +289,33 @@ def _summary(extension: Extension, versions: list[ExtensionVersion]) -> Extensio
         rating_average=rating_average(extension),
         rating_count=extension.rating_count,
         featured=extension.featured,
+        engines_navide=requirement,
+        min_navide_version=min_navide_version(requirement),
+        compatible=engine_compatible(requirement, navide_version),
+        **marketplace_links(manifest),
+        icon_path=_icon_path(repo, latest_row),
+        extension_pack=pack_members(manifest),
+        trust_tier=(
+            compute_trust_tier(signed=latest_row.registry_signature is not None)
+            if latest_row is not None
+            else None
+        ),
     )
+
+
+def _latest_row(
+    repo: RegistryRepository, extension: Extension
+) -> ExtensionVersion | None:
+    """One artifact of the latest non-yanked version (target-independent reads)."""
+    active = [v for v in repo.list_versions(extension.id) if not v.yanked]
+    latest = latest_stable_version([v.version for v in active])
+    return next((v for v in active if v.version == latest), None)
+
+
+def _navide_version_param(navide_version: str | None) -> str | None:
+    if navide_version is not None and not is_navide_version(navide_version):
+        raise HTTPException(status_code=400, detail="invalid navide_version")
+    return navide_version
 
 
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
@@ -225,6 +334,23 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    @app.get("/api/categories", response_model=CategoryListResponse)
+    def list_categories(
+        repo: RegistryRepository = Depends(_repo),
+    ) -> CategoryListResponse:
+        """The closed category list with per-category extension counts."""
+        rows = repo.search_extensions(limit=10**9)[0]
+        return CategoryListResponse(
+            items=[
+                CategoryInfo(
+                    slug=slug,
+                    label=label,
+                    count=sum(1 for e in rows if in_category(e.categories, slug)),
+                )
+                for slug, label in CATEGORIES
+            ]
+        )
 
     @app.post(
         "/api/publishers",
@@ -323,10 +449,17 @@ def _register_routes(app: FastAPI) -> None:
                 status_code=403, detail="invalid package signature"
             )
 
+        pack_conflict = _pack_conflict(repo, manifest)
+        if pack_conflict is not None:
+            raise HTTPException(status_code=400, detail=pack_conflict)
+
         if isinstance(manifest, ManifestV2):
             display_name = manifest.name
             description = manifest.marketplace.description
             categories = manifest.marketplace.categories
+            # A pack is listed under Extension Packs whatever it declares.
+            if manifest.extensionPack is not None and PACK_CATEGORY not in categories:
+                categories = [*categories, PACK_CATEGORY]
         else:
             display_name = manifest.displayName or manifest.name
             description = manifest.description
@@ -339,30 +472,54 @@ def _register_routes(app: FastAPI) -> None:
             display_name=display_name,
             description=description,
             categories=categories,
+            update_existing=not publisher.review_required,
         )
 
         conflict = _publish_conflict(
             extension.identity,
             manifest.version,
             target,
-            repo.list_version_artifacts(extension.id, manifest.version),
+            repo.list_version_artifacts(
+                extension.id, manifest.version, public_only=False
+            ),
         )
         if conflict is not None:
             raise HTTPException(status_code=409, detail=conflict)
 
-        try:
-            registry_envelope, registry_signature = state.trust_signer.sign_envelope(
-                artifact_digest=loaded.digest,
-                package_id=f"{namespace}.{name}",
-                version=manifest.version,
-                target=target,
-                publisher_id=publisher_name,
+        if publisher.review_required:
+            # Review before publish (D3): a self-claimed namespace's upload
+            # waits unsigned and invisible until an admin approves it, which
+            # is when the registry signs it (review.approve).
+            registry_envelope, registry_signature = {}, None
+            trust_tier = compute_trust_tier(signed=False)
+            review_status = review.PENDING
+            review_report = review.submission_report(
+                repo.session,
+                namespace=namespace,
+                name=name,
+                data=data,
+                manifest=manifest.model_dump(exclude_none=True),
+                signature_present=signature is not None,
+                size_limit=MAX_ARCHIVE_SIZE,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        # Publisher signatures authenticate a submission only. Client-facing
-        # integrity is established by the registry signature created above.
-        trust_tier = compute_trust_tier(signed=True)
+        else:
+            try:
+                registry_envelope, registry_signature = (
+                    state.trust_signer.sign_envelope(
+                        artifact_digest=loaded.digest,
+                        package_id=f"{namespace}.{name}",
+                        version=manifest.version,
+                        target=target,
+                        publisher_id=publisher_name,
+                    )
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            # Publisher signatures authenticate a submission only. Client-facing
+            # integrity is established by the registry signature created above.
+            trust_tier = compute_trust_tier(signed=True)
+            review_status = review.APPROVED
+            review_report = {}
 
         key = _package_key(namespace, name, manifest.version, target)
         state.storage.put(key, data)
@@ -378,6 +535,8 @@ def _register_routes(app: FastAPI) -> None:
             registry_signature=registry_signature,
             trust_tier=trust_tier,
             assets=[(a.path, a.size, a.content_type) for a in loaded.assets],
+            review_status=review_status,
+            review_report=review_report,
         )
         return PublishResponse(
             namespace=namespace,
@@ -386,6 +545,7 @@ def _register_routes(app: FastAPI) -> None:
             target=row.target,
             package_digest=row.package_digest,
             yanked=row.yanked,
+            review_status=row.review_status,
         )
 
     @app.get("/api/extensions", response_model=ExtensionListResponse)
@@ -395,16 +555,35 @@ def _register_routes(app: FastAPI) -> None:
         sort: str = "updated",
         offset: int = 0,
         limit: int = 20,
+        navide_version: str | None = None,
+        compatible_only: bool = False,
         repo: RegistryRepository = Depends(_repo),
     ) -> ExtensionListResponse:
+        """`navide_version` (the client's release) fills each item's
+        `compatible`; with `compatible_only` an item is kept only when it is
+        known to be compatible, before paging so `total` stays exact."""
         limit = max(1, min(limit, 100))
         offset = max(0, offset)
         if sort not in {"updated", "downloads", "rating"}:
             sort = "updated"
+        navide_version = _navide_version_param(navide_version)
+
+        def keep(extension: Extension) -> bool:
+            if category and not in_category(extension.categories, category):
+                return False
+            if compatible_only and navide_version is not None:
+                summary = _summary(
+                    extension, repo.list_versions(extension.id), repo, navide_version
+                )
+                return summary.compatible is not False
+            return True
+
         rows, total = repo.search_extensions(
-            query=q, category=category, sort=sort, offset=offset, limit=limit
+            query=q, sort=sort, offset=offset, limit=limit, keep=keep
         )
-        items = [_summary(e, repo.list_versions(e.id)) for e in rows]
+        items = [
+            _summary(e, repo.list_versions(e.id), repo, navide_version) for e in rows
+        ]
         return ExtensionListResponse(
             items=items, total=total, offset=offset, limit=limit
         )
@@ -416,13 +595,15 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         namespace: str,
         name: str,
+        navide_version: str | None = None,
         repo: RegistryRepository = Depends(_repo),
     ) -> ExtensionDetail:
+        navide_version = _navide_version_param(navide_version)
         extension = repo.get_extension(namespace, name)
         if extension is None:
             raise HTTPException(status_code=404, detail="extension not found")
         versions = repo.list_versions(extension.id)
-        summary = _summary(extension, versions)
+        summary = _summary(extension, versions, repo, navide_version)
         publisher = repo.session.get(Publisher, extension.publisher_id)
         publisher_name = publisher.name if publisher else extension.namespace
         trust_metadata, trust_metadata_signature = (
@@ -431,12 +612,39 @@ def _register_routes(app: FastAPI) -> None:
         ordered = sorted(
             versions, key=lambda v: v.published_at, reverse=True
         )
+        latest_row = _latest_row(repo, extension)
         return ExtensionDetail(
             **summary.model_dump(),
             publisher=publisher_name,
             trust_metadata=trust_metadata,
             trust_metadata_signature=trust_metadata_signature,
-            versions=[_version_info(v) for v in ordered],
+            versions=[_version_info(v, navide_version) for v in ordered],
+            has_changelog=latest_row is not None
+            and any(
+                a.path.lower() in CHANGELOG_NAMES
+                for a in repo.list_assets(latest_row.id)
+            ),
+        )
+
+    @app.get(
+        "/api/extensions/{namespace}/{name}/changelog",
+        response_model=ChangelogResponse,
+    )
+    def extension_changelog(
+        request: Request,
+        namespace: str,
+        name: str,
+        repo: RegistryRepository = Depends(_repo),
+    ) -> ChangelogResponse:
+        """Raw root CHANGELOG.md of the latest version, as text (like readme)."""
+        extension = repo.get_extension(namespace, name)
+        if extension is None:
+            raise HTTPException(status_code=404, detail="extension not found")
+        row = _latest_row(repo, extension)
+        if row is None:
+            return ChangelogResponse(version=None, markdown=None)
+        return ChangelogResponse(
+            version=row.version, markdown=changelog_text(request, row)
         )
 
     @app.get(
@@ -456,9 +664,7 @@ def _register_routes(app: FastAPI) -> None:
         extension = repo.get_extension(namespace, name)
         if extension is None:
             raise HTTPException(status_code=404, detail="extension not found")
-        active = [v for v in repo.list_versions(extension.id) if not v.yanked]
-        latest = latest_version([v.version for v in active])
-        row = next((v for v in active if v.version == latest), None)
+        row = _latest_row(repo, extension)
         if row is None:
             return ReadmeResponse(version=None, markdown=None)
         return ReadmeResponse(version=row.version, markdown=readme_text(request, row))
@@ -540,12 +746,14 @@ def _register_routes(app: FastAPI) -> None:
                     f"namespace '{namespace}'"
                 ),
             )
-        extension = repo.get_extension(namespace, name)
+        extension = repo.get_extension(namespace, name, public_only=False)
         if extension is None:
             raise HTTPException(status_code=404, detail="extension not found")
         # A version is yanked as a whole, across every target's artifact, so
         # "latest" resolves the same on every platform.
-        artifacts = repo.list_version_artifacts(extension.id, version)
+        artifacts = repo.list_version_artifacts(
+            extension.id, version, public_only=False
+        )
         if not artifacts:
             raise HTTPException(status_code=404, detail="version not found")
         repo.yank_version(artifacts)

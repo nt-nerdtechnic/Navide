@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "apiVersion": "^1.0.0",
+  "id": "acme.web-dev-pack",
+  "name": "Web Dev Pack",
+  "version": "1.0.0",
+  "publisher": "acme",
+  "permissions": {},
+  "marketplace": {
+    "description": "Three extensions for web work.",
+    "license": "MIT"
+  },
+  "extensionPack": [
+    "acme.m0",
+    "acme.m1",
+    "acme.m2",
+    "acme.m3",
+    "acme.m4",
+    "acme.m5",
+    "acme.m6",
+    "acme.m7",
+    "acme.m8",
+    "acme.m9",
+    "acme.m10",
+    "acme.m11",
+    "acme.m12",
+    "acme.m13",
+    "acme.m14",
+    "acme.m15",
+    "acme.m16",
+    "acme.m17",
+    "acme.m18",
+    "acme.m19",
+    "acme.m20"
+  ]
+}

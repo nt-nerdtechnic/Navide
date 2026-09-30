@@ -45,7 +45,8 @@ watch(dialog, async (d) => {
           <strong>{{ dialog.title }}</strong>
         </header>
         <div class="body">
-          <pre>{{ dialog.message }}</pre>
+          <pre :class="{ prose: dialog.detail !== undefined }">{{ dialog.message }}</pre>
+          <pre v-if="dialog.detail !== undefined" class="detail">{{ dialog.detail }}</pre>
           <input
             v-if="dialog.kind === 'prompt'"
             ref="promptInput"
@@ -303,6 +304,17 @@ button.primary:hover {
 .card.danger .body pre {
   font-family: inherit;
   font-size: var(--font-sm);
+}
+/* Opt-in `detail`: the message is prose and only the literal stays monospace. */
+.body pre.prose {
+  font-family: inherit;
+  font-size: var(--font-sm);
+}
+.body pre.detail {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
 }
 button.primary.danger {
   background: var(--danger-emphasis);

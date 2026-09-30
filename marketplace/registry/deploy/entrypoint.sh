@@ -26,6 +26,16 @@ if [ -n "${REGISTRY_ADMIN_TOKEN_FILE:-}" ]; then
   export REGISTRY_ADMIN_TOKEN
 fi
 
+# Navide Cloud sign-in secrets (Phase 2), read from files like the admin token.
+if [ -n "${REGISTRY_AUTH_SECRET_FILE:-}" ]; then
+  REGISTRY_AUTH_SECRET="$(cat "$REGISTRY_AUTH_SECRET_FILE")"
+  export REGISTRY_AUTH_SECRET
+fi
+if [ -n "${REGISTRY_SESSION_SECRET_FILE:-}" ]; then
+  REGISTRY_SESSION_SECRET="$(cat "$REGISTRY_SESSION_SECRET_FILE")"
+  export REGISTRY_SESSION_SECRET
+fi
+
 # REGISTRY_ROOT_PATH (e.g. /registry) is applied by the app itself, so a proxy
 # may forward the prefix unchanged (AWS ALB) or strip it. Do not also pass
 # uvicorn --root-path. One worker: the registry stores its index in SQLite.

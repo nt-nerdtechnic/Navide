@@ -364,6 +364,7 @@ describe('PaneChannelButton', () => {
     expect(mock.sent.find((s) => s.type === 'channels.locations')?.payload).toEqual({ platform: 'telegram' })
     expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
       pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'new', chat_id: '-100', title: 'api-refactor',
+      verbosity: 'replies',
     })
     expect(document.querySelector('[data-testid="channel-popover"]')).toBeNull()
   })
@@ -376,8 +377,31 @@ describe('PaneChannelButton', () => {
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
       pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'existing', chat_id: '-100',
+      verbosity: 'replies',
     })
     expect(q('[data-testid="channel-popover"]')).toBeNull()
+  })
+
+  it('asks what the chat receives before binding, replies-only preselected', async () => {
+    seed({ configured: true })
+    const w = await render()
+    await openPopover(w)
+    const options = qa('[data-testid^="channel-bind-level-"]')
+    expect(options.map((e) => e.getAttribute('data-testid'))).toEqual([
+      'channel-bind-level-replies',
+      'channel-bind-level-minimal',
+      'channel-bind-level-standard',
+      'channel-bind-level-full',
+    ])
+    expect(options.map((e) => e.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false'])
+    expect(q('[data-testid="channel-bind-level-full"]')?.textContent).toContain('what you type on this machine')
+    expect(q('[data-testid="channel-popover"] [data-testid="channel-redact-note"]')?.textContent).toContain('only masks this channel')
+    q('[data-testid="channel-bind-level-full"]')!.click()
+    await flushPromises()
+    expect(q('[data-testid="channel-bind-level-full"]')?.getAttribute('aria-checked')).toBe('true')
+    q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toMatchObject({ chat_id: '-100', verbosity: 'full' })
   })
 
   describe('Guard warning for a CLI Guard cannot block', () => {
@@ -481,18 +505,44 @@ describe('PaneChannelButton', () => {
     expect(q('[data-testid="channel-no-chats"]')).toBeNull()
     expect(q('[data-testid="channel-bind-existing"]')?.textContent).toContain('neillu123')
   })
-  it('shows the mirror verbosity menu (default full) and sends the pick', async () => {
+  it('shows the mirror verbosity menu (default replies) and sends the pick', async () => {
     seed({ configured: true, bound: true })
     mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
     const w = await render()
     await w.get('[data-testid="channel-chip-menu"]').trigger('click')
     await flushPromises()
-    expect(q('[data-testid="channel-verbosity-full"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(q('[data-testid="channel-verbosity-replies"]')?.getAttribute('aria-checked')).toBe('true')
     q('[data-testid="channel-verbosity-minimal"]')!.click()
     await flushPromises()
     expect(mock.sent.find((m) => m.type === 'channels.set_binding_options')?.payload).toEqual({
       pane_id: 'p1',
       verbosity: 'minimal',
+    })
+  })
+
+  it('offers the replies-only level and says redaction covers channel credentials only', async () => {
+    seed({
+      configured: true,
+      bindings: [{ pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'replies' }],
+    })
+    mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
+    const w = await render()
+    await w.get('[data-testid="channel-chip-menu"]').trigger('click')
+    await flushPromises()
+    expect(qa('[role="menuitemradio"]').map((e) => e.getAttribute('data-testid'))).toEqual([
+      'channel-verbosity-replies',
+      'channel-verbosity-minimal',
+      'channel-verbosity-standard',
+      'channel-verbosity-full',
+    ])
+    expect(q('[data-testid="channel-verbosity-replies"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(q('[data-testid="channel-verbosity-replies"]')?.textContent).toContain('Chat replies only')
+    expect(q('[data-testid="channel-redact-note"]')?.textContent).toContain('only masks this channel')
+    q('[data-testid="channel-verbosity-full"]')!.click()
+    await flushPromises()
+    expect(mock.sent.find((m) => m.type === 'channels.set_binding_options')?.payload).toEqual({
+      pane_id: 'p1',
+      verbosity: 'full',
     })
   })
 

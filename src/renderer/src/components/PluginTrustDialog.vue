@@ -2,10 +2,22 @@
 // The publisher-trust / capability-risk confirmation shown between a verified
 // prepareInstall and its commit. Presentation only: usePluginInstallFlow owns
 // the pending package and decides which step is showing.
+import { onBeforeUnmount, onMounted } from 'vue'
 import type { PendingInstall } from '../composables/usePluginInstallFlow'
 
 defineProps<{ pending: PendingInstall; step: 'publisher' | 'risk' | null }>()
-defineEmits<{ confirmPublisher: []; confirmRisk: []; cancel: [] }>()
+const emit = defineEmits<{ confirmPublisher: []; confirmRisk: []; cancel: [] }>()
+
+// Esc cancels this confirmation only; it must not reach the settings modal,
+// which closes on any Escape nobody handled (this capture listener runs first).
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  emit('cancel')
+}
+onMounted(() => window.addEventListener('keydown', onKeydown, true))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
 </script>
 
 <template>
@@ -66,7 +78,9 @@ defineEmits<{ confirmPublisher: []; confirmRisk: []; cancel: [] }>()
 .ext-trust-dialog {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  /* Above the settings modal chrome (.s-close is z-index 30 in the same
+     stacking context), so Settings cannot be closed behind the dialog. */
+  z-index: 40;
   display: flex;
   align-items: center;
   justify-content: center;

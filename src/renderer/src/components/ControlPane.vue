@@ -881,6 +881,19 @@ const wsCountStates = computed<Map<string, PaneStatusValue | undefined>>(() => {
   return out
 })
 
+/** Each workspace heading's live-pane count, keyed by path — the status bar's
+ *  "▤ live / total" per project. A reclaimed or cold-restored placeholder holds
+ *  no process and is the only pane whose status is 'waiting', so everything
+ *  else under `paneIds` counts as live. */
+const wsLiveCounts = computed<Map<string, number>>(() => {
+  const statusById = new Map(props.panes.map((p) => [p.id, p.status]))
+  const out = new Map<string, number>()
+  for (const ws of props.workspaces ?? []) {
+    out.set(ws.path, ws.paneIds.filter((id) => (statusById.get(id) ?? 'waiting') !== 'waiting').length)
+  }
+  return out
+})
+
 /** Each parent pane's "↳ n" subtree signal, keyed by pane id — see
  *  subtreeSignals for why it is computed from spawnedBy over all panes and
  *  kept out of the pane's own status. */
@@ -3677,7 +3690,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 :title="wsNameTitle(ws.path)"
                 @dblclick.stop="startWorkspaceRename(ws.path)"
               >{{ ws.label }}</span>
-              <span class="ws-count" v-bind="countBadgeAttrs(wsCountStates.get(ws.path))">{{ ws.count }}</span>
+              <span class="ws-count" v-bind="countBadgeAttrs(wsCountStates.get(ws.path))">{{ wsLiveCounts.get(ws.path) ?? 0 }} / {{ ws.count }}</span>
             </span>
             <span class="ws-path">{{ ws.displayPath }}</span>
           </span>

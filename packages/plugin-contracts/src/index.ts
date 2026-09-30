@@ -35,6 +35,8 @@ export const V2_VIEW_LOCATIONS = ['top', 'bottom', 'right', 'left', 'main', 'win
 export const V2_RECEIVER_LOCATIONS = ['left', 'detail'] as const
 export const V2_SYSTEM_NAMESPACES = ['fs', 'ui', 'aiCli'] as const
 export const V2_SHELL_MODES = ['allowlist', 'full'] as const
+/** Most members one Extension Pack may list. */
+export const MAX_EXTENSION_PACK_MEMBERS = 20
 export const EXECUTION_POLICY_SCHEMA_VERSION = 1 as const
 export const EXECUTION_POLICY_MODES = ['full', 'allowlist', 'denylist'] as const
 
@@ -96,6 +98,10 @@ export type PluginManifestV2 = {
     protocolVersion: 1
     activation: 'startup'
   }
+  /** Extension Pack members (package ids). A pack carries no runtime surface
+   *  and no permissions of its own: every member is installed, verified and
+   *  confirmed on its own. */
+  extensionPack?: string[]
   /** Legacy fields are intentionally unavailable on a v2 manifest. */
   requires?: never
   entry?: never
@@ -530,7 +536,7 @@ export function parseManifestV2(raw: unknown): PluginManifestV2 {
   const manifest = assertObject(raw, 'manifest')
   assertOnlyKeys(
     manifest,
-    ['schemaVersion', 'apiVersion', 'id', 'name', 'version', 'publisher', 'engines', 'permissions', 'marketplace', 'contributes', 'backend'],
+    ['schemaVersion', 'apiVersion', 'id', 'name', 'version', 'publisher', 'engines', 'permissions', 'marketplace', 'contributes', 'backend', 'extensionPack'],
     'manifest'
   )
   if (manifest.schemaVersion !== 2) fail('manifest schemaVersion must be 2')
@@ -558,7 +564,18 @@ export function parseManifestV2(raw: unknown): PluginManifestV2 {
   }
   const permissions = parsePermissions(required(manifest, 'permissions', 'manifest'))
   const marketplace = parseMarketplace(required(manifest, 'marketplace', 'manifest'))
-  if (manifest.contributes === undefined && manifest.backend === undefined) {
+  let extensionPack: string[] | undefined
+  if (manifest.extensionPack !== undefined) {
+    extensionPack = uniqueStringArray(manifest.extensionPack, 'manifest extensionPack', 1, MAX_EXTENSION_PACK_MEMBERS)
+    if (extensionPack.some((member) => !PLUGIN_ID.test(member))) fail('manifest extensionPack contains an invalid package id')
+    if (extensionPack.includes(id)) fail('manifest extensionPack must not list the pack itself')
+    if (manifest.contributes !== undefined || manifest.backend !== undefined) {
+      fail('an extension pack must not declare contributes or backend')
+    }
+    if (permissions.system !== undefined || permissions.shell !== undefined) {
+      fail('an extension pack must not request permissions')
+    }
+  } else if (manifest.contributes === undefined && manifest.backend === undefined) {
     fail('manifest must declare contributes or backend')
   }
   const contributes = manifest.contributes === undefined ? undefined : parseViews(manifest.contributes)
@@ -575,6 +592,7 @@ export function parseManifestV2(raw: unknown): PluginManifestV2 {
     marketplace,
     ...(contributes ? { contributes } : {}),
     ...(backend ? { backend } : {}),
+    ...(extensionPack ? { extensionPack } : {}),
   }
 }
 

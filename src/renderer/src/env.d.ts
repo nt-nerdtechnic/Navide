@@ -6,6 +6,7 @@ type UpdaterSettings = import('../../shared/updater').UpdaterSettings
 type UpdateState = import('../../shared/updater').UpdateState
 type ExecutionPolicyApi = import('../../shared/executionPolicy').ExecutionPolicyApi
 type FnKeyApi = import('../../shared/fnKey').FnKeyApi
+type DeepLinkApi = import('../../shared/deepLink').DeepLinkApi
 type ManifestPermissionsSummary = import('../../shared/executionPolicy').ManifestPermissionsSummary
 type PackageVersionGrantSummary = import('../../shared/executionPolicy').PackageVersionGrantSummary
 type LegacyPlansPreferenceProjection = import('../../shared/plansPreferences').LegacyPlansPreferenceProjection
@@ -356,6 +357,7 @@ declare global {
         askMicrophone: () => Promise<{ granted: boolean; status: string; prompted?: boolean }>
       }
       fnKey?: FnKeyApi
+      deepLink?: DeepLinkApi
       executionPolicy?: ExecutionPolicyApi
       plugins?: {
         listInstalled: () => Promise<InstalledPluginSummary[]>
@@ -385,8 +387,22 @@ declare global {
         onContributionsChanged: (handler: () => void) => () => void
         marketplaceSearch: (
           query?: string,
-          sort?: 'updated' | 'downloads' | 'rating'
+          sort?: 'updated' | 'downloads' | 'rating',
+          options?: {
+            category?: string
+            offset?: number
+            limit?: number
+            hideIncompatible?: boolean
+          }
         ) => Promise<MarketplaceListResponse>
+        marketplaceCategories: () => Promise<MarketplaceCategory[]>
+        marketplaceIcon: (args: {
+          namespace: string
+          name: string
+          version: string
+          path: string
+        }) => Promise<string | null>
+        marketplaceChangelog: (args: { namespace: string; name: string }) => Promise<string | null>
         marketplaceDetail: (args: {
           namespace: string
           name: string
@@ -417,6 +433,12 @@ declare global {
         }>
         remove: (id: string) => Promise<{ ok: boolean }>
         restoreFactoryPackage: (id: string) => Promise<{ ok: boolean }>
+        setPrerelease: (id: string, enabled: boolean) => Promise<{ id: string; enabled: boolean }>
+        marketplacePackMembers: (members: string[]) => Promise<PackMemberSummary[]>
+        preparePack: (args: { namespace: string; name: string }) => Promise<PreparedPackSummary>
+        finishPack: (id: string) => Promise<{ recorded: boolean; pack?: InstalledPackRecord }>
+        listPacks: () => Promise<InstalledPackRecord[]>
+        removePack: (id: string, members: string[]) => Promise<{ removed: boolean }>
       }
     }
   }
@@ -433,6 +455,12 @@ declare global {
     pendingCandidateVersion?: string
     rollbackKind?: 'factory' | 'previous'
     rollbackToVersion?: string
+    /** Lowest Navide release the installed version needs (label only). */
+    minNavideVersion?: string
+    /** False when this Navide release is older; the Host still runs it. */
+    engineCompatible?: boolean
+    /** Per-extension "Get pre-releases" switch (Registry installs only). */
+    getsPrereleases?: boolean
   }
 
   interface FactoryPluginSummary {
@@ -457,6 +485,58 @@ declare global {
     download_count: number
     rating_average: number
     featured: boolean
+    /** Main-process verdict: the latest version's `engines.navide` against
+     *  this Navide release; null when unknown (never blocks). */
+    compatible?: boolean | null
+    /** Lowest Navide release the latest version accepts. */
+    min_navide_version?: string | null
+    /** The running Navide release the verdict was computed against. */
+    app_version?: string
+    license?: string | null
+    /** https links only (the main process drops anything else). */
+    repository?: string | null
+    homepage?: string | null
+    /** Package-relative raster icon of the latest version. */
+    icon_path?: string | null
+    /** Member ids when this is an Extension Pack. */
+    extension_pack?: string[] | null
+    /** Trust tier of the latest version ('signed-verified' or 'unsigned'). */
+    trust_tier?: string | null
+  }
+
+  interface PackMemberSummary {
+    id: string
+    status: 'ready' | 'installed' | 'missing' | 'nested' | 'unavailable' | 'incompatible' | 'error'
+    display_name: string | null
+    version: string | null
+    capabilities: string[]
+    sensitive_capabilities: string[]
+    min_navide_version: string | null
+  }
+
+  interface PreparedPackSummary {
+    id: string
+    version: string
+    display_name: string | null
+    trustTier: 'signed-verified' | 'unsigned'
+    publisherId: string
+    members: PackMemberSummary[]
+  }
+
+  interface InstalledPackRecord {
+    id: string
+    displayName?: string
+    version: string
+    members: string[]
+    /** Members installed only because of this pack (still installed, and not
+     *  listed by any other installed pack). */
+    installedByPack: string[]
+  }
+
+  interface MarketplaceCategory {
+    slug: string
+    label: string
+    count: number
   }
 
   interface MarketplaceVersionInfo {
@@ -470,6 +550,10 @@ declare global {
     download_count: number
     /** Main-process verdict: this row's target can be installed on this Host. */
     installable: boolean
+    /** This row's `engines.navide` against this Navide release (null: unknown). */
+    compatible?: boolean | null
+    min_navide_version?: string | null
+    channel?: 'stable' | 'pre-release'
   }
 
   interface MarketplaceExtensionDetail extends MarketplaceExtension {
@@ -479,6 +563,14 @@ declare global {
     host_target: string
     /** Newest non-yanked version with an artifact for this Host. */
     latest_installable_version: string | null
+    /** Newest version this Host can install that this Navide release also runs. */
+    latest_compatible_version?: string | null
+    /** Newest pre-release newer than `latest_version` (Registry's view). */
+    latest_prerelease_version?: string | null
+    /** This extension's "Get pre-releases" switch; the installable
+     *  versions above already honour it. */
+    gets_prereleases?: boolean
+    has_changelog?: boolean
     versions: MarketplaceVersionInfo[]
     /** Raw README markdown; rendered as text nodes, never as HTML. */
     readme: string | null

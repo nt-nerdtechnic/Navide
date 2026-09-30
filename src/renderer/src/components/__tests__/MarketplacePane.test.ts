@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import { i18n, useNotify } from '@navide/plugin-ui/foundation'
@@ -103,6 +105,13 @@ function mockPlugins(overrides: Record<string, unknown> = {}) {
     remove: vi.fn().mockResolvedValue({ ok: true }),
     checkUpdates: vi.fn().mockResolvedValue([]),
     marketplaceDetail: vi.fn().mockResolvedValue(demoDetail()),
+    marketplaceCategories: vi.fn().mockResolvedValue([]),
+    marketplaceIcon: vi.fn().mockResolvedValue(null),
+    marketplaceChangelog: vi.fn().mockResolvedValue(null),
+    setPrerelease: vi.fn().mockResolvedValue({ id: '', enabled: false }),
+    marketplacePackMembers: vi.fn().mockResolvedValue([]),
+    preparePack: vi.fn(),
+    finishPack: vi.fn().mockResolvedValue({ recorded: false }),
     ...overrides,
   }
   ;(window as unknown as Record<string, unknown>).agentTeam = { plugins: api }
@@ -283,6 +292,41 @@ describe('MarketplacePane', () => {
     expect(dialog.find('.ext-unsigned').exists()).toBe(false)
   })
 
+  it('Escape cancels the trust dialog without closing Settings', async () => {
+    const api = mockPlugins({
+      prepareInstall: vi.fn().mockResolvedValue({
+        id: 'acme.demo',
+        version: '1.0.0',
+        trustTier: 'signed-verified',
+        sensitive: ['fs'],
+        containsBackendExecutable: false,
+        requiresConfirmation: true,
+        requiresRiskConfirmation: true,
+        publisherId: 'acme',
+        requiresPublisherTrust: false,
+      }),
+    })
+    const settingsClose = vi.fn()
+    const settingsEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) settingsClose()
+    }
+    window.addEventListener('keydown', settingsEsc)
+    try {
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('.ext-install').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.ext-trust-dialog').exists()).toBe(true)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+      await flushPromises()
+      expect(settingsClose).not.toHaveBeenCalled()
+      expect(wrapper.find('.ext-trust-dialog').exists()).toBe(false)
+      expect(api.commitInstall).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', settingsEsc)
+    }
+  })
+
   it('cancelling the trust dialog does not install', async () => {
     const api = mockPlugins({
       prepareInstall: vi.fn().mockResolvedValue({
@@ -346,7 +390,11 @@ describe('MarketplacePane', () => {
     wrapper = mountMarketplace()
     await flushPromises()
     expect(wrapper.find('.mkt-loading').exists()).toBe(true)
-    expect(api.marketplaceSearch).toHaveBeenCalledWith(undefined, 'downloads')
+    expect(api.marketplaceSearch).toHaveBeenCalledWith(undefined, 'downloads', {
+      offset: 0,
+      limit: 20,
+      hideIncompatible: false,
+    })
 
     resolveSearch({ items: [], total: 0, offset: 0, limit: 20 })
     await flushPromises()
@@ -463,7 +511,10 @@ describe('MarketplacePane', () => {
       'ui',
     ])
     expect(view.get('.mkt-cap--sensitive').text()).toContain('fs')
-    expect(view.findAll('.mkt-versions tr')).toHaveLength(2)
+    // The same chips as the pack detail: every permission, sensitive ones highlighted.
+    expect(view.findAll('.mkt-caps .mkt-pack-cap').map((c) => c.text())).toEqual(['fs · sensitive', 'ui'])
+    expect(view.findAll('.mkt-caps .mkt-pack-cap--sensitive')).toHaveLength(1)
+    expect(view.findAll('.mkt-versions tbody tr')).toHaveLength(2)
     expect(view.get('.mkt-yanked').text()).toContain('1.0.0')
 
     await view.get('.ext-install').trigger('click')
@@ -735,5 +786,801 @@ describe('MarketplacePane', () => {
     const row = wrapper.get('[data-id="acme.demo"]')
     expect(row.text()).toContain('18,234 downloads')
     expect(row.get('.mkt-card-rating').text()).toBe('★ 4.7')
+  })
+
+  function listing(identity: string, overrides: Record<string, unknown> = {}) {
+    const [namespace, name] = identity.split('.')
+    return {
+      namespace,
+      name,
+      identity,
+      display_name: name,
+      description: null,
+      categories: [],
+      latest_version: '1.0.0',
+      download_count: 0,
+      rating_average: 0,
+      featured: false,
+      ...overrides,
+    }
+  }
+
+  it('shows category chips and searches the chosen category', async () => {
+    const api = mockPlugins({
+      marketplaceCategories: vi.fn().mockResolvedValue([
+        { slug: 'productivity', label: 'Productivity', count: 2 },
+        { slug: 'future-slug', label: 'Future', count: 0 },
+      ]),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    const chips = wrapper.findAll('.mkt-chip')
+    expect(chips.map((c) => c.text())).toEqual(['All', 'Productivity', 'Future'])
+    expect(chips[0].attributes('aria-pressed')).toBe('true')
+    await wrapper.get('[data-category="productivity"]').trigger('click')
+    await flushPromises()
+    expect(api.marketplaceSearch).toHaveBeenLastCalledWith(undefined, 'downloads', {
+      category: 'productivity',
+      offset: 0,
+      limit: 20,
+      hideIncompatible: false,
+    })
+    expect(wrapper.get('[data-category="productivity"]').attributes('aria-pressed')).toBe('true')
+  })
+
+  it('shows no chips for a Registry without a category list', async () => {
+    mockPlugins({ marketplaceCategories: vi.fn().mockRejectedValue(new Error('offline')) })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    expect(wrapper.find('.mkt-chips').exists()).toBe(false)
+  })
+
+  it('loads more results and reports how many are shown', async () => {
+    const api = mockPlugins({
+      marketplaceSearch: vi
+        .fn()
+        .mockResolvedValueOnce({ items: [listing('acme.a'), listing('acme.b')], total: 3, offset: 0, limit: 20 })
+        .mockResolvedValueOnce({ items: [listing('acme.b'), listing('acme.c')], total: 3, offset: 2, limit: 20 }),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    expect(wrapper.get('.mkt-showing').text()).toBe('Showing 2 of 3')
+    await wrapper.get('.mkt-load-more-btn').trigger('click')
+    await flushPromises()
+    expect(api.marketplaceSearch).toHaveBeenLastCalledWith(undefined, 'downloads', {
+      offset: 2,
+      limit: 20,
+      hideIncompatible: false,
+    })
+    // A row already shown is not repeated when the ranking shifts.
+    expect(wrapper.findAll('.ext-result').map((r) => r.attributes('data-id'))).toEqual([
+      'acme.a',
+      'acme.b',
+      'acme.c',
+    ])
+    expect(wrapper.get('.mkt-showing').text()).toBe('Showing 3 of 3')
+    expect(wrapper.find('.mkt-load-more-btn').exists()).toBe(false)
+  })
+
+  it('keeps the loaded rows and shows the error when loading more fails', async () => {
+    mockPlugins({
+      marketplaceSearch: vi
+        .fn()
+        .mockResolvedValueOnce({ items: [listing('acme.a')], total: 2, offset: 0, limit: 20 })
+        .mockRejectedValueOnce(new Error('marketplace search failed: HTTP 502')),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    await wrapper.get('.mkt-load-more-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.ext-result')).toHaveLength(1)
+    expect(wrapper.get('.mkt-load-more-error').text()).toContain('HTTP 502')
+  })
+
+  it('shows an offline listing as an error, never the previous results', async () => {
+    mockPlugins({
+      marketplaceSearch: vi
+        .fn()
+        .mockResolvedValueOnce({ items: [listing('acme.a')], total: 1, offset: 0, limit: 20 })
+        .mockRejectedValueOnce(new Error('fetch failed')),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    expect(wrapper.findAll('.ext-result')).toHaveLength(1)
+    await wrapper.get('.ext-search button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.ext-result').exists()).toBe(false)
+    expect(wrapper.get('.mkt-list-error').text()).toContain('fetch failed')
+  })
+
+  it('shows compatible, incompatible and unknown listings (D1: shown but not installable)', async () => {
+    const api = mockPlugins({
+      marketplaceSearch: vi.fn().mockResolvedValue({
+        items: [
+          listing('acme.ok', { compatible: true, app_version: '0.2.13' }),
+          listing('acme.new', { compatible: false, min_navide_version: '0.3.0', app_version: '0.2.13' }),
+          listing('acme.unknown', { compatible: null }),
+        ],
+        total: 3,
+        offset: 0,
+        limit: 20,
+      }),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    const ok = wrapper.get('[data-id="acme.ok"]')
+    expect(ok.get('.ext-compatible-badge').text()).toBe('Navide 0.2.13 ✓')
+    expect(ok.get('.ext-install').attributes('disabled')).toBeUndefined()
+
+    const incompatible = wrapper.get('[data-id="acme.new"]')
+    expect(incompatible.classes()).toContain('ext-result--incompatible')
+    expect(incompatible.get('.ext-incompatible-badge').text()).toBe('Requires Navide ≥ 0.3.0')
+    expect(incompatible.get('.mkt-card-incompatible').text()).toContain('You have 0.2.13')
+    expect(incompatible.get('.ext-install').attributes('disabled')).toBeDefined()
+
+    const unknown = wrapper.get('[data-id="acme.unknown"]')
+    expect(unknown.find('.ext-compatible-badge').exists()).toBe(false)
+    expect(unknown.find('.ext-incompatible-badge').exists()).toBe(false)
+    expect(unknown.get('.ext-install').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('.mkt-hide-incompatible input').setValue(true)
+    await flushPromises()
+    expect(api.marketplaceSearch).toHaveBeenLastCalledWith(undefined, 'downloads', {
+      offset: 0,
+      limit: 20,
+      hideIncompatible: true,
+    })
+  })
+
+  it('draws the icon from the main process, else a letter tile', async () => {
+    const api = mockPlugins({
+      marketplaceIcon: vi.fn().mockResolvedValue('data:image/png;base64,AAAA'),
+      marketplaceSearch: vi.fn().mockResolvedValue({
+        items: [listing('acme.icon', { icon_path: 'assets/i.png' }), listing('acme.plain', { display_name: 'plain' })],
+        total: 2,
+        offset: 0,
+        limit: 20,
+      }),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    expect(api.marketplaceIcon).toHaveBeenCalledWith({
+      namespace: 'acme',
+      name: 'icon',
+      version: '1.0.0',
+      path: 'assets/i.png',
+    })
+    expect(wrapper.get('[data-id="acme.icon"] img.mkt-icon').attributes('src')).toBe('data:image/png;base64,AAAA')
+    expect(wrapper.get('[data-id="acme.plain"] .mkt-icon--letter').text()).toBe('P')
+    expect(api.marketplaceIcon).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores an icon answer that is not an image data URL', async () => {
+    mockPlugins({
+      marketplaceIcon: vi.fn().mockResolvedValue('https://evil.test/x.png'),
+      marketplaceSearch: vi.fn().mockResolvedValue({
+        items: [listing('acme.icon', { icon_path: 'i.png' })],
+        total: 1,
+        offset: 0,
+        limit: 20,
+      }),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    expect(wrapper.find('[data-id="acme.icon"] img').exists()).toBe(false)
+    expect(wrapper.find('[data-id="acme.icon"] .mkt-icon--letter').exists()).toBe(true)
+  })
+
+  it('opens a repository link only after an in-app confirmation', async () => {
+    mockPlugins({
+      marketplaceSearch: vi.fn().mockResolvedValue({
+        items: [listing('acme.demo', { repository: 'https://github.com/acme/demo', license: 'MIT' })],
+        total: 1,
+        offset: 0,
+        limit: 20,
+      }),
+    })
+    const openExternal = vi.fn().mockResolvedValue({ ok: true })
+    ;(window as unknown as { agentTeam: Record<string, unknown> }).agentTeam.openExternal = openExternal
+    wrapper = mountMarketplace()
+    await flushPromises()
+    const row = wrapper.get('[data-id="acme.demo"]')
+    expect(row.get('.mkt-card-links').text()).toContain('MIT')
+    await row.get('.mkt-link').trigger('click')
+    await flushPromises()
+    // The card did not open its detail page, and nothing opened yet.
+    expect(wrapper.find('.mkt-detail').exists()).toBe(false)
+    expect(openExternal).not.toHaveBeenCalled()
+    // The prose explains; the URL itself is the monospace detail line.
+    expect(useNotify().dialog.value?.detail).toBe('https://github.com/acme/demo')
+    expect(useNotify().dialog.value?.message).not.toContain('https://')
+    useNotify().resolveDialog(false)
+    await flushPromises()
+    expect(openExternal).not.toHaveBeenCalled()
+
+    await row.get('.mkt-link').trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(true)
+    await flushPromises()
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/acme/demo')
+  })
+
+  it('shows links, works-with and the changelog in the detail view', async () => {
+    const api = mockPlugins({
+      marketplaceDetail: vi.fn().mockResolvedValue(
+        demoDetail({
+          repository: 'https://github.com/acme/demo',
+          homepage: 'https://acme.test',
+          license: 'MIT',
+          has_changelog: true,
+          min_navide_version: '0.2.9',
+          compatible: true,
+          app_version: '0.2.13',
+          versions: [{ ...demoDetail().versions[0], min_navide_version: '0.2.9' }, demoDetail().versions[1]],
+        })
+      ),
+      marketplaceChangelog: vi.fn().mockResolvedValue('# 1.1.0\n\n- fixed things'),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    await wrapper.get('[data-id="acme.demo"]').trigger('click')
+    await flushPromises()
+    const links = wrapper.get('.mkt-links')
+    expect(links.findAll('.mkt-link').map((l) => l.text())).toEqual(['Repository ↗', 'Homepage ↗', 'Changelog'])
+    expect(links.get('.mkt-license').text()).toBe('License: MIT')
+    const worksWith = wrapper.get('.mkt-works-with')
+    expect(worksWith.get('.mkt-works-with-version').text()).toBe('Version 1.1.0')
+    expect(worksWith.findAll('.mkt-platform').map((p) => p.text())).toEqual(['All platforms'])
+    expect(worksWith.get('.mkt-min-navide').text()).toBe('Navide ≥ 0.2.9')
+    await wrapper.get('.mkt-changelog-toggle').trigger('click')
+    await flushPromises()
+    expect(api.marketplaceChangelog).toHaveBeenCalledWith({ namespace: 'acme', name: 'demo' })
+    expect(wrapper.get('.mkt-changelog').text()).toContain('fixed things')
+  })
+
+  it('disables Install for an incompatible latest version and offers the compatible ones', async () => {
+    const api = mockPlugins({
+      marketplaceDetail: vi.fn().mockResolvedValue(
+        demoDetail({
+          latest_version: '2.0.0',
+          latest_installable_version: '2.0.0',
+          latest_compatible_version: '1.1.0',
+          app_version: '0.2.13',
+          versions: [
+            {
+              version: '2.0.0',
+              published_at: '2026-09-29T00:00:00Z',
+              target: 'universal',
+              yanked: false,
+              trust_tier: 'signed-verified',
+              capabilities: [],
+              sensitive_capabilities: [],
+              download_count: 0,
+              installable: true,
+              compatible: false,
+              min_navide_version: '0.3.0',
+            },
+            {
+              version: '1.1.0',
+              published_at: '2026-09-01T00:00:00Z',
+              target: 'universal',
+              yanked: false,
+              trust_tier: 'signed-verified',
+              capabilities: [],
+              sensitive_capabilities: [],
+              download_count: 0,
+              installable: true,
+              compatible: true,
+            },
+          ],
+        })
+      ),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    await wrapper.get('[data-id="acme.demo"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.mkt-actions .ext-install').attributes('disabled')).toBeDefined()
+    const banner = wrapper.get('.mkt-incompatible-banner')
+    expect(banner.text()).toContain('Version 2.0.0 requires Navide 0.3.0 or newer. You have 0.2.13')
+    expect(banner.text()).toContain('1.1.0 (older) is compatible.')
+    expect(wrapper.get('.mkt-row-incompatible').text()).toBe('Requires Navide ≥ 0.3.0')
+
+    await banner.get('.mkt-show-compatible').trigger('click')
+    await flushPromises()
+    const rows = wrapper.findAll('.mkt-versions tbody tr')
+    expect(rows).toHaveLength(1)
+    await rows[0].get('.mkt-row-install').trigger('click')
+    await flushPromises()
+    expect(api.prepareInstall).toHaveBeenCalledWith({
+      namespace: 'acme',
+      name: 'demo',
+      version: '1.1.0',
+    })
+  })
+
+  it('shows each version channel and switches this extension to pre-releases', async () => {
+    const rows = [
+      { version: '2.5.0-beta.1', channel: 'pre-release' },
+      { version: '2.4.0', channel: 'stable' },
+    ].map((row) => ({
+      published_at: '2026-09-29T00:00:00Z',
+      target: 'universal',
+      yanked: false,
+      trust_tier: 'signed-verified',
+      capabilities: [],
+      sensitive_capabilities: [],
+      download_count: 0,
+      installable: true,
+      ...row,
+    }))
+    const api = mockPlugins({
+      marketplaceDetail: vi
+        .fn()
+        .mockResolvedValueOnce(
+          demoDetail({ latest_version: '2.4.0', latest_installable_version: '2.4.0', gets_prereleases: false, versions: rows })
+        )
+        .mockResolvedValue(
+          demoDetail({ latest_version: '2.4.0', latest_installable_version: '2.5.0-beta.1', gets_prereleases: true, versions: rows })
+        ),
+      setPrerelease: vi.fn().mockResolvedValue({ id: 'acme.demo', enabled: true }),
+    })
+    wrapper = mountMarketplace()
+    await flushPromises()
+    await wrapper.get('[data-id="acme.demo"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.mkt-channel-pre').text()).toBe('pre-release')
+    expect(wrapper.get('.mkt-channel-stable').text()).toBe('stable')
+    // Stable by default: Install names the stable latest, with no note.
+    expect(wrapper.get('.mkt-actions .ext-install').text()).toBe('Install')
+    expect(wrapper.find('.mkt-prerelease-note').exists()).toBe(false)
+    const toggle = wrapper.get('.mkt-prerelease-toggle input')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(api.setPrerelease).toHaveBeenCalledWith('acme.demo', true)
+    // The stable latest is still installable here: no platform warning, and
+    // the button says the candidate is a pre-release (review #15).
+    expect(wrapper.find('.mkt-unavailable').exists()).toBe(false)
+    expect(wrapper.get('.mkt-actions .ext-install').text()).toBe('Install 2.5.0-beta.1 (pre-release)')
+    // The header keeps the stable version and notes the pre-release beside it.
+    expect(wrapper.get('.mkt-meta').text()).toContain('Version 2.4.0')
+    expect(wrapper.get('.mkt-prerelease-note').text()).toBe('pre-release 2.5.0-beta.1 available')
+    await wrapper.get('.mkt-actions .ext-install').trigger('click')
+    await flushPromises()
+    expect(api.prepareInstall).toHaveBeenCalledWith({ namespace: 'acme', name: 'demo', version: '2.5.0-beta.1' })
+  })
+
+  it('hides the pre-release switch when no pre-release exists', async () => {
+    mockPlugins()
+    wrapper = mountMarketplace()
+    await flushPromises()
+    await wrapper.get('[data-id="acme.demo"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.mkt-prerelease-toggle').exists()).toBe(false)
+  })
+
+  describe('Extension Pack', () => {
+    const member = (id: string, status: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      status,
+      display_name: null,
+      version: '1.0.0',
+      capabilities: [],
+      sensitive_capabilities: [],
+      min_navide_version: null,
+      ...extra,
+    })
+    const prepared = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      version: '1.0.0',
+      trustTier: 'signed-verified',
+      sensitive: [],
+      containsBackendExecutable: false,
+      requiresConfirmation: false,
+      publisherId: 'acme',
+      requiresPublisherTrust: false,
+      requiresRiskConfirmation: false,
+      ...extra,
+    })
+
+    function mockPack(overrides: Record<string, unknown> = {}) {
+      return mockPlugins({
+        marketplaceDetail: vi.fn().mockResolvedValue(
+          demoDetail({
+            extension_pack: ['acme.hello', 'acme.lint', 'acme.notes', 'acme.gone'],
+            // A pack's own manifest carries no permissions.
+            versions: [{ ...demoDetail().versions[0], capabilities: [], sensitive_capabilities: [] }],
+          })
+        ),
+        marketplacePackMembers: vi.fn().mockResolvedValue([
+          member('acme.hello', 'ready', { display_name: 'Hello', capabilities: ['ui'] }),
+          member('acme.lint', 'ready', { capabilities: ['fs', 'shell', 'ui'], sensitive_capabilities: ['fs', 'shell'] }),
+          member('acme.notes', 'installed'),
+          member('acme.gone', 'missing', { version: null }),
+        ]),
+        preparePack: vi.fn().mockResolvedValue({
+          id: 'acme.demo',
+          version: '1.0.0',
+          display_name: 'Demo Pack',
+          trustTier: 'signed-verified',
+          publisherId: 'acme',
+          members: [
+            member('acme.hello', 'ready'),
+            member('acme.lint', 'ready', { capabilities: ['fs', 'shell', 'ui'], sensitive_capabilities: ['fs', 'shell'] }),
+            member('acme.notes', 'ready'),
+            member('acme.gone', 'missing', { version: null }),
+          ],
+        }),
+        prepareInstall: vi.fn(async ({ namespace, name }: { namespace: string; name: string }) =>
+          name === 'lint'
+            ? prepared(`${namespace}.${name}`, { sensitive: ['fs', 'shell'], requiresConfirmation: true, requiresRiskConfirmation: true })
+            : name === 'notes'
+              ? prepared(`${namespace}.${name}`, { requiresPublisherTrust: true, publisherId: 'notes-co' })
+              : prepared(`${namespace}.${name}`)
+        ),
+        finishPack: vi.fn().mockResolvedValue({ recorded: true }),
+        ...overrides,
+      })
+    }
+
+    async function openPackDetail() {
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+    }
+
+    it('shows the members and their permissions on the pack detail page', async () => {
+      const api = mockPack()
+      await openPackDetail()
+      expect(wrapper!.get('.mkt-pack-badge').text()).toBe('Extension Pack')
+      expect(api.marketplacePackMembers).toHaveBeenCalledWith(['acme.hello', 'acme.lint', 'acme.notes', 'acme.gone'])
+      const members = wrapper!.findAll('.mkt-pack-member')
+      expect(members.map((m) => m.attributes('data-member'))).toEqual(['acme.hello', 'acme.lint', 'acme.notes', 'acme.gone'])
+      // Each row keeps its fields apart: name, id · version, permissions, state.
+      expect(members[0].get('.mkt-pack-member-name').text()).toBe('Hello')
+      expect(members[0].get('.mkt-pack-member-id').text()).toBe('acme.hello · 1.0.0')
+      expect(members[0].get('.mkt-pack-member-id').attributes('title')).toBe('acme.hello · 1.0.0')
+      expect(members[0].get('.mkt-pack-member-name').attributes('title')).toBe('Hello')
+      expect(members[0].findAll('.mkt-pack-cap').map((c) => c.text())).toEqual(['ui'])
+      expect(members[0].find('.mkt-pack-status').exists()).toBe(false)
+      // The same "fs · sensitive" label as the install dialog, spaces included.
+      expect(members[1].findAll('.mkt-pack-cap--sensitive').map((c) => c.text())).toEqual(['fs · sensitive', 'shell · sensitive'])
+      expect(members[1].findAll('.mkt-pack-cap:not(.mkt-pack-cap--sensitive)').map((c) => c.text())).toEqual(['ui'])
+      expect(members[2].get('.mkt-pack-status').classes()).toContain('mkt-badge--ok')
+      expect(members[3].get('.mkt-pack-status').text()).toContain('Not in the Marketplace')
+      // The pack itself grants nothing; it does not say "declares no permissions".
+      expect(wrapper!.get('.mkt-no-permissions').text()).toContain('This pack grants no permissions itself')
+      expect(wrapper!.get('.mkt-actions .mkt-pack-install').text()).toBe('Install pack (4)')
+      // A pack has no Install of its own.
+      expect(wrapper!.find('.mkt-actions .ext-install').exists()).toBe(false)
+    })
+
+    it('summarises the pack first, then confirms every member on its own (D5)', async () => {
+      const api = mockPack()
+      await openPackDetail()
+      await wrapper!.get('.mkt-pack-install').trigger('click')
+      await flushPromises()
+      expect(api.preparePack).toHaveBeenCalledWith({ namespace: 'acme', name: 'demo' })
+      // The id and version stay one token with the full value as a tooltip.
+      const lintId = wrapper!.get('.pack-member--summary[data-member="acme.lint"] .pack-member-id')
+      expect(lintId.text()).toBe('acme.lint · 1.0.0')
+      expect(lintId.attributes('title')).toBe('acme.lint · 1.0.0')
+      // Every summary row has the same three cells, so states line up.
+      for (const row of wrapper!.findAll('.pack-member--summary')) {
+        expect(row.findAll(':scope > .pack-member-main, :scope > .pack-member-caps, :scope > .pack-status')).toHaveLength(3)
+      }
+      expect(wrapper!.get('.pack-member--summary[data-member="acme.lint"] .pack-member-caps').findAll('.pack-cap--sensitive').map((c) => c.text())).toEqual(['fs · sensitive', 'shell · sensitive'])
+      // Summary: no member has been prepared or installed yet, and there is no accept-all.
+      expect(wrapper!.find('.pack-review').text()).toBe('Review 3 extensions')
+      expect(api.prepareInstall).not.toHaveBeenCalled()
+      expect(wrapper!.text()).not.toMatch(/accept all/i)
+
+      await wrapper!.get('.pack-review').trigger('click')
+      await flushPromises()
+      // Member 1 is non-sensitive, yet still waits for its own confirmation.
+      expect(api.prepareInstall).toHaveBeenCalledWith({ namespace: 'acme', name: 'hello', version: '1.0.0' })
+      expect(api.commitInstall).not.toHaveBeenCalled()
+      expect(wrapper!.get('.pack-step--current').text()).toContain('acme.hello')
+      await wrapper!.get('.pack-confirm').trigger('click')
+      await flushPromises()
+      expect(api.commitInstall).toHaveBeenCalledWith('acme.hello', { publisherConfirmed: false, riskConfirmed: true })
+
+      // Member 2 shows its sensitive capabilities, highlighted; the user skips it.
+      expect(wrapper!.get('.pack-sensitive').text()).toContain('fs, shell')
+      expect(wrapper!.findAll('.pack-sensitive-caps .pack-cap--sensitive').map((c) => c.text())).toEqual([
+        'fs · sensitive',
+        'shell · sensitive',
+      ])
+      expect(wrapper!.get('.pack-step--done').text()).toContain('acme.hello')
+      await wrapper!.get('.pack-skip').trigger('click')
+      await flushPromises()
+      expect(api.commitInstall).toHaveBeenCalledTimes(1)
+
+      // Member 3 needs publisher trust first, then its own confirmation.
+      expect(wrapper!.find('.pack-publisher-risk').exists()).toBe(true)
+      await wrapper!.get('.pack-confirm-publisher').trigger('click')
+      await flushPromises()
+      expect(api.commitInstall).toHaveBeenCalledTimes(1)
+      await wrapper!.get('.pack-confirm').trigger('click')
+      await flushPromises()
+      expect(api.commitInstall).toHaveBeenLastCalledWith('acme.notes', { publisherConfirmed: true, riskConfirmed: true })
+
+      expect(api.finishPack).toHaveBeenCalledWith('acme.demo')
+      const results = Object.fromEntries(
+        wrapper!.findAll('.pack-dialog .pack-member').map((m) => [m.attributes('data-member'), m.get('.pack-result').text()])
+      )
+      expect(results).toEqual({
+        'acme.hello': '✓ Installed',
+        'acme.lint': '– Skipped',
+        'acme.notes': '✓ Installed',
+        'acme.gone': '– Not in the Marketplace, skipped',
+      })
+      const tone = (id: string) => wrapper!.get(`.pack-dialog [data-member="${id}"] .pack-result`).classes()
+      expect(tone('acme.hello')).toContain('pack-result--success')
+      expect(tone('acme.lint')).toContain('pack-result--muted')
+      await wrapper!.get('.pack-close').trigger('click')
+      expect(wrapper!.find('.pack-dialog').exists()).toBe(false)
+    })
+
+    it('cancelling the pack keeps what was installed and installs nothing more', async () => {
+      const api = mockPack()
+      await openPackDetail()
+      await wrapper!.get('.mkt-pack-install').trigger('click')
+      await flushPromises()
+      await wrapper!.get('.pack-review').trigger('click')
+      await flushPromises()
+      await wrapper!.get('.pack-confirm').trigger('click')
+      await flushPromises()
+      await wrapper!.get('.pack-dialog .pack-cancel').trigger('click')
+      await flushPromises()
+      expect(api.commitInstall).toHaveBeenCalledTimes(1)
+      expect(api.prepareInstall).toHaveBeenCalledTimes(2)
+      expect(api.finishPack).toHaveBeenCalledWith('acme.demo')
+      const results = wrapper!.findAll('.pack-dialog .pack-member .pack-result').map((r) => r.text())
+      expect(results.slice(0, 3)).toEqual([
+        '✓ Installed',
+        '– Not installed (pack cancelled)',
+        '– Not installed (pack cancelled)',
+      ])
+    })
+
+    it('cancelling at the summary records nothing', async () => {
+      const api = mockPack()
+      await openPackDetail()
+      await wrapper!.get('.mkt-pack-install').trigger('click')
+      await flushPromises()
+      await wrapper!.get('.pack-dialog .pack-cancel').trigger('click')
+      await flushPromises()
+      expect(api.finishPack).not.toHaveBeenCalled()
+      expect(wrapper!.find('.pack-dialog').exists()).toBe(false)
+    })
+
+    it('keeps Escape from closing Settings behind the pack flow', async () => {
+      const api = mockPack()
+      // The settings modal closes on any Escape nobody handled.
+      const settingsClose = vi.fn()
+      const settingsEsc = (e: KeyboardEvent) => {
+        if (e.key === 'Escape' && !e.defaultPrevented) settingsClose()
+      }
+      window.addEventListener('keydown', settingsEsc)
+      try {
+        await openPackDetail()
+        await wrapper!.get('.mkt-pack-install').trigger('click')
+        await flushPromises()
+        await wrapper!.get('.pack-review').trigger('click')
+        await flushPromises()
+        // Mid-review, Escape does nothing: leaving is an explicit Skip or Cancel.
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+        await flushPromises()
+        expect(settingsClose).not.toHaveBeenCalled()
+        expect(wrapper!.find('.pack-confirm').exists()).toBe(true)
+        expect(api.commitInstall).not.toHaveBeenCalled()
+      } finally {
+        window.removeEventListener('keydown', settingsEsc)
+      }
+    })
+
+    it('cancels at the summary on Escape without closing Settings', async () => {
+      const api = mockPack()
+      const settingsClose = vi.fn()
+      const settingsEsc = (e: KeyboardEvent) => {
+        if (e.key === 'Escape' && !e.defaultPrevented) settingsClose()
+      }
+      window.addEventListener('keydown', settingsEsc)
+      try {
+        await openPackDetail()
+        await wrapper!.get('.mkt-pack-install').trigger('click')
+        await flushPromises()
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+        await flushPromises()
+        expect(settingsClose).not.toHaveBeenCalled()
+        expect(wrapper!.find('.pack-dialog').exists()).toBe(false)
+        expect(api.finishPack).not.toHaveBeenCalled()
+        // Once the dialog is gone, Escape reaches Settings again.
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+        expect(settingsClose).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', settingsEsc)
+      }
+    })
+
+    it('stacks the pack dialogs above the settings close button', () => {
+      // Same stacking context (.s-overlay): the dialog overlay must outrank
+      // .s-close or the modal can be closed mid-flow.
+      const read = (file: string) => readFileSync(join(process.cwd(), 'src/renderer/src/components', file), 'utf8')
+      const zIndex = (css: string, selector: string) => {
+        const block = new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? ''
+        return Number(/z-index:\s*(\d+)/.exec(block)?.[1])
+      }
+      const close = zIndex(read('SettingsModal.vue'), '.s-close')
+      expect(close).toBeGreaterThan(0)
+      expect(zIndex(read('PackInstallDialog.vue'), '.pack-dialog')).toBeGreaterThan(close)
+      expect(zIndex(read('PackUninstallDialog.vue'), '.pack-uninstall-dialog')).toBeGreaterThan(close)
+      expect(zIndex(read('PluginTrustDialog.vue'), '.ext-trust-dialog')).toBeGreaterThan(close)
+    })
+
+    it('reports a member that fails verification and moves on', async () => {
+      const api = mockPack({
+        prepareInstall: vi
+          .fn()
+          .mockRejectedValueOnce(new Error('invalid Registry signature'))
+          .mockResolvedValue(prepared('acme.lint')),
+      })
+      await openPackDetail()
+      await wrapper!.get('.mkt-pack-install').trigger('click')
+      await flushPromises()
+      await wrapper!.get('.pack-review').trigger('click')
+      await flushPromises()
+      expect(wrapper!.get('.pack-step--failed').text()).toContain('acme.hello')
+      expect(wrapper!.get('.pack-step--current').text()).toContain('acme.lint')
+      expect(api.commitInstall).not.toHaveBeenCalled()
+    })
+
+    it('shows the pack failure when the pack cannot be verified', async () => {
+      mockPack({ preparePack: vi.fn().mockRejectedValue(new Error('acme.demo is not an extension pack')) })
+      await openPackDetail()
+      await wrapper!.get('.mkt-pack-install').trigger('click')
+      await flushPromises()
+      expect(wrapper!.get('.mkt-pack-error').text()).toContain('is not an extension pack')
+      expect(wrapper!.find('.pack-dialog').exists()).toBe(false)
+    })
+  })
+
+  describe('screenshot review fixes', () => {
+    it('still warns when the latest version has no artifact for this platform', async () => {
+      mockPlugins({
+        marketplaceDetail: vi.fn().mockResolvedValue(
+          demoDetail({
+            latest_version: '2.0.0',
+            latest_installable_version: '1.1.0',
+            host_target: 'darwin-arm64',
+            versions: [
+              { ...demoDetail().versions[0], version: '2.0.0', target: 'win32-x64', installable: false },
+              { ...demoDetail().versions[0], version: '1.1.0' },
+            ],
+          })
+        ),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.mkt-unavailable').text()).toContain('Version 2.0.0 is not published for this platform')
+      expect(wrapper.get('.mkt-actions .ext-install').text()).toBe('Install 1.1.0')
+    })
+
+    it('describes one version under Works with: the one Install would install', async () => {
+      mockPlugins({
+        marketplaceDetail: vi.fn().mockResolvedValue(
+          demoDetail({
+            latest_version: '2.0.0',
+            latest_installable_version: '2.0.0',
+            versions: [
+              { ...demoDetail().versions[0], version: '2.0.0', target: 'darwin-arm64', min_navide_version: '0.2.9' },
+              { ...demoDetail().versions[0], version: '1.0.0', target: 'win32-x64', installable: false, min_navide_version: '0.1.0' },
+            ],
+          })
+        ),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      const worksWith = wrapper.get('.mkt-works-with')
+      expect(worksWith.get('.mkt-works-with-version').text()).toBe('Version 2.0.0')
+      // The older version's win32 build is not mixed in with 2.0.0's floor.
+      expect(worksWith.findAll('.mkt-platform').map((p) => p.text())).toEqual(['darwin-arm64'])
+      expect(worksWith.get('.mkt-min-navide').text()).toBe('Navide ≥ 0.2.9')
+    })
+
+    it('translates category chips and heads the versions table', async () => {
+      mockPlugins({ marketplaceDetail: vi.fn().mockResolvedValue(demoDetail({ categories: ['productivity', 'tools'] })) })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('.mkt-tags .mkt-tag').slice(0, 2).map((t) => t.text())).toEqual(['Productivity', 'tools'])
+      expect(wrapper.findAll('.mkt-versions th').map((th) => th.text())).toEqual([
+        'Version',
+        'Published',
+        'Target',
+        'Channel',
+        'Downloads',
+        'Status',
+      ])
+    })
+
+    it('translates category chips in zh-TW', async () => {
+      const previous = i18n.global.locale.value
+      i18n.global.locale.value = 'zh-TW'
+      try {
+        mockPlugins({
+          marketplaceCategories: vi.fn().mockResolvedValue([{ slug: 'version-control', label: 'Version control', count: 1 }]),
+          marketplaceDetail: vi.fn().mockResolvedValue(demoDetail({ categories: ['extension-packs'] })),
+        })
+        wrapper = mountMarketplace()
+        await flushPromises()
+        expect(wrapper.get('[data-category="version-control"]').text()).toBe('版本控制')
+        await wrapper.get('[data-id="acme.demo"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.get('.mkt-tags .mkt-tag').text()).toBe('擴充套件組合')
+      } finally {
+        i18n.global.locale.value = previous
+      }
+    })
+
+    it('goes back to all versions after showing only the compatible ones', async () => {
+      mockPlugins({
+        marketplaceDetail: vi.fn().mockResolvedValue(
+          demoDetail({
+            latest_version: '2.0.0',
+            latest_installable_version: '2.0.0',
+            latest_compatible_version: '1.1.0',
+            versions: [
+              { ...demoDetail().versions[0], version: '2.0.0', compatible: false, min_navide_version: '0.3.0' },
+              { ...demoDetail().versions[0], version: '1.1.0', compatible: true },
+            ],
+          })
+        ),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('.mkt-versions tbody tr')).toHaveLength(2)
+      expect(wrapper.find('.mkt-show-all').exists()).toBe(false)
+      await wrapper.get('.mkt-show-compatible').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('.mkt-versions tbody tr')).toHaveLength(1)
+      await wrapper.get('.mkt-show-all').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('.mkt-versions tbody tr')).toHaveLength(2)
+      expect(wrapper.find('.mkt-show-all').exists()).toBe(false)
+    })
+
+    it('shows no compatibility check on a card not available for this platform, and a signed badge', async () => {
+      mockPlugins({
+        marketplaceSearch: vi.fn().mockResolvedValue({
+          items: [
+            { ...demoDetail(), identity: 'acme.win', name: 'win', installable: false, compatible: true, app_version: '0.2.12', trust_tier: 'signed-verified' },
+            { ...demoDetail(), identity: 'acme.ok', name: 'ok', installable: true, compatible: true, app_version: '0.2.12', trust_tier: 'unsigned' },
+          ],
+          total: 2,
+          offset: 0,
+          limit: 20,
+        }),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      const win = wrapper.get('[data-id="acme.win"]')
+      expect(win.find('.ext-unavailable-badge').exists()).toBe(true)
+      expect(win.find('.ext-compatible-badge').exists()).toBe(false)
+      expect(win.get('.ext-signed-badge').text()).toBe('✓ signed')
+      const ok = wrapper.get('[data-id="acme.ok"]')
+      expect(ok.find('.ext-compatible-badge').exists()).toBe(true)
+      expect(ok.find('.ext-signed-badge').exists()).toBe(false)
+    })
   })
 })

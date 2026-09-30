@@ -7,7 +7,7 @@
 // All privileged work is brokered through the main process via
 // `window.agentTeam.plugins`; this component holds no secrets and never touches
 // package bytes.
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
   ManifestPermissionsSummary,
@@ -18,6 +18,7 @@ import { usePluginUpdates } from '../composables/usePluginUpdates'
 import { confirmUninstall, ipcErrorMessage, usePluginInstallFlow } from '../composables/usePluginInstallFlow'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import PluginTrustDialog from './PluginTrustDialog.vue'
+import PackUninstallDialog from './PackUninstallDialog.vue'
 
 const { t } = useI18n()
 
@@ -161,6 +162,60 @@ async function restartPlugin(id: string): Promise<void> {
   }
 }
 
+// D2: the per-extension "Get pre-releases" switch. It only changes which
+// versions the update check offers; updating still goes through the normal
+// verified install flow and its trust dialog.
+async function setPrerelease(id: string, enabled: boolean): Promise<void> {
+  const api = pluginsApi()
+  if (!api?.setPrerelease) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.setPrerelease(id, enabled)
+    await refreshInstalled()
+    await pluginUpdates.refresh()
+  } catch (err) {
+    error.value = pluginErrorMessage(err)
+  } finally {
+    busy.value = false
+  }
+}
+
+// Installed Extension Packs. A pack is a record over its members, which are
+// listed (and removable) as ordinary extensions below.
+const packs = ref<InstalledPackRecord[]>([])
+const uninstallingPack = ref<InstalledPackRecord | null>(null)
+
+async function refreshPacks(): Promise<void> {
+  const api = pluginsApi()
+  if (!api?.listPacks) return
+  try {
+    packs.value = await api.listPacks()
+  } catch {
+    packs.value = []
+  }
+}
+
+// D8: remove the pack and only the members the user ticked; the Host removes
+// those members and refuses one another installed pack still uses.
+async function uninstallPack(members: string[]): Promise<void> {
+  const api = pluginsApi()
+  const pack = uninstallingPack.value
+  if (!api?.removePack || !pack) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.removePack(pack.id, members)
+    uninstallingPack.value = null
+  } catch (err) {
+    error.value = pluginErrorMessage(err)
+  } finally {
+    busy.value = false
+    await refreshInstalled()
+    await refreshPacks()
+  }
+}
+
 async function restoreFactoryPackage(id: string): Promise<void> {
   const api = pluginsApi()
   if (!api) return
@@ -179,7 +234,10 @@ async function restoreFactoryPackage(id: string): Promise<void> {
 onMounted(() => {
   void refreshInstalled()
   void pluginUpdates.refresh()
+  void refreshPacks()
 })
+// A pack installed from the Marketplace page shows up here without a remount.
+watch(installed, () => void refreshPacks())
 </script>
 
 <template>
@@ -252,6 +310,22 @@ onMounted(() => {
         {{ $t('settings.extensions.marketplace.updatesCount', { count: pluginUpdates.count.value }) }}
       </p>
       <ul class="ext-list">
+        <li v-for="pack in packs" :key="`pack:${pack.id}`" class="ext-installed ext-pack" :data-pack-id="pack.id">
+          <span class="ext-id">{{ pack.displayName || pack.id }}</span>
+          <span v-if="pack.displayName" class="ext-requires ext-pack-id">{{ pack.id }}</span>
+          <span class="ext-requires">{{ $t('settings.extensions.marketplace.versionLabel', { version: pack.version }) }}</span>
+          <span class="ext-badge ext-pack-badge">{{ $t('settings.extensions.pack.membersBadge', { count: pack.members.length }) }}</span>
+          <button
+            class="ext-pack-remove nv-btn nv-btn--sm"
+            :disabled="busy || updateFlow.busy.value"
+            @click="uninstallingPack = pack"
+          >
+            {{ $t('settings.extensions.marketplace.uninstall') }}
+          </button>
+          <div class="ext-permission-details">
+            <span class="ext-pack-includes">{{ $t('settings.extensions.pack.includes', { members: pack.members.join(' · ') }) }}</span>
+          </div>
+        </li>
         <li v-for="p in nonFactoryInstalled" :key="p.id" class="ext-installed" :data-id="p.id">
           <span class="ext-id">{{ p.id }}</span>
           <span v-if="p.packageVersion" class="ext-requires">{{ $t('settings.extensions.marketplace.versionLabel', { version: p.packageVersion }) }}</span>
@@ -260,6 +334,14 @@ onMounted(() => {
           </span>
           <span class="ext-requires">{{ p.requires.join(', ') }}</span>
           <span v-if="p.warning" class="ext-badge ext-dev-warning">{{ p.warning }}</span>
+          <!-- Label only: the Host keeps running the package (no silent disable). -->
+          <span
+            v-if="p.engineCompatible === false"
+            class="ext-badge ext-incompatible"
+            :title="$t('settings.extensions.incompatibleReason', { version: p.minNavideVersion ?? '' })"
+          >
+            {{ $t('settings.extensions.incompatibleInstalled', { version: p.minNavideVersion ?? '' }) }}
+          </span>
           <span v-if="p.pendingCandidateVersion" class="ext-badge ext-candidate">
             {{ $t('settings.extensions.candidateReady', { version: p.pendingCandidateVersion }) }}
           </span>
@@ -309,12 +391,31 @@ onMounted(() => {
             >
               {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.packageVersionGrant'), value: formatPackageGrant(p.packageVersionGrant) }) }}
             </span>
+            <span v-if="p.engineCompatible === false" class="ext-incompatible-reason">
+              {{ $t('settings.extensions.incompatibleReason', { version: p.minNavideVersion ?? '' }) }}
+            </span>
           </div>
+          <label v-if="p.getsPrereleases !== undefined" class="ext-prerelease-toggle">
+            <input
+              type="checkbox"
+              :checked="p.getsPrereleases"
+              :disabled="busy || updateFlow.busy.value"
+              @change="setPrerelease(p.id, ($event.target as HTMLInputElement).checked)"
+            />
+            {{ $t('settings.extensions.getPrereleases') }}
+          </label>
         </li>
         <li v-if="!nonFactoryInstalled.length" class="ext-empty nv-empty">{{ $t('settings.extensions.empty') }}</li>
       </ul>
     </section>
 
+    <PackUninstallDialog
+      v-if="uninstallingPack"
+      :pack="uninstallingPack"
+      :busy="busy"
+      @confirm="uninstallPack"
+      @cancel="uninstallingPack = null"
+    />
     <PluginTrustDialog
       v-if="updateFlow.pendingConfirm.value"
       :pending="updateFlow.pendingConfirm.value"
@@ -412,8 +513,26 @@ onMounted(() => {
   color: var(--accent-fg);
   font-size: var(--font-2xs);
 }
+.ext-badge.ext-incompatible {
+  color: var(--danger-bright);
+  font-size: var(--font-2xs);
+}
+.ext-badge.ext-pack-badge {
+  color: var(--accent-fg);
+  font-size: var(--font-2xs);
+}
+.ext-prerelease-toggle {
+  flex: 1 1 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-2xs);
+}
 .ext-update,
 .ext-remove,
+.ext-pack-remove,
 .ext-restore,
 .ext-rollback,
 .ext-restart {

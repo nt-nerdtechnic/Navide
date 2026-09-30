@@ -2497,14 +2497,14 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.2C6.6 2.2 4.2 2.8 4.2 4.8 2.7 5.1 2.7 7.3 4.2 7.8c0 2 1.9 2.6 3.8 2.1"/><path d="M8 3.2c1.4-1 3.8-.4 3.8 1.6 1.5.3 1.5 2.5 0 3 0 2-1.9 2.6-3.8 2.1"/><path d="M8 3.2v9.6"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('channels.nav')" :active="activeTab === 'channels'" @select="activeTab = 'channels'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z"/><path d="M5.4 6.2h5.2M5.4 8.2h3.2"/></svg>
-                </template>
-              </SettingsNavItem>
               <SettingsNavItem :label="$t('guard.nav')" :active="activeTab === 'security'" @select="activeTab = 'security'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.6v4c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6v-4Z"/><path d="M5.8 8l1.6 1.6 2.9-3"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('channels.nav')" :active="activeTab === 'channels'" @select="activeTab = 'channels'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z"/><path d="M5.4 6.2h5.2M5.4 8.2h3.2"/></svg>
                 </template>
               </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">

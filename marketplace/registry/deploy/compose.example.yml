@@ -17,10 +17,20 @@ services:
       REGISTRY_TRUST_CONFIG_FILE: /etc/navide-registry/official-trust.json
       REGISTRY_ROOT_PATH: /registry
       REGISTRY_ADMIN_TOKEN_FILE: /run/secrets/navide-registry-admin-token
+      # Navide Cloud sign-in (Phase 2). Leave these four unset to keep
+      # self-service publishing off.
+      REGISTRY_AUTH_URL: https://forum.navide.dev/navide-auth
+      REGISTRY_AUTH_RETURN_URL: https://server.navide.dev/registry/auth/callback
+      REGISTRY_AUTH_SECRET_FILE: /run/secrets/navide-registry-auth-secret
+      REGISTRY_SESSION_SECRET_FILE: /run/secrets/navide-registry-session-secret
+      # Comma-separated Navide member ids allowed into /admin/review.
+      REGISTRY_ADMIN_MEMBER_IDS: ""
     secrets:
       - navide-registry-root.pem
       - navide-registry-signer.pem
       - navide-registry-admin-token
+      - navide-registry-auth-secret
+      - navide-registry-session-secret
     volumes:
       - navide-registry-data:/data
       - ./official-trust.json:/etc/navide-registry/official-trust.json:ro
@@ -38,6 +48,10 @@ secrets:
     file: /srv/navide-registry/secrets/registry_signer.key
   navide-registry-admin-token:
     file: /srv/navide-registry/secrets/admin_token
+  navide-registry-auth-secret:
+    file: /srv/navide-registry/secrets/auth_secret
+  navide-registry-session-secret:
+    file: /srv/navide-registry/secrets/session_secret
 
 volumes:
   navide-registry-data:

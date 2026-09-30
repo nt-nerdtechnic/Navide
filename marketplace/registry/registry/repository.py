@@ -7,11 +7,21 @@ strategy can evolve without touching the API layer.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
-from .models import Extension, ExtensionAsset, ExtensionVersion, Publisher
+from .models import (
+    BlocklistEntry,
+    Extension,
+    ExtensionAsset,
+    ExtensionVersion,
+    Publisher,
+)
+
+APPROVED = "approved"
+"""Only approved versions are public (review.py owns the state machine)."""
 
 
 def _now() -> datetime:
@@ -71,13 +81,47 @@ class RegistryRepository:
         self.session.refresh(publisher)
         return publisher
 
+    # -- public visibility ----------------------------------------------
+    def _hidden(self) -> tuple[set[str], set[str]]:
+        """Namespaces and package ids removed through the admin blocklist."""
+        entries = self.session.exec(select(BlocklistEntry)).all()
+        return (
+            {e.value for e in entries if e.kind == "publisher"},
+            {e.value for e in entries if e.kind == "package"},
+        )
+
+    def _public_filter(self):
+        """Predicate for extensions public reads may show: at least one
+        approved version, and not removed through the blocklist."""
+        approved = set(
+            self.session.exec(
+                select(ExtensionVersion.extension_id).where(
+                    ExtensionVersion.review_status == APPROVED
+                )
+            ).all()
+        )
+        publishers, packages = self._hidden()
+        return lambda e: (
+            e.id in approved
+            and e.namespace not in publishers
+            and e.identity not in packages
+        )
+
     # -- extensions -----------------------------------------------------
-    def get_extension(self, namespace: str, name: str) -> Extension | None:
-        return self.session.exec(
+    def get_extension(
+        self, namespace: str, name: str, *, public_only: bool = True
+    ) -> Extension | None:
+        """`public_only` (the default for every read path) hides extensions
+        with no approved version and removed ones; publish and yank look up
+        the stored row regardless."""
+        extension = self.session.exec(
             select(Extension).where(
                 Extension.namespace == namespace, Extension.name == name
             )
         ).first()
+        if extension is not None and public_only and not self._public_filter()(extension):
+            return None
+        return extension
 
     def get_or_create_extension(
         self,
@@ -88,8 +132,11 @@ class RegistryRepository:
         display_name: str | None,
         description: str | None,
         categories: list[str],
+        update_existing: bool = True,
     ) -> Extension:
-        extension = self.get_extension(namespace, name)
+        """`update_existing=False` keeps a public listing unchanged by a
+        submission still under review; approval updates it (review.py)."""
+        extension = self.get_extension(namespace, name, public_only=False)
         if extension is None:
             extension = Extension(
                 publisher_id=publisher.id,
@@ -103,7 +150,7 @@ class RegistryRepository:
             self.session.add(extension)
             self.session.commit()
             self.session.refresh(extension)
-        else:
+        elif update_existing:
             # Keep discovery metadata in sync with the newest publish.
             extension.display_name = display_name
             extension.description = description
@@ -122,6 +169,7 @@ class RegistryRepository:
         sort: str = "updated",
         offset: int = 0,
         limit: int = 20,
+        keep: Callable[[Extension], bool] | None = None,
     ) -> tuple[list[Extension], int]:
         """Keyword search over name/description/categories with filter + sort.
 
@@ -129,27 +177,34 @@ class RegistryRepository:
         - `category`: keep only extensions carrying this category.
         - `sort`: one of `updated` (newest first, default), `downloads`,
           `rating` (average, then count as tiebreak).
+        - `keep`: an extra caller-side filter applied before paging.
 
         Returns (page, total_matches).
         """
-        rows = list(self.session.exec(select(Extension)).all())
+        public = self._public_filter()
+        rows = [e for e in self.session.exec(select(Extension)).all() if public(e)]
         if query:
             needle = query.lower()
             rows = [e for e in rows if _matches(e, needle)]
         if category:
             wanted = category.lower()
             rows = [e for e in rows if wanted in [c.lower() for c in e.categories]]
+        if keep is not None:
+            rows = [e for e in rows if keep(e)]
         rows.sort(key=_sort_key(sort))
         total = len(rows)
         return rows[offset : offset + limit], total
 
     def list_featured(self, *, limit: int = 12) -> list[Extension]:
         """Featured (curated) extensions, most downloaded first."""
-        rows = list(
-            self.session.exec(
+        public = self._public_filter()
+        rows = [
+            e
+            for e in self.session.exec(
                 select(Extension).where(Extension.featured == True)  # noqa: E712
             ).all()
-        )
+            if public(e)
+        ]
         rows.sort(key=_sort_key("downloads"))
         return rows[:limit]
 
@@ -163,8 +218,10 @@ class RegistryRepository:
     def all_categories(self) -> list[str]:
         """Distinct categories across all extensions, alphabetically."""
         seen: set[str] = set()
+        public = self._public_filter()
         for e in self.session.exec(select(Extension)).all():
-            seen.update(e.categories)
+            if public(e):
+                seen.update(e.categories)
         return sorted(seen)
 
     # -- downloads + ratings -------------------------------------------
@@ -200,28 +257,29 @@ class RegistryRepository:
         return next((row for row in artifacts if row.target == target), None)
 
     def list_version_artifacts(
-        self, extension_id: int, version: str
+        self, extension_id: int, version: str, *, public_only: bool = True
     ) -> list[ExtensionVersion]:
-        """Every target's artifact of one version, ordered by target."""
+        """Every target's artifact of one version, ordered by target; only
+        approved ones unless `public_only` is False (publish conflicts, yank)."""
+        statement = select(ExtensionVersion).where(
+            ExtensionVersion.extension_id == extension_id,
+            ExtensionVersion.version == version,
+        )
+        if public_only:
+            statement = statement.where(ExtensionVersion.review_status == APPROVED)
         return list(
-            self.session.exec(
-                select(ExtensionVersion)
-                .where(
-                    ExtensionVersion.extension_id == extension_id,
-                    ExtensionVersion.version == version,
-                )
-                .order_by(ExtensionVersion.target)
-            ).all()
+            self.session.exec(statement.order_by(ExtensionVersion.target)).all()
         )
 
-    def list_versions(self, extension_id: int) -> list[ExtensionVersion]:
-        return list(
-            self.session.exec(
-                select(ExtensionVersion).where(
-                    ExtensionVersion.extension_id == extension_id
-                )
-            ).all()
+    def list_versions(
+        self, extension_id: int, *, public_only: bool = True
+    ) -> list[ExtensionVersion]:
+        statement = select(ExtensionVersion).where(
+            ExtensionVersion.extension_id == extension_id
         )
+        if public_only:
+            statement = statement.where(ExtensionVersion.review_status == APPROVED)
+        return list(self.session.exec(statement).all())
 
     def add_version(
         self,
@@ -234,9 +292,11 @@ class RegistryRepository:
         signature: str | None,
         target: str,
         registry_envelope: dict,
-        registry_signature: str,
+        registry_signature: str | None,
         trust_tier: str,
         assets: list[tuple[str, int, str]],
+        review_status: str = APPROVED,
+        review_report: dict | None = None,
     ) -> ExtensionVersion:
         record = ExtensionVersion(
             extension_id=extension.id,
@@ -249,6 +309,8 @@ class RegistryRepository:
             registry_envelope=registry_envelope,
             registry_signature=registry_signature,
             trust_tier=trust_tier,
+            review_status=review_status,
+            review_report=review_report or {},
         )
         self.session.add(record)
         self.session.commit()

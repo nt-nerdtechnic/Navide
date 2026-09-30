@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ publisher.name }} — Publisher dashboard{% endblock %}
+{% block content %}
+{# /publisher redirects here when this is the only namespace: no self-link. #}
+{% if owned_count > 1 %}<nav class="crumbs"><a href="{{ base }}/publisher">← Publisher dashboard</a></nav>{% endif %}
+<section class="panel">
+  <div class="ns-head">
+    <span class="ns-avatar">{{ publisher.name[:1]|upper }}</span>
+    <div>
+      <h1>{{ publisher.name }}</h1>
+      <div class="detail-sub">
+        {% if publisher.verified_domain %}<span class="badge badge-verified">✓ verified · {{ publisher.verified_domain }}</span>{% endif %}
+        <span class="muted">{{ extension_count }} extension{{ '' if extension_count == 1 else 's' }}</span>
+        {% if in_review %}<span class="tag">{{ in_review }} in review</span>{% endif %}
+      </div>
+    </div>
+    <a class="install-button ns-publish" href="#publish-cli">Publish new version</a>
+  </div>
+
+  <h2 class="section-title" id="publish-cli">Publish with the CLI</h2>
+  <pre class="code">navide-plugin login --registry {{ registry_url }}
+navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry {{ registry_url }} --signature SIG
+# uses a short-lived token from “Publisher tokens” (login stores one for you)</pre>
+  {% if publisher.review_required %}
+  <p class="muted">Every version is reviewed before it is public (target: 3 business days).
+    Pending versions are not visible to the Navide app.</p>
+  {% endif %}
+
+  <h2 class="section-title">Versions &amp; review status</h2>
+  {% if rows %}
+  <div class="table-scroll">
+  <table class="version-table review-status-table">
+    <thead><tr><th>Extension</th><th>Version</th><th>Submitted</th><th>Status</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="nowrap"><code>{{ r.identity }}</code></td>
+        <td class="nowrap">{{ r.version }}</td>
+        <td class="nowrap">{{ r.submitted_at.strftime('%Y-%m-%d') }}</td>
+        <td class="nowrap">
+          {% if r.status == 'pending' %}<span class="tag">⏳ pending review</span>
+          {% elif r.status == 'approved' %}<span class="badge badge-signed">✓ approved</span>
+          {% else %}<span class="badge badge-danger">✕ rejected</span>{% endif %}
+        </td>
+        <td>
+          {% if r.status == 'pending' %}<span class="muted">Not public yet</span>
+          {% elif r.status == 'approved' %}<span class="muted">Live · {{ r.downloads }} downloads{% if r.yanked %} · yanked{% endif %}</span>
+          {% else %}<span>Reason: {{ r.reason }}</span>{% endif %}
+          {% if r.secret_findings %}
+            <div class="muted">Secret scan: {% for f in r.secret_findings %}{{ f.rule }} in {{ f.path }}:{{ f.line }}{% if not loop.last %}; {% endif %}{% endfor %} (value hidden)</div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty">Nothing published yet.</p>
+  {% endif %}
+
+  <h2 class="section-title">Publisher tokens</h2>
+  {% if new_token %}
+  <div class="warn warn-block" role="status">
+    New token “{{ new_token_label }}” (expires {{ new_token_expires.strftime('%Y-%m-%d') }}). Copy it now — it is not shown again:
+    <pre class="code">{{ new_token }}</pre>
+  </div>
+  {% endif %}
+  {% if token_error %}<p class="warn warn-block" role="alert">{{ token_error }}</p>{% endif %}
+  {% for t in tokens %}
+    <div class="token-row">
+      <strong>{{ t.label }}</strong>
+      {% if t.state == 'active' %}<span class="muted">· expires {{ t.expires_at.strftime('%Y-%m-%d') }}</span>
+        <form class="inline-form" method="post" action="{{ base }}/publisher/{{ publisher.name }}/tokens/{{ t.id }}/revoke">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="link-button">revoke</button>
+        </form>
+      {% else %}<span class="tag">{{ t.state }}</span>{% endif %}
+    </div>
+  {% endfor %}
+  <form method="post" action="{{ base }}/publisher/{{ publisher.name }}/tokens" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input class="wide-input" name="label" placeholder="Token name, e.g. ci-github" required maxlength="64">
+    <select name="days" aria-label="Lifetime">
+      <option value="7">7 days</option><option value="30" selected>30 days</option><option value="{{ max_token_days }}">{{ max_token_days }} days</option>
+    </select>
+    <button type="submit">Create token</button>
+  </form>
+
+  <h2 class="section-title">Signing key</h2>
+  {% if publisher.key_fingerprint %}
+    <p class="muted">Ed25519 key {{ publisher.key_fingerprint }}. Uploads must be signed with it.</p>
+  {% else %}
+    <p class="muted">No public key yet. Create one with <code>navide-plugin keygen</code> and paste the <code>.pub</code> file.</p>
+  {% endif %}
+  {% if key_error %}<p class="warn warn-block" role="alert">{{ key_error }}</p>{% endif %}
+  <form method="post" action="{{ base }}/publisher/{{ publisher.name }}/key" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <textarea name="public_key" rows="4" placeholder="-----BEGIN PUBLIC KEY-----" required></textarea>
+    <button type="submit">Save public key</button>
+  </form>
+
+  <h2 class="section-title">Verified publisher (optional)</h2>
+  {% if publisher.verified_domain %}
+    <p class="ok-line">✓ You proved control of {{ publisher.verified_domain }}.</p>
+  {% elif publisher.domain %}
+    <p>Prove you control {{ publisher.domain }} to show the verified badge. Add this DNS record:</p>
+    <pre class="code">Type:  TXT
+Host:  {{ publisher.record_host }}
+Value: {{ publisher.record_value }}</pre>
+    <form class="inline-form" method="post" action="{{ base }}/publisher/{{ publisher.name }}/domain/check">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Check DNS now</button>
+    </form>
+    {% if domain_check %}<span class="muted">Last check: {{ domain_check }}</span>{% endif %}
+  {% endif %}
+  {% if domain_error %}<p class="warn warn-block" role="alert">{{ domain_error }}</p>{% endif %}
+  <form method="post" action="{{ base }}/publisher/{{ publisher.name }}/domain" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input class="wide-input" name="domain" placeholder="example.com" value="{{ publisher.domain or '' }}" required>
+    <button type="submit">{{ 'Change domain' if publisher.domain else 'Add domain' }}</button>
+  </form>
+</section>
+{% endblock %}

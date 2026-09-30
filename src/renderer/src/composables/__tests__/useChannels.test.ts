@@ -83,7 +83,7 @@ describe('useChannels', () => {
 
     await store.configure('slack', { permission_relay: false }, { app_token: 'xapp', bot_token: 'xoxb' })
     await store.configure('telegram', { permission_relay: true })
-    await store.bind({ pane_id: 'p2', pane_name: 'docs', platform: 'telegram', mode: 'new', chat_id: '-100', title: 'docs' })
+    await store.bind({ pane_id: 'p2', pane_name: 'docs', platform: 'telegram', mode: 'new', chat_id: '-100', title: 'docs', verbosity: 'standard' })
     await store.unbind('p1')
     await store.approvePairing('telegram', 'K7Q2M9XA')
     await store.setGlobalEnabled(false)
@@ -96,6 +96,7 @@ describe('useChannels', () => {
     expect(mock.sent.filter((s) => s.type === 'channels.configure')[1].payload).not.toHaveProperty('secret')
     expect(types).toEqual(expect.arrayContaining(['channels.bind', 'channels.unbind', 'channels.pairing.approve', 'channels.set_global_enabled']))
     expect(mock.sent.find((s) => s.type === 'channels.unbind')?.payload).toEqual({ pane_id: 'p1', pane_name: '' })
+    expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toMatchObject({ pane_id: 'p2', verbosity: 'standard' })
 
     mock.setResponse('channels.remove', { ok: false, error: 'nope' })
     expect(await store.remove('telegram')).toEqual({ ok: false, error: 'nope' })

@@ -97,12 +97,12 @@ describe('ControlPane – workspace sections', () => {
   })
 
   it('shows this window own workspace heading with its pane count', () => {
-    wrapper = mountWith({ workspaces: [current()] })
+    wrapper = mountWith({ workspaces: [current({ paneIds: ['p1', 'p2'] })] })
     const head = wrapper.find('.ws-head')
     expect(head.exists()).toBe(true)
     expect(head.classes()).toContain('ws-head--current')
     expect(head.text()).toContain('Agent-Team')
-    expect(wrapper.find('.ws-count').text()).toBe('2')
+    expect(wrapper.find('.ws-count').text()).toBe('2 / 2')
   })
 
   it('shows the path under the name, with home collapsed', () => {

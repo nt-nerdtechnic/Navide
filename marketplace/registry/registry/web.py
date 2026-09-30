@@ -26,12 +26,15 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from sqlmodel import Session
 
+from .cloud_auth import viewer_context
+from .discovery import CATEGORIES, engine_requirement, min_navide_version
 from .manifest import manifest_capabilities, manifest_icon
 from .models import Extension, ExtensionVersion, Publisher
 from .repository import RegistryRepository, rating_average
+from .self_service import verified_domain
 from .storage import StorageError
 from .trust import compute_trust_tier, sensitive_capabilities
-from .versions import version_key
+from .versions import latest_stable_version, version_channel
 
 # Package assets are third-party uploads served on the marketplace origin, so a
 # stored `text/html` or `image/svg+xml` Content-Type would be a stored-XSS
@@ -64,10 +67,14 @@ def _latest_active(versions: list[ExtensionVersion]) -> ExtensionVersion | None:
     active = [v for v in versions if not v.yanked]
     if not active:
         return None
-    return max(active, key=lambda v: version_key(v.version))
+    # Same channel rule as the API: stable first (p4-channel-rule).
+    latest = latest_stable_version([v.version for v in active])
+    return next(v for v in active if v.version == latest)
 
 
-def _card(extension: Extension, versions: list[ExtensionVersion]) -> dict:
+def _card(
+    extension: Extension, versions: list[ExtensionVersion], repo: RegistryRepository
+) -> dict:
     latest = _latest_active(versions)
     caps = manifest_capabilities(latest.manifest) if latest else []
     return {
@@ -93,6 +100,33 @@ def _card(extension: Extension, versions: list[ExtensionVersion]) -> dict:
             else "unsigned"
         ),
         "sensitive_capabilities": sensitive_capabilities(caps),
+        **_navide_requirement(latest),
+        "icon_path": _safe_icon(repo, latest),
+    }
+
+
+def _safe_icon(repo: RegistryRepository, row: ExtensionVersion | None) -> str | None:
+    """The manifest icon only when the package stored it as a raster asset the
+    asset route will serve (the API's `_icon_path` rule), so the page never
+    points at an icon that can only 404 or 415."""
+    icon = manifest_icon(row.manifest) if row else None
+    if row is None or icon is None:
+        return None
+    for asset in repo.list_assets(row.id):
+        if asset.path == icon and asset.content_type in SAFE_ASSET_TYPES:
+            return icon
+    return None
+
+
+def _navide_requirement(row: ExtensionVersion | None) -> dict[str, str | None]:
+    """`engines.navide` of `row` and the minimum release it names, read with
+    the same rule the API's compat flag uses. `*` (any release) and forms the
+    rule cannot read have no minimum worth showing."""
+    requirement = engine_requirement(row.manifest) if row else None
+    minimum = min_navide_version(requirement)
+    return {
+        "engines_navide": requirement,
+        "min_navide_version": minimum if minimum != "0.0.0" else None,
     }
 
 
@@ -132,6 +166,32 @@ def readme_text(request: Request, row: ExtensionVersion) -> str | None:
     return raw
 
 
+CHANGELOG_NAMES = frozenset({"changelog.md", "changelog.markdown", "changelog"})
+
+
+def changelog_text(request: Request, row: ExtensionVersion) -> str | None:
+    """The package's root CHANGELOG as raw markdown text, or None."""
+    zf = _read_package_zip(request, row.package_key)
+    if zf is None:
+        return None
+    with zf:
+        target = next(
+            (entry for entry in zf.namelist() if entry.lower() in CHANGELOG_NAMES),
+            None,
+        )
+        if target is None:
+            return None
+        return zf.read(target).decode("utf-8", errors="replace")
+
+
+_CATEGORY_LABELS = dict(CATEGORIES)
+
+
+def category_label(slug: str) -> str:
+    """Display name of a closed-list category slug; any other slug as-is."""
+    return _CATEGORY_LABELS.get(slug.lower(), slug)
+
+
 def _base_path_context(request: Request) -> dict[str, str]:
     """Expose the public path prefix so every emitted link carries it."""
     return {"base": request.scope.get("root_path", "").rstrip("/")}
@@ -140,8 +200,10 @@ def _base_path_context(request: Request) -> dict[str, str]:
 def create_web_router() -> APIRouter:
     router = APIRouter(include_in_schema=False)
     templates = Jinja2Templates(
-        directory=str(_TEMPLATES_DIR), context_processors=[_base_path_context]
+        directory=str(_TEMPLATES_DIR),
+        context_processors=[_base_path_context, viewer_context],
     )
+    templates.env.filters["category_label"] = category_label
 
     @router.get("/", response_class=HTMLResponse)
     def home(
@@ -157,9 +219,9 @@ def create_web_router() -> APIRouter:
             rows, total = repo.search_extensions(
                 query=q, category=category, sort=sort, offset=0, limit=60
             )
-            items = [_card(e, repo.list_versions(e.id)) for e in rows]
+            items = [_card(e, repo.list_versions(e.id), repo) for e in rows]
             featured = [
-                _card(e, repo.list_versions(e.id)) for e in repo.list_featured()
+                _card(e, repo.list_versions(e.id), repo) for e in repo.list_featured()
             ]
             categories = repo.all_categories()
         finally:
@@ -191,6 +253,7 @@ def create_web_router() -> APIRouter:
             version_views = [
                 {
                     "version": v.version,
+                    "channel": version_channel(v.version),
                     "target": v.target,
                     "trust_tier": compute_trust_tier(
                         signed=v.registry_signature is not None
@@ -208,12 +271,13 @@ def create_web_router() -> APIRouter:
             ]
             readme_html = _extract_readme(request, latest) if latest else None
             screenshots = _screenshots(repo, latest) if latest else []
-            icon_path = manifest_icon(latest.manifest) if latest else None
+            icon_path = _safe_icon(repo, latest)
             pub = repo.session.get(Publisher, extension.publisher_id)
             publisher_display = pub.name if pub else extension.namespace
             context = {
-                "ext": _card(extension, versions),
+                "ext": _card(extension, versions, repo),
                 "publisher": publisher_display,
+                "publisher_domain": verified_domain(pub),
                 "versions": version_views,
                 "readme_html": readme_html,
                 "screenshots": screenshots,

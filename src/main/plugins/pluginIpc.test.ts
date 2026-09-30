@@ -30,6 +30,7 @@ import { projectBackendPluginActivationCatalog } from './pluginBackendActivation
 import { makeZip } from './zipFixture'
 import { readZipEntries } from './pluginPackage'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
+import { PluginPackStore } from './pluginPackStore'
 import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
 const { handlers, browserWindowFromWebContents } = vi.hoisted(() => ({
@@ -38,7 +39,7 @@ const { handlers, browserWindowFromWebContents } = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
-  app: { isPackaged: false },
+  app: { isPackaged: false, getVersion: () => '0.2.13' },
   BrowserWindow: { fromWebContents: browserWindowFromWebContents },
   ipcMain: {
     handle: (channel: string, fn: (...a: unknown[]) => unknown) => {
@@ -68,6 +69,7 @@ vi.setConfig({ testTimeout: 30_000 })
 
 import { app as electronApp } from 'electron'
 import {
+  MARKETPLACE_ICON_MAX_BYTES,
   OFFICIAL_MARKETPLACE_URL,
   isTrustedPluginManagementSender,
   registerPluginIpc,
@@ -79,9 +81,11 @@ function buildPkg(
   packageId = 'acme.demo',
   publisherId = 'acme',
   permissions: Record<string, unknown> = {},
-  version = '1.0.0'
+  version = '1.0.0',
+  manifestExtra: Record<string, unknown> = {}
 ): { bytes: Uint8Array; digest: string } {
   const manifest = JSON.stringify({
+    ...manifestExtra,
     schemaVersion: 2,
     apiVersion: '^1.0.0',
     id: packageId,
@@ -3908,5 +3912,651 @@ describe('plugins:marketplaceDetail / plugins:checkUpdates', () => {
       `${BASE}?sort=downloads`,
       BASE,
     ])
+  })
+})
+
+describe('Marketplace discovery (Phase 1)', () => {
+  const savedFetch = global.fetch
+  const savedMarketplaceUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
+  beforeEach(() => {
+    handlers.clear()
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+  })
+  afterEach(() => {
+    global.fetch = savedFetch
+    if (savedMarketplaceUrl === undefined) delete process.env['AGENT_TEAM_MARKETPLACE_URL']
+    else process.env['AGENT_TEAM_MARKETPLACE_URL'] = savedMarketplaceUrl
+    vi.restoreAllMocks()
+  })
+
+  const ROOT = 'https://server.navide.dev/registry'
+
+  function jsonFetch(body: unknown, status = 200) {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) => ({
+      ok: status < 400,
+      status,
+      async json() {
+        return body
+      },
+    }))
+    global.fetch = fetchMock as unknown as typeof fetch
+    return fetchMock
+  }
+
+  function bytesFetch(bytes: Uint8Array, contentLength?: number) {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (h: string) =>
+          h.toLowerCase() === 'content-length' && contentLength !== undefined ? String(contentLength) : null,
+      },
+      async arrayBuffer() {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      },
+    }))
+    global.fetch = fetchMock as unknown as typeof fetch
+    return fetchMock
+  }
+
+  const registerAll = (): void => {
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG, undefined, {
+      appVersion: () => '0.2.13',
+    })
+  }
+
+  it('computes compatibility main-side and keeps only https links', async () => {
+    jsonFetch({
+      items: [
+        { identity: 'a.old', engines_navide: '^0.1.0', repository: 'https://x.test/r', license: 'MIT' },
+        { identity: 'a.new', engines_navide: '>=0.3.0', repository: 'javascript:alert(1)' },
+        { identity: 'a.none', homepage: 'http://plain.test' },
+      ],
+      total: 3,
+    })
+    registerAll()
+    const result = (await handlers.get('plugins:marketplaceSearch')!(null)) as {
+      items: Array<Record<string, unknown>>
+    }
+    const byId = Object.fromEntries(result.items.map((item) => [item.identity, item]))
+    expect(byId['a.old']).toMatchObject({ compatible: true, min_navide_version: '0.1.0', app_version: '0.2.13' })
+    expect(byId['a.old']).toMatchObject({ repository: 'https://x.test/r', license: 'MIT' })
+    expect(byId['a.new']).toMatchObject({ compatible: false, min_navide_version: '0.3.0', repository: null })
+    expect(byId['a.none']).toMatchObject({ compatible: null, homepage: null, license: null, icon_path: null })
+  })
+
+  it('forwards category, paging and the hide-incompatible filter', async () => {
+    const fetchMock = jsonFetch({ items: [], total: 0 })
+    registerAll()
+    const search = handlers.get('plugins:marketplaceSearch')!
+    await search(null, 'git', 'downloads', { category: 'version-control', offset: 40, limit: 20, hideIncompatible: true })
+    await search(null, undefined, undefined, { category: 'Bad Slug&x=1', offset: -5, limit: 1000 })
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+      `${ROOT}/api/extensions?q=git&sort=downloads&category=version-control&offset=40&limit=20&navide_version=0.2.13&compatible_only=true`,
+      `${ROOT}/api/extensions?limit=100`,
+    ])
+  })
+
+  it('lists the closed categories and tolerates a Registry without them', async () => {
+    jsonFetch({ items: [{ slug: 'ai', label: 'AI', count: 2 }, { slug: 'BAD SLUG', label: 'x', count: 1 }] })
+    registerAll()
+    expect(await handlers.get('plugins:marketplaceCategories')!(null)).toEqual([
+      { slug: 'ai', label: 'AI', count: 2 },
+    ])
+    jsonFetch({}, 404)
+    expect(await handlers.get('plugins:marketplaceCategories')!(null)).toEqual([])
+  })
+
+  it('returns a raster icon as a data URL, fetched without redirects', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    const fetchMock = bytesFetch(png)
+    registerAll()
+    const icon = await handlers.get('plugins:marketplaceIcon')!(null, {
+      namespace: 'acme',
+      name: 'demo',
+      version: '1.0.0',
+      path: 'assets/icon.png',
+    })
+    expect(icon).toBe(`data:image/png;base64,${Buffer.from(png).toString('base64')}`)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `${ROOT}/extensions/acme/demo/1.0.0/assets/assets/icon.png`
+    )
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual({ redirect: 'error' })
+  })
+
+  it('refuses SVG, oversized and unsafe-path icons', async () => {
+    registerAll()
+    const icon = handlers.get('plugins:marketplaceIcon')!
+    bytesFetch(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>'))
+    expect(await icon(null, { namespace: 'acme', name: 'demo', version: '1.0.0', path: 'icon.svg' })).toBeNull()
+    const big = new Uint8Array(MARKETPLACE_ICON_MAX_BYTES + 1)
+    big.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    bytesFetch(big)
+    expect(await icon(null, { namespace: 'acme', name: 'demo', version: '1.0.0', path: 'big.png' })).toBeNull()
+    const declaredBig = bytesFetch(new Uint8Array([0x89, 0x50]), MARKETPLACE_ICON_MAX_BYTES + 1)
+    expect(await icon(null, { namespace: 'acme', name: 'demo', version: '1.0.0', path: 'decl.png' })).toBeNull()
+    expect(declaredBig).toHaveBeenCalledTimes(1)
+    const unsafe = bytesFetch(new Uint8Array([0x89]))
+    for (const path of ['../secret.png', 'a/../../b.png', '/abs.png', 'a\\b.png', 'x?.png']) {
+      expect(await icon(null, { namespace: 'acme', name: 'demo', version: '1.0.0', path })).toBeNull()
+    }
+    expect(await icon(null, { namespace: 'acme', name: 'demo', version: 'latest', path: 'i.png' })).toBeNull()
+    expect(unsafe).not.toHaveBeenCalled()
+  })
+
+  function streamFetch(chunks: Uint8Array[], contentLength?: number) {
+    const pulled: number[] = []
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = chunks[pulled.length]
+        if (!next) {
+          controller.close()
+          return
+        }
+        pulled.push(next.byteLength)
+        controller.enqueue(next)
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) => ({
+      ok: true,
+      status: 200,
+      body,
+      headers: {
+        get: (h: string) =>
+          h.toLowerCase() === 'content-length' && contentLength !== undefined ? String(contentLength) : null,
+      },
+      async arrayBuffer(): Promise<ArrayBuffer> {
+        throw new Error('the icon body must be streamed, not buffered whole')
+      },
+    }))
+    global.fetch = fetchMock as unknown as typeof fetch
+    return { pulled, isCancelled: () => cancelled }
+  }
+
+  it('stops reading a chunked icon body as soon as it passes the cap', async () => {
+    registerAll()
+    const chunk = new Uint8Array(64 * 1024)
+    chunk.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    // 40 chunks (2.5 MiB) with no Content-Length.
+    const stream = streamFetch(Array.from({ length: 40 }, () => chunk))
+    const icon = await handlers.get('plugins:marketplaceIcon')!(null, {
+      namespace: 'acme',
+      name: 'demo',
+      version: '1.0.0',
+      path: 'chunked.png',
+    })
+    expect(icon).toBeNull()
+    // Cap/chunk (4) plus the chunk that crosses it, plus one the stream queues
+    // ahead of the reader: 6 of the 40.
+    expect(stream.pulled.length).toBeLessThanOrEqual(Math.ceil(MARKETPLACE_ICON_MAX_BYTES / chunk.byteLength) + 2)
+    expect(stream.isCancelled()).toBe(true)
+  })
+
+  it('assembles a small chunked icon', async () => {
+    registerAll()
+    const head = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+    const tail = new Uint8Array([0x0d, 0x0a, 0x1a, 0x0a, 9])
+    streamFetch([head, tail])
+    const icon = await handlers.get('plugins:marketplaceIcon')!(null, {
+      namespace: 'acme',
+      name: 'demo',
+      version: '1.0.0',
+      path: 'small.png',
+    })
+    expect(icon).toBe(`data:image/png;base64,${Buffer.from([...head, ...tail]).toString('base64')}`)
+  })
+
+  it('reads the changelog as text', async () => {
+    const fetchMock = jsonFetch({ version: '1.0.0', markdown: '# 1.0.0' })
+    registerAll()
+    expect(await handlers.get('plugins:marketplaceChangelog')!(null, { namespace: 'acme', name: 'demo' })).toBe(
+      '# 1.0.0'
+    )
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`${ROOT}/api/extensions/acme/demo/changelog`)
+  })
+
+  it('marks per-version compatibility and the newest compatible version in the detail', async () => {
+    jsonFetch({
+      namespace: 'acme',
+      name: 'demo',
+      latest_version: '2.0.0',
+      engines_navide: '>=0.3.0',
+      has_changelog: true,
+      repository: 'https://x.test/r',
+      versions: [
+        { version: '2.0.0', target: 'universal', yanked: false, engines_navide: '>=0.3.0' },
+        { version: '1.0.0', target: 'universal', yanked: false, engines_navide: '^0.1.0' },
+      ],
+    })
+    registerAll()
+    const detail = (await handlers.get('plugins:marketplaceDetail')!(null, { namespace: 'acme', name: 'demo' })) as
+      Record<string, unknown> & { versions: Array<Record<string, unknown>> }
+    expect(detail).toMatchObject({
+      compatible: false,
+      min_navide_version: '0.3.0',
+      app_version: '0.2.13',
+      latest_installable_version: '2.0.0',
+      latest_compatible_version: '1.0.0',
+      has_changelog: true,
+      repository: 'https://x.test/r',
+    })
+    expect(detail.versions.map((v) => [v.version, v.compatible])).toEqual([
+      ['2.0.0', false],
+      ['1.0.0', true],
+    ])
+  })
+
+  it('refuses an incompatible version before downloading it', async () => {
+    const { bytes, digest } = buildPkg()
+    const detail = signedDetail(digest)
+    const row = detail.versions[0] as WireDetail['versions'][number] & { engines_navide?: string }
+    row.engines_navide = '>=0.3.0'
+    installFetch(detail, bytes, digest)
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG, undefined, {
+      appVersion: () => '0.2.13',
+      ...TEST_PREFLIGHT_OPTIONS,
+    })
+    await expect(handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo' })).rejects.toThrow(
+      'requires Navide 0.3.0 or newer; this is Navide 0.2.13'
+    )
+    const urls = vi.mocked(global.fetch).mock.calls.map((call) => String(call[0]))
+    expect(urls.some((u) => u.endsWith('/download'))).toBe(false)
+  })
+
+  it('refuses a verified package whose own manifest needs a newer Navide', async () => {
+    const { bytes, digest } = buildPkg('acme.demo', 'acme', {}, '1.0.0', { engines: { navide: '>=9.0.0' } })
+    installFetch(signedDetail(digest), bytes, digest)
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG, undefined, {
+      appVersion: () => '0.2.13',
+      ...TEST_PREFLIGHT_OPTIONS,
+    })
+    await expect(handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo' })).rejects.toThrow(
+      'requires Navide 9.0.0 or newer'
+    )
+    // Nothing is held for commit.
+    await expect(
+      handlers.get('plugins:commitInstall')!(null, { id: 'acme.demo', publisherConfirmed: true })
+    ).rejects.toThrow()
+  })
+
+  it('never offers an update this Navide release cannot run', async () => {
+    const manager = new FrontendPluginManager()
+    vi.spyOn(manager, 'listInstalledPackages').mockReturnValue([
+      { id: 'acme.demo', provenance: 'official-registry', packageVersion: '1.0.0' },
+    ] as unknown as ReturnType<FrontendPluginManager['listInstalledPackages']>)
+    jsonFetch({
+      versions: [
+        { version: '2.0.0', target: 'universal', yanked: false, engines_navide: '>=0.3.0' },
+        { version: '1.1.0', target: 'universal', yanked: false, engines_navide: '^0.1.0' },
+      ],
+    })
+    registerPluginIpc(manager, '/plugins', () => true, TRUST_CONFIG, undefined, { appVersion: () => '0.2.13' })
+    const updates = (await handlers.get('plugins:checkUpdates')!(null)) as Array<{ latestVersion: string }>
+    expect(updates.map((u) => u.latestVersion)).toEqual(['1.1.0'])
+  })
+})
+
+describe('Pre-release channel (Phase 4)', () => {
+  const savedFetch = global.fetch
+  const savedMarketplaceUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
+  let root = ''
+  beforeEach(() => {
+    handlers.clear()
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+    root = mkdtempSync(join(tmpdir(), 'navide-prerelease-ipc-'))
+  })
+  afterEach(() => {
+    global.fetch = savedFetch
+    if (savedMarketplaceUrl === undefined) delete process.env['AGENT_TEAM_MARKETPLACE_URL']
+    else process.env['AGENT_TEAM_MARKETPLACE_URL'] = savedMarketplaceUrl
+    rmSync(root, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const VERSIONS = [
+    { version: '1.3.1-beta.2', target: 'universal', yanked: false },
+    { version: '1.3.0', target: 'universal', yanked: false },
+    { version: '1.2.0', target: 'universal', yanked: false },
+  ]
+
+  function serve(versions: unknown[]) {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return { namespace: 'acme', name: 'demo', latest_version: '1.3.0', versions }
+      },
+    })) as unknown as typeof fetch
+  }
+
+  function registerWith(installedVersion: string, extra: Record<string, unknown> = {}) {
+    const manager = new FrontendPluginManager()
+    vi.spyOn(manager, 'listInstalledPackages').mockReturnValue([
+      { id: 'acme.demo', requires: [], provenance: 'official-registry', packageVersion: installedVersion, ...extra },
+    ] as unknown as ReturnType<FrontendPluginManager['listInstalledPackages']>)
+    registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, { appVersion: () => '0.2.13' })
+  }
+
+  const updates = async () =>
+    ((await handlers.get('plugins:checkUpdates')!(null)) as Array<{ latestVersion: string }>).map(
+      (u) => u.latestVersion
+    )
+  const setPrerelease = (id: unknown, enabled: unknown) =>
+    handlers.get('plugins:setPrerelease')!(null, { id, enabled })
+
+  it('never offers a pre-release to a stable user', async () => {
+    serve(VERSIONS)
+    registerWith('1.2.0')
+    expect(await updates()).toEqual(['1.3.0'])
+  })
+
+  it('offers the newest pre-release once the extension opts in', async () => {
+    serve(VERSIONS)
+    registerWith('1.2.0')
+    await setPrerelease('acme.demo', true)
+    expect(await updates()).toEqual(['1.3.1-beta.2'])
+  })
+
+  it('does not downgrade a pre-release install when the switch is turned off again', async () => {
+    serve(VERSIONS)
+    registerWith('1.3.1-beta.2')
+    await setPrerelease('acme.demo', true)
+    expect(await updates()).toEqual([])
+    await setPrerelease('acme.demo', false)
+    // 1.3.0 is older than the installed 1.3.1-beta.2: nothing is offered…
+    expect(await updates()).toEqual([])
+    // …until a stable release newer than the installed pre-release exists.
+    serve([{ version: '1.3.1', target: 'universal', yanked: false }, ...VERSIONS])
+    expect(await updates()).toEqual(['1.3.1'])
+  })
+
+  it('makes the detail install candidate follow the switch and labels each channel', async () => {
+    serve(VERSIONS)
+    registerWith('1.2.0')
+    const detail = async () =>
+      (await handlers.get('plugins:marketplaceDetail')!(null, { namespace: 'acme', name: 'demo' })) as Record<
+        string,
+        unknown
+      > & { versions: Array<{ version: string; channel: string }> }
+    const stable = await detail()
+    expect(stable.latest_installable_version).toBe('1.3.0')
+    expect(stable.gets_prereleases).toBe(false)
+    expect(stable.versions.map((v) => [v.version, v.channel])).toEqual([
+      ['1.3.1-beta.2', 'pre-release'],
+      ['1.3.0', 'stable'],
+      ['1.2.0', 'stable'],
+    ])
+    await setPrerelease('acme.demo', true)
+    const optedIn = await detail()
+    expect(optedIn.latest_installable_version).toBe('1.3.1-beta.2')
+    expect(optedIn.gets_prereleases).toBe(true)
+  })
+
+  it('reports the switch and the engine label in the installed inventory', async () => {
+    registerWith('1.2.0', { enginesNavide: '>=0.3.0' })
+    await setPrerelease('acme.demo', true)
+    const rows = (await handlers.get('plugins:listInstalled')!(null)) as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({
+      id: 'acme.demo',
+      getsPrereleases: true,
+      minNavideVersion: '0.3.0',
+      engineCompatible: false,
+    })
+  })
+
+  it('validates the switch arguments', async () => {
+    registerWith('1.2.0')
+    await expect(setPrerelease('../evil', true)).rejects.toThrow('invalid plugin id')
+    await expect(setPrerelease('acme.demo', 'yes')).rejects.toThrow('invalid pre-release setting')
+  })
+})
+
+describe('Extension Pack (Phase 5)', () => {
+  const savedFetch = global.fetch
+  const savedMarketplaceUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
+  let root = ''
+  beforeEach(() => {
+    handlers.clear()
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+    root = mkdtempSync(join(tmpdir(), 'navide-pack-ipc-'))
+  })
+  afterEach(() => {
+    global.fetch = savedFetch
+    if (savedMarketplaceUrl === undefined) delete process.env['AGENT_TEAM_MARKETPLACE_URL']
+    else process.env['AGENT_TEAM_MARKETPLACE_URL'] = savedMarketplaceUrl
+    rmSync(root, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const API = 'https://server.navide.dev/registry/api/extensions'
+
+  function buildPackPkg(members: string[], extra: Record<string, unknown> = {}): { bytes: Uint8Array; digest: string } {
+    const manifest = JSON.stringify({
+      schemaVersion: 2,
+      apiVersion: '^1.0.0',
+      id: 'acme.pack',
+      name: 'Pack',
+      version: '1.0.0',
+      publisher: 'acme',
+      permissions: {},
+      marketplace: { description: 'A pack', license: 'MIT' },
+      extensionPack: members,
+      ...extra,
+    })
+    const bytes = new Uint8Array(makeZip([{ name: 'manifest.json', data: manifest }]))
+    return { bytes, digest: sha256Hex(bytes) }
+  }
+
+  const row = (version: string, extra: Record<string, unknown> = {}) => ({
+    version,
+    target: 'universal',
+    yanked: false,
+    capabilities: ['fs', 'ui'],
+    sensitive_capabilities: ['fs'],
+    ...extra,
+  })
+
+  /** Serve the pack (signed detail + download) and member listings. */
+  function servePack(
+    pack: { bytes: Uint8Array; digest: string },
+    members: Record<string, Record<string, unknown> | 404>
+  ) {
+    const detail = signedDetail(pack.digest, 'acme.pack')
+    global.fetch = vi.fn(async (url: unknown) => {
+      const u = String(url)
+      if (u.endsWith('/download')) {
+        const ab = pack.bytes.buffer.slice(pack.bytes.byteOffset, pack.bytes.byteOffset + pack.bytes.byteLength)
+        return {
+          ok: true,
+          status: 200,
+          async arrayBuffer() {
+            return ab
+          },
+          headers: { get: (h: string) => (h.toLowerCase() === 'x-package-digest' ? pack.digest : null) },
+        }
+      }
+      if (u === `${API}/acme/pack`) return { ok: true, status: 200, async json() { return { ...detail, display_name: 'Pack' } } }
+      const id = u.slice(API.length + 1).replace('/', '.')
+      const member = members[id]
+      if (member === undefined || member === 404) return { ok: false, status: 404, async json() { return {} } }
+      return { ok: true, status: 200, async json() { return member } }
+    }) as unknown as typeof fetch
+  }
+
+  function setup(installed: string[] = []) {
+    const manager = new FrontendPluginManager()
+    const current = [...installed]
+    vi.spyOn(manager, 'listInstalledPackages').mockImplementation(
+      () =>
+        current.map((id) => ({ id, requires: [], provenance: 'official-registry' })) as unknown as ReturnType<
+          FrontendPluginManager['listInstalledPackages']
+        >
+    )
+    vi.spyOn(manager, 'removeInstalledPlugin').mockImplementation((id: string) => {
+      current.splice(current.indexOf(id), 1)
+    })
+    registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+      appVersion: () => '0.2.13',
+      cleanupPluginStorage: async () => undefined,
+      ...TEST_PREFLIGHT_OPTIONS,
+    })
+    return current
+  }
+
+  it('verifies the pack and resolves every member without installing anything', async () => {
+    const pack = buildPackPkg(['acme.ready', 'acme.have', 'acme.gone', 'acme.inner', 'acme.newer', 'acme.other-os'])
+    servePack(pack, {
+      'acme.ready': { display_name: 'Ready', versions: [row('1.2.0')] },
+      'acme.have': { versions: [row('1.0.0')] },
+      'acme.gone': 404,
+      'acme.inner': { extension_pack: ['acme.x'], versions: [row('1.0.0', { capabilities: [] })] },
+      'acme.newer': { versions: [row('2.0.0', { engines_navide: '>=0.3.0' })] },
+      'acme.other-os': { versions: [row('1.0.0', { target: 'plan9-mips' })] },
+    })
+    setup(['acme.have'])
+    const result = (await handlers.get('plugins:preparePack')!(null, { namespace: 'acme', name: 'pack' })) as {
+      id: string
+      version: string
+      members: Array<{ id: string; status: string; version: string | null; sensitive_capabilities: string[] }>
+    }
+    expect(result.id).toBe('acme.pack')
+    expect(result.members.map((m) => [m.id, m.status])).toEqual([
+      ['acme.ready', 'ready'],
+      ['acme.have', 'installed'],
+      ['acme.gone', 'missing'],
+      ['acme.inner', 'nested'],
+      ['acme.newer', 'incompatible'],
+      ['acme.other-os', 'unavailable'],
+    ])
+    expect(result.members[0]).toMatchObject({ version: '1.2.0', sensitive_capabilities: ['fs'] })
+    // Nothing was staged for commit: the pack package is never installed.
+    await expect(handlers.get('plugins:commitInstall')!(null, { id: 'acme.pack' })).rejects.toThrow()
+  })
+
+  it('refuses to install a pack package directly', async () => {
+    const pack = buildPackPkg(['acme.ready'])
+    servePack(pack, {})
+    setup()
+    await expect(
+      handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'pack' })
+    ).rejects.toThrow('acme.pack is an extension pack')
+  })
+
+  it('rejects a pack whose verified manifest asks for permissions', async () => {
+    // The manifest contract refuses it, so the verified package never parses.
+    const pack = buildPackPkg(['acme.ready'], { permissions: { system: ['fs'] } })
+    servePack(pack, {})
+    setup()
+    await expect(
+      handlers.get('plugins:preparePack')!(null, { namespace: 'acme', name: 'pack' })
+    ).rejects.toThrow(/pack must not request permissions/)
+  })
+
+  it('refuses preparePack for an ordinary extension', async () => {
+    const { bytes, digest } = buildPkg('acme.pack')
+    servePack({ bytes, digest }, {})
+    setup()
+    await expect(
+      handlers.get('plugins:preparePack')!(null, { namespace: 'acme', name: 'pack' })
+    ).rejects.toThrow('acme.pack is not an extension pack')
+  })
+
+  it('records only the members this pack installed, and forgets the pack on removal', async () => {
+    const pack = buildPackPkg(['acme.a', 'acme.b', 'acme.c'])
+    servePack(pack, {
+      'acme.a': { versions: [row('1.0.0')] },
+      'acme.b': { versions: [row('1.0.0')] },
+      'acme.c': { versions: [row('1.0.0')] },
+    })
+    const installed = setup(['acme.b'])
+    await handlers.get('plugins:preparePack')!(null, { namespace: 'acme', name: 'pack' })
+    // The user confirmed acme.a and skipped acme.c.
+    installed.push('acme.a')
+    const finished = (await handlers.get('plugins:finishPack')!(null, { id: 'acme.pack' })) as {
+      recorded: boolean
+      pack: { installedByPack: string[] }
+    }
+    expect(finished.recorded).toBe(true)
+    expect(finished.pack.installedByPack).toEqual(['acme.a'])
+    expect(await handlers.get('plugins:listPacks')!(null)).toEqual([
+      {
+        id: 'acme.pack',
+        displayName: 'Pack',
+        version: '1.0.0',
+        members: ['acme.a', 'acme.b', 'acme.c'],
+        installedByPack: ['acme.a'],
+      },
+    ])
+    // A member removed on its own is no longer offered for removal.
+    installed.splice(installed.indexOf('acme.a'), 1)
+    expect(((await handlers.get('plugins:listPacks')!(null)) as Array<{ installedByPack: string[] }>)[0].installedByPack).toEqual([])
+    expect(await handlers.get('plugins:removePack')!(null, { id: 'acme.pack' })).toEqual({ removed: true })
+    expect(await handlers.get('plugins:listPacks')!(null)).toEqual([])
+  })
+
+  // Pack A installed acme.x; pack B, installed later, lists acme.x too.
+  function twoPacksSharingX(): void {
+    const store = new PluginPackStore(root)
+    store.put({ id: 'acme.a', version: '1.0.0', members: ['acme.x', 'acme.y'], installedByPack: ['acme.x', 'acme.y'] })
+    store.put({ id: 'acme.b', version: '1.0.0', members: ['acme.x', 'acme.z'], installedByPack: ['acme.z'] })
+    for (const id of ['acme.x', 'acme.y', 'acme.z']) mkdirSync(join(root, id))
+  }
+
+  it('does not offer a member that another installed pack also uses', async () => {
+    twoPacksSharingX()
+    setup(['acme.x', 'acme.y', 'acme.z'])
+    const listed = (await handlers.get('plugins:listPacks')!(null)) as Array<{ id: string; installedByPack: string[] }>
+    expect(listed.map((pack) => [pack.id, pack.installedByPack])).toEqual([
+      ['acme.a', ['acme.y']],
+      ['acme.b', ['acme.z']],
+    ])
+  })
+
+  it('refuses to remove a shared member with the pack, and removes nothing', async () => {
+    twoPacksSharingX()
+    const installed = setup(['acme.x', 'acme.y', 'acme.z'])
+    await expect(
+      handlers.get('plugins:removePack')!(null, { id: 'acme.a', members: ['acme.y', 'acme.x'] })
+    ).rejects.toThrow('acme.x is not removable with acme.a')
+    expect(installed).toEqual(['acme.x', 'acme.y', 'acme.z'])
+    expect(existsSync(join(root, 'acme.y'))).toBe(true)
+    expect(new PluginPackStore(root).get('acme.a')).not.toBeNull()
+  })
+
+  it('removes the chosen pack-only members together with the pack', async () => {
+    twoPacksSharingX()
+    const installed = setup(['acme.x', 'acme.y', 'acme.z'])
+    expect(await handlers.get('plugins:removePack')!(null, { id: 'acme.a', members: ['acme.y'] })).toEqual({
+      removed: true,
+    })
+    expect(installed).toEqual(['acme.x', 'acme.z'])
+    expect(existsSync(join(root, 'acme.y'))).toBe(false)
+    expect(new PluginPackStore(root).get('acme.a')).toBeNull()
+    // With pack A gone, acme.x is no longer offered by pack B either (B did not install it).
+    const listed = (await handlers.get('plugins:listPacks')!(null)) as Array<{ id: string; installedByPack: string[] }>
+    expect(listed).toEqual([expect.objectContaining({ id: 'acme.b', installedByPack: ['acme.z'] })])
+  })
+
+  it('records nothing when no member ended up installed', async () => {
+    const pack = buildPackPkg(['acme.a'])
+    servePack(pack, { 'acme.a': { versions: [row('1.0.0')] } })
+    setup()
+    await handlers.get('plugins:preparePack')!(null, { namespace: 'acme', name: 'pack' })
+    expect(await handlers.get('plugins:finishPack')!(null, { id: 'acme.pack' })).toEqual({ recorded: false })
+    expect(await handlers.get('plugins:listPacks')!(null)).toEqual([])
+    await expect(handlers.get('plugins:finishPack')!(null, { id: 'acme.pack' })).rejects.toThrow(
+      'no extension pack install in progress'
+    )
+  })
+
+  it('bounds the member lookup', async () => {
+    setup()
+    await expect(
+      handlers.get('plugins:marketplacePackMembers')!(null, { members: Array.from({ length: 21 }, (_, i) => `acme.m${i}`) })
+    ).rejects.toThrow('invalid extension pack members')
   })
 })
