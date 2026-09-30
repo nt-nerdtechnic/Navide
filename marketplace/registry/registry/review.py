@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, update
 
 from .discovery import pack_members
 from .manifest import manifest_capabilities
@@ -144,6 +144,27 @@ def _reviewed_rows(
     return rows
 
 
+def _claim(session: Session, rows: list[ExtensionVersion], status: str, **values: object) -> None:
+    """Move `rows` from pending to `status` in one conditional UPDATE, inside
+    the caller's transaction. Another decision may have committed since the
+    rows were read; if any row is no longer pending, nothing changes and the
+    decision is refused instead of overwriting that one."""
+    result = session.exec(
+        update(ExtensionVersion)
+        .where(
+            ExtensionVersion.id.in_([row.id for row in rows]),
+            ExtensionVersion.review_status == PENDING,
+        )
+        .values(review_status=status, **values)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != len(rows):
+        session.rollback()
+        raise ReviewError(
+            "another reviewer decided this version meanwhile; reload to see the outcome"
+        )
+
+
 def approve(
     session: Session,
     signer: RegistryTrustSigner,
@@ -193,6 +214,8 @@ def approve(
         ).all()
     ]
     now = _now()
+    # Claim first: only rows this decision moved out of pending get signed.
+    _claim(session, rows, APPROVED, reviewed_at=now, reviewed_by=reviewer)
     for row in rows:
         envelope, signature = signer.sign_envelope(
             artifact_digest=row.package_digest,
@@ -241,13 +264,10 @@ def reject(
         raise ReviewError(f"reason is longer than {MAX_REASON_LENGTH} characters")
     rows = _reviewed_rows(session, extension, version, artifacts)
     now = _now()
-    for row in rows:
-        row.review_status = REJECTED
-        row.review_reason = reason
-        row.reviewed_at = now
-        row.reviewed_by = reviewer
-        session.add(row)
+    _claim(session, rows, REJECTED, review_reason=reason, reviewed_at=now, reviewed_by=reviewer)
     session.commit()
+    for row in rows:
+        session.refresh(row)
     return rows
 
 
