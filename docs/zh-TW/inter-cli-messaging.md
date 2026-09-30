@@ -691,7 +691,16 @@ hook：這次切換要等到那個 Pane 下一次啟動才對它生效，在那�
 | `paused` | 這個視窗的投遞已暫停 |
 | `gone` | 目標 Pane 已不存在 |
 | `remote-ack` | 已送往另一個視窗；正在等它的回報 |
+| `remote-busy` | 已送往另一台裝置，超過一分鐘沒有回應，而目標 Pane 正在執行中（只出現在 `cli_check_message`） |
+| `remote-unreported` | 已送往另一台裝置，超過一分鐘沒有回應，而目標 Pane 並沒有在執行（只出現在 `cli_check_message`） |
 | `cancelling` | 已向另一個視窗要求撤回；正在等它的回答 |
+
+送往另一台裝置的訊息一定會有回應。接收端的 Backend 會對交給它的每一則訊息回 ack，
+包括處理失敗的（`receiver-error`）；連線斷掉而沒送出的 ack，會在下一次連線時重送。
+送出端的 Backend 依這個 ack 更新送出視窗裡的那一列（從印出的訊息區塊送出的也一樣），
+並對仍未得到回應的訊息用 `messages.get` 向 Server 查詢：自己的連線恢復時查一次，
+之後每分鐘查一次超過一分鐘的訊息。失敗或被拒的遠端訊息會帶著對方的原因，格式是
+`<state>: <reason>`，例如 `rejected: not-paired`。
 
 透過 `cli_send` 進來的訊息也會把它的保留原因一併回報給 Backend，因此送出它的
 Agent 不必有 Messages 面板可看，也能讀到同一個原因 ——
@@ -711,6 +720,7 @@ Agent 不必有 Messages 面板可看，也能讀到同一個原因 ——
 | `inject-failed` / `inject-error` | 把它輸入到該 Pane 沒有成功 |
 | `window-reloaded` | 視窗在它傳輸中途重新載入 |
 | `no-report` | 另一個視窗始終沒有回報結果 |
+| `receiver-error` | 另一台裝置收到了，但處理時出錯；錯誤堆疊在它的 Backend log 裡。重試可能會成功 |
 | `unknown-workspace` / `ambiguous-workspace` | 一個沒有對應到任何開啟中 Workspace、或對應到多個的 `<folder>/<pane>` 位址 |
 | `unknown-target-in-workspace` / `ambiguous-target` | Workspace 解析成功，但 Pane 名稱沒有 —— 或是對應到兩個 |
 | `unknown-pane-id` | 一個在這台機器上指不到任何 Pane 的 `pane_id` —— 去 `cli_list_targets` 讀一個新的 |

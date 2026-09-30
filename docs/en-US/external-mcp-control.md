@@ -177,7 +177,10 @@ Left at its default of `0`, the answer is byte-for-byte what it always was.
 **Why a message is still queued.** `hold` is the same reason the Messages panel
 shows — `{key, n?}`, where `key` is `typing`, `mid-turn`, `behind`, `starting`,
 `settling`, `not-ready`, `gone`, `paused` or `remote-ack` — and `held_for_s` is
-how long it has been that way. It appears on `cli_check_message` and on a
+how long it has been that way. A message to another device that has gone a
+minute unanswered is asked about through the server, and then reads
+`remote-busy` (its target pane is mid-turn) or `remote-unreported` (it is not,
+and the far side has still said nothing). It appears on `cli_check_message` and on a
 timed-out `cli_send` wait, and it is absent once the message settles or while
 no window has reported one. `cli_list_targets` surfaces the same fact per pane
 as `hold_reason`, which is what makes `busy` explainable — but only while a

@@ -163,7 +163,9 @@ group ID below with values returned for the target workspace:
 **訊息為何仍在佇列中。** `hold` 就是 Messages 面板顯示的同一個原因 —— `{key, n?}`，
 其中 `key` 可能是 `typing`、`mid-turn`、`behind`、`starting`、`settling`、
 `not-ready`、`gone`、`paused` 或 `remote-ack` —— 而 `held_for_s` 是它維持這個狀態
-多久了。它會出現在 `cli_check_message`，以及逾時的 `cli_send` 等待上；一旦訊息塵埃
+多久了。送往另一台裝置、超過一分鐘沒有回應的訊息，會透過 Server 查詢，之後顯示為
+`remote-busy`（目標 Pane 正在執行中）或 `remote-unreported`（沒有在執行，對方也仍然
+沒有任何回應）。它會出現在 `cli_check_message`，以及逾時的 `cli_send` 等待上；一旦訊息塵埃
 落定，或在還沒有任何視窗回報過原因時，它就不存在。`cli_list_targets` 以
 `hold_reason` 逐 Pane 呈現同一件事，那正是讓 `busy` 變得可以解釋的東西 —— 但只在
 從這裡送出的某則訊息正為那個 Pane 排隊時才有，所以它不存在並不說明任何事。

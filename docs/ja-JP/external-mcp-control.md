@@ -178,7 +178,10 @@ Turn の途中の Pane や入力されている Pane はメッセージをはる
 **メッセージがまだ Queue にある理由。** `hold` は Messages パネルが表示するのと
 同じ理由で、`{key, n?}` の形をとります。`key` は `typing`、`mid-turn`、`behind`、
 `starting`、`settling`、`not-ready`、`gone`、`paused`、`remote-ack` のいずれかで、
-`held_for_s` はその状態が続いている長さです。これは `cli_check_message` と、
+`held_for_s` はその状態が続いている長さです。別のデバイスへ送って 1 分以上応答のない
+メッセージは Server に問い合わせられ、その後は `remote-busy`（対象 Pane が Turn の
+途中）または `remote-unreported`（作業中ではなく、相手からもまだ何の応答もない）に
+なります。これは `cli_check_message` と、
 Timeout した `cli_send` の待機に現れ、メッセージが決着したあとや、どのウィンドウも
 理由を報告していない間は現れません。`cli_list_targets` は同じ事実を Pane ごとに
 `hold_reason` として見せ、それが `busy` を説明可能にしています。ただしここから送った

@@ -2366,3 +2366,279 @@ async def test_writing_a_policy_with_no_server_says_so_instead_of_failing_silent
     reply = session.websocket.sent[0]
     assert reply["ok"] is False
     assert reply["error"]["code"] == "P2P_NOT_CONFIGURED"
+
+
+# ---- delivery that is always answered ---------------------------------------
+#
+# A relayed message used to be able to end in silence: the receiver swallowed an
+# exception or a lost ack, the sender had no way to ask afterwards, and a
+# message relayed from a printed MSG block never settled in the sending window
+# even when it was delivered. Each test below reproduces one of those.
+
+
+def _events(monkeypatch) -> list[dict]:
+    """Every broadcast, unfiltered — these tests are about the ones that settle rows."""
+    events: list[dict] = []
+
+    async def fake_broadcast(event: dict, **_kwargs) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", fake_broadcast)
+    return events
+
+
+def _with_messages_get(states: dict[str, str], gets: list[str]):
+    """default_responder plus `messages.get`, answering from *states*."""
+
+    def responder(conn: "FakeConnection", message: dict) -> dict | None:
+        if message.get("type") == "messages.get":
+            key = (message.get("payload") or {}).get("msgKey")
+            gets.append(key)
+            if key not in states:
+                return {
+                    "id": message["id"],
+                    "type": "messages.get.result",
+                    "ok": False,
+                    "error": {"code": "NOT_FOUND", "message": "no such message"},
+                }
+            return _ok(
+                message,
+                {"message": {"msgKey": key, "state": states[key], "reason": None}},
+            )
+        return default_responder(conn, message)
+
+    return responder
+
+
+async def test_a_message_whose_handling_raises_is_acked_as_failed(monkeypatch, broadcasts):
+    """Before: the spawned handler died, nothing was logged, nothing was acked."""
+    agent_messaging.register("p1", "reviewer", "/tmp/proj-a", agent_key="claude")
+
+    def keychain_trouble(*_args, **_kwargs):
+        raise RuntimeError("keychain write failed")
+
+    monkeypatch.setattr(trust_store, "note_remote_command", keychain_trouble)
+    server = FakeServer()
+    link = await _connected(server)
+    try:
+        conn = server.opened[0]
+        await conn.push({"type": "messages.pending", "payload": _pending()})
+        await _until(lambda: bool(conn.acks))
+        assert conn.acks == [
+            {
+                "msgKey": "pa:mcp:deadbeef",
+                "state": "failed",
+                "reason": server_link.REASON_RECEIVER_ERROR,
+            }
+        ]
+        assert broadcasts == []
+    finally:
+        await link.stop()
+
+
+async def test_a_resent_message_that_was_already_answered_is_answered_again(broadcasts):
+    """The server re-pushes a key only when its sender sent it again, which a
+    sender does when it never heard back: the first answer was lost."""
+    server = FakeServer()
+    link = await _connected(server)
+    try:
+        conn = server.opened[0]
+        await conn.push({"type": "messages.pending", "payload": _pending()})
+        await _until(lambda: len(conn.acks) == 1)
+        await conn.push({"type": "messages.pending", "payload": _pending()})
+        await _until(lambda: len(conn.acks) == 2)
+        assert conn.acks[0] == conn.acks[1]
+        assert conn.acks[0]["state"] == "failed"
+        assert broadcasts == []
+    finally:
+        await link.stop()
+
+
+async def test_a_resent_message_still_waiting_for_its_pane_is_not_answered_twice(broadcasts):
+    agent_messaging.register("p1", "reviewer", "/tmp/proj-a", agent_key="claude")
+    server = FakeServer()
+    link = await _connected(server)
+    try:
+        conn = server.opened[0]
+        await conn.push({"type": "messages.pending", "payload": _pending()})
+        await _until(lambda: bool(broadcasts))
+        await conn.push({"type": "messages.pending", "payload": _pending()})
+        await asyncio.sleep(0.1)
+        # Still in the window's queue: no answer yet, and no second delivery.
+        assert conn.acks == []
+        assert len(broadcasts) == 1
+    finally:
+        await link.stop()
+
+
+async def test_an_ack_lost_to_a_dropped_connection_is_sent_on_the_next_one(broadcasts):
+    """Before: logged as a warning and dropped; the sender waited for ever."""
+
+    def responder(conn: "FakeConnection", message: dict) -> dict | None:
+        if message.get("type") == "messages.ack" and conn is conn.server.connections[0]:
+            asyncio.get_running_loop().create_task(conn.close())
+            return None
+        return default_responder(conn, message)
+
+    server = FakeServer(responder=responder)
+    link = await _connected(server)
+    try:
+        await server.opened[0].push({"type": "messages.pending", "payload": _pending()})
+        await _until(lambda: len(server.opened) == 2 and bool(server.opened[1].acks), timeout=8.0)
+        assert server.opened[1].acks[0]["msgKey"] == "pa:mcp:deadbeef"
+        assert server.opened[1].acks[0]["state"] == "failed"
+    finally:
+        await link.stop()
+
+
+async def test_a_remote_ack_settles_the_sending_windows_row(monkeypatch):
+    """Before: only cli_check_message's table heard about it, so a message sent
+    from a printed MSG block failed with "never reported back" after 30 minutes
+    even when it had been delivered."""
+    events = _events(monkeypatch)
+    server = FakeServer()
+    link = await _connected(server)
+    try:
+        conn = server.opened[0]
+        await conn.push(
+            {"type": "messages.acked", "payload": {"msgKey": "pb:7", "state": "delivered"}}
+        )
+        await conn.push(
+            {
+                "type": "messages.acked",
+                "payload": {"msgKey": "pb:8", "state": "rejected", "reason": "not-paired"},
+            }
+        )
+        await _until(
+            lambda: len([e for e in events if e["type"] == "agent_msg.delivery_result"]) == 2
+        )
+        results = [e["payload"] for e in events if e["type"] == "agent_msg.delivery_result"]
+        assert results == [
+            {"msg_key": "pb:7", "ok": True, "reason": ""},
+            {"msg_key": "pb:8", "ok": False, "reason": "rejected: not-paired"},
+        ]
+    finally:
+        await link.stop()
+
+
+async def test_an_ack_pushed_while_away_is_recovered_on_reconnect(monkeypatch):
+    """The server pushes messages.acked once; its contract says a sender that was
+    away asks with messages.get. Nothing asked."""
+    from agent_team_backend.mcp_server import server as plan_mcp
+
+    events = _events(monkeypatch)
+    gets: list[str] = []
+    states = {"pa:mcp:away": "delivered"}
+    server = FakeServer(responder=_with_messages_get(states, gets))
+    plan_mcp._record_message_sent("pa:mcp:away", "dev-b/beta/builder", "pa", "ship it")
+    link = await _connected(server)
+    try:
+        reply = await link.send_message(
+            to={"deviceId": "dev-b", "workspace": "beta", "paneName": "builder"},
+            sender=None,
+            text="ship it",
+            msg_key="pa:mcp:away",
+        )
+        assert reply["ok"] is True
+        # The connection drops before the far side answers; the answer is
+        # pushed to nobody.
+        await server.opened[0].close()
+        await _until(lambda: "pa:mcp:away" in gets, timeout=8.0)
+        await _until(lambda: plan_mcp._mcp_message_status["pa:mcp:away"]["status"] == "delivered")
+        assert any(
+            e["type"] == "agent_msg.delivery_result" and e["payload"]["msg_key"] == "pa:mcp:away"
+            for e in events
+        )
+        assert "pa:mcp:away" not in link._outbound
+    finally:
+        plan_mcp._mcp_message_status.pop("pa:mcp:away", None)
+        await link.stop()
+
+
+@pytest.mark.parametrize(
+    ("roster_status", "expected_hold"),
+    [
+        ("running", server_link.HOLD_REMOTE_BUSY),
+        ("waiting", server_link.HOLD_REMOTE_UNREPORTED),
+    ],
+)
+async def test_an_unanswered_message_says_which_silence_it_is(roster_status, expected_hold):
+    """"queued" meant both "its pane is mid-turn" and "nothing over there is
+    answering" — the two cases that call for opposite responses."""
+    from agent_team_backend.mcp_server import server as plan_mcp
+
+    gets: list[str] = []
+    server = FakeServer(responder=_with_messages_get({"pa:mcp:quiet": "pending"}, gets))
+    plan_mcp._record_message_sent("pa:mcp:quiet", "dev-b/beta/builder", "pa", "hello")
+    link = await _connected(server)
+    try:
+        await link.send_message(
+            to={"deviceId": "dev-b", "workspace": "beta", "paneName": "builder"},
+            sender=None,
+            text="hello",
+            msg_key="pa:mcp:quiet",
+        )
+        remote_roster.replace(
+            [
+                {
+                    "sessionId": "s-b",
+                    "deviceId": "dev-b",
+                    "deviceName": "far box",
+                    "workspace": "beta",
+                    "title": "builder",
+                    "paneId": "pb",
+                    "agentKey": "claude",
+                    "status": roster_status,
+                    "hostOnline": True,
+                }
+            ],
+            local_device_id="dev-local",
+        )
+        await link._reconcile(min_age_s=0.0)
+        entry = plan_mcp._mcp_message_status["pa:mcp:quiet"]
+        assert entry["status"] == "queued"
+        assert entry["hold"] == {"key": expected_hold}
+        # Still unanswered, so it is asked about again next round.
+        assert "pa:mcp:quiet" in link._outbound
+    finally:
+        plan_mcp._mcp_message_status.pop("pa:mcp:quiet", None)
+        remote_roster._reset_for_test()
+        await link.stop()
+
+
+async def test_reconciling_asks_only_about_messages_old_enough(monkeypatch):
+    gets: list[str] = []
+    server = FakeServer(responder=_with_messages_get({"pa:mcp:new": "pending"}, gets))
+    link = await _connected(server)
+    try:
+        await link.send_message(
+            to={"deviceId": "dev-b", "workspace": "beta", "paneName": "builder"},
+            sender=None,
+            text="hi",
+            msg_key="pa:mcp:new",
+        )
+        await link._reconcile(min_age_s=server_link.RECONCILE_AFTER_S)
+        assert gets == []
+        link._outbound["pa:mcp:new"]["sent_at"] -= server_link.RECONCILE_AFTER_S
+        await link._reconcile(min_age_s=server_link.RECONCILE_AFTER_S)
+        assert gets == ["pa:mcp:new"]
+    finally:
+        await link.stop()
+
+
+async def test_a_message_the_server_no_longer_has_stops_being_asked_about():
+    gets: list[str] = []
+    server = FakeServer(responder=_with_messages_get({}, gets))
+    link = await _connected(server)
+    try:
+        await link.send_message(
+            to={"deviceId": "dev-b", "workspace": "beta", "paneName": "builder"},
+            sender=None,
+            text="hi",
+            msg_key="pa:mcp:gone",
+        )
+        await link._reconcile(min_age_s=0.0)
+        assert gets == ["pa:mcp:gone"]
+        assert "pa:mcp:gone" not in link._outbound
+    finally:
+        await link.stop()
