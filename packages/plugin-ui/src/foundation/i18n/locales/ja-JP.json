@@ -9245,6 +9245,18 @@
       "no-deep-link": "{platform} を直接開けませんでした。下のコードを自分で bot に送ってください。",
       "send-code-discord": "これを bot に DM で送ってください。Discord では同じサーバーにいる bot にしか DM できないため、まだの場合は先に「サーバーに追加」を使ってください。",
       "count-failed": "この bot が認識しているチャットを読み込めませんでした：{error}"
+    },
+    "monitor": {
+      "title": "チャンネル接続",
+      "tagline": "チャットに接続されているペインと、その接続状態を一覧します。",
+      "open": "チャンネル接続",
+      "close": "閉じる",
+      "empty": "チャンネルに接続されているペインはありません。",
+      "disconnect": "切断",
+      "disconnect-label": "{pane} と {channel} の接続を切断",
+      "go-to": "{pane} へ移動",
+      "auto-child": "自動サブトピック",
+      "auto-child-hint": "子ペイン用に自動作成されたトピックです。親ペインの接続を切ると一緒に閉じます。"
     }
   },
   "guard": {

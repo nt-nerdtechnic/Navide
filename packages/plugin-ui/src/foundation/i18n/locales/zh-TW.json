@@ -9245,6 +9245,18 @@
       "no-deep-link": "無法直接開啟 {platform}，請自行把下方代碼傳給 bot。",
       "send-code-discord": "在與 bot 的私訊傳送這段。Discord 只能私訊和你在同一個伺服器的 bot，若還沒有，請先按「加到伺服器」。",
       "count-failed": "無法讀取這個 bot 已知的聊天室：{error}"
+    },
+    "monitor": {
+      "title": "Channel 連線監控",
+      "tagline": "集中查看每個與聊天室連線的 pane，以及連線是否正常。",
+      "open": "Channel 連線監控",
+      "close": "關閉",
+      "empty": "目前沒有任何 pane 連線到 channel。",
+      "disconnect": "關閉連線",
+      "disconnect-label": "關閉 {pane} 與 {channel} 的連線",
+      "go-to": "跳到 {pane}",
+      "auto-child": "自動子話題",
+      "auto-child-hint": "為子 pane 自動建立的話題；關閉父 pane 的連線時會一併關閉。"
     }
   },
   "guard": {

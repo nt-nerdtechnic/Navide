@@ -9245,6 +9245,18 @@
       "no-deep-link": "Could not open {platform} directly. Send the code below to the bot yourself.",
       "send-code-discord": "Send this to the bot in a DM. Discord only lets you DM a bot you share a server with, so use “Add to a server” first if you don't.",
       "count-failed": "Could not load the chats this bot knows: {error}"
+    },
+    "monitor": {
+      "title": "Channel connections",
+      "tagline": "Every pane linked to a chat, and whether the link is up.",
+      "open": "Channel connections",
+      "close": "Close",
+      "empty": "No pane is linked to a channel yet.",
+      "disconnect": "Disconnect",
+      "disconnect-label": "Disconnect {pane} from {channel}",
+      "go-to": "Go to {pane}",
+      "auto-child": "Auto sub-topic",
+      "auto-child-hint": "Created automatically for a child pane. Disconnecting the parent pane closes it too."
     }
   },
   "guard": {
