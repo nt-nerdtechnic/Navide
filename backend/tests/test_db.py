@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import threading
+import time
 
 import pytest
 
@@ -187,6 +189,35 @@ def test_failed_rollback_after_commit_error_keeps_commit_error(db, tmp_path):
     assert not db._conn.in_transaction
     db.kv_set("after", 1, now=1)
     assert _committed_keys(tmp_path / "navide.db") == {"after"}
+
+
+# ── journal ──────────────────────────────────────────────────────────
+
+
+def test_commits_empty_the_journal_instead_of_deleting_it(db, tmp_path):
+    # DELETE mode creates and deletes -journal on every commit, and on
+    # Windows another process holding it open stalls each commit in
+    # SQLite's retry loop (a CI run hung past 90 s on 320 commits).
+    journal = tmp_path / "navide.db-journal"
+    for i in range(3):
+        db.kv_set(f"k{i}", i, now=i)
+        assert journal.exists()
+        assert journal.stat().st_size == 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows sharing semantics")
+def test_commits_are_not_blocked_by_a_reader_holding_the_journal(db, tmp_path):
+    # Python's open() on Windows does not share delete access — the same
+    # handle an antivirus or indexer scan leaves on a freshly written file.
+    journal = tmp_path / "navide.db-journal"
+    db.kv_set("seed", 0, now=0)
+    journal.touch()  # DELETE mode has no journal between commits
+    started = time.monotonic()
+    with open(journal, "rb"):
+        for i in range(50):
+            db.kv_set(f"k{i}", i, now=i)
+    assert time.monotonic() - started < 10
+    assert db.kv_get("k49") == 49
 
 
 # ── schema migrations ────────────────────────────────────────────────

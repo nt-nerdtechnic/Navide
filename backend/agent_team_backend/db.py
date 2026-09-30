@@ -14,9 +14,16 @@ Design constraints (see .agent-team/plans/storage-architecture-decision):
 - One connection per database, shared across threads behind an RLock
   (``check_same_thread=False``). The backend is a single process with a
   single event-loop writer plus one save thread, so a per-database lock
-  suffices. ``journal_mode`` stays at the rollback default so a database
-  is exactly one file on disk — backup/restore and "delete to reset"
-  flows never have to know about ``-wal``/``-shm`` siblings.
+  suffices. ``journal_mode`` stays a rollback journal (not WAL) so a
+  database's content is exactly one file on disk — backup/restore and
+  "delete to reset" flows never have to know about ``-wal``/``-shm``
+  siblings. It is TRUNCATE rather than the DELETE default: DELETE creates
+  and deletes ``-journal`` on every commit, and on Windows any other
+  process holding that file open (an antivirus or indexer scan) turns
+  each create/delete into SQLite's sleep-and-retry loop — hundreds of
+  milliseconds per commit, so a burst of commits stalls for minutes.
+  TRUNCATE keeps the journal file and empties it instead; an empty
+  journal is never hot, so ignoring it is still safe.
 - Document-class stores keep their whole-document read/write API on top
   of the shared ``kv`` table. Record-class stores create their own tables
   through :meth:`Database.migrate`.
@@ -81,6 +88,7 @@ class Database:
             str(self._path), isolation_level=None, check_same_thread=False
         )
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=TRUNCATE")
         return conn
 
     # ── Transactions ─────────────────────────────────────────────────
