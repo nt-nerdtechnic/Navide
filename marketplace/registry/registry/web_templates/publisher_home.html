@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Publisher dashboard — Navide Marketplace{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Publisher dashboard</h1>
+  {% if not items %}
+    <p>You don't own a namespace yet. The namespace is the first half of every
+      extension id (<code>namespace.name</code>).</p>
+  {% endif %}
+  {% for item in items %}
+    <div class="ns-row">
+      <a class="ns-name" href="{{ base }}/publisher/{{ item.name }}">{{ item.name }}</a>
+      {% if item.verified_domain %}<span class="badge badge-verified">✓ verified · {{ item.verified_domain }}</span>{% endif %}
+      <span class="muted">{{ item.rows|length }} version{{ '' if item.rows|length == 1 else 's' }}</span>
+    </div>
+  {% endfor %}
+  {% if can_claim %}
+    <p><a class="install-button" href="{{ base }}/publisher/claim">Claim a namespace</a></p>
+  {% else %}
+    <p class="muted">An account can own at most {{ max }} namespaces.</p>
+  {% endif %}
+</section>
+{% endblock %}

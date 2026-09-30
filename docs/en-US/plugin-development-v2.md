@@ -540,6 +540,57 @@ The version axes are independent:
 | `engines.navide` | Optional product/runtime requirement | Only when the plugin needs a particular Navide product feature |
 | `backend.protocolVersion` | Navide child-process wire profile; `1` freezes the MCP 2026-07-28-aligned conventions above | Only when adopting another supported Navide wire profile |
 
+`engines.navide` is read as the lowest Navide release the package supports,
+the way VS Code reads `engines.vscode`: `^0.2.9`, `~0.2.9`, `>=0.2.9` and a
+bare `0.2.9` all mean "Navide 0.2.9 or newer", and `*` means any release. An
+upper bound is never enforced, so a package keeps installing on later Navide
+releases (a `^0.1.0` package installs on 0.2.x). The Marketplace shows an
+extension whose requirement the running Navide does not meet, but disables its
+Install, and the Host refuses to install it; a requirement in any other form
+is treated as unknown and does not block installation.
+
+A `version` with a SemVer prerelease suffix (`2.5.0-beta.1`) is a
+**pre-release**; any other version is **stable**. The Registry's
+`latest_version` names the newest stable version (the newest pre-release only
+when an extension has no stable version at all), and Navide offers a
+pre-release as an install or update candidate only for an extension whose
+"Get pre-releases" switch the user turned on. Build metadata (`+build.1`) does
+not change the channel and is ignored for ordering.
+
+### Extension Packs
+
+A package whose manifest declares `extensionPack` is an **Extension Pack**: a
+list of 1–20 other package ids installed together.
+
+```json
+{
+  "schemaVersion": 2,
+  "apiVersion": "^1.0.0",
+  "id": "acme.web-dev-pack",
+  "name": "Web Dev Pack",
+  "version": "1.0.0",
+  "publisher": "acme",
+  "permissions": {},
+  "marketplace": { "description": "Three extensions for web work.", "license": "MIT" },
+  "extensionPack": ["acme.hello", "acme.lint-guard", "acme.notes"]
+}
+```
+
+- A pack declares no `contributes`, no `backend` and empty `permissions`; it
+  cannot grant anything. Each member is downloaded, verified and confirmed on
+  its own, with the member's own permissions.
+- A pack may not list itself, and a member may not itself be a pack: the
+  Registry refuses such a publish (which also rules out cycles), and Navide
+  refuses such a member at install time.
+- Navide first shows a summary of the whole pack, then one confirmation per
+  member with **Skip this one** and **Cancel pack**. Members missing from the
+  Registry, not built for the platform or needing a newer Navide are skipped.
+  Members installed before a cancel stay installed.
+- Uninstalling a pack removes only the pack by default; Navide lists the
+  members that were installed only because of that pack so the user can tick
+  any to remove as well.
+- The Registry lists every pack under the `extension-packs` category.
+
 `permissions` contains one coarse `system` namespace array and an optional
 `shell` mode. Each key appears at most once because duplicate JSON object keys
 are rejected before schema validation. The manifest never declares scope: the

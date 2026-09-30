@@ -6,6 +6,8 @@ import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import VoiceCapsule from './components/VoiceCapsule.vue'
 import { setupVoiceInput } from './voice/voiceWiring'
+import { requestMarketplaceDetail } from './marketplaceDeepLink'
+import type { DeepLinkExtensionTarget } from '../../shared/deepLink'
 import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
 import { buildPaneLineage, effectiveParents, withDescendants } from './lib/paneLineage'
@@ -8331,7 +8333,7 @@ watch(currentWorkspace, (workspacePath) => {
 // alone is not enough: asking for the tab you are already on leaves the prop
 // unchanged, so the modal's watcher never fires and the request is dropped.
 const settingsTabRequest = ref(0)
-const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels' | 'voice'>('general')
+const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts' | 'channels' | 'voice' | 'marketplace'>('general')
 // Needed to retarget an already-open modal: initialTab is only honoured on mount
 // and by its own watcher, so re-issuing the same tab is a no-op without this.
 const settingsModalRef = ref<{
@@ -8343,6 +8345,22 @@ function openSettingsAt(tab: typeof settingsInitialTab.value): void {
   if (showSettings.value) settingsModalRef.value?.setTab(tab)
   else showSettings.value = true
 }
+// navide://extension/<id> (src/main/deep-link.ts): show that extension's
+// Marketplace detail page. Only opens the page — installing still takes the
+// user's own Install press and the trust dialog.
+function openMarketplaceDetail(target: DeepLinkExtensionTarget): void {
+  requestMarketplaceDetail(target)
+  openSettingsAt('marketplace')
+}
+let stopDeepLinks: (() => void) | null = null
+onMounted(() => {
+  const api = window.agentTeam?.deepLink
+  if (!api) return
+  stopDeepLinks = api.onOpenExtension(openMarketplaceDetail)
+  // Links that arrived before this window could show them (cold start).
+  void api.ready().then((queued) => queued.forEach(openMarketplaceDetail))
+})
+onUnmounted(() => stopDeepLinks?.())
 // Workspaces the Resource Manager's storage scan walks: the open one first, then the recents that
 // still exist on disk.
 const knownWorkspacePaths = computed<string[]>(() => {

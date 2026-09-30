@@ -18,6 +18,19 @@
                placeholder="Search extensions…" aria-label="Search extensions">
         <button type="submit">Search</button>
       </form>
+      <nav class="site-nav">
+        {% if viewer %}
+          {% if viewer.is_admin %}<a href="{{ base }}/admin/review">Review</a>{% endif %}
+          <a href="{{ base }}/publisher">{{ viewer.name }} ▾</a>
+          <form class="inline-form" method="post" action="{{ base }}/logout">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit" class="link-button">Sign out</button>
+          </form>
+        {% else %}
+          <a href="{{ base }}/publish">Publish</a>
+          {% if cloud_auth %}<a href="{{ base }}/login">Sign in</a>{% endif %}
+        {% endif %}
+      </nav>
     </div>
   </header>
 
@@ -28,7 +41,7 @@
   <footer class="site-footer">
     <div class="wrap">
       Self-hosted plugin registry · packages served from the same service that
-      renders this page.
+      renders this page. · <a href="{{ base }}/removed">Removed extensions</a>
     </div>
   </footer>
 </body>

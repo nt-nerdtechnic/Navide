@@ -23,6 +23,13 @@ ENV_ADMIN_TOKEN = "REGISTRY_ADMIN_TOKEN"
 ENV_TRUST_PROFILE = "REGISTRY_TRUST_PROFILE"
 ENV_TRUST_CONFIG_FILE = "REGISTRY_TRUST_CONFIG_FILE"
 ENV_ROOT_PATH = "REGISTRY_ROOT_PATH"
+ENV_AUTH_URL = "REGISTRY_AUTH_URL"
+ENV_AUTH_SECRET = "REGISTRY_AUTH_SECRET"
+ENV_AUTH_RETURN_URL = "REGISTRY_AUTH_RETURN_URL"
+ENV_SESSION_SECRET = "REGISTRY_SESSION_SECRET"
+ENV_ADMIN_MEMBER_IDS = "REGISTRY_ADMIN_MEMBER_IDS"
+ENV_COOKIE_SECURE = "REGISTRY_COOKIE_SECURE"
+MIN_AUTH_SECRET_LENGTH = 32
 
 TRUST_PROFILE_OFFICIAL = "official"
 TRUST_PROFILE_SELF_HOSTED_DEV = "self-hosted-dev"
@@ -74,8 +81,52 @@ class Settings:
     blocked_packages: tuple[str, ...] = ()
     root_path: str = ""
     """Public path prefix when served behind a reverse proxy (e.g. "/registry")."""
+    auth_url: str | None = None
+    """navide-auth base URL, e.g. https://forum.navide.dev/navide-auth; None
+    disables Navide Cloud sign-in (and with it self-service publishing)."""
+    auth_secret: str | None = None
+    """This registry's own navide-auth client secret (never Discourse's)."""
+    auth_return_url: str | None = None
+    """Exact `/auth/callback` URL registered in navide-auth's allowlist."""
+    session_secret: str | None = None
+    """Signs the registry session and login-state cookies."""
+    admin_member_ids: tuple[str, ...] = ()
+    """Navide Cloud member ids allowed into the review queue and blocklist UI."""
+    cookie_secure: bool = True
+    """Only a plain-http local run turns this off."""
+
+    @property
+    def cloud_auth_enabled(self) -> bool:
+        return self.auth_url is not None
 
     def __post_init__(self) -> None:
+        auth_values = (
+            self.auth_url,
+            self.auth_secret,
+            self.auth_return_url,
+            self.session_secret,
+        )
+        if any(v is not None for v in auth_values):
+            if any(v is None or not v.strip() for v in auth_values):
+                raise ValueError(
+                    "Navide Cloud sign-in needs auth_url, auth_secret, "
+                    "auth_return_url and session_secret together"
+                )
+            if (
+                len(self.auth_secret) < MIN_AUTH_SECRET_LENGTH
+                or len(self.session_secret) < MIN_AUTH_SECRET_LENGTH
+            ):
+                raise ValueError(
+                    "auth_secret and session_secret must be at least "
+                    f"{MIN_AUTH_SECRET_LENGTH} characters"
+                )
+            if self.auth_secret == self.session_secret:
+                raise ValueError("auth_secret and session_secret must differ")
+            for url in (self.auth_url, self.auth_return_url):
+                if not url.startswith("https://") and not (
+                    not self.cookie_secure and url.startswith("http://")
+                ):
+                    raise ValueError("auth URLs must be https")
         if self.root_path and (
             not self.root_path.startswith("/")
             or self.root_path.endswith("/")
@@ -94,6 +145,8 @@ class Settings:
             raise ValueError("official registry requires publisher authentication")
         if self.admin_token is None or not self.admin_token.strip():
             raise ValueError("official registry requires an admin token")
+        if not self.cookie_secure:
+            raise ValueError("official registry requires Secure cookies")
 
     @property
     def db_path(self) -> Path:
@@ -319,5 +372,15 @@ def load_settings() -> Settings:
         require_auth=_env_bool(ENV_REQUIRE_AUTH, True),
         admin_token=os.environ.get(ENV_ADMIN_TOKEN),
         root_path=os.environ.get(ENV_ROOT_PATH, "").strip().rstrip("/"),
+        auth_url=(os.environ.get(ENV_AUTH_URL) or "").strip().rstrip("/") or None,
+        auth_secret=os.environ.get(ENV_AUTH_SECRET) or None,
+        auth_return_url=(os.environ.get(ENV_AUTH_RETURN_URL) or "").strip() or None,
+        session_secret=os.environ.get(ENV_SESSION_SECRET) or None,
+        admin_member_ids=tuple(
+            item.strip()
+            for item in os.environ.get(ENV_ADMIN_MEMBER_IDS, "").split(",")
+            if item.strip()
+        ),
+        cookie_secure=_env_bool(ENV_COOKIE_SECURE, True),
         **trust_config,
     )

@@ -384,6 +384,56 @@ takes the extension in place of the POSIX exec bit, exactly as the Host's
 `backendEntryOnDisk` does. `navide-plugin pack --target <target>` applies the
 same rule, so a Windows build packs and publishes like any other target.
 
+## Third-party publishing (Phase 2)
+
+Self-service publishing is on when the four `REGISTRY_AUTH_*`/session
+settings below are set; without them the registry behaves exactly as before
+(admin-created publishers only).
+
+- **Sign in** (`/publish`, `/login`, `/auth/callback`): the registry is the
+  `registry` client of navide-auth (forum.navide.dev/navide-auth). It signs the
+  request with its own client secret, checks the returned signature, `client`,
+  nonce (bound to a 10-minute login-state cookie), freshness and
+  `email_verified`, then sets its own HttpOnly, Secure, SameSite=Lax session
+  cookie (path = `REGISTRY_ROOT_PATH`). Only the member id, display name and
+  email-verified flag are received; no Navide account token is involved.
+- **Namespaces** (`/publisher/claim`): first come, first served; reserved words
+  (`navide`, `official`, …) and look-alikes (`nav1de`, or a folded match of an
+  existing namespace) are refused; at most 3 per account
+  (`Publisher.navide_member_id`). A claimed namespace is review-required.
+- **Review** (`/admin/review`, `GET /api/admin/review`,
+  `POST /api/admin/review/{ns}/{name}/{version}/approve|reject`): uploads to a
+  review-required namespace are stored `pending`, unsigned and invisible to
+  every public read; approval registry-signs them, rejection needs a reason the
+  publisher sees. Admin-created publishers (the official `navide` namespace)
+  stay auto-approved. The queue shows name similarity (warn/block), a secret
+  scan (file and line only, never the value), requested permissions and size.
+  A similarity block cannot be approved; secret findings need an explicit
+  false-positive acknowledgement. Target: 3 business days, no auto-approve.
+- **Dashboard** (`/publisher/{ns}`): versions with review status and reasons,
+  short-lived revocable tokens (≤ 90 days, stored as sha256), the signing
+  public key, and optional DNS TXT verification
+  (`_navide-verify.<domain>` = `navide-verify=<token>`) for a verified badge.
+- **Blocklist** (`/admin/blocklist`, `/api/admin/blocklist`): entries join the
+  trust-config lists in publish refusal and the signed trust metadata, and hide
+  the package/publisher from public reads. `/removed` and `/api/removed` list
+  every removal.
+- **CLI**: `navide-plugin login --registry URL` opens the browser, receives a
+  one-time code on a `127.0.0.1` loopback redirect (checked against a random
+  `state`), and exchanges it with a PKCE verifier for a 30-day token stored in
+  `~/.config/navide-plugin/credentials.json` (0600). `publish` uses it when no
+  `--token`/`NAVIDE_PLUGIN_TOKEN` is given. No password is ever typed into the
+  CLI.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `REGISTRY_AUTH_URL` | _(unset)_ | navide-auth base, e.g. `https://forum.navide.dev/navide-auth`. |
+| `REGISTRY_AUTH_SECRET` / `_FILE` | _(unset)_ | This registry's navide-auth client secret (≥ 32 chars; equals navide-auth's `REGISTRY_CONNECT_SECRET`, never the Discourse secret). |
+| `REGISTRY_AUTH_RETURN_URL` | _(unset)_ | Exact callback, e.g. `https://server.navide.dev/registry/auth/callback`; must be in navide-auth's `REGISTRY_RETURN_URLS`. |
+| `REGISTRY_SESSION_SECRET` / `_FILE` | _(unset)_ | Signs the session and login-state cookies (≥ 32 chars, different from the auth secret). |
+| `REGISTRY_ADMIN_MEMBER_IDS` | _(empty)_ | Comma-separated Navide member ids allowed into the review queue and blocklist UI. |
+| `REGISTRY_COOKIE_SECURE` | `true` | `false` only for a plain-http local run (then http auth URLs are accepted). |
+
 ## Seams left for later Phase 3 todos
 
 - **Discovery frontend** (`p3-discovery`): ✅ built — the server-rendered

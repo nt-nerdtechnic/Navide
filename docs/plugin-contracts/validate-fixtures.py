@@ -76,6 +76,9 @@ def _validate_manifest_semantics(manifest: Any) -> None:
     """
     if not isinstance(manifest, dict):
         return
+    pack = manifest.get("extensionPack")
+    if isinstance(pack, list) and manifest.get("id") in pack:
+        raise ValueError("extensionPack must not list the pack itself")
     contributes = manifest.get("contributes")
     if not isinstance(contributes, dict):
         return

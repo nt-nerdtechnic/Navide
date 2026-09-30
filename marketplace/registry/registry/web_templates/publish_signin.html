@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Publish — Navide Marketplace{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h1>◆ Publish on Navide Marketplace</h1>
+  <p>Sign in with your Navide Cloud account. Extensions you publish are
+    reviewed before they appear.</p>
+  {% if error %}<p class="warn warn-block" role="alert">{{ error }}</p>{% endif %}
+  {% if enabled %}
+    <a class="install-button" href="{{ base }}/login?next=/publisher">Sign in with Navide Cloud</a>
+    <p class="muted">Uses the same Navide account as the forum. We only read your
+      account id, display name and email-verified flag.</p>
+    <p class="muted">Already have a namespace? <a href="{{ base }}/publisher">Go to dashboard</a></p>
+  {% else %}
+    <p class="muted">Navide Cloud sign-in is not enabled on this registry.</p>
+  {% endif %}
+</section>
+{% endblock %}

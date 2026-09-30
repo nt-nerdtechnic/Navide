@@ -109,3 +109,28 @@ def latest_version(versions: list[str]) -> str | None:
     if not versions:
         return None
     return max(versions, key=version_key)
+
+
+STABLE_CHANNEL = "stable"
+PRERELEASE_CHANNEL = "pre-release"
+
+
+def version_channel(version: str) -> str:
+    """A version with a SemVer prerelease suffix (`2.5.0-beta.1`) is a
+    pre-release; build metadata alone does not make one."""
+    return PRERELEASE_CHANNEL if _parse_semver(version).prerelease else STABLE_CHANNEL
+
+
+def latest_stable_version(versions: list[str]) -> str | None:
+    """The newest stable version; the newest pre-release only when there is no
+    stable version at all, so a pre-release-only extension stays listable."""
+    stable = [v for v in versions if version_channel(v) == STABLE_CHANNEL]
+    return latest_version(stable) or latest_version(versions)
+
+
+def latest_prerelease_version(versions: list[str]) -> str | None:
+    """The newest pre-release when it is newer than every stable version."""
+    newest = latest_version(versions)
+    if newest is None or version_channel(newest) != PRERELEASE_CHANNEL:
+        return None
+    return newest

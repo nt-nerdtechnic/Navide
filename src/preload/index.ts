@@ -15,6 +15,7 @@ import type { LegacyPlansPreferenceProjection } from '../shared/plansPreferences
 import { LEGAL_LINKS, type LegalRoute } from '../shared/legalLinks'
 import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 import { FN_KEY_EVENT_CHANNEL, FN_KEY_STATUS_CHANNEL, type FnKeyApi } from '../shared/fnKey'
+import { DEEP_LINK_OPEN_CHANNEL, DEEP_LINK_READY_CHANNEL, type DeepLinkApi } from '../shared/deepLink'
 
 /** Which Electron-owned cache groups to clear. Never touches user state. */
 export interface ClearElectronCachesOptions {
@@ -121,6 +122,12 @@ export interface InstalledPluginSummary {
   pendingCandidateVersion?: string
   rollbackKind?: 'factory' | 'previous'
   rollbackToVersion?: string
+  /** Lowest Navide release the installed version needs (label only). */
+  minNavideVersion?: string
+  /** False when this Navide release is older; the Host still runs it. */
+  engineCompatible?: boolean
+  /** Per-extension "Get pre-releases" switch (Registry installs only). */
+  getsPrereleases?: boolean
 }
 
 export interface FactoryPluginSummary {
@@ -145,6 +152,65 @@ export interface MarketplaceExtension {
   download_count: number
   rating_average: number
   featured: boolean
+  /** Main-process verdict: the latest version's `engines.navide` against
+   *  this Navide release; null when unknown (never blocks). */
+  compatible?: boolean | null
+  /** Lowest Navide release the latest version accepts. */
+  min_navide_version?: string | null
+  /** The running Navide release the verdict was computed against. */
+  app_version?: string
+  license?: string | null
+  /** https links only (the main process drops anything else). */
+  repository?: string | null
+  homepage?: string | null
+  /** Package-relative raster icon of the latest version. */
+  icon_path?: string | null
+  /** Member ids when this is an Extension Pack. */
+  extension_pack?: string[] | null
+  /** Trust tier of the latest version ('signed-verified' or 'unsigned'). */
+  trust_tier?: string | null
+}
+
+export interface PackMemberSummary {
+  id: string
+  status: 'ready' | 'installed' | 'missing' | 'nested' | 'unavailable' | 'incompatible' | 'error'
+  display_name: string | null
+  version: string | null
+  capabilities: string[]
+  sensitive_capabilities: string[]
+  min_navide_version: string | null
+}
+
+export interface PreparedPackSummary {
+  id: string
+  version: string
+  display_name: string | null
+  trustTier: 'signed-verified' | 'unsigned'
+  publisherId: string
+  members: PackMemberSummary[]
+}
+
+export interface InstalledPackRecord {
+  id: string
+  displayName?: string
+  version: string
+  members: string[]
+  /** Members installed only because of this pack (still installed). */
+  installedByPack: string[]
+}
+
+export interface MarketplaceSearchOptions {
+  category?: string
+  offset?: number
+  limit?: number
+  /** Ask the Registry for known-compatible extensions only (D1 filter). */
+  hideIncompatible?: boolean
+}
+
+export interface MarketplaceCategory {
+  slug: string
+  label: string
+  count: number
 }
 
 export interface MarketplaceVersionInfo {
@@ -158,6 +224,10 @@ export interface MarketplaceVersionInfo {
   download_count: number
   /** Main-process verdict: this row's target can be installed on this Host. */
   installable: boolean
+  /** This row's `engines.navide` against this Navide release (null: unknown). */
+  compatible?: boolean | null
+  min_navide_version?: string | null
+  channel?: 'stable' | 'pre-release'
 }
 
 export interface MarketplaceExtensionDetail extends MarketplaceExtension {
@@ -167,6 +237,14 @@ export interface MarketplaceExtensionDetail extends MarketplaceExtension {
   host_target: string
   /** Newest non-yanked version with an artifact for this Host. */
   latest_installable_version: string | null
+  /** Newest version this Host can install that this Navide release also runs. */
+  latest_compatible_version?: string | null
+  /** Newest pre-release newer than `latest_version` (Registry's view). */
+  latest_prerelease_version?: string | null
+  /** This extension's "Get pre-releases" switch; the installable
+   *  versions above already honour it. */
+  gets_prereleases?: boolean
+  has_changelog?: boolean
   versions: MarketplaceVersionInfo[]
   /** Raw README markdown; rendered as text nodes, never as HTML. */
   readme: string | null
@@ -829,6 +907,15 @@ contextBridge.exposeInMainWorld('agentTeam', {
       return () => ipcRenderer.removeListener(FN_KEY_STATUS_CHANNEL, listener)
     },
   } satisfies FnKeyApi,
+  // navide://extension/<id> links routed by src/main/deep-link.ts.
+  deepLink: {
+    ready: () => ipcRenderer.invoke(DEEP_LINK_READY_CHANNEL),
+    onOpenExtension: (handler) => {
+      const listener = (_e: unknown, target: Parameters<typeof handler>[0]): void => handler(target)
+      ipcRenderer.on(DEEP_LINK_OPEN_CHANNEL, listener)
+      return () => ipcRenderer.removeListener(DEEP_LINK_OPEN_CHANNEL, listener)
+    },
+  } satisfies DeepLinkApi,
   executionPolicy: {
     inspect: (workspacePath?: string): ReturnType<ExecutionPolicyApi['inspect']> =>
       ipcRenderer.invoke('execution-policy:inspect', workspacePath),
@@ -894,9 +981,20 @@ contextBridge.exposeInMainWorld('agentTeam', {
     },
     marketplaceSearch: (
       query?: string,
-      sort?: 'updated' | 'downloads' | 'rating'
+      sort?: 'updated' | 'downloads' | 'rating',
+      options?: MarketplaceSearchOptions
     ): Promise<MarketplaceListResponse> =>
-      ipcRenderer.invoke('plugins:marketplaceSearch', query, sort),
+      ipcRenderer.invoke('plugins:marketplaceSearch', query, sort, options),
+    marketplaceCategories: (): Promise<MarketplaceCategory[]> =>
+      ipcRenderer.invoke('plugins:marketplaceCategories'),
+    marketplaceIcon: (args: {
+      namespace: string
+      name: string
+      version: string
+      path: string
+    }): Promise<string | null> => ipcRenderer.invoke('plugins:marketplaceIcon', args),
+    marketplaceChangelog: (args: { namespace: string; name: string }): Promise<string | null> =>
+      ipcRenderer.invoke('plugins:marketplaceChangelog', args),
     marketplaceDetail: (args: { namespace: string; name: string }): Promise<MarketplaceExtensionDetail> =>
       ipcRenderer.invoke('plugins:marketplaceDetail', args),
     checkUpdates: (): Promise<PluginUpdateInfo[]> => ipcRenderer.invoke('plugins:checkUpdates'),
@@ -930,6 +1028,16 @@ contextBridge.exposeInMainWorld('agentTeam', {
     }> => ipcRenderer.invoke('plugins:rollback', { id }),
     remove: (id: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('plugins:remove', { id }),
+    setPrerelease: (id: string, enabled: boolean): Promise<{ id: string; enabled: boolean }> =>
+      ipcRenderer.invoke('plugins:setPrerelease', { id, enabled }),
+    marketplacePackMembers: (members: string[]): Promise<PackMemberSummary[]> =>
+      ipcRenderer.invoke('plugins:marketplacePackMembers', { members }),
+    preparePack: (args: { namespace: string; name: string }): Promise<PreparedPackSummary> =>
+      ipcRenderer.invoke('plugins:preparePack', args),
+    finishPack: (id: string): Promise<{ recorded: boolean; pack?: InstalledPackRecord }> =>
+      ipcRenderer.invoke('plugins:finishPack', { id }),
+    listPacks: (): Promise<InstalledPackRecord[]> => ipcRenderer.invoke('plugins:listPacks'),
+    removePack: (id: string): Promise<{ removed: boolean }> => ipcRenderer.invoke('plugins:removePack', { id }),
     restoreFactoryPackage: (id: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('plugins:restoreFactoryPackage', { id }),
   },

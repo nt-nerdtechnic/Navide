@@ -16,6 +16,7 @@ from fastapi import Header, HTTPException, Request
 from sqlmodel import Session
 
 from .repository import RegistryRepository
+from .self_service import publisher_for_token
 
 DEV_PUBLISHER = "dev"
 
@@ -45,7 +46,11 @@ def get_publisher_identity(
     token = _parse_bearer(authorization)
     if token is not None:
         with Session(state.engine) as session:
-            publisher = RegistryRepository(session).get_publisher_by_token(token)
+            # Admin-issued publisher token first, then a short-lived token
+            # from the publisher dashboard or `navide-plugin login`.
+            publisher = RegistryRepository(session).get_publisher_by_token(
+                token
+            ) or publisher_for_token(session, token)
         if publisher is None:
             raise HTTPException(status_code=401, detail="invalid publisher token")
         return PublisherIdentity(publisher=publisher.name, authenticated=True)

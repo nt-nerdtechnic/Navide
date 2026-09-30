@@ -30,4 +30,26 @@ describe('NotificationHost danger confirm', () => {
     expect(await answer).toBe(true)
     wrapper.unmount()
   })
+
+  it('renders an opt-in detail: prose message, and only the literal in monospace', async () => {
+    const wrapper = mount(NotificationHost, { attachTo: document.body })
+    void useNotify().confirm('Opens in your browser:', { detail: 'https://github.com/acme/demo' })
+    await flushPromises()
+    const [message, detail] = Array.from(document.querySelectorAll('.body pre'))
+    expect(message.className).toBe('prose')
+    expect(message.textContent).toBe('Opens in your browser:')
+    expect(detail.className).toBe('detail')
+    expect(detail.textContent).toBe('https://github.com/acme/demo')
+    wrapper.unmount()
+  })
+
+  it('keeps a confirm without detail on the single default body', async () => {
+    const wrapper = mount(NotificationHost, { attachTo: document.body })
+    void useNotify().confirm('/tmp/some/path')
+    await flushPromises()
+    const pres = document.querySelectorAll('.body pre')
+    expect(pres).toHaveLength(1)
+    expect(pres[0].className).toBe('')
+    wrapper.unmount()
+  })
 })

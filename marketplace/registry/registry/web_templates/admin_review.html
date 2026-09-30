@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Review queue — Navide Marketplace{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Review queue <span class="tag">{{ items|length }} pending</span></h1>
+  {% if oldest %}<p class="muted">Oldest waiting: {{ oldest }} · target: {{ sla_days }} business days</p>{% endif %}
+  {% for item in items %}
+  <article class="review-item{% if item.overdue %} overdue{% endif %}">
+    <h2 class="review-title"><code>{{ item.identity }}</code> {{ item.version }}
+      <span class="muted">· publisher <code>{{ item.publisher }}</code>{% if item.publisher_domain %} (✓ verified){% endif %} · {{ item.targets|join(', ') }}</span>
+      {% if item.overdue %}<span class="badge badge-danger">past SLA</span>{% endif %}
+    </h2>
+    <table class="version-table review-table">
+      <colgroup><col class="col-check"><col class="col-result"><col></colgroup>
+      <thead><tr><th>Check</th><th>Result</th><th>Details</th></tr></thead>
+      <tbody>
+        <tr><td>Manifest &amp; signature</td><td><span class="badge badge-signed">✓ pass</span></td><td>manifest validated, {{ item.signature }}</td></tr>
+        <tr><td>Name similarity</td>
+          <td>{% if item.similarity_blocked %}<span class="badge badge-danger">✕ blocked</span>
+              {% elif item.similarity %}<span class="tag">⚠ warning</span>
+              {% else %}<span class="badge badge-signed">✓ pass</span>{% endif %}</td>
+          <td>{% for f in item.similarity %}{{ f.message }}{% if not loop.last %}<br>{% endif %}{% else %}no look-alike{% endfor %}</td></tr>
+        <tr><td>Secret scan</td>
+          <td>{% if item.secret_findings %}<span class="badge badge-danger">✕ {{ item.secret_findings|length }} finding{{ '' if item.secret_findings|length == 1 else 's' }}</span>
+              {% else %}<span class="badge badge-signed">✓ pass</span>{% endif %}</td>
+          <td>{% for f in item.secret_findings %}{{ f.rule }} in {{ f.path }}:{{ f.line }} (value hidden){% if not loop.last %}<br>{% endif %}{% else %}0 findings in {{ item.files_scanned }} files{% endfor %}</td></tr>
+        <tr><td>Permissions requested</td>
+          <td>{% if item.sensitive_capabilities %}<span class="chip chip-warn">sensitive</span>{% else %}<span class="chip">none sensitive</span>{% endif %}</td>
+          <td>{{ item.capabilities|join(', ') or '—' }}</td></tr>
+        <tr><td>Package limits</td><td><span class="badge badge-signed">✓ pass</span></td>
+          <td>{{ '%.1f'|format(item.size / 1048576) }} MiB / {{ (item.size_limit / 1048576)|int }} MiB</td></tr>
+      </tbody>
+    </table>
+    <div class="row">
+      {% if not item.similarity_blocked %}
+      <form class="inline-form" method="post" action="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/approve">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% if item.secret_findings %}
+        <label class="muted"><input type="checkbox" name="acknowledge" value="yes" required> findings are false positives</label>
+        {% endif %}
+        <button type="submit" class="install-button">Approve &amp; publish</button>
+      </form>
+      {% endif %}
+      <form class="inline-form" method="post" action="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/reject">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input class="wide-input" name="reason" placeholder="Reason (shown to the publisher)" required maxlength="500">
+        <button type="submit">Reject…</button>
+      </form>
+      {% for t in item.targets %}
+      <a href="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/{{ t }}/package">Download to inspect{% if item.targets|length > 1 %} ({{ t }}){% endif %}</a>
+      {% endfor %}
+    </div>
+  </article>
+  {% else %}
+  <p class="empty">Nothing waiting for review.</p>
+  {% endfor %}
+  <p><a href="{{ base }}/admin/blocklist">Blocklist →</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Blocklist — Navide Marketplace{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ base }}/admin/review">← Review queue</a></nav>
+<section class="panel">
+  <h1>Blocklist</h1>
+  <p class="muted">Blocked publishers and packages are refused at publish, listed in the
+    signed trust metadata the app enforces, hidden from the marketplace, and shown on
+    the public <a href="{{ base }}/removed">removed extensions</a> list. Entries from the
+    trust config file are read-only here.</p>
+  {% if error %}<p class="warn warn-block" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ base }}/admin/blocklist" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="kind" aria-label="Kind"><option value="package">package</option><option value="publisher">publisher</option></select>
+    <input class="wide-input" name="value" placeholder="namespace.name[@version] or namespace" required>
+    <input class="wide-input" name="reason" placeholder="Public reason" required maxlength="500">
+    <button type="submit">Block</button>
+  </form>
+  <table class="version-table">
+    <thead><tr><th>Kind</th><th>Id</th><th>Reason</th><th>Since</th><th></th></tr></thead>
+    <tbody>
+    {% for i in items %}
+      <tr>
+        <td>{{ i.kind }}</td><td>{{ i.value }}</td><td>{{ i.reason or '—' }}</td>
+        <td>{{ i.removed_at.strftime('%Y-%m-%d') if i.removed_at else 'config' }}</td>
+        <td>{% if i.id %}
+          <form class="inline-form" method="post" action="{{ base }}/admin/blocklist/{{ i.id }}/delete">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit" class="link-button">unblock</button>
+          </form>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="empty">Nothing blocked.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

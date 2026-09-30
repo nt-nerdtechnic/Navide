@@ -94,6 +94,14 @@
       }
     ],
     "artifactName": "Navide-${version}-${arch}.${ext}",
+    "protocols": [
+      {
+        "name": "Navide",
+        "schemes": [
+          "navide"
+        ]
+      }
+    ],
     "mac": {
       "target": [
         "dmg",

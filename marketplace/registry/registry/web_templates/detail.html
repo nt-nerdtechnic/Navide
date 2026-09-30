@@ -6,15 +6,21 @@
 
 <article class="detail">
   <header class="detail-head">
-    {% if icon_path and latest_version %}
-    <img class="detail-icon"
-         src="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ icon_path }}"
-         alt="{{ ext.display_name }} icon">
-    {% endif %}
+    {# Fixed-size box: the initial shows when there is no icon, and a broken
+       image can never spill its alt text out of the box (no script needed). #}
+    {% set initial = (ext.display_name or ext.name)[:1]|upper %}
+    <div class="ext-icon ext-icon-lg" aria-hidden="true">
+      <span class="ext-icon-initial">{{ initial }}</span>
+      {% if icon_path and latest_version %}
+      <img class="ext-icon-img" alt="" data-initial="{{ initial }}"
+           src="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ icon_path }}">
+      {% endif %}
+    </div>
     <div class="detail-head-text">
       <h1>{{ ext.display_name }}</h1>
       <div class="detail-sub">
         <span class="pub">{{ publisher }}</span>
+        {% if publisher_domain %}<span class="badge badge-verified" title="Publisher proved control of {{ publisher_domain }} (DNS)">✓ verified · {{ publisher_domain }}</span>{% endif %}
         {% if latest_version %}<span class="ver">v{{ latest_version }}</span>{% endif %}
         {% if ext.trust_tier == 'signed-verified' %}
           <span class="badge badge-signed">✓ signed-verified</span>
@@ -23,6 +29,7 @@
         {% endif %}
       </div>
       <div class="detail-stats">
+        {% if ext.min_navide_version %}<span class="requires" title="engines.navide: {{ ext.engines_navide }}">Requires Navide ≥ {{ ext.min_navide_version }}</span>{% endif %}
         <span title="Total downloads">⬇ {{ download_count }} downloads</span>
         {% if rating_count %}
           <span>★ {{ '%.1f'|format(rating_average) }} ({{ rating_count }} ratings)</span>
@@ -31,8 +38,14 @@
         {% endif %}
       </div>
       <div class="detail-cats">
-        {% for c in ext.categories %}<span class="chip">{{ c }}</span>{% endfor %}
+        {% for c in ext.categories %}<span class="chip">{{ c|category_label }}</span>{% endfor %}
       </div>
+      {% if latest_targets %}
+      <div class="detail-targets" title="Platforms v{{ latest_version }} is published for">
+        {% if 'universal' in latest_targets %}<span class="chip chip-target">All platforms</span>
+        {% else %}{% for t in latest_targets %}<span class="chip chip-target">{{ t }}</span>{% endfor %}{% endif %}
+      </div>
+      {% endif %}
     </div>
   </header>
 
@@ -47,13 +60,36 @@
   {% if latest_version %}
   <section class="install">
     <h2 class="section-title">Install</h2>
-    <p>Install from the Navide app: open <strong>Settings → Marketplace</strong>,
-      search for <code>{{ ext.identity }}</code> and choose Install. The app
-      picks the build for its own platform and verifies the registry
-      signature before installing.</p>
+    {# navide:// only opens this extension's detail page in the app; nothing is
+       installed until the user confirms there (plan decision D4). #}
+    <div class="install-cta">
+      <a class="install-button" href="navide://extension/{{ ext.identity }}">⬇ Install in Navide</a>
+      <span class="muted">Opens this extension's page in the Navide app — nothing
+        is installed until you confirm there.</span>
+    </div>
+    <p class="deeplink-copy">
+      <code class="deeplink" title="Select to copy">navide://extension/{{ ext.identity }}</code>
+      <span class="muted">Copy this link if your browser blocks the redirect.</span>
+    </p>
+    <details class="install-fallback">
+      <summary>Nothing happened? Navide may not be installed.</summary>
+      <ol>
+        <li><a href="https://navide.dev">Download Navide</a> and install it.</li>
+        <li>Open Navide, then click <strong>Install in Navide</strong> again.</li>
+      </ol>
+      <p>Or in the app: open <strong>Settings → Marketplace</strong>,
+        search for <code>{{ ext.identity }}</code> and choose Install. The app
+        picks the build for its own platform and verifies the registry
+        signature before installing.</p>
+    </details>
     <p>{% if 'universal' in latest_targets %}Or download the package directly (all platforms):{% else %}Or download the package for a platform directly:{% endif %}</p>
-    <pre class="code">{% for t in latest_targets %}GET {{ base }}/api/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/download{% if t != 'universal' %}?target={{ t }}{% endif %}
-{% endfor %}</pre>
+    <ul class="download-list">
+      {% for t in latest_targets %}
+      {% set url = base ~ '/api/extensions/' ~ ext.namespace ~ '/' ~ ext.name ~ '/' ~ latest_version ~ '/download' ~ ('' if t == 'universal' else '?target=' ~ t) %}
+      <li><a class="download-link" href="{{ url }}">⬇ {{ 'All platforms' if t == 'universal' else t }}</a>
+        <code class="download-url">GET {{ url }}</code></li>
+      {% endfor %}
+    </ul>
   </section>
   {% endif %}
 
@@ -82,12 +118,13 @@
     <h2 class="section-title">Versions</h2>
     <table class="version-table">
       <thead>
-        <tr><th>Version</th><th>Target</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
+        <tr><th>Version</th><th>Channel</th><th>Target</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
       </thead>
       <tbody>
         {% for v in versions %}
         <tr class="{% if v.yanked %}yanked{% endif %}">
           <td>{{ v.version }}{% if v.yanked %} <span class="tag">yanked</span>{% endif %}</td>
+          <td>{% if v.channel == 'pre-release' %}<span class="badge badge-prerelease">pre-release</span>{% else %}<span class="channel-stable">stable</span>{% endif %}</td>
           <td>{{ v.target }}</td>
           <td>
             {% if v.trust_tier == 'signed-verified' %}

@@ -348,6 +348,8 @@ export interface InstalledPluginPackageSummary {
   manifestPermissions?: ManifestPermissionsSummary
   provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
   warning?: string
+  /** The v2 manifest's `engines.navide`, verbatim, when it declares one. */
+  enginesNavide?: string
 }
 
 export function manifestToInstalledPackageSummary(
@@ -364,6 +366,7 @@ export function manifestToInstalledPackageSummary(
             system: [...(manifest.permissions.system ?? [])],
             ...(manifest.permissions.shell ? { shell: manifest.permissions.shell } : {}),
           },
+          ...(manifest.engines ? { enginesNavide: manifest.engines.navide } : {}),
         }
       : {}),
     ...(provenance ? { provenance } : {}),

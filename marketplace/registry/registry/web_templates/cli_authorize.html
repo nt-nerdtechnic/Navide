@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Authorize the CLI — Navide Marketplace{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h1>Authorize navide-plugin</h1>
+  <p>A command-line tool on this computer asked for a publish token.
+    Only continue if you just ran <code>navide-plugin login</code>.</p>
+  <table class="version-table cli-request">
+    <tr><th>Requested by</th><td><code>{{ label }}</code></td></tr>
+    <tr><th>Returns to</th><td><code>http://127.0.0.1:{{ port }}/callback</code></td></tr>
+  </table>
+  {# The deny form sits outside the authorize form; its Cancel button joins
+     the Authorize row through the `form` attribute. #}
+  <form id="cli-deny" method="post" action="{{ base }}/cli/deny">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="port" value="{{ port }}">
+    <input type="hidden" name="state" value="{{ state }}">
+    <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+  </form>
+  {% if namespaces %}
+  <form method="post" action="{{ base }}/cli/authorize" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="port" value="{{ port }}">
+    <input type="hidden" name="state" value="{{ state }}">
+    <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+    <input type="hidden" name="label" value="{{ label }}">
+    <label for="cli-ns">Publish as</label>
+    <select id="cli-ns" name="namespace">
+      {% for ns in namespaces %}<option value="{{ ns }}">{{ ns }}</option>{% endfor %}
+    </select>
+    <p class="muted">The token lasts 30 days and can be revoked from the dashboard.
+      Cancel denies the request and the CLI stops waiting.</p>
+    <div class="button-row">
+      <button type="submit" class="install-button">Authorize</button>
+      <button type="submit" form="cli-deny">Cancel</button>
+    </div>
+  </form>
+  {% else %}
+  <p>You need a namespace first. <a href="{{ base }}/publisher/claim">Claim a namespace</a></p>
+  <div class="button-row">
+    <button type="submit" form="cli-deny">Cancel</button>
+    <span class="muted">Denies the request; the CLI stops waiting.</span>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

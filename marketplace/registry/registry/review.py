@@ -1,0 +1,277 @@
+"""Review-before-publish state machine (D3).
+
+    pending --approve--> approved   (registry-signs every pending artifact)
+    pending --reject---> rejected   (reason required; shown to the publisher)
+
+Nothing else moves: approved and rejected are final, and a version cannot go
+back to pending. Only approved rows are signed and visible through public
+reads (repository.py filters on `review_status`). There is no auto-approve
+for review-required publishers; admin-created (official) publishers are not
+review-required, so their publishes are approved at submission as before.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from sqlmodel import Session, select
+
+from .discovery import pack_members
+from .manifest import manifest_capabilities
+from .models import Extension, ExtensionVersion, Publisher
+from .packs import pack_conflict
+from .registry_trust import RegistryTrustSigner
+from .repository import RegistryRepository
+from .secret_scan import scan_package
+from .similarity import check_extension_name
+from .trust import compute_trust_tier, sensitive_capabilities
+from .versions import latest_stable_version
+
+PENDING = "pending"
+APPROVED = "approved"
+REJECTED = "rejected"
+STATUSES = (PENDING, APPROVED, REJECTED)
+_TRANSITIONS = {PENDING: {APPROVED, REJECTED}}
+
+SLA_BUSINESS_DAYS = 3
+MAX_REASON_LENGTH = 500
+
+
+class ReviewError(ValueError):
+    pass
+
+
+def can_transition(current: str, target: str) -> bool:
+    return target in _TRANSITIONS.get(current, set())
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def business_deadline(start: datetime, days: int = SLA_BUSINESS_DAYS) -> datetime:
+    """`start` plus `days` business days (Saturday and Sunday skipped)."""
+    current = _aware(start)
+    remaining = days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
+def manifest_listing(manifest: dict) -> tuple[str | None, str | None, list[str]]:
+    """(display name, description, categories) the way publish derives them."""
+    if manifest.get("schemaVersion") == 2:
+        marketplace = manifest.get("marketplace") or {}
+        return manifest.get("name"), marketplace.get("description"), list(marketplace.get("categories") or [])
+    return (
+        manifest.get("displayName") or manifest.get("name"),
+        manifest.get("description"),
+        list(manifest.get("categories") or []),
+    )
+
+
+def submission_report(
+    session: Session,
+    *,
+    namespace: str,
+    name: str,
+    data: bytes,
+    manifest: dict,
+    signature_present: bool,
+    size_limit: int,
+) -> dict:
+    """Automatic checks a reviewer sees next to the submission (card 10)."""
+    others = [
+        (row.namespace, row.name)
+        for row in session.exec(select(Extension)).all()
+    ]
+    similarity = [f.as_dict() for f in check_extension_name(namespace, name, others)]
+    capabilities = manifest_capabilities(manifest)
+    return {
+        "signature": "publisher-signed" if signature_present else "unsigned",
+        "similarity": similarity,
+        "secret_scan": scan_package(data).as_dict(),
+        "capabilities": capabilities,
+        "sensitive_capabilities": sensitive_capabilities(capabilities),
+        "size": len(data),
+        "size_limit": size_limit,
+    }
+
+
+def blocking_similarity(report: dict) -> bool:
+    return any(item.get("tier") == "block" for item in report.get("similarity", []))
+
+
+def secret_findings(report: dict) -> list[dict]:
+    return list((report.get("secret_scan") or {}).get("findings", []))
+
+
+def _pending_rows(session: Session, extension: Extension, version: str) -> list[ExtensionVersion]:
+    return list(
+        session.exec(
+            select(ExtensionVersion)
+            .where(
+                ExtensionVersion.extension_id == extension.id,
+                ExtensionVersion.version == version,
+                ExtensionVersion.review_status == PENDING,
+            )
+            .order_by(ExtensionVersion.target)
+        ).all()
+    )
+
+
+def approve(
+    session: Session,
+    signer: RegistryTrustSigner,
+    *,
+    extension: Extension,
+    version: str,
+    reviewer: str,
+    acknowledge_secret_findings: bool = False,
+) -> list[ExtensionVersion]:
+    """Sign and publish every pending artifact of `extension@version`."""
+    rows = _pending_rows(session, extension, version)
+    if not rows:
+        raise ReviewError("no pending submission for this version")
+    publisher = session.get(Publisher, extension.publisher_id)
+    publisher_id = publisher.name if publisher else extension.namespace
+    reason = signer.block_reason(
+        publisher_id=publisher_id, package_id=extension.identity, version=version
+    )
+    if reason is not None:
+        raise ReviewError(reason)
+    # Re-run the pack nesting check against what is public now: two packs
+    # that were each fine at submission must not both go live listing each
+    # other.
+    conflict = pack_conflict(
+        RegistryRepository(session),
+        extension.identity,
+        pack_members(rows[0].manifest),
+        include_pending=False,
+    )
+    if conflict is not None:
+        raise ReviewError(f"cannot approve: {conflict}")
+    for row in rows:
+        if blocking_similarity(row.review_report):
+            raise ReviewError("name similarity check blocks this submission; reject it")
+        if secret_findings(row.review_report) and not acknowledge_secret_findings:
+            raise ReviewError(
+                "secret scan has findings; confirm they are false positives to approve"
+            )
+    previously_public = [
+        v.version
+        for v in session.exec(
+            select(ExtensionVersion).where(
+                ExtensionVersion.extension_id == extension.id,
+                ExtensionVersion.review_status == APPROVED,
+                ExtensionVersion.yanked == False,  # noqa: E712
+            )
+        ).all()
+    ]
+    now = _now()
+    for row in rows:
+        envelope, signature = signer.sign_envelope(
+            artifact_digest=row.package_digest,
+            package_id=extension.identity,
+            version=row.version,
+            target=row.target,
+            publisher_id=publisher_id,
+        )
+        row.registry_envelope = envelope
+        row.registry_signature = signature
+        row.trust_tier = compute_trust_tier(signed=True)
+        row.review_status = APPROVED
+        row.reviewed_at = now
+        row.reviewed_by = reviewer
+        session.add(row)
+    # The listing follows the latest stable version: approving an older
+    # version or a pre-release must not roll it back. The first approved
+    # version always sets it, since the listing has nothing else to show.
+    becomes_latest = latest_stable_version([*previously_public, version]) == version
+    if not previously_public or becomes_latest:
+        display_name, description, categories = manifest_listing(rows[0].manifest)
+        extension.display_name = display_name
+        extension.description = description
+        extension.categories = categories
+        extension.updated_at = now
+        session.add(extension)
+    session.commit()
+    for row in rows:
+        session.refresh(row)
+    return rows
+
+
+def reject(
+    session: Session,
+    *,
+    extension: Extension,
+    version: str,
+    reviewer: str,
+    reason: str,
+) -> list[ExtensionVersion]:
+    reason = reason.strip()
+    if not reason:
+        raise ReviewError("a rejection needs a reason")
+    if len(reason) > MAX_REASON_LENGTH:
+        raise ReviewError(f"reason is longer than {MAX_REASON_LENGTH} characters")
+    rows = _pending_rows(session, extension, version)
+    if not rows:
+        raise ReviewError("no pending submission for this version")
+    now = _now()
+    for row in rows:
+        row.review_status = REJECTED
+        row.review_reason = reason
+        row.reviewed_at = now
+        row.reviewed_by = reviewer
+        session.add(row)
+    session.commit()
+    return rows
+
+
+def review_queue(session: Session, now: datetime | None = None) -> list[dict]:
+    """Pending submissions grouped by extension version, oldest first."""
+    now = now or _now()
+    groups: dict[tuple[int, str], dict] = {}
+    rows = session.exec(
+        select(ExtensionVersion)
+        .where(ExtensionVersion.review_status == PENDING)
+        .order_by(ExtensionVersion.published_at)
+    ).all()
+    for row in rows:
+        key = (row.extension_id, row.version)
+        group = groups.get(key)
+        if group is None:
+            extension = session.get(Extension, row.extension_id)
+            publisher = session.get(Publisher, extension.publisher_id)
+            submitted = _aware(row.published_at)
+            deadline = business_deadline(submitted)
+            group = {
+                "extension": extension,
+                "publisher": publisher,
+                "version": row.version,
+                "submitted_at": submitted,
+                "waiting": now - submitted,
+                "deadline": deadline,
+                "overdue": now > deadline,
+                "targets": [],
+                "reports": [],
+            }
+            groups[key] = group
+        group["targets"].append(row.target)
+        group["reports"].append(row.review_report)
+    return list(groups.values())
+
+
+def format_wait(delta: timedelta) -> str:
+    hours = int(delta.total_seconds() // 3600)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days} day{'s' if days != 1 else ''} {hours} h"
+    minutes = int(delta.total_seconds() // 60) % 60
+    return f"{hours} h {minutes} min"

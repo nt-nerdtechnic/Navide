@@ -156,6 +156,8 @@ import { openInExternalTerminal } from './external-terminal'
 import { isMac } from '../shared/osplat'
 import { installMediaPermissionHandlers } from './media-permissions'
 import { registerFnKeyIpc } from './fn-key-ipc'
+import { createDeepLinkRouter, registerDeepLinkIpc } from './deep-link'
+import { DEEP_LINK_SCHEME, deepLinkFromArgv } from '../shared/deepLink'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -4812,6 +4814,34 @@ app.on('open-file', (event, p) => {
   openWorkspaceFromPath(p)
 })
 
+// navide://extension/<id> links (see deep-link.ts). A link that arrives before
+// a main window can show it waits in the router's queue; windows are only
+// created for it once startup has opened (or skipped) its own.
+let startupWindowsSettled = false
+const deepLinks = createDeepLinkRouter({
+  pickTarget: (ready) => {
+    if (mainWindow && !mainWindow.isDestroyed() && ready.has(mainWindow.webContents.id)) {
+      return mainWindow.webContents
+    }
+    const win = [...mainWindows].find((w) => !w.isDestroyed() && ready.has(w.webContents.id))
+    return win ? win.webContents : null
+  },
+  reveal: (contents) => {
+    const win = BrowserWindow.fromWebContents(contents)
+    if (win) revealMainWindow(win)
+  },
+  ensureWindow: () => {
+    if (startupWindowsSettled) focusOrCreateMainWindow()
+  },
+  log: (message) => console.log(message),
+})
+// macOS delivers the scheme through this event, on a cold start too (before
+// ready), so it is registered at the top level like open-file.
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  deepLinks.handle(url)
+})
+
 // Single-instance lock: a second launch must NOT spawn a parallel backend.
 // On macOS, closing the window leaves the app alive (see window-all-closed
 // below), so relaunching from Finder/Dock would otherwise start a second main
@@ -4826,7 +4856,18 @@ const gotSingleInstanceLock = !app.isPackaged || app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
+  // Packaged builds only: a dev run would register the bare Electron binary as
+  // the system-wide handler. The packaged app also declares the scheme in its
+  // Info.plist / installer (package.json build.protocols).
+  if (app.isPackaged) app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME)
   app.on('second-instance', (_event, argv) => {
+    // Windows/Linux hand a clicked navide:// link to the running instance as
+    // an argv entry of the relaunch.
+    const link = deepLinkFromArgv(argv)
+    if (link) {
+      deepLinks.handle(link)
+      return
+    }
     // A relaunch carrying folder paths (e.g. a Quick Action that still uses
     // `open -n`) lands here because we hold the single-instance lock. Open the
     // folders as workspaces instead of dropping them.
@@ -4908,6 +4949,12 @@ app.whenReady().then(async () => {
     [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
   )
   app.on('will-quit', () => fnKey.dispose())
+  registerDeepLinkIpc(deepLinks, (wc) =>
+    [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
+  )
+  // Windows/Linux cold start: the link is a launch argument.
+  const launchLink = app.isPackaged ? deepLinkFromArgv(process.argv) : null
+  if (launchLink) deepLinks.handle(launchLink)
   if (gitRecoveryEnabled) {
     const recovery = registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,
@@ -5225,6 +5272,7 @@ app.whenReady().then(async () => {
     }
   }
   if (!openedAny) await createWindow()
+  startupWindowsSettled = true
 
   app.on('activate', focusOrCreateMainWindow)
 })

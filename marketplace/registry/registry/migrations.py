@@ -150,10 +150,55 @@ def _key_artifacts_by_target(connection: sqlite3.Connection) -> None:
         )
 
 
+def _add_publisher_cloud_identity(connection: sqlite3.Connection) -> None:
+    """Link publishers to Navide Cloud accounts and record DNS verification.
+
+    Existing publishers were all created by an admin, so they keep
+    `review_required = 0` (auto-approved, the official path)."""
+    columns = _columns(connection, "publisher")
+    for column, ddl in (
+        ("navide_member_id", "VARCHAR"),
+        ("review_required", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("verified_domain", "VARCHAR"),
+        ("domain_token", "VARCHAR"),
+        ("domain_verified_at", "DATETIME"),
+    ):
+        if column not in columns:
+            connection.execute(f"ALTER TABLE publisher ADD COLUMN {column} {ddl}")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_publisher_navide_member_id "
+        "ON publisher (navide_member_id)"
+    )
+
+
+def _add_version_review_state(connection: sqlite3.Connection) -> None:
+    """Add the review state machine columns. Every existing version was public
+    and registry-signed, so it becomes 'approved'."""
+    columns = _columns(connection, "extension_version")
+    for column, ddl in (
+        ("review_status", "VARCHAR NOT NULL DEFAULT 'approved'"),
+        ("review_reason", "VARCHAR"),
+        ("reviewed_at", "DATETIME"),
+        ("reviewed_by", "VARCHAR"),
+        # Nullable like the model's JSON column; the default fills old rows.
+        ("review_report", "JSON DEFAULT '{}'"),
+    ):
+        if column not in columns:
+            connection.execute(
+                f"ALTER TABLE extension_version ADD COLUMN {column} {ddl}"
+            )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_extension_version_review_status "
+        "ON extension_version (review_status)"
+    )
+
+
 MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "discovery-columns", _add_discovery_columns),
     (2, "registry-signing-columns", _add_registry_signing_columns),
     (3, "artifact-per-target", _key_artifacts_by_target),
+    (4, "publisher-cloud-identity", _add_publisher_cloud_identity),
+    (5, "version-review-state", _add_version_review_state),
 )
 
 
