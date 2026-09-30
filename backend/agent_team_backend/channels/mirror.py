@@ -659,9 +659,14 @@ class Mirror:
                       parent.pane_id)
 
     async def release_children(self, pane_id: str) -> None:
-        """A parent binding went away: its auto topics have no parent to follow any more."""
+        """A parent binding went away or moved: its auto topics have no parent to follow
+        any more, and its descendants are adopted afresh by the pane's next chat."""
+        for _, child in self.descendants(pane_id):
+            self._seen_children.discard(str(child["pane_id"]))
+            self._topic_failed.discard(str(child["pane_id"]))
         for b in self.m.store.bindings():
             if b.auto and b.parent_pane_id == pane_id:
+                self._seen_children.discard(b.pane_id)
                 await self.m.unbind(b.pane_id, pane_name=b.title.removeprefix("↳ "))
 
     # --- inbound: commands and routing ----------------------------------------------

@@ -608,6 +608,10 @@ class ChannelManager:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
         previous = next((b for b in self.store.bindings() if b.pane_id == pane_id), None)
         binding = self.store.bind(pane_id, loc, **({"verbosity": previous.verbosity} if previous else {}))
+        if previous is not None and previous.location().key() != loc.key():
+            # Moved to another chat: child topics left in the old one would keep
+            # posting there and let its members drive the children.
+            await self.mirror.release_children(pane_id)
         await self._changed()
         self.mirror.schedule_sync()  # children the pane already has get their topics now
         # Tell the chat which pane it now drives; off the request path like unbind,

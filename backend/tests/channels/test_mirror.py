@@ -428,6 +428,29 @@ async def test_unbinding_the_parent_releases_its_auto_topics(env: Env) -> None:
     assert env.store.bindings() == []
 
 
+async def test_moving_the_parent_to_another_chat_moves_its_child_topics_too(env: Env) -> None:
+    _topics(env)
+    _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
+    await env.m.mirror.sync_lineage()
+    assert next(b for b in env.store.bindings() if b.pane_id == "pane-2").chat_id == "-100"
+    assert (await env.m.bind("pane-1", "main", "telegram", "existing", "-200", ""))["ok"]
+    await _until(lambda: {b.pane_id: b.chat_id for b in env.store.bindings()} == {"pane-1": "-200", "pane-2": "-200"})
+    # The old group can no longer drive the child.
+    await env.inbound("run e2e", chat="-100", thread="100")
+    assert not any(d[0] == "pane-2" for d in env.fake.delivered)
+
+
+async def test_rebinding_the_same_pane_after_unbind_reopens_its_child_topics(env: Env) -> None:
+    _topics(env)
+    _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1"),
+                         _pane("pane-3", "helper", "pane-2")])
+    await env.m.mirror.sync_lineage()
+    assert {b.pane_id for b in env.store.bindings()} == {"pane-1", "pane-2", "pane-3"}
+    await env.m.unbind("pane-1")
+    assert (await env.m.bind("pane-1", "main", "telegram", "existing", "-100", "50"))["ok"]
+    await _until(lambda: {b.pane_id for b in env.store.bindings()} == {"pane-1", "pane-2", "pane-3"})
+
+
 async def test_verbosity_change_follows_to_auto_children(env: Env) -> None:
     _topics(env)
     _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
