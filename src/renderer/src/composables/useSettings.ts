@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { onSettingsChanged, settingsGet, settingsReadiness, settingsSet } from '@navide/plugin-ui/shared'
+import { isLinux } from '../../../shared/osplat'
 
 const LANGUAGE_KEY = 'agent-team:language'
 const SUPPORTED = new Set(['zh-TW', 'en-US', 'ja-JP'])
@@ -93,13 +94,19 @@ function setLanguage(locale: string, options: { broadcast?: boolean } = {}): voi
 export const DEFAULT_HEALTH_CHECK_TIMEOUT_SEC = 45
 export const MIN_HEALTH_CHECK_TIMEOUT_SEC = 15
 export const MAX_HEALTH_CHECK_TIMEOUT_SEC = 120
+// Mirrors src/main/health-timeout.ts: Linux's AppImage first launch needs more.
+export const LINUX_DEFAULT_HEALTH_CHECK_TIMEOUT_SEC = 120
+
+export function defaultHealthCheckTimeoutSec(): number {
+  return isLinux() ? LINUX_DEFAULT_HEALTH_CHECK_TIMEOUT_SEC : DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+}
 
 function clampHealthCheckTimeoutSec(raw: number): number {
-  if (!Number.isFinite(raw)) return DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+  if (!Number.isFinite(raw)) return defaultHealthCheckTimeoutSec()
   return Math.min(MAX_HEALTH_CHECK_TIMEOUT_SEC, Math.max(MIN_HEALTH_CHECK_TIMEOUT_SEC, Math.round(raw)))
 }
 
-const healthCheckTimeoutSec = ref<number>(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+const healthCheckTimeoutSec = ref<number>(defaultHealthCheckTimeoutSec())
 
 async function loadHealthCheckTimeoutSec(): Promise<void> {
   try {

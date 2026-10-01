@@ -27,7 +27,7 @@ vi.mock('node:fs', async (importOriginal) => {
   }
 })
 
-const { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec, DEFAULT_HEALTH_CHECK_TIMEOUT_SEC } =
+const { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec, defaultHealthCheckTimeoutSec } =
   await import('./health-timeout')
 
 describe('health timeout durability', () => {
@@ -69,7 +69,7 @@ describe('health timeout durability', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     realWriteFileSync(file, '{truncated', 'utf-8')
 
-    expect(readHealthCheckTimeoutSec(file)).toBe(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+    expect(readHealthCheckTimeoutSec(file)).toBe(defaultHealthCheckTimeoutSec())
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('corrupt document'),
       expect.anything(),
@@ -80,7 +80,7 @@ describe('health timeout durability', () => {
     // First run is not a fault — warning here would train the user to ignore it.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
 
-    expect(readHealthCheckTimeoutSec(file)).toBe(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+    expect(readHealthCheckTimeoutSec(file)).toBe(defaultHealthCheckTimeoutSec())
     expect(warn).not.toHaveBeenCalled()
   })
 })

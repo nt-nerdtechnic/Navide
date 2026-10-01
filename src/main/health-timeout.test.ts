@@ -1,13 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { platformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import {
   clampHealthCheckTimeoutSec,
+  defaultHealthCheckTimeoutSec,
   parseHealthCheckTimeoutDoc,
   readHealthCheckTimeoutSec,
   writeHealthCheckTimeoutSec,
   DEFAULT_HEALTH_CHECK_TIMEOUT_SEC,
+  LINUX_DEFAULT_HEALTH_CHECK_TIMEOUT_SEC,
   MAX_HEALTH_CHECK_TIMEOUT_SEC,
 } from './health-timeout'
 
@@ -25,14 +28,14 @@ describe('clampHealthCheckTimeoutSec', () => {
     expect(clampHealthCheckTimeoutSec(60.6)).toBe(61)
   })
   it('falls back to the default for non-finite input', () => {
-    expect(clampHealthCheckTimeoutSec(NaN)).toBe(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+    expect(clampHealthCheckTimeoutSec(NaN)).toBe(defaultHealthCheckTimeoutSec())
   })
 })
 
 describe('parseHealthCheckTimeoutDoc', () => {
   it('returns the default for missing or corrupt content', () => {
     for (const text of [null, '', 'not json', '{}']) {
-      expect(parseHealthCheckTimeoutDoc(text)).toBe(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+      expect(parseHealthCheckTimeoutDoc(text)).toBe(defaultHealthCheckTimeoutSec())
     }
   })
   it('parses and clamps a valid doc', () => {
@@ -52,7 +55,7 @@ describe('readHealthCheckTimeoutSec / writeHealthCheckTimeoutSec', () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   it('reads the default when no file exists yet', () => {
-    expect(readHealthCheckTimeoutSec(file)).toBe(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+    expect(readHealthCheckTimeoutSec(file)).toBe(defaultHealthCheckTimeoutSec())
   })
 
   it('round-trips a written value', () => {
@@ -67,6 +70,55 @@ describe('readHealthCheckTimeoutSec / writeHealthCheckTimeoutSec', () => {
 
   it('survives a corrupt file on disk', () => {
     writeFileSync(file, '{truncated', 'utf-8')
-    expect(readHealthCheckTimeoutSec(file)).toBe(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+    expect(readHealthCheckTimeoutSec(file)).toBe(defaultHealthCheckTimeoutSec())
+  })
+})
+
+describe('platform default', () => {
+  const original = platformId()
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'health-timeout-platform-'))
+    file = join(dir, 'health-check-timeout.json')
+  })
+  afterEach(() => {
+    setPlatformId(original)
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it.each<[PlatformId, number]>([
+    ['linux', 120],
+    ['darwin', 45],
+    ['win32', 45],
+  ])('%s defaults to %is when nothing is configured', (platform, expected) => {
+    setPlatformId(platform)
+    expect(defaultHealthCheckTimeoutSec()).toBe(expected)
+    expect(readHealthCheckTimeoutSec(file)).toBe(expected)
+    expect(clampHealthCheckTimeoutSec(NaN)).toBe(expected)
+  })
+
+  it('keeps macOS and Windows on the original 45s and Linux on 120s', () => {
+    expect(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC).toBe(45)
+    expect(LINUX_DEFAULT_HEALTH_CHECK_TIMEOUT_SEC).toBe(120)
+  })
+
+  it.each<PlatformId>(['linux', 'darwin', 'win32'])('a configured value wins over the %s default', (platform) => {
+    setPlatformId(platform)
+    writeHealthCheckTimeoutSec(file, 30)
+    expect(readHealthCheckTimeoutSec(file)).toBe(30)
+  })
+
+  it.each<[PlatformId, number]>([
+    ['linux', 120],
+    ['darwin', 45],
+    ['win32', 45],
+  ])('a corrupt file on %s falls back to %is', (platform, expected) => {
+    setPlatformId(platform)
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    writeFileSync(file, '{truncated', 'utf-8')
+    expect(readHealthCheckTimeoutSec(file)).toBe(expected)
   })
 })
