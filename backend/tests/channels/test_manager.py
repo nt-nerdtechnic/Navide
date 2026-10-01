@@ -745,6 +745,58 @@ async def test_relay_id_expires_when_pane_leaves_awaiting_or_ttl(clocked, monkey
     assert env.tg.texts()[-1] == mgr_mod.MSG_RELAY_EXPIRED and env.fake.answers == []
 
 
+def _fail_relay_sends(env: Env, times: int) -> list[int]:
+    """Make the next ``times`` relay prompt sends raise; returns a one-item failure counter."""
+    failed = [0]
+    orig = env.tg.send_text
+
+    async def flaky(loc, text, *, buttons=None):
+        if text.startswith("⏸") and failed[0] < times:
+            failed[0] += 1
+            raise RuntimeError("chat unreachable")
+        return await orig(loc, text, buttons=buttons)
+
+    env.tg.send_text = flaky
+    return failed
+
+
+async def test_failed_relay_prompt_is_resent_on_next_probe(env: Env) -> None:
+    failed = _fail_relay_sends(env, 1)
+    await _awaiting(env)
+    await _until(lambda: any(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()))
+    await asyncio.sleep(0.1)
+    assert failed[0] == 1
+    assert sum(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()) == 1
+    assert len(env.m.relay._by_id) == 1  # only the delivered prompt's id is answerable
+
+
+async def test_awaiting_info_failure_is_retried(env: Env) -> None:
+    calls = [0]
+    orig = env.fake.awaiting_info
+
+    async def flaky(pane_id):
+        calls[0] += 1
+        if calls[0] == 1:
+            raise RuntimeError("screen unreadable")
+        return await orig(pane_id)
+
+    env.m._seams.awaiting_info = flaky
+    await _awaiting(env)
+    await _until(lambda: any("Allow Bash(npm run build)?" in t for t in env.tg.texts()))
+    await asyncio.sleep(0.1)
+    assert sum(t.startswith("⏸") for t in env.tg.texts()) == 1
+
+
+async def test_failed_relay_send_leaves_no_answerable_id(env: Env) -> None:
+    failed = _fail_relay_sends(env, 1_000)
+    await _awaiting(env)
+    await _until(lambda: failed[0] >= 1)
+    await asyncio.sleep(0.3)  # every retry the cap allows has run by now
+    assert env.m.relay._by_id == {}
+    assert failed[0] == mgr_mod.AWAITING_RETRY_MAX  # capped: no tight retry loop
+    assert not any(t.startswith("⏸") for t in env.tg.texts())
+
+
 # --- receive loop never waits on a slow chat ------------------------------------------
 
 
