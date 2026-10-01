@@ -571,15 +571,31 @@ export class ThirdPartyBackendController {
 
   /** Global kill switch. Turning it off stops every third-party child. */
   async setEnabled(enabled: boolean): Promise<void> {
-    this.store.setEnabled(enabled)
-    if (!enabled) await this.options.stopBackends?.(null)
+    if (enabled) {
+      this.store.setEnabled(true)
+      return
+    }
+    // Fail closed: the store applies "off" in memory before saving, and the
+    // children stop even when the save throws (the error still reaches the UI).
+    try {
+      this.store.setEnabled(false)
+    } finally {
+      await this.options.stopBackends?.(null)
+    }
   }
 
-  /** Per-plugin kill switch. */
+  /** Per-plugin kill switch; fails closed like the global one. */
   async setDisabled(pluginId: string, disabled: boolean): Promise<void> {
-    this.store.setDisabled(pluginId, disabled)
-    if (disabled) await this.options.stopBackends?.(pluginId)
-    else this.resetFailures(pluginId)
+    if (!disabled) {
+      this.store.setDisabled(pluginId, false)
+      this.resetFailures(pluginId)
+      return
+    }
+    try {
+      this.store.setDisabled(pluginId, true)
+    } finally {
+      await this.options.stopBackends?.(pluginId)
+    }
   }
 
   async setWorkspaceWrite(pluginId: string, workspacePath: string, allowed: boolean): Promise<void> {

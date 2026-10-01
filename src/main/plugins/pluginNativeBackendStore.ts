@@ -90,7 +90,14 @@ export class NativeBackendStore {
     return read.kind === 'present' ? parseState(read.value) : emptyState()
   }
 
-  private save(next: NativeBackendState): void {
+  /**
+   * Persist a decision. A decision that allows more takes effect only once it
+   * is saved. A decision that allows less (`restricting`) takes effect in
+   * memory first, so a failed save still stops the backend for the rest of
+   * the session; the save error is still thrown for the UI.
+   */
+  private save(next: NativeBackendState, restricting = false): void {
+    if (restricting) this.state = next
     if (this.persistence.ensureDirectory(true) !== 'ready') {
       throw new Error('native backend decision store is unavailable')
     }
@@ -98,13 +105,17 @@ export class NativeBackendStore {
     this.state = next
   }
 
-  private update(pluginId: string, change: (record: NativeBackendPluginRecord) => NativeBackendPluginRecord): void {
+  private update(
+    pluginId: string,
+    change: (record: NativeBackendPluginRecord) => NativeBackendPluginRecord,
+    restricting = false,
+  ): void {
     const current = this.state.plugins[pluginId] ?? {}
     const nextRecord = change({ ...current })
     const plugins = { ...this.state.plugins }
     if (Object.keys(nextRecord).length === 0) delete plugins[pluginId]
     else plugins[pluginId] = nextRecord
-    this.save({ ...this.state, plugins })
+    this.save({ ...this.state, plugins }, restricting)
   }
 
   snapshot(): NativeBackendState {
@@ -116,7 +127,7 @@ export class NativeBackendStore {
   }
 
   setEnabled(enabled: boolean): void {
-    this.save({ ...this.state, enabled })
+    this.save({ ...this.state, enabled }, !enabled)
   }
 
   record(pluginId: string): NativeBackendPluginRecord {
@@ -139,7 +150,7 @@ export class NativeBackendStore {
       if (disabled) record.disabled = true
       else delete record.disabled
       return record
-    })
+    }, disabled)
   }
 
   allowsWorkspaceWrite(pluginId: string, workspacePath: string): boolean {

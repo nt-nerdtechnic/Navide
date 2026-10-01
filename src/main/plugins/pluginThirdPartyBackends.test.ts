@@ -6,6 +6,7 @@ import { BackendPluginError } from './pluginBackendSupervisor'
 import { PlansBridgeError, type PlansBridgeContext, type PlansFilesystemPort } from './plansBridge'
 import { SANDBOX_EXEC_PATH, type BackendSandboxProbe } from './pluginBackendSandbox'
 import { NativeBackendStore } from './pluginNativeBackendStore'
+import { OwnerOnlyJsonPersistence } from './ownerOnlyJsonPersistence'
 import { isWindows } from '../../shared/osplat'
 import {
   BACKEND_RESTART_DELAYS_MS,
@@ -346,6 +347,60 @@ describe('Windows (unsupported in v1)', () => {
     expect(allow).not.toHaveBeenCalled()
     expect(spawnImpl).not.toHaveBeenCalled()
     expect(await instance.preflightAdmission(windowsSpec)).toBeNull()
+  })
+})
+
+// Host-independent: every refusal below happens before any sandbox path work.
+describe('kill switches when the decision cannot be saved', () => {
+  function failingSaves() {
+    return vi.spyOn(OwnerOnlyJsonPersistence.prototype, 'write').mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device')
+    })
+  }
+
+  it('turning the global switch off still stops every child and refuses, and reports the error', async () => {
+    const stopBackends = vi.fn(async () => undefined)
+    const { instance } = controller({ promptConsent: allow, stopBackends, digestBackend: async () => 'digest' })
+    const spec = writePackage()
+    const write = failingSaves()
+    try {
+      await expect(instance.setEnabled(false)).rejects.toThrow('ENOSPC')
+      expect(stopBackends).toHaveBeenCalledWith(null)
+      expect(store.isEnabled()).toBe(false)
+      expect((await refusal(instance.admit(spec))).message).toBe('third-party native backends are turned off')
+      expect(await instance.preflightAdmission(spec)).toBeNull()
+      expect(allow).not.toHaveBeenCalled()
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it('disabling one plugin still stops it and refuses, and reports the error', async () => {
+    const stopBackends = vi.fn(async () => undefined)
+    const { instance } = controller({ promptConsent: allow, stopBackends, digestBackend: async () => 'digest' })
+    const spec = writePackage()
+    const write = failingSaves()
+    try {
+      await expect(instance.setDisabled('acme.indexer', true)).rejects.toThrow('ENOSPC')
+      expect(stopBackends).toHaveBeenCalledWith('acme.indexer')
+      expect(store.record('acme.indexer').disabled).toBe(true)
+      expect((await refusal(instance.admit(spec))).message).toBe('the native backend is disabled for this plugin')
+      expect(allow).not.toHaveBeenCalled()
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it('turning things on still takes effect only once saved', async () => {
+    store.setEnabled(false)
+    const { instance } = controller({ promptConsent: allow })
+    const write = failingSaves()
+    try {
+      await expect(instance.setEnabled(true)).rejects.toThrow('ENOSPC')
+      expect(store.isEnabled()).toBe(false)
+    } finally {
+      write.mockRestore()
+    }
   })
 })
 
