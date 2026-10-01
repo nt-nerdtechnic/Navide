@@ -397,6 +397,53 @@ jobs:
           # branch only fires on a manual rerun of this job alone.
           scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
+  smoke-linux-x64:
+    # The job above only proves the installers build. This one installs each
+    # of them on a clean desktop-class runner, starts the app under a virtual
+    # display, waits for the bundled backend, and has the backend's own MCP
+    # server open a terminal pane and run a command in it — the first time an
+    # x64 Linux build is actually opened before it ships. On a tag push the
+    # mirror and the publish wait for it, so a build that cannot start stays
+    # a draft.
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    name: Launch packaged Linux x64 (${{ matrix.format }})
+    needs: release-linux-x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: appimage
+            pattern: Navide-*.AppImage
+          - format: deb
+            pattern: Navide-*.deb
+
+    steps:
+      - name: Check out the smoke script
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+
+      - name: Download the installers
+        uses: actions/download-artifact@v7
+        with:
+          name: navide-linux-x64
+          path: dist-release
+
+      - name: Install the virtual display and FUSE
+        # libfuse2t64: an AppImage mounts itself through FUSE 2, which a
+        # stock Ubuntu 24.04 does not ship.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth libfuse2t64
+
+      - name: Open the packaged app and run a command in a pane
+        run: |
+          installer="$(find dist-release -maxdepth 1 -name '${{ matrix.pattern }}' -print -quit)"
+          test -n "${installer}"
+          python3 scripts/linux-packaged-smoke.py --${{ matrix.format }} "${installer}"
+
   package-linux-arm64:
     # Manual dry runs only: this build exists so the Linux port can be tried
     # in an arm64 VM on Apple silicon, where the x64 binaries cannot run. It
@@ -917,7 +964,7 @@ jobs:
     # the mirror carries exactly what GitHub will serve — including the
     # Windows latest.yml after the arm64 job merged itself into it.
     if: github.event_name == 'push' && github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
-    needs: [release-macos-arm64, release-linux-x64, release-windows-arm64]
+    needs: [release-macos-arm64, release-linux-x64, smoke-linux-x64, release-windows-arm64]
     uses: ./.github/workflows/mirror.yml
     with:
       tag: ${{ github.ref_name }}
@@ -932,7 +979,7 @@ jobs:
     # Any failure upstream skips this job and leaves the release a draft; a
     # "Re-run failed jobs" on the run finishes it once the cause is fixed.
     if: github.event_name == 'push' && github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
-    needs: [release-macos-arm64, release-linux-x64, release-windows-x64, release-windows-arm64, mirror-release]
+    needs: [release-macos-arm64, release-linux-x64, smoke-linux-x64, release-windows-x64, release-windows-arm64, mirror-release]
     name: Publish the GitHub Release
     runs-on: ubuntu-22.04
     timeout-minutes: 10
