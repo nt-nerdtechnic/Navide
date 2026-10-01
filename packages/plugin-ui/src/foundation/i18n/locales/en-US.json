@@ -1306,6 +1306,35 @@
     },
     "extensions": {
       "devUnpacked": "Unsigned local folder — Developer Mode only",
+      "nativeBackends": {
+        "title": "Native backends",
+        "description": "Some extensions include native code. Navide runs it in a sandbox with no network access; it can read only the workspaces you open with it, and change files only where you allow. Nothing native runs until you turn the switch below on.",
+        "enable": "Allow third-party extensions to run native backends",
+        "empty": "No installed extension has a native backend.",
+        "allow": "Allow",
+        "disable": "Disable",
+        "enable_plugin": "Enable",
+        "changed": "Its native code or permissions changed since you allowed it.",
+        "writeAllowed": "May change files in {path}",
+        "revoke": "Revoke",
+        "violation": "Stopped after exceeding its {kind} limit.",
+        "kinds": {
+          "memory": "memory",
+          "cpu": "CPU",
+          "processes": "process",
+          "disk": "disk"
+        },
+        "status": {
+          "ready": "Allowed",
+          "disabledGlobally": "Off (setting is off)",
+          "disabled": "Disabled",
+          "needsConsent": "Needs your permission",
+          "sandboxUnavailable": "Cannot run safely on this system",
+          "shellNotAllowed": "Blocked: also requests shell access",
+          "stoppedAfterCrashes": "Stopped after repeated failures",
+          "unavailable": "Unavailable"
+        }
+      },
       "bundled": "Bundled",
       "bundledGit": "Bundled Git",
       "state": {

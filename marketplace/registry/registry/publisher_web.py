@@ -25,6 +25,7 @@ from . import cloud_auth, ratings, reports, review
 from .blocklist import BlocklistError, add_entry, db_entries, remove_entry, removed_list
 from .dns_verify import DomainError, record_host, record_value
 from .models import Extension, ExtensionVersion, Publisher
+from .native_backend import self_service_publishers, set_native_backend_allowed
 from .repository import RegistryRepository
 from .self_service import (
     MAX_NAMESPACES_PER_ACCOUNT,
@@ -63,6 +64,8 @@ class CliTokenRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     acknowledge_secret_findings: bool = False
+    # Required for a version with a native backend (every target inspected).
+    inspected_native_backend: bool = False
     # Package digests from the review queue: the decision applies to exactly these.
     artifacts: list[str] = []
 
@@ -679,6 +682,7 @@ def create_publisher_router() -> APIRouter:
                     "sensitive_capabilities": report.get("sensitive_capabilities", []),
                     "size": report.get("size", 0),
                     "size_limit": report.get("size_limit", 0),
+                    "native_backend": any(r.get("native_backend") for r in group["reports"]),
                 }
             )
         return items
@@ -696,7 +700,7 @@ def create_publisher_router() -> APIRouter:
             {"items": items, "oldest": oldest, "sla_days": review.SLA_BUSINESS_DAYS},
         )
 
-    def _decide(request: Request, namespace: str, name: str, version: str, reviewer: str, action: str, artifacts: list[str], *, reason: str = "", acknowledge: bool = False) -> None:
+    def _decide(request: Request, namespace: str, name: str, version: str, reviewer: str, action: str, artifacts: list[str], *, reason: str = "", acknowledge: bool = False, inspected_native_backend: bool = False) -> None:
         state = request.app.state.registry
         with _session(request) as session:
             repo = RegistryRepository(session)
@@ -713,6 +717,7 @@ def create_publisher_router() -> APIRouter:
                         reviewer=reviewer,
                         artifacts=artifacts,
                         acknowledge_secret_findings=acknowledge,
+                        inspected_native_backend=inspected_native_backend,
                     )
                 else:
                     review.reject(
@@ -725,13 +730,13 @@ def create_publisher_router() -> APIRouter:
     @guarded
     def admin_approve(
         request: Request, namespace: str, name: str, version: str, csrf: str = Form(""), acknowledge: str = Form(""),
-        artifact: list[str] = Form([]),
+        artifact: list[str] = Form([]), inspected_backend: str = Form(""),
     ) -> Response:
         viewer = _require_admin(request)
         _check_csrf(request, viewer, csrf)
         _decide(
             request, namespace, name, version, f"member:{viewer.member_id}", "approve", artifact,
-            acknowledge=acknowledge == "yes",
+            acknowledge=acknowledge == "yes", inspected_native_backend=inspected_backend == "yes",
         )
         return _redirect(request, "/admin/review")
 
@@ -816,6 +821,34 @@ def create_publisher_router() -> APIRouter:
                 raise HTTPException(status_code=404, detail="entry not found")
         return _redirect(request, "/admin/blocklist")
 
+    # -- native backend allowlist ---------------------------------------
+    @router.get("/admin/native-backends", response_class=HTMLResponse)
+    @guarded
+    def admin_native_backends(request: Request) -> Response:
+        _require_admin(request)
+        with _session(request) as session:
+            publishers = [
+                {
+                    "name": p.name,
+                    "allowed": p.native_backend_allowed,
+                    "domain": verified_domain(p),
+                }
+                for p in self_service_publishers(session)
+            ]
+        return page(request, "admin_native_backends.html", {"publishers": publishers})
+
+    @router.post("/admin/native-backends/{name}")
+    @guarded
+    def admin_set_native_backend(
+        request: Request, name: str, allowed: str = Form(""), csrf: str = Form("")
+    ) -> Response:
+        viewer = _require_admin(request)
+        _check_csrf(request, viewer, csrf)
+        with _session(request) as session:
+            if set_native_backend_allowed(session, name, allowed == "yes") is None:
+                raise HTTPException(status_code=404, detail="publisher not found")
+        return _redirect(request, "/admin/native-backends")
+
     @router.get("/removed", response_class=HTMLResponse)
     def removed_page(request: Request) -> HTMLResponse:
         with _session(request) as session:
@@ -870,6 +903,7 @@ def create_publisher_router() -> APIRouter:
             "approve",
             body.artifacts if body else [],
             acknowledge=bool(body and body.acknowledge_secret_findings),
+            inspected_native_backend=bool(body and body.inspected_native_backend),
         )
         return JSONResponse({"identity": f"{namespace}.{name}", "version": version, "review_status": review.APPROVED})
 

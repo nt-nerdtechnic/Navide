@@ -101,6 +101,7 @@ import {
 import {
   canonicalBackendPackageDir,
   PluginBackendHost,
+  type ThirdPartyAdmitter,
 } from './pluginBackendHost'
 import { currentPluginHostTarget, UNIVERSAL_PLUGIN_TARGET } from './pluginTarget'
 import {
@@ -123,6 +124,7 @@ import {
   type JsonValue,
 } from './pluginBackendSupervisor'
 import {
+  canonicalExistingDirectory,
   isWorkspaceContainedPath,
   resolvePathForContainment,
   resolveWorkspaceRelativePath,
@@ -1647,6 +1649,25 @@ export class FrontendPluginManager {
       ) !== undefined
   }
 
+  /** A third-party v2 view binds its backend when its package identity is
+   * registered; a package declaring `fs` also needs the user's fs grant for
+   * this exact version (the same grant the view itself runs under). */
+  private hasThirdPartyBackendView(
+    descriptor: PluginLaunchDescriptor,
+    capabilityContext?: HostCapabilityContext | null,
+  ): boolean {
+    const policy = descriptor.capabilityPolicy
+    if (policy?.kind !== 'manifest-v2') return false
+    if (!nonEmptyString(descriptor.packageVersion) || !nonEmptyString(descriptor.packageDir)) return false
+    if (policy.system.includes('fs')) {
+      const grant = capabilityContext?.userGrant
+      if (!grant || grant.packageVersion !== descriptor.packageVersion || !grant.system.includes('fs')) {
+        return false
+      }
+    }
+    return true
+  }
+
   /**
    * The Plans bundle exposes this Host-selected identity in DevTools so a
    * developer can distinguish the package that was selected from an older
@@ -2085,6 +2106,93 @@ export class FrontendPluginManager {
         activeVersion: record.active.packageVersion,
         ...(record.previous ? { previousVersion: record.previous.packageVersion } : {}),
       })
+    }
+  }
+
+  /** Install the third-party backend admission gate (sandbox, consent, kill
+   * switches). Without it every third-party backend is refused. */
+  setThirdPartyBackendAdmitter(admitter: ThirdPartyAdmitter | null): void {
+    this.pluginBackendHost.setThirdPartyAdmitter(admitter ?? undefined)
+  }
+
+  /** Kill switch: stop running third-party backend children. */
+  stopThirdPartyBackends(pluginId: string | null): Promise<void> {
+    return this.pluginBackendHost.stopThirdPartyBackends(pluginId)
+  }
+
+  /** The Host workspace filesystem service (the same service and path
+   * checks Plans uses) as a bridge port for the third-party package bridge,
+   * behind its own grant check. */
+  createWorkspaceFilesystemPort(): PlansFilesystemPort {
+    return createHostPlansFilesystemPort({
+      call: (operation, payload, context) => this.sendThirdPartyFilesystemService(operation, payload, context),
+    })
+  }
+
+  /** Revalidated at every dispatch, like Plans: a third-party backend reaches
+   * the workspace only through a live user-initiated binding of its own
+   * registered package version, whose manifest declares `fs` and whose user
+   * Grant for that version includes `fs`, and only at the bound workspace
+   * root. Write grants are enforced by the package bridge before this. */
+  private thirdPartyFilesystemGrantAllows(
+    payload: Record<string, JsonValue>,
+    context: PlansBridgeContext,
+  ): boolean {
+    const runtime = context.runtime
+    if (
+      context.signal.aborted ||
+      runtime.pluginId === PLANS_PLUGIN_ID ||
+      runtime.initiator.kind !== 'user' ||
+      !nonEmptyString(runtime.packageVersion) ||
+      !nonEmptyString(runtime.instanceId) ||
+      !nonEmptyString(context.workspacePath) ||
+      !nonEmptyString(context.authorizedPlanRoot)
+    ) return false
+    const activation = this.pluginBackendHost.activationForPlugin(runtime.pluginId)
+    if (
+      !activation?.thirdParty?.system.includes('fs') ||
+      activation.packageVersion !== runtime.packageVersion
+    ) return false
+    const view = this.running.get(runtime.instanceId)
+    if (
+      !view ||
+      view.id !== runtime.pluginId ||
+      !view.workspacePath ||
+      resolve(view.workspacePath) !== resolve(context.workspacePath) ||
+      runtime.workspaceId !== this.workspaceIdForPath(context.workspacePath)
+    ) return false
+    const grant = this.capabilityGrantResolver?.(runtime.pluginId, runtime.packageVersion) ?? null
+    if (!grant || grant.packageVersion !== runtime.packageVersion || !grant.system.includes('fs')) return false
+    const root = canonicalExistingDirectory(context.workspacePath)
+    return root !== null && root === context.authorizedPlanRoot && payload.workspace_path === root
+  }
+
+  private async sendThirdPartyFilesystemService(
+    operation: PlansFilesystemServiceOperation,
+    payload: Record<string, JsonValue>,
+    context: PlansBridgeContext,
+  ): Promise<JsonValue> {
+    if (context.signal.aborted) throw new PlansBridgeError('USER_CANCELLED')
+    if (!this.thirdPartyFilesystemGrantAllows(payload, context)) {
+      throw new PlansBridgeError('CAPABILITY_DENIED', 'Filesystem capability is denied.')
+    }
+    try {
+      const response = await this.sendPublicBackend(
+        operation,
+        payload,
+        () => this.thirdPartyFilesystemGrantAllows(payload, context),
+      )
+      if (!isJsonValue(response)) {
+        throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Filesystem service returned an invalid response.')
+      }
+      return response
+    } catch (error) {
+      if (error instanceof PlansBridgeError) throw error
+      if (context.signal.aborted) throw new PlansBridgeError('USER_CANCELLED')
+      if (error instanceof Error && error.message === 'request denied before dispatch') {
+        throw new PlansBridgeError('CAPABILITY_DENIED', 'Filesystem capability is denied.')
+      }
+      throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Filesystem service is unavailable.')
     }
   }
 
@@ -8991,6 +9099,38 @@ export class FrontendPluginManager {
         // The opener consumes this rejection; the attached no-op handler keeps
         // direct callers that do not await open() from producing an unhandled
         // rejection while still allowing waitForBackendBinding to observe it.
+        void record.backendBindingTask.catch(() => undefined)
+      }
+    } else if (
+      activation?.thirdParty !== undefined &&
+      record.workspacePath &&
+      this.hasThirdPartyBackendView(descriptor, record.capabilityContext)
+    ) {
+      // Third-party children are admitted (consent, sandbox, kill switches)
+      // and launched by the Backend Host; a refusal leaves the view running
+      // with every backend call failing closed.
+      const workspaceId = this.workspaceIdForPath(record.workspacePath)
+      if (workspaceId) {
+        const workspacePath = record.workspacePath
+        const binding = Promise.resolve().then(() => this.pluginBackendHost.bindView({
+          pluginId: descriptor.id,
+          packageVersion: activation.packageVersion,
+          workspaceId,
+          instanceId,
+          contributionKey: record.contributionKey ?? `${descriptor.id}.view`,
+          hostWindowId: String(hostWindow.id),
+          initiator: HOST_USER_INITIATOR,
+        }, descriptor.packageDir!, workspacePath))
+        record.backendBindingTask = binding.then(() => {
+          if (this.running.get(instanceId) === record) record.backendWorkspaceId = workspaceId
+        }).catch((error: unknown) => {
+          warnMain(
+            `[plugin-backend] ${descriptor.id} view ${instanceId} could not bind: ${
+              error instanceof Error ? error.message : 'invalid backend runtime'
+            }`,
+          )
+          throw error
+        })
         void record.backendBindingTask.catch(() => undefined)
       }
     }

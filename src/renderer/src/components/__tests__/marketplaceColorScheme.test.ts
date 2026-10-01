@@ -17,6 +17,7 @@ const tokens = [
 const SURFACES: Array<[string, string]> = [
   ['src/renderer/src/components/MarketplacePane.vue', 'marketplace-pane'],
   ['src/renderer/src/components/ExtensionsPane.vue', 'extensions-pane'],
+  ['src/renderer/src/components/NativeBackendPanel.vue', 'native-backends'],
 ]
 
 function colorSchemeOf(className: string): string {

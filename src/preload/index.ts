@@ -190,6 +190,32 @@ export interface PreparedPackSummary {
   members: PackMemberSummary[]
 }
 
+/** Third-party native backend state for the Extensions page. */
+export interface NativeBackendStatusRow {
+  pluginId: string
+  packageVersion: string
+  name: string
+  status:
+    | 'ready'
+    | 'disabled-globally'
+    | 'disabled'
+    | 'needs-consent'
+    | 'sandbox-unavailable'
+    | 'shell-not-allowed'
+    | 'stopped-after-crashes'
+    | 'unavailable'
+  reason?: string
+  changedSinceConsent: boolean
+  canWriteWorkspace: boolean
+  workspaceWrite: string[]
+  lastViolation?: 'memory' | 'cpu' | 'processes' | 'disk'
+}
+
+export interface NativeBackendOverview {
+  enabled: boolean
+  plugins: NativeBackendStatusRow[]
+}
+
 export interface InstalledPackRecord {
   id: string
   displayName?: string
@@ -1042,5 +1068,16 @@ contextBridge.exposeInMainWorld('agentTeam', {
       ipcRenderer.invoke('plugins:removePack', { id, members }),
     restoreFactoryPackage: (id: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('plugins:restoreFactoryPackage', { id }),
+    nativeBackends: {
+      list: (): Promise<NativeBackendOverview> => ipcRenderer.invoke('plugins:nativeBackends:list'),
+      setEnabled: (enabled: boolean): Promise<NativeBackendOverview> =>
+        ipcRenderer.invoke('plugins:nativeBackends:setEnabled', { enabled }),
+      allow: (id: string): Promise<NativeBackendOverview> =>
+        ipcRenderer.invoke('plugins:nativeBackends:allow', { id }),
+      setDisabled: (id: string, disabled: boolean): Promise<NativeBackendOverview> =>
+        ipcRenderer.invoke('plugins:nativeBackends:setDisabled', { id, disabled }),
+      revokeWorkspaceWrite: (id: string, workspacePath: string): Promise<NativeBackendOverview> =>
+        ipcRenderer.invoke('plugins:nativeBackends:revokeWorkspaceWrite', { id, workspacePath }),
+    },
   },
 })

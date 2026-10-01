@@ -29,6 +29,7 @@ import {
   parseManifestV2,
   validatePortableArchiveEntries,
 } from '@navide/plugin-contracts'
+import { runDevBackend } from './dev-backend.mjs'
 import { initPlugin } from './init-template.mjs'
 import { readRegularFileNoFollow } from './package-files.mjs'
 import { assertSecureTransport, credentialsPath, login, publish, registryUrl, removeCredentials, storedCredentials } from './registry-client.mjs'
@@ -436,6 +437,7 @@ function usage() {
     '  navide-plugin whoami [--registry <url>]',
     '  navide-plugin logout [--registry <url>]',
     '  navide-plugin publish <package> [--registry <url>] [--target <target>] [--signature <file-or-value>] [--insecure-http]',
+    '  navide-plugin dev-backend <directory> [--call <method>] [--args <json>] [--subscribe <event,...>] [--data <directory>]',
     '',
     `The registry defaults to $NAVIDE_REGISTRY_URL, then https://server.navide.dev/registry.`,
     'publish reads its token from NAVIDE_PLUGIN_TOKEN, then `navide-plugin login`. Registries must use https unless they are on loopback.',
@@ -454,6 +456,7 @@ const COMMANDS = {
   whoami: [0, ['--registry'], []],
   logout: [0, ['--registry'], []],
   publish: [1, ['--registry', '--target', '--signature', '--token'], ['--insecure-http']],
+  'dev-backend': [1, ['--call', '--args', '--subscribe', '--data'], []],
 }
 
 function parseArgs(argv) {
@@ -515,6 +518,15 @@ async function main(argv) {
     if (!options.get('--key') || !options.get('--signature')) fail(usage())
     const digest = verifyPackage(argument, options.get('--key'), options.get('--signature'))
     console.log(`Verified complete archive digest ${digest}`)
+    return
+  }
+  if (command === 'dev-backend') {
+    process.exitCode = await runDevBackend(argument, readManifest(argument), {
+      call: options.get('--call'),
+      args: options.get('--args'),
+      subscribe: (options.get('--subscribe') ?? '').split(',').filter(Boolean),
+      dataDir: options.get('--data'),
+    })
     return
   }
   const registry = registryUrl(options.get('--registry'))

@@ -18,6 +18,7 @@ navide-plugin login [--registry <url>] [--label <label>] [--no-browser] [--insec
 navide-plugin whoami [--registry <url>]
 navide-plugin logout [--registry <url>]
 navide-plugin publish <package> [--registry <url>] [--target <target>] [--signature <file-or-value>] [--insecure-http]
+navide-plugin dev-backend <directory> [--call <method>] [--args <json>] [--subscribe <event,...>] [--data <directory>]
 ```
 
 Packaging reads `artifact-files.json` from the staging directory; it contains

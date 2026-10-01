@@ -1,0 +1,88 @@
+name: Linux backend sandbox
+
+# Live verification of the third-party backend sandbox on Linux (bubblewrap).
+# Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, which
+# is the configuration most likely to stop bwrap. Each step pins the outcome it
+# expects through NAVIDE_EXPECT_BWRAP so a host that cannot run bwrap fails
+# the run instead of silently skipping the escape suite.
+
+on:
+  push:
+    branches:
+      - main
+    paths: &sandbox-paths
+      - src/main/plugins/pluginBackendSandbox*.ts
+      - src/main/plugins/pluginBackendResourceWatchdog*.ts
+      - src/main/plugins/pluginThirdPartyBackends.ts
+      - src/main/plugins/test-fixtures/sandbox-escape-probe.c
+      - packages/plugin-sdk/bin/dev-backend*
+      - packages/plugin-sdk/test-fixtures/**
+      - .github/workflows/linux-sandbox.yml
+  pull_request:
+    paths: *sandbox-paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-sandbox-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bubblewrap:
+    name: Sandbox escape suite (Ubuntu 24.04, bubblewrap)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install bubblewrap and a C compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap build-essential
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build public packages
+        run: pnpm run build:public-packages
+
+      - name: Record the host's namespace policy
+        run: |
+          bwrap --version
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          sysctl user.max_user_namespaces
+          bwrap --unshare-all --die-with-parent --ro-bind / / true && echo "bwrap works as configured" || echo "bwrap is refused as configured"
+
+      # 1. Restricted: no user namespaces at all. The Host and dev-backend must
+      #    refuse with a clear reason; nothing may run unsandboxed.
+      - name: Restricted user namespaces refuse cleanly
+        env:
+          NAVIDE_EXPECT_BWRAP: unavailable
+        run: |
+          previous=$(sysctl -n user.max_user_namespaces)
+          echo "PREVIOUS_MAX_USER_NAMESPACES=$previous" >> "$GITHUB_ENV"
+          sudo sysctl -w user.max_user_namespaces=0
+          pnpm test:run src/main/plugins/pluginBackendSandbox.test.ts packages/plugin-sdk/bin/dev-backend.test.ts
+
+      # 2. Permitted: namespaces allowed and the AppArmor restriction relaxed,
+      #    so bwrap works. Every escape in the suite must be blocked.
+      - name: Working bubblewrap blocks every escape
+        env:
+          NAVIDE_EXPECT_BWRAP: available
+        run: |
+          sudo sysctl -w user.max_user_namespaces="$PREVIOUS_MAX_USER_NAMESPACES"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || echo "no AppArmor userns restriction on this kernel"
+          pnpm test:run src/main/plugins/pluginBackendSandbox.test.ts packages/plugin-sdk/bin/dev-backend.test.ts

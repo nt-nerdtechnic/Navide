@@ -287,6 +287,15 @@ def _extension_reports(connection: sqlite3.Connection) -> None:
     )
 
 
+def _add_publisher_native_backend(connection: sqlite3.Connection) -> None:
+    """Admin allowlist for native backend publishing; nobody is allowed yet."""
+    if "native_backend_allowed" not in _columns(connection, "publisher"):
+        connection.execute(
+            "ALTER TABLE publisher ADD COLUMN native_backend_allowed BOOLEAN "
+            "NOT NULL DEFAULT 0"
+        )
+
+
 MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "discovery-columns", _add_discovery_columns),
     (2, "registry-signing-columns", _add_registry_signing_columns),
@@ -295,6 +304,7 @@ MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = 
     (5, "version-review-state", _add_version_review_state),
     (6, "member-ratings", _member_ratings),
     (7, "extension-reports", _extension_reports),
+    (8, "publisher-native-backend", _add_publisher_native_backend),
 )
 
 

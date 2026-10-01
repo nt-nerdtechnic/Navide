@@ -133,6 +133,7 @@ navide-plugin login [--registry <url>] [--label <label>] [--no-browser] [--insec
 navide-plugin whoami [--registry <url>]
 navide-plugin logout [--registry <url>]
 navide-plugin publish <package> [--registry <url>] [--target <target>] [--signature <file-or-value>] [--insecure-http]
+navide-plugin dev-backend <directory> [--call <method>] [--args <json>] [--subscribe <event,...>] [--data <directory>]
 ```
 
 Every staging directory includes an `artifact-files.json` control file with one
@@ -294,6 +295,92 @@ Cross-language backend support is not considered available merely because the
 manifest has `backend.entry`. It becomes a public capability only after the
 backend protocol, development launcher, packager, platform validation, and
 cross-language conformance fixtures pass the B5/B8 release gates.
+
+### Third-party backends: sandbox, consent, and publishing
+
+A backend in any package other than the first-party `navide.plans` is
+third-party native code. The Host never runs it directly; it starts only when
+all of these hold, and they are checked again before every restart:
+
+- Settings → Extensions → "Allow third-party plugins to run native backends"
+  is on. It is off by default and can only be turned on there: while it is
+  off, opening a plugin never prompts and never turns it on.
+- The user has not disabled the plugin's backend.
+- The user allowed this exact package content with this exact permission set
+  (`permissions`, `backend.methods`, `backend.events`). The digest covers every
+  file in the package (relative path and content), because a backend can read
+  any package file and turn it into code at run time. Any new version that
+  changes any file - frontend files included - is staged but not started until
+  the user allows it again.
+- The platform sandbox is available. There is no unsandboxed fallback.
+- The package does not also declare `permissions.shell`.
+
+| Platform | Sandbox | Contains | Does not contain |
+|---|---|---|---|
+| macOS | Seatbelt (`sandbox-exec`), deny by default | reads outside the package and its private data directory, writes outside the data directory, every network connection including loopback and DNS, executing anything outside the package (including files it writes to its data directory), Keychain, even the metadata of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.claude`, `~/.codex`, `~/Library/Keychains`, `~/Documents`, `~/Downloads` | CPU and memory (see below); `stat` of other paths still succeeds, because denying metadata reads under all of `/Users` or `/private/tmp` makes a real PyInstaller backend exit at start |
+| Linux | bubblewrap with every namespace unshared, only when the system `bwrap` can create unprivileged user namespaces | the same file view and no network; every process dies with the pid namespace (checked by the linux-sandbox CI workflow on Ubuntu 24.04; not yet run) | CPU and memory; system binaries under `/usr` can run inside the namespaces |
+| Windows | not supported yet (AppContainer is planned for v1.1) | — | — |
+
+On macOS a process can leave the child's process tree (fork, `setsid`, fork:
+the grandchild is reparented to launchd). Because the sandbox lets a process
+exec only files of its own package, the Host recognises every such escapee by
+its kernel executable name and the image lsof reports, counts it in the
+resource limits, and kills it whenever the child stops (kill switches, idle
+stop, crash, Host shutdown) and before the next child starts.
+
+Installing or updating a package health-checks a third-party backend only when
+it would also be allowed to run - switch on, not disabled, consent for this
+exact content and permission set, sandbox available - and then under the same
+watchdog; otherwise the package is only staged and nothing is executed.
+
+The child's `HOME`, `TMPDIR`/`TEMP` and `XDG_*` point at its private data
+directory, which is also its working directory, so a PyInstaller one-file
+executable can extract itself there. Files written to the data directory can
+still be loaded as code (`dlopen` or an executable mapping), though not
+executed as a program; this is why consent binds to the whole package content. Its only route to the user's files is the
+Host bridge: `filesystem` reads (`read_file`, `read_range`, `list_dir`,
+`stat_path`) inside the workspace the view is bound to, when the package
+declares `permissions.system: ["fs"]` and the user granted it. Writes
+(`write_file`, chunked writes, `delete`, `rename`) additionally need a
+per-workspace "allow file changes" grant, asked once in a dialog and revocable
+in Settings. Every other bridge port is refused. Third-party methods are never
+callable by MCP agents.
+
+`backend.methods` and `backend.events` declare the package-local names the
+Host forwards (1–64 methods, 1–32 events, dotted lower-camel names such as
+`files.search`). A name that is not declared is refused before it reaches the
+child. A third-party backend that declares no methods is never started.
+
+A third-party child with no call, subscription or bridge traffic for 10
+minutes is stopped. The next call starts it again lazily, through the same
+admission checks (switch, consent, sandbox, trust); an open subscription keeps
+it running. The first-party Plans backend is not affected.
+
+Before publishing, run the built backend locally with
+`navide-plugin dev-backend <directory>`: it launches the backend under the same
+sandbox profile, refuses undeclared methods and events, prints results, events
+and stderr, and answers every Host bridge request with `CAPABILITY_DENIED`. See
+[marketplace-publishing.md](marketplace-publishing.md), "Test a native backend
+before publishing".
+
+The Host samples the child's process tree every 5 seconds and kills it after
+two samples over 512 MiB resident memory, more than 8 processes, a data
+directory over 1 GiB, or 5 minutes of a full core. A failed child restarts
+after 1 s, 5 s and 30 s; a fourth failure within 10 minutes keeps it stopped
+until the user allows it again. The kill switches are the global setting, the
+per-plugin disable switch, the Registry blocklist (a trust refresh revokes a
+blocked package's running child and quarantines the package, and the pre-spawn
+trust check refuses it) and the Registry trust metadata expiry (an expired
+snapshot fails the pre-spawn trust check).
+
+Publishing a package with a backend from a self-service namespace requires an
+administrator to allowlist the publisher and a verified publisher domain
+(DNS). The package must declare `engines.navide` of at least `>=0.2.14`, must
+not request `shell`, and every version waits in the review queue, where the
+reviewer must confirm having inspected the executable of every target. The
+secret scan reads backend executables in full (up to 512 MiB uncompressed per
+file) instead of the first 5 MiB, and name similarity also warns on names
+within two edits of another publisher's extension.
 
 ### Navide Backend Wire v1
 
@@ -548,6 +635,7 @@ The version axes are independent:
 | `version` | This plugin package release; SemVer 2.0.0 prerelease and build metadata are accepted | Every published plugin release |
 | `engines.navide` | Optional product/runtime requirement | Only when the plugin needs a particular Navide product feature |
 | `backend.protocolVersion` | Navide child-process wire profile; `1` freezes the MCP 2026-07-28-aligned conventions above | Only when adopting another supported Navide wire profile |
+| `backend.methods` / `backend.events` | Package-local names the Host forwards to and from a third-party backend | When the backend's public methods or events change (users must consent again) |
 
 `engines.navide` is read as the lowest Navide release the package supports,
 the way VS Code reads `engines.vscode`: `^0.2.9`, `~0.2.9`, `>=0.2.9` and a

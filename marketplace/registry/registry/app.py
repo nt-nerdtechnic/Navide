@@ -32,6 +32,7 @@ from .discovery import (
     pack_members,
 )
 from .models import Extension, ExtensionVersion, Publisher
+from .native_backend import native_backend_publish_problem
 from .manifest import ManifestV2, manifest_capabilities, manifest_icon
 from .package import MAX_ARCHIVE_SIZE, PackageError, read_package
 from .packs import pack_conflict
@@ -509,6 +510,11 @@ def _register_routes(app: FastAPI) -> None:
         pack_conflict = _pack_conflict(repo, manifest)
         if pack_conflict is not None:
             raise HTTPException(status_code=400, detail=pack_conflict)
+
+        if isinstance(manifest, ManifestV2):
+            backend_problem = native_backend_publish_problem(publisher, manifest)
+            if backend_problem is not None:
+                raise HTTPException(status_code=403, detail=backend_problem)
 
         if isinstance(manifest, ManifestV2):
             display_name = manifest.name

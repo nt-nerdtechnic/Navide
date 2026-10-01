@@ -1,0 +1,508 @@
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BackendPluginError } from './pluginBackendSupervisor'
+import { PlansBridgeError, type PlansBridgeContext, type PlansFilesystemPort } from './plansBridge'
+import { SANDBOX_EXEC_PATH, type BackendSandboxProbe } from './pluginBackendSandbox'
+import { NativeBackendStore } from './pluginNativeBackendStore'
+import {
+  BACKEND_RESTART_DELAYS_MS,
+  backendPermissionsKey,
+  ThirdPartyBackendController,
+  thirdPartyBackendLaunchSpec,
+  type NativeBackendConsentPrompt,
+  type ThirdPartyLaunchSpec,
+} from './pluginThirdPartyBackends'
+import type { PluginActivationCatalogEntry } from './installedPlugins'
+
+const DARWIN: BackendSandboxProbe = { platform: 'darwin', sandboxExec: () => SANDBOX_EXEC_PATH, bubblewrap: () => null }
+
+function manifest(overrides: { system?: string[]; shell?: string; methods?: string[] } = {}) {
+  return {
+    schemaVersion: 2,
+    apiVersion: '^1.0.0',
+    id: 'acme.indexer',
+    name: 'Indexer',
+    version: '1.0.0',
+    publisher: 'acme',
+    permissions: {
+      ...(overrides.system ? { system: overrides.system } : {}),
+      ...(overrides.shell ? { shell: overrides.shell } : {}),
+    },
+    marketplace: { description: 'Index files.', license: 'MIT' },
+    contributes: {
+      views: [{ id: 'left', kind: 'custom', location: 'left', title: 'Indexer', entry: 'frontend/left/index.html' }],
+    },
+    backend: {
+      entry: 'backend/acme-indexer',
+      protocolVersion: 1,
+      activation: 'startup',
+      methods: overrides.methods ?? ['files.search'],
+      events: ['files.indexProgress'],
+    },
+  }
+}
+
+let root = ''
+let packageDir = ''
+let store: NativeBackendStore
+
+function writePackage(options: Parameters<typeof manifest>[0] = {}, binary = 'binary-v1'): ThirdPartyLaunchSpec {
+  mkdirSync(join(packageDir, 'backend'), { recursive: true })
+  writeFileSync(join(packageDir, 'manifest.json'), JSON.stringify(manifest(options)))
+  writeFileSync(join(packageDir, 'backend', 'acme-indexer'), binary, { mode: 0o700 })
+  const activation: PluginActivationCatalogEntry = {
+    pluginId: 'acme.indexer',
+    packageVersion: '1.0.0',
+    packageDir,
+    views: [],
+    backend: { entryFile: join(packageDir, 'backend', 'acme-indexer'), protocolVersion: 1, activation: 'startup' },
+  }
+  const spec = thirdPartyBackendLaunchSpec(activation)
+  if (!spec) throw new Error('no spec')
+  return spec
+}
+
+function controller(options: Partial<ConstructorParameters<typeof ThirdPartyBackendController>[0]> = {}) {
+  const spawnImpl = vi.fn(() => ({ pid: undefined, once: vi.fn() }))
+  const instance = new ThirdPartyBackendController({
+    store,
+    dataRoot: join(root, 'data'),
+    probe: DARWIN,
+    spawnImpl: spawnImpl as never,
+    watchResources: () => ({ dispose: vi.fn(), sample: async () => null }),
+    killSandbox: vi.fn(),
+    sweepEscapees: vi.fn(async () => []),
+    ...options,
+  })
+  return { instance, spawnImpl }
+}
+
+const allow = vi.fn(async (_prompt: NativeBackendConsentPrompt) => true)
+const deny = vi.fn(async (_prompt: NativeBackendConsentPrompt) => false)
+
+beforeEach(() => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'third-party-backend-')))
+  packageDir = join(root, 'plugins', 'acme.indexer', '1.0.0')
+  store = new NativeBackendStore(join(root, 'store'))
+  allow.mockClear()
+  deny.mockClear()
+  store.setEnabled(true)
+})
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true })
+})
+
+async function refusal(promise: Promise<unknown>): Promise<BackendPluginError> {
+  const error = await promise.then(() => null, (value: unknown) => value)
+  expect(error).toBeInstanceOf(BackendPluginError)
+  expect((error as BackendPluginError).code).toBe('BACKEND_UNAVAILABLE')
+  return error as BackendPluginError
+}
+
+describe('thirdPartyBackendLaunchSpec', () => {
+  it('projects the manifest allowlists, the fs bridge port and no agent methods', () => {
+    const spec = writePackage({ system: ['fs'] })
+    expect(spec).toMatchObject({
+      approvedMethods: ['files.search'],
+      agentMethods: [],
+      approvedEvents: ['files.indexProgress'],
+      approvedBridgePorts: ['filesystem'],
+      thirdParty: { name: 'Indexer', system: ['fs'] },
+    })
+    expect(writePackage({}).approvedBridgePorts).toEqual([])
+  })
+
+  it('never projects a backend that declares no methods', () => {
+    writePackage()
+    const raw = JSON.parse(readFileSync(join(packageDir, 'manifest.json'), 'utf8'))
+    delete raw.backend.methods
+    writeFileSync(join(packageDir, 'manifest.json'), JSON.stringify(raw))
+    expect(thirdPartyBackendLaunchSpec({
+      pluginId: 'acme.indexer', packageVersion: '1.0.0', packageDir, views: [],
+      backend: { entryFile: join(packageDir, 'backend', 'acme-indexer'), protocolVersion: 1, activation: 'startup' },
+    })).toBeNull()
+  })
+})
+
+describe('admission', () => {
+  it('is off by default, and off means off: no prompt, no spawn, never re-enabled', async () => {
+    expect(new NativeBackendStore(join(root, 'fresh-store')).isEnabled()).toBe(false)
+    store.setEnabled(false)
+    const spec = writePackage()
+    const { instance, spawnImpl } = controller({ promptConsent: allow })
+    const error = await refusal(instance.admit(spec))
+    expect(error.message).toBe('third-party native backends are turned off')
+    expect(allow).not.toHaveBeenCalled()
+    expect(store.isEnabled()).toBe(false)
+    expect(spawnImpl).not.toHaveBeenCalled()
+  })
+
+  it('never prompts without a prompt handler', async () => {
+    const { instance, spawnImpl } = controller()
+    expect((await refusal(instance.admit(writePackage()))).message).toBe('the native backend has not been allowed')
+    expect(spawnImpl).not.toHaveBeenCalled()
+  })
+
+  it('asks once, then records consent and launches through sandbox-exec', async () => {
+    const spec = writePackage({ system: ['fs'] })
+    const { instance, spawnImpl } = controller({ promptConsent: allow })
+    const admission = await instance.admit(spec, root)
+    expect(allow).toHaveBeenCalledWith(expect.objectContaining({
+      pluginId: 'acme.indexer', update: false, system: ['fs'],
+    }))
+    expect(store.isEnabled()).toBe(true)
+    expect(store.record('acme.indexer').consent?.permissionsKey).toBe(backendPermissionsKey(spec))
+    expect(admission.workspaceRoot).toBe(root)
+    await admission.beforeSpawn()
+    admission.spawnProcess(spec.entryFile, { env: { PATH: '/usr/bin' } })
+    expect(spawnImpl).toHaveBeenCalledWith(
+      SANDBOX_EXEC_PATH,
+      ['-p', expect.stringContaining('(deny default)'), realpathSync(spec.entryFile)],
+      expect.objectContaining({ shell: false, env: expect.objectContaining({ HOME: realpathSync(instance.dataDirFor('acme.indexer')) }) }),
+    )
+    expect(statSync(instance.dataDirFor('acme.indexer')).mode & 0o777).toBe(0o700)
+
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not ask again in the same session after "Not now"', async () => {
+    const spec = writePackage()
+    const { instance } = controller({ promptConsent: deny })
+    await refusal(instance.admit(spec))
+    await refusal(instance.admit(spec))
+    expect(deny).toHaveBeenCalledTimes(1)
+    expect(store.record('acme.indexer').consent).toBeUndefined()
+  })
+
+  it('asks again when the backend binary changes', async () => {
+    const { instance } = controller({ promptConsent: allow })
+    await instance.admit(writePackage({}, 'binary-v1'))
+    const changed = writePackage({}, 'binary-v2')
+    expect((await instance.status(changed)).status).toBe('needs-consent')
+    expect((await instance.status(changed)).changedSinceConsent).toBe(true)
+    await instance.admit(changed)
+    expect(allow).toHaveBeenCalledTimes(2)
+    expect(allow.mock.calls[1][0]).toMatchObject({ update: true })
+  })
+
+  it('binds consent to the whole package: any changed file asks again', async () => {
+    const { instance } = controller({ promptConsent: allow })
+    const spec = writePackage()
+    mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+    writeFileSync(join(packageDir, 'frontend', 'index.html'), '<p>v1</p>')
+    // An innocuous-looking asset a loader could decode into a library.
+    writeFileSync(join(packageDir, 'frontend', 'asset.bin'), Buffer.from('payload-v1'), { mode: 0o644 })
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(1)
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(1)
+
+    writeFileSync(join(packageDir, 'frontend', 'asset.bin'), Buffer.from('payload-v2'))
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(2)
+
+    writeFileSync(join(packageDir, 'frontend', 'index.html'), '<p>v2</p>')
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(3)
+
+    writeFileSync(join(packageDir, 'frontend', 'script.py'), 'print(1)')
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(4)
+
+    mkdirSync(join(packageDir, 'frontend', 'payload_4a5f'))
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(5)
+
+    // Files the Host writes into the package directory do not count.
+    writeFileSync(join(packageDir, '.navide-registry-receipt.json'), '{}')
+    writeFileSync(join(packageDir, '.navide-receipt.json'), '{}')
+    await instance.admit(spec)
+    expect(allow).toHaveBeenCalledTimes(5)
+  })
+
+  it('re-checks the switches after hashing: a stop during the digest refuses the spawn', async () => {
+    for (const flip of [
+      (instance: ThirdPartyBackendController) => instance.setDisabled('acme.indexer', true),
+      (instance: ThirdPartyBackendController) => instance.setEnabled(false),
+    ]) {
+      store.setEnabled(true)
+      store.setDisabled('acme.indexer', false)
+      let flipDuringDigest = false
+      let instance!: ThirdPartyBackendController
+      const spawnImpl = vi.fn(() => ({ pid: undefined, once: vi.fn() }))
+      ;({ instance } = controller({
+        spawnImpl: spawnImpl as never,
+        digestBackend: async () => {
+          if (flipDuringDigest) await flip(instance)
+          return 'digest-1'
+        },
+      }))
+      const spec = writePackage()
+      // Consent for exactly the digest this test hashes to.
+      store.grantConsent('acme.indexer', { binarySha256: 'digest-1', permissionsKey: backendPermissionsKey(spec), packageVersion: '1.0.0' })
+      const admission = await instance.preflightAdmission(spec)
+      expect(admission).not.toBeNull()
+      flipDuringDigest = true
+      await refusal(admission!.beforeSpawn())
+      expect(await instance.preflightAdmission(spec)).toBeNull()
+      expect(spawnImpl).not.toHaveBeenCalled()
+    }
+  })
+
+  it('sweeps escapees asynchronously before each spawn and the whole sandbox after the child exits', async () => {
+    const listeners = new Map<string, () => void>()
+    const killSandbox = vi.fn()
+    const sweepEscapees = vi.fn(async () => [])
+    const { instance } = controller({
+      promptConsent: allow,
+      killSandbox,
+      sweepEscapees,
+      spawnImpl: (() => ({ pid: 42, once: (event: string, listener: () => void) => listeners.set(event, listener) })) as never,
+    })
+    const spec = writePackage()
+    const admission = await instance.admit(spec)
+    await admission.beforeSpawn()
+    expect(sweepEscapees).toHaveBeenCalledWith(expect.objectContaining({
+      packageDir: realpathSync(packageDir), names: new Set(['acme-indexer']),
+    }))
+    admission.spawnProcess(spec.entryFile, {})
+    expect(killSandbox).not.toHaveBeenCalled()
+    listeners.get('exit')!()
+    expect(killSandbox).toHaveBeenCalledWith(42, expect.objectContaining({ packageDir: realpathSync(packageDir) }))
+  })
+
+  it('asks again when the declared permissions or methods change', async () => {
+    const { instance } = controller({ promptConsent: allow })
+    await instance.admit(writePackage({ methods: ['files.search'] }))
+    await instance.admit(writePackage({ methods: ['files.search', 'files.delete'] }))
+    await instance.admit(writePackage({ methods: ['files.search', 'files.delete'], system: ['fs'] }))
+    expect(allow).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses a changed binary at respawn time even after admission', async () => {
+    const { instance } = controller({ promptConsent: allow })
+    const admission = await instance.admit(writePackage({}, 'binary-v1'))
+    writeFileSync(join(packageDir, 'backend', 'acme-indexer'), 'tampered')
+    await refusal(admission.beforeSpawn())
+  })
+
+  it('refuses without prompting when the sandbox is unavailable', async () => {
+    const spec = writePackage()
+    const { instance } = controller({
+      promptConsent: allow,
+      probe: { platform: 'linux', sandboxExec: () => null, bubblewrap: () => null },
+    })
+    const error = await refusal(instance.admit(spec))
+    expect(error.message).toContain('bubblewrap')
+    expect(allow).not.toHaveBeenCalled()
+    expect((await instance.status(spec)).status).toBe('sandbox-unavailable')
+    store.setEnabled(false)
+    expect((await instance.status(spec)).status).toBe('disabled-globally')
+  })
+
+  it('refuses a backend that also declares shell access', async () => {
+    const spec = writePackage({ shell: 'allowlist' })
+    const { instance } = controller({ promptConsent: allow })
+    expect((await refusal(instance.admit(spec))).message).toContain('shell')
+    expect(allow).not.toHaveBeenCalled()
+  })
+})
+
+describe('kill switches', () => {
+  it('turning the global switch off stops every third-party child and blocks respawn', async () => {
+    const stopBackends = vi.fn(async () => undefined)
+    const { instance } = controller({ promptConsent: allow, stopBackends })
+    const admission = await instance.admit(writePackage())
+    await instance.setEnabled(false)
+    expect(stopBackends).toHaveBeenCalledWith(null)
+    await refusal(admission.beforeSpawn())
+  })
+
+  it('disabling one plugin stops it and refuses without prompting', async () => {
+    const stopBackends = vi.fn(async () => undefined)
+    const { instance } = controller({ promptConsent: allow, stopBackends })
+    const spec = writePackage()
+    const admission = await instance.admit(spec)
+    await instance.setDisabled('acme.indexer', true)
+    expect(stopBackends).toHaveBeenCalledWith('acme.indexer')
+    await refusal(admission.beforeSpawn())
+    await refusal(instance.admit(spec))
+    expect(allow).toHaveBeenCalledTimes(1)
+    expect((await instance.status(spec)).status).toBe('disabled')
+    await instance.setDisabled('acme.indexer', false)
+    await instance.admit(spec)
+  })
+})
+
+describe('crash breaker and resource violations', () => {
+  it('restarts with backoff, then stays down until the user allows it again', async () => {
+    let now = 0
+    const { instance } = controller({ promptConsent: allow, now: () => now })
+    const spec = writePackage()
+    const admission = await instance.admit(spec)
+    expect(BACKEND_RESTART_DELAYS_MS.map(() => admission.noteFailure())).toEqual([...BACKEND_RESTART_DELAYS_MS])
+    expect(admission.noteFailure()).toBeNull()
+    expect((await instance.status(spec)).status).toBe('stopped-after-crashes')
+    await refusal(admission.beforeSpawn())
+    await instance.allow(spec)
+    expect((await instance.status(spec)).status).toBe('ready')
+    now += 1
+    expect(admission.noteFailure()).toBe(BACKEND_RESTART_DELAYS_MS[0])
+  })
+
+  it('forgets failures outside the crash window', async () => {
+    let now = 0
+    const { instance } = controller({ promptConsent: allow, now: () => now })
+    const admission = await instance.admit(writePackage())
+    for (let index = 0; index < 10; index += 1) {
+      expect(admission.noteFailure()).toBe(BACKEND_RESTART_DELAYS_MS[0])
+      now += 11 * 60_000
+    }
+  })
+
+  it('reports the resource limit that stopped the child', async () => {
+    let report: ((violation: 'memory') => void) | undefined
+    const { instance } = controller({
+      promptConsent: allow,
+      spawnImpl: (() => ({ pid: 42, once: vi.fn() })) as never,
+      watchResources: (_pid, _dir, onViolation) => {
+        report = onViolation as never
+        return { dispose: vi.fn(), sample: async () => null }
+      },
+    })
+    const spec = writePackage()
+    const admission = await instance.admit(spec)
+    admission.spawnProcess(spec.entryFile, {})
+    report!('memory')
+    expect((await instance.status(spec)).lastViolation).toBe('memory')
+  })
+})
+
+describe('package bridge', () => {
+  function context(root: string): PlansBridgeContext {
+    return {
+      runtime: {
+        pluginId: 'acme.indexer', packageVersion: '1.0.0', workspaceId: 'ws', instanceId: 'i',
+        contributionKey: 'k', hostWindowId: 'w', initiator: { kind: 'user', id: 'u' } as never,
+      },
+      workspacePath: root,
+      authorizedPlanRoot: root,
+      requestId: 'bridge:1',
+      signal: new AbortController().signal,
+      emit: vi.fn(),
+    }
+  }
+  const request = (port: string, operation: string) => ({
+    id: 'bridge:1', origin: { kind: 'call' as const, requestId: 'r' }, port: port as never, operation, arguments: { rel_path: 'a.txt' },
+  })
+  function fsPort(): PlansFilesystemPort {
+    const handler = vi.fn(async () => ({ ok: true }))
+    return new Proxy({}, { get: () => handler }) as PlansFilesystemPort
+  }
+
+  it('forwards reads inside the bound workspace and denies other ports', async () => {
+    const port = fsPort()
+    const { instance } = controller({ promptConsent: allow, filesystemPort: () => port })
+    const admission = await instance.admit(writePackage({ system: ['fs'] }), root)
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'read_file'), context(root))).resolves.toEqual({ ok: true })
+    for (const [port_, operation] of [['terminal', 'create'], ['spawn', 'transform'], ['agent-messaging', 'send'], ['workspace-storage', 'get']]) {
+      await expect(admission.bridgeDispatcher.dispatch(request(port_, operation), context(root)))
+        .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+    }
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'watch'), context(root)))
+      .rejects.toMatchObject({ code: 'METHOD_NOT_FOUND' })
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'read_file'), { ...context(root), authorizedPlanRoot: undefined }))
+      .rejects.toMatchObject({ code: 'WORKSPACE_SCOPE_VIOLATION' })
+  })
+
+  it('denies the filesystem to a package that did not declare fs', async () => {
+    const { instance } = controller({ promptConsent: allow, filesystemPort: fsPort })
+    const admission = await instance.admit(writePackage({}), root)
+    expect(admission.workspaceRoot).toBeUndefined()
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'read_file'), context(root)))
+      .rejects.toBeInstanceOf(PlansBridgeError)
+  })
+
+  it('needs a separate per-workspace grant for writes, unchecked by default', async () => {
+    const promptWorkspaceWrite = vi.fn(async () => false)
+    const { instance } = controller({ promptConsent: allow, filesystemPort: fsPort, promptWorkspaceWrite })
+    const admission = await instance.admit(writePackage({ system: ['fs'] }), root)
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'write_file'), context(root)))
+      .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'delete'), context(root)))
+      .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+    expect(promptWorkspaceWrite).toHaveBeenCalledTimes(1)
+    expect(store.allowsWorkspaceWrite('acme.indexer', root)).toBe(false)
+
+    promptWorkspaceWrite.mockResolvedValue(true)
+    await instance.setWorkspaceWrite('acme.indexer', root, false)
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'write_file'), context(root))).resolves.toEqual({ ok: true })
+    expect(store.allowsWorkspaceWrite('acme.indexer', root)).toBe(true)
+    const other = join(root, 'other')
+    await expect(admission.bridgeDispatcher.dispatch(request('filesystem', 'write_file'), context(other))).resolves.toEqual({ ok: true })
+    expect(promptWorkspaceWrite).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('install-time preflight', () => {
+  it('needs the full admission for this exact content, never prompts, and runs under the watchdog', async () => {
+    const watchResources = vi.fn(() => ({ dispose: vi.fn(), sample: async () => null }))
+    const spawnImpl = vi.fn(() => ({ pid: 7, once: vi.fn() }))
+    const { instance } = controller({ promptConsent: allow, watchResources, spawnImpl: spawnImpl as never })
+    const spec = writePackage({}, 'binary-v1')
+
+    // No consent yet: staged only, and the user is not asked.
+    expect(await instance.preflightAdmission(spec)).toBeNull()
+    expect(allow).not.toHaveBeenCalled()
+
+    await instance.allow(spec)
+    const admission = await instance.preflightAdmission(spec)
+    expect(admission).not.toBeNull()
+    admission!.spawnProcess(spec.entryFile, {})
+    expect(spawnImpl).toHaveBeenCalledWith(SANDBOX_EXEC_PATH, expect.any(Array), expect.any(Object))
+    expect(watchResources).toHaveBeenCalledWith(7, expect.any(String), expect.any(Function))
+
+    // A changed binary, a disabled plugin, the switch off, a tripped breaker
+    // or no sandbox: never executed.
+    expect(await instance.preflightAdmission(writePackage({}, 'binary-v2'))).toBeNull()
+    writePackage({}, 'binary-v1')
+    await instance.setDisabled('acme.indexer', true)
+    expect(await instance.preflightAdmission(spec)).toBeNull()
+    await instance.setDisabled('acme.indexer', false)
+    store.setEnabled(false)
+    expect(await instance.preflightAdmission(spec)).toBeNull()
+    store.setEnabled(true)
+    const tripped = await instance.admit(spec)
+    for (let index = 0; index <= BACKEND_RESTART_DELAYS_MS.length; index += 1) tripped.noteFailure()
+    expect(await instance.preflightAdmission(spec)).toBeNull()
+    await instance.allow(spec)
+    expect(await controller({ probe: { platform: 'win32', sandboxExec: () => null, bubblewrap: () => null } })
+      .instance.preflightAdmission(spec)).toBeNull()
+    expect(allow).not.toHaveBeenCalled()
+  })
+})
+
+describe('NativeBackendStore', () => {
+  it('persists decisions owner-only and reads a corrupt file as nothing allowed', () => {
+    store.setEnabled(true)
+    store.grantConsent('acme.indexer', { binarySha256: 'a'.repeat(64), permissionsKey: '{}', packageVersion: '1.0.0' })
+    store.setWorkspaceWrite('acme.indexer', '/w', true)
+    const file = join(root, 'store', 'native-backends.json')
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    const reloaded = new NativeBackendStore(join(root, 'store'))
+    expect(reloaded.isEnabled()).toBe(true)
+    expect(reloaded.record('acme.indexer')).toMatchObject({ workspaceWrite: ['/w'], consent: { packageVersion: '1.0.0' } })
+    reloaded.forget('acme.indexer')
+    expect(new NativeBackendStore(join(root, 'store')).record('acme.indexer')).toEqual({})
+
+    writeFileSync(file, '{"schemaVersion":1,"enabled":true,"plugins":', { mode: 0o600 })
+    expect(new NativeBackendStore(join(root, 'store')).isEnabled()).toBe(false)
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, enabled: true, plugins: { x: { consent: { binarySha256: 'short' } } } }))
+    expect(new NativeBackendStore(join(root, 'store')).record('x').consent).toBeUndefined()
+    expect(readFileSync(file, 'utf8')).toContain('short')
+  })
+})

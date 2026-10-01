@@ -96,12 +96,18 @@ def submission_report(
         (row.namespace, row.name)
         for row in session.exec(select(Extension)).all()
     ]
-    similarity = [f.as_dict() for f in check_extension_name(namespace, name, others)]
+    has_backend = manifest.get("backend") is not None
+    similarity = [
+        f.as_dict() for f in check_extension_name(namespace, name, others, strict=has_backend)
+    ]
     capabilities = manifest_capabilities(manifest)
     return {
         "signature": "publisher-signed" if signature_present else "unsigned",
         "similarity": similarity,
-        "secret_scan": scan_package(data).as_dict(),
+        "secret_scan": scan_package(
+            data, backend_prefix="backend/" if has_backend else None
+        ).as_dict(),
+        "native_backend": has_backend,
         "capabilities": capabilities,
         "sensitive_capabilities": sensitive_capabilities(capabilities),
         "size": len(data),
@@ -178,6 +184,7 @@ def approve(
     reviewer: str,
     artifacts: Sequence[str],
     acknowledge_secret_findings: bool = False,
+    inspected_native_backend: bool = False,
 ) -> list[ExtensionVersion]:
     """Sign and publish the pending artifacts of `extension@version`, which
     must be exactly `artifacts` (the package digests the reviewer saw)."""
@@ -206,6 +213,11 @@ def approve(
         if secret_findings(row.review_report) and not acknowledge_secret_findings:
             raise ReviewError(
                 "secret scan has findings; confirm they are false positives to approve"
+            )
+        if (row.review_report or {}).get("native_backend") and not inspected_native_backend:
+            raise ReviewError(
+                "this version ships a native backend; confirm every target's "
+                "executable was inspected to approve"
             )
     previously_public = [
         v.version

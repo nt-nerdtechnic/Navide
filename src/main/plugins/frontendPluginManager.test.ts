@@ -380,6 +380,8 @@ import { PluginStorageError } from './pluginStorage'
 import type { ExecutionPolicySnapshot } from './executionPolicy'
 import type { JsonValue } from '../../../packages/plugin-contracts/src/index'
 import type { FilePickerInvocation } from '../filePicker'
+import { NativeBackendStore } from './pluginNativeBackendStore'
+import { ThirdPartyBackendController, thirdPartyBackendLaunchSpec } from './pluginThirdPartyBackends'
 
 interface FakeWebContentsLike {
   id: number
@@ -13809,5 +13811,141 @@ describe('plansQuery workspace alias', () => {
       expect(plain.has('workspace_display_name')).toBe(false)
     }
     expect(new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW')).has('workspace_display_name')).toBe(false)
+  })
+})
+
+describe('third-party workspace filesystem (real package bridge, port and grant check)', () => {
+  it('reads and writes only through its own live grant, at the bound workspace root, without touching Plans rules', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'third-party-fs-')))
+    const workspace = join(root, 'workspace')
+    const packageDir = join(root, 'package')
+    mkdirSync(workspace)
+    mkdirSync(join(packageDir, 'backend'), { recursive: true })
+    writeFileSync(join(packageDir, 'backend', 'acme-indexer'), 'binary', { mode: 0o700 })
+    writeFileSync(join(packageDir, 'manifest.json'), JSON.stringify({
+      schemaVersion: 2, apiVersion: '^1.0.0', id: 'acme.indexer', name: 'Indexer', version: '1.0.0', publisher: 'acme',
+      permissions: { system: ['fs'] },
+      marketplace: { description: 'Index files.', license: 'MIT' },
+      contributes: { views: [{ id: 'left', kind: 'custom', location: 'left', title: 'Indexer', entry: 'frontend/left/index.html' }] },
+      backend: { entry: 'backend/acme-indexer', protocolVersion: 1, activation: 'startup', methods: ['files.search'] },
+    }))
+    const spec = thirdPartyBackendLaunchSpec({
+      pluginId: 'acme.indexer', packageVersion: '1.0.0', packageDir, views: [],
+      backend: { entryFile: join(packageDir, 'backend', 'acme-indexer'), protocolVersion: 1, activation: 'startup' },
+    })!
+    const view: NonNullable<PluginLaunchDescriptor['views']>[number] = {
+      id: 'left', contributionKey: 'acme.indexer.left', kind: 'custom', location: 'left', title: 'Indexer',
+      entryFile: join(packageDir, 'frontend/left/index.html'),
+    }
+    const pluginDescriptor: PluginLaunchDescriptor = {
+      id: 'acme.indexer', packageVersion: '1.0.0', packageDir, requires: ['fs'],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+      devUrl: '', entryFile: view.entryFile, views: [view],
+    }
+    const mgr = new FrontendPluginManager()
+    let grant: { packageVersion: string; system: Array<'fs'>; storage: boolean } | null = {
+      packageVersion: '1.0.0', system: ['fs'], storage: true,
+    }
+    mgr.setCapabilityGrantResolver(() => grant)
+    mgr.registerDescriptor(pluginDescriptor, { builtin: true })
+    mgr.registerBackendActivation(spec)
+    const bind = vi.spyOn(PluginBackendHost.prototype, 'bindView').mockResolvedValue(undefined)
+    const service = vi.spyOn(
+      mgr as unknown as { sendPublicBackend: (type: string, payload: Record<string, unknown>, before?: () => boolean) => Promise<unknown> },
+      'sendPublicBackend',
+    ).mockImplementation(async (_type, _payload, before) => {
+      if (before && !before()) throw new Error('request denied before dispatch')
+      return { ok: true, content: 'hello', mtime: 1 }
+    })
+    const store = new NativeBackendStore(join(root, 'store'))
+    store.setEnabled(true)
+    const promptWorkspaceWrite = vi.fn(async () => false)
+    const controller = new ThirdPartyBackendController({
+      store,
+      dataRoot: join(root, 'data'),
+      probe: { platform: 'darwin', sandboxExec: () => '/usr/bin/sandbox-exec', bubblewrap: () => null },
+      promptConsent: async () => true,
+      promptWorkspaceWrite,
+      filesystemPort: () => mgr.createWorkspaceFilesystemPort(),
+      watchResources: () => ({ dispose: () => undefined, sample: async () => null }),
+    })
+    const host = new FakeBrowserWindow()
+    try {
+      const handle = await mgr.openView(pluginDescriptor, view, {
+        hostWindow: asHost(host),
+        bounds: 'fill',
+        workspacePath: workspace,
+        capabilityContext: {
+          publisherEligible: false,
+          userGrant: grant,
+          runtimeBinding: {
+            pluginId: 'acme.indexer', packageVersion: '1.0.0',
+            workspaceId: mgr.workspaceIdForPath(workspace), instanceId: null, audience: view.contributionKey,
+          },
+        } as HostCapabilityContext,
+      })
+      expect(bind).toHaveBeenCalled()
+      const admission = await controller.admit(spec, workspace)
+      expect(admission.workspaceRoot).toBe(workspace)
+      const context = (instanceId: string, overrides: Partial<PlansBridgeContext> = {}): PlansBridgeContext => ({
+        runtime: {
+          pluginId: 'acme.indexer', packageVersion: '1.0.0', workspaceId: mgr.workspaceIdForPath(workspace),
+          instanceId, contributionKey: view.contributionKey, hostWindowId: 'w', initiator: { kind: 'user', id: 'u' },
+        },
+        workspacePath: workspace,
+        authorizedPlanRoot: workspace,
+        requestId: 'bridge:1',
+        signal: new AbortController().signal,
+        emit: () => undefined,
+        ...overrides,
+      })
+      const request = (operation: string, args: Record<string, unknown> = { rel_path: 'a.txt' }) => ({
+        id: 'bridge:1', origin: { kind: 'call' as const, requestId: 'r' }, port: 'filesystem' as const, operation, arguments: args as never,
+      })
+
+      await expect(admission.bridgeDispatcher.dispatch(request('read_file'), context(handle.instanceId)))
+        .resolves.toEqual({ content: 'hello', mtime: 1 })
+      expect(service).toHaveBeenLastCalledWith('fs.read_file', { rel_path: 'a.txt', workspace_path: workspace }, expect.any(Function))
+
+      // Writes need the separate per-workspace grant.
+      service.mockClear()
+      await expect(admission.bridgeDispatcher.dispatch(request('write_file', { rel_path: 'a.txt', content: 'x' }), context(handle.instanceId)))
+        .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+      expect(service).not.toHaveBeenCalled()
+      store.setWorkspaceWrite('acme.indexer', workspace, true)
+      await admission.bridgeDispatcher.dispatch(request('write_file', { rel_path: 'a.txt', content: 'x' }), context(handle.instanceId))
+      expect(service).toHaveBeenLastCalledWith('fs.write_file', expect.objectContaining({ workspace_path: workspace }), expect.any(Function))
+
+      // Another instance, another workspace root, or an agent initiator is refused.
+      service.mockClear()
+      await expect(admission.bridgeDispatcher.dispatch(request('read_file'), context('not-running')))
+        .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+      await expect(admission.bridgeDispatcher.dispatch(request('read_file'), context(handle.instanceId, { authorizedPlanRoot: root })))
+        .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+      const agent = context(handle.instanceId)
+      await expect(admission.bridgeDispatcher.dispatch(request('read_file'), {
+        ...agent, runtime: { ...agent.runtime, initiator: { kind: 'agent', source: 'mcp', id: 'a' } as never },
+      })).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+      expect(service).not.toHaveBeenCalled()
+
+      // Revoking the user Grant takes effect at the next dispatch.
+      grant = null
+      await expect(admission.bridgeDispatcher.dispatch(request('read_file'), context(handle.instanceId)))
+        .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+
+      // Plans' own grant rule is unchanged: it never admits a third-party runtime.
+      grant = { packageVersion: '1.0.0', system: ['fs'], storage: true }
+      const plansInternals = mgr as unknown as {
+        sendPlansFilesystemService: (operation: string, payload: Record<string, unknown>, context: PlansBridgeContext) => Promise<unknown>
+      }
+      await expect(plansInternals.sendPlansFilesystemService('fs.read_file', { rel_path: 'a.txt', workspace_path: workspace }, context(handle.instanceId)))
+        .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+      mgr.destroyInstance(handle.instanceId)
+    } finally {
+      bind.mockRestore()
+      service.mockRestore()
+      await mgr.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

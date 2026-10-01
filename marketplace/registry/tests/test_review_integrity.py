@@ -4,12 +4,14 @@ while they are still pending."""
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from registry.models import ExtensionVersion
+from registry.models import ExtensionVersion, Publisher
+from registry.native_backend import MIN_NAVIDE_FOR_THIRD_PARTY_BACKEND
 from tests.fixtures import build_v2_package, contract_manifest
 from tests.phase2_helpers import (
     ADMIN_HEADERS,
@@ -37,12 +39,25 @@ def client(tmp_path):
 def _native_package(backend_data: bytes) -> bytes:
     manifest = contract_manifest("backend-only-skills.json")
     manifest.update(id="acme-tools.skills", publisher="acme-tools")
+    manifest["engines"] = {"navide": f">={MIN_NAVIDE_FOR_THIRD_PARTY_BACKEND}"}
+    manifest["backend"]["methods"] = ["skills.list"]
     backend_name = manifest["backend"]["entry"] + ".exe" if backend_data.startswith(b"MZ") else None
     return build_v2_package(manifest, backend_data=backend_data, backend_name=backend_name)
 
 
+def _allow_native_backends(client) -> None:
+    """Native backends need the admin allowlist and a verified domain."""
+    with Session(client.app.state.registry.engine) as session:
+        publisher = session.exec(select(Publisher).where(Publisher.name == "acme-tools")).one()
+        publisher.native_backend_allowed = True
+        publisher.domain_verified_at = datetime.now(timezone.utc)
+        session.add(publisher)
+        session.commit()
+
+
 def _submit(client, target: str) -> str:
     """Upload one target; return its package digest."""
+    _allow_native_backends(client)
     token = new_token(client, "acme-tools")
     data = MACHO_ARM64 if target == "darwin-arm64" else PE_X64
     resp = publish(client, token, _native_package(data), target)
@@ -66,7 +81,7 @@ def test_approve_refuses_a_target_added_after_the_reviewer_looked(client):
     seen = [_submit(client, "darwin-arm64")]
     _submit(client, "win32-x64")  # uploaded while the reviewer reads the report
 
-    resp = client.post(f"{BASE}/approve", json={"artifacts": seen}, headers=ADMIN_HEADERS)
+    resp = client.post(f"{BASE}/approve", json={"artifacts": seen, "inspected_native_backend": True}, headers=ADMIN_HEADERS)
     assert resp.status_code == 409, resp.text
     assert "reload" in resp.json()["detail"]
     rows = _rows(client)
@@ -76,7 +91,11 @@ def test_approve_refuses_a_target_added_after_the_reviewer_looked(client):
     }
 
     # After a reload the reviewer sees both and can approve both.
-    resp = client.post(f"{BASE}/approve", json={"artifacts": _queued_artifacts(client)}, headers=ADMIN_HEADERS)
+    resp = client.post(
+        f"{BASE}/approve",
+        json={"artifacts": _queued_artifacts(client), "inspected_native_backend": True},
+        headers=ADMIN_HEADERS,
+    )
     assert resp.status_code == 200, resp.text
     assert all(r.review_status == "approved" and r.registry_signature for r in _rows(client).values())
 
@@ -107,7 +126,7 @@ def test_web_form_carries_the_artifacts_it_showed(client):
     _submit(client, "win32-x64")  # the publisher adds a target meanwhile
 
     url = "/admin/review/acme-tools/skills/1.0.0/approve"
-    resp = admin.post(url, data={"csrf": csrf, "artifact": [seen]})
+    resp = admin.post(url, data={"csrf": csrf, "artifact": [seen], "inspected_backend": "yes"})
     assert resp.status_code == 409, resp.text
     assert _rows(client)["win32-x64"].registry_signature is None
 

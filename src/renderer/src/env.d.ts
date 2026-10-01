@@ -439,6 +439,13 @@ declare global {
         finishPack: (id: string) => Promise<{ recorded: boolean; pack?: InstalledPackRecord }>
         listPacks: () => Promise<InstalledPackRecord[]>
         removePack: (id: string, members: string[]) => Promise<{ removed: boolean }>
+        nativeBackends?: {
+          list: () => Promise<NativeBackendOverview>
+          setEnabled: (enabled: boolean) => Promise<NativeBackendOverview>
+          allow: (id: string) => Promise<NativeBackendOverview>
+          setDisabled: (id: string, disabled: boolean) => Promise<NativeBackendOverview>
+          revokeWorkspaceWrite: (id: string, workspacePath: string) => Promise<NativeBackendOverview>
+        }
       }
     }
   }
@@ -521,6 +528,32 @@ declare global {
     trustTier: 'signed-verified' | 'unsigned'
     publisherId: string
     members: PackMemberSummary[]
+  }
+
+  /** Third-party native backend state for the Extensions page. */
+  interface NativeBackendStatusRow {
+    pluginId: string
+    packageVersion: string
+    name: string
+    status:
+      | 'ready'
+      | 'disabled-globally'
+      | 'disabled'
+      | 'needs-consent'
+      | 'sandbox-unavailable'
+      | 'shell-not-allowed'
+      | 'stopped-after-crashes'
+      | 'unavailable'
+    reason?: string
+    changedSinceConsent: boolean
+    canWriteWorkspace: boolean
+    workspaceWrite: string[]
+    lastViolation?: 'memory' | 'cpu' | 'processes' | 'disk'
+  }
+
+  interface NativeBackendOverview {
+    enabled: boolean
+    plugins: NativeBackendStatusRow[]
   }
 
   interface InstalledPackRecord {

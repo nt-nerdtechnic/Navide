@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from io import BytesIO
 
 MAX_SCANNED_BYTES_PER_FILE = 5 * 1024 * 1024
+MAX_SCANNED_BYTES_PER_BACKEND = 512 * 1024 * 1024
+"""A native backend executable is scanned whole, binary or not: bundled
+interpreters embed source and config as plain bytes. The bound only stops a
+decompression bomb; the archive itself is capped at 200 MiB."""
 MAX_FINDINGS = 50
 
 RULES: tuple[tuple[str, re.Pattern[bytes]], ...] = (
@@ -72,8 +76,9 @@ def scan_bytes(path: str, data: bytes) -> list[SecretFinding]:
     return findings
 
 
-def scan_package(data: bytes) -> ScanReport:
-    """Scan every non-binary member of a validated package archive."""
+def scan_package(data: bytes, *, backend_prefix: str | None = None) -> ScanReport:
+    """Scan every non-binary member of a validated package archive, plus every
+    member under `backend_prefix` in full whether binary or not."""
     findings: list[SecretFinding] = []
     scanned = 0
     truncated = False
@@ -81,12 +86,14 @@ def scan_package(data: bytes) -> ScanReport:
         for info in archive.infolist():
             if info.is_dir():
                 continue
+            backend = backend_prefix is not None and info.filename.startswith(backend_prefix)
+            limit = MAX_SCANNED_BYTES_PER_BACKEND if backend else MAX_SCANNED_BYTES_PER_FILE
             with archive.open(info) as stream:
-                content = stream.read(MAX_SCANNED_BYTES_PER_FILE + 1)
-            if len(content) > MAX_SCANNED_BYTES_PER_FILE:
+                content = stream.read(limit + 1)
+            if len(content) > limit:
                 truncated = True
-                content = content[:MAX_SCANNED_BYTES_PER_FILE]
-            if _is_binary(content):
+                content = content[:limit]
+            if not backend and _is_binary(content):
                 continue
             scanned += 1
             findings.extend(scan_bytes(info.filename, content))

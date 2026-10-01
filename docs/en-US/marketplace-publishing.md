@@ -118,6 +118,43 @@ Write `backend.entry` without an extension (`backend/acme-hello`); on
 `win32-*` targets the package must contain `backend/acme-hello.exe` instead.
 See FORMAT.md, "Targets and backend entry".
 
+### Test a native backend before publishing
+
+A backend runs in Navide only inside the OS sandbox, after the user allows it,
+and only answers the methods and events it declares. Publishing one also needs
+an administrator to allow your namespace for native backends, a verified
+publisher domain, `engines.navide` of at least `>=0.2.14`, a non-empty
+`backend.methods`, and no `shell` permission. See
+[plugin-development-v2.md](plugin-development-v2.md), "Third-party backends".
+
+`dev-backend` runs your built backend the same way, so what works here works
+in Navide:
+
+```bash
+# one call, then exit (exit code 1 when the call fails)
+navide-plugin dev-backend dist/package --call files.search --args '{"query":"todo"}'
+
+# subscribe first, then watch events arrive while the call runs
+navide-plugin dev-backend dist/package --subscribe files.indexProgress --call files.index
+
+# interactive: type `<method> [json]`, `:subscribe <event>`, or `:quit`
+navide-plugin dev-backend dist/package
+```
+
+- It uses the exact sandbox profile Navide uses: `sandbox-exec` on macOS;
+  `bwrap` on Linux, and a clear refusal when bubblewrap or unprivileged user
+  namespaces are unavailable; Windows is not supported yet.
+- The backend's `HOME` and `TMPDIR` are a private data directory
+  (`<directory>/.navide-dev/data`, or `--data <directory>`), which is also the
+  only writable place. It has no network access and cannot read your home
+  folder.
+- Calls to methods, and subscriptions to events, that `manifest.json` does not
+  declare are refused before they reach the backend, as in Navide.
+- The Host bridge is not emulated: each `navide/host/call` the backend makes
+  is printed and answered with `CAPABILITY_DENIED`.
+- Results print as `← result`, events as `← event`, and the backend's stderr
+  as `[backend]` lines.
+
 ## 3. Test against a local registry
 
 A local Registry exercises the same publish checks as the Marketplace without
@@ -368,4 +405,5 @@ navide-plugin login [--registry <url>] [--label <label>] [--no-browser] [--insec
 navide-plugin whoami [--registry <url>]
 navide-plugin logout [--registry <url>]
 navide-plugin publish <package> [--registry <url>] [--target <target>] [--signature <file-or-value>] [--insecure-http]
+navide-plugin dev-backend <directory> [--call <method>] [--args <json>] [--subscribe <event,...>] [--data <directory>]
 ```

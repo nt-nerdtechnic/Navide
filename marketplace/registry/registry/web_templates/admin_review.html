@@ -27,6 +27,7 @@
       <li class="verdict {{ 'bad' if item.similarity_blocked else ('warn' if item.similarity else 'ok') }}">{{ '✕' if item.similarity_blocked else ('⚠' if item.similarity else '✓') }} Name</li>
       <li class="verdict {{ 'bad' if item.secret_findings else 'ok' }}">{{ '✕' if item.secret_findings else '✓' }} Secrets{% if item.secret_findings %} ({{ item.secret_findings|length }}){% endif %}</li>
       <li class="verdict {{ 'warn' if item.sensitive_capabilities else 'ok' }}">{{ '⚠' if item.sensitive_capabilities else '✓' }} Permissions</li>
+      {% if item.native_backend %}<li class="verdict warn">⚠ Native code</li>{% endif %}
       <li class="verdict ok">✓ Size</li>
     </ul>
     <details class="review-checks"{% if needs_look %} open{% endif %}>
@@ -48,6 +49,11 @@
         <tr><td>Permissions requested</td>
           <td>{% if item.sensitive_capabilities %}<span class="chip chip-warn">sensitive</span>{% else %}<span class="chip">none sensitive</span>{% endif %}</td>
           <td>{{ item.capabilities|join(', ') or '—' }}</td></tr>
+        {% if item.native_backend %}
+        <tr><td>Native backend</td><td><span class="chip chip-warn">native code</span></td>
+          <td>Runs on users' machines (sandboxed). Download and inspect the executable for every target:
+            does it match the declared methods, embed a second executable, or contain credentials?</td></tr>
+        {% endif %}
         <tr><td>Package limits</td><td><span class="badge badge-signed">✓ pass</span></td>
           <td>{{ '%.1f'|format(item.size / 1048576) }} MiB / {{ (item.size_limit / 1048576)|int }} MiB</td></tr>
       </tbody>
@@ -60,6 +66,9 @@
         {% for a in item.artifacts %}<input type="hidden" name="artifact" value="{{ a }}">{% endfor %}
         {% if item.secret_findings %}
         <label class="muted"><input type="checkbox" name="acknowledge" value="yes" required> findings are false positives</label>
+        {% endif %}
+        {% if item.native_backend %}
+        <label class="muted"><input type="checkbox" name="inspected_backend" value="yes" required> I inspected the native backend of every target</label>
         {% endif %}
         <button type="submit" class="install-button">Approve &amp; publish</button>
       </form>
@@ -83,6 +92,6 @@
   {% else %}
   <p class="empty">Nothing waiting for review.</p>
   {% endfor %}
-  <p class="page-links"><a href="{{ base }}/admin/blocklist">Blocklist →</a></p>
+  <p class="page-links"><a href="{{ base }}/admin/blocklist">Blocklist →</a><a href="{{ base }}/admin/native-backends">Native backend publishers →</a></p>
 </section>
 {% endblock %}

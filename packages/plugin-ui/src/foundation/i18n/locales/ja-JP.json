@@ -1306,6 +1306,35 @@
     },
     "extensions": {
       "devUnpacked": "署名なしのローカルフォルダー（開発者モードのみ）",
+      "nativeBackends": {
+        "title": "ネイティブバックエンド",
+        "description": "一部の拡張機能にはネイティブコードが含まれます。Navide はそれをネットワークなしのサンドボックスで実行します。読み取れるのは一緒に開いたワークスペースだけで、ファイルの変更は許可した場所に限られます。下のスイッチをオンにするまで、ネイティブコードは実行されません。",
+        "enable": "サードパーティ製プラグインのネイティブバックエンド実行を許可",
+        "empty": "ネイティブバックエンドを含むプラグインはインストールされていません。",
+        "allow": "許可",
+        "disable": "無効化",
+        "enable_plugin": "有効化",
+        "changed": "許可した後にネイティブコードまたは権限が変更されました。",
+        "writeAllowed": "{path} のファイル変更を許可済み",
+        "revoke": "取り消す",
+        "violation": "{kind}の上限を超えたため停止しました。",
+        "kinds": {
+          "memory": "メモリ",
+          "cpu": "CPU",
+          "processes": "プロセス数",
+          "disk": "ディスク"
+        },
+        "status": {
+          "ready": "許可済み",
+          "disabledGlobally": "オフ（設定がオフ）",
+          "disabled": "無効",
+          "needsConsent": "許可が必要",
+          "sandboxUnavailable": "このシステムでは安全に実行できません",
+          "shellNotAllowed": "ブロック：シェルアクセスも要求しています",
+          "stoppedAfterCrashes": "失敗が続いたため停止",
+          "unavailable": "利用不可"
+        }
+      },
       "bundled": "同梱",
       "bundledGit": "同梱の Git",
       "state": {

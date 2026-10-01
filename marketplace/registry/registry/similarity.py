@@ -134,13 +134,16 @@ def check_extension_name(
     others: Iterable[tuple[str, str]],
     *,
     official_namespaces: Iterable[str] = ("navide",),
+    strict: bool = False,
 ) -> list[NameFinding]:
     """Compare `namespace.name` with every other known extension.
 
     `others` is (namespace, name) of existing extensions; the submission's own
     identity is skipped. An extension name that folds to another publisher's
     full identity (`zzz.navide-git` vs `navide.git`) or to a first-party
-    extension's name is blocked; a close ratio is a warning.
+    extension's name is blocked; a close ratio is a warning. `strict` (native
+    backend packages) also warns on names within two edits of another
+    publisher's extension.
     """
     findings: list[NameFinding] = []
     official = set(official_namespaces)
@@ -170,6 +173,14 @@ def check_extension_name(
                     "warn",
                     f"“{name}” is {round(ratio * 100)}% similar to "
                     f"{other_identity} ({owner})",
+                )
+            )
+        elif strict and other_ns != namespace and edit_distance(name, other_name) <= 2:
+            findings.append(
+                NameFinding(
+                    "warn",
+                    f"“{name}” is within two edits of {other_identity} "
+                    "(different publisher; native backend packages get the stricter check)",
                 )
             )
     # Reserved words hard-block namespaces only. In an extension name

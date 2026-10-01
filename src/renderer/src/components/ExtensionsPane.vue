@@ -19,6 +19,7 @@ import { confirmUninstall, ipcErrorMessage, usePluginInstallFlow } from '../comp
 import { useNotify } from '@navide/plugin-ui/foundation'
 import PluginTrustDialog from './PluginTrustDialog.vue'
 import PackUninstallDialog from './PackUninstallDialog.vue'
+import NativeBackendPanel from './NativeBackendPanel.vue'
 import MarketplaceIcon from './MarketplaceIcon.vue'
 
 const { t } = useI18n()
@@ -460,6 +461,8 @@ watch(installed, () => void refreshPacks())
         <li v-if="!nonFactoryInstalled.length" class="ext-empty nv-empty">{{ $t('settings.extensions.empty') }}</li>
       </ul>
     </section>
+
+    <NativeBackendPanel />
 
     <PackUninstallDialog
       v-if="uninstallingPack"

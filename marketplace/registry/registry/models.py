@@ -39,6 +39,8 @@ class Publisher(SQLModel, table=True):
     """Random value expected in `_navide-verify.<domain>` TXT."""
     domain_verified_at: datetime | None = None
     """Set once the TXT record matched; cleared when the domain changes."""
+    native_backend_allowed: bool = Field(default=False, sa_column_kwargs={"server_default": text("0")})
+    """Admin allowlist for publishing native backends (see native_backend.py)."""
     created_at: datetime = Field(default_factory=_now)
 
 

@@ -164,6 +164,15 @@ import {
   type GitAccountInput
 } from './gitAccountsStore'
 import type { EditorNativeHost } from './plugins/editorNativeCapability'
+import { NativeBackendStore } from './plugins/pluginNativeBackendStore'
+import { registerNativeBackendIpc } from './plugins/pluginNativeBackendIpc'
+import {
+  isThirdPartyLaunchSpec,
+  thirdPartyBackendLaunchSpec,
+  ThirdPartyBackendController,
+  type NativeBackendConsentPrompt,
+  type NativeBackendWritePrompt,
+} from './plugins/pluginThirdPartyBackends'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -920,6 +929,31 @@ async function preflightCandidateBackend(
 ): Promise<void> {
   const backend = activation.backend
   if (!backend) return
+  if (activation.pluginId !== 'navide.plans') {
+    // A third-party candidate runs only with the admission a real launch
+    // needs (switch, consent for this content, sandbox, breaker), never with
+    // a prompt, and under the same watchdog and cleanup. Otherwise installing
+    // only stages it; its first launch asks through the full admission.
+    const spec = thirdPartyBackendActivation(activation)
+    if (!spec || !isThirdPartyLaunchSpec(spec)) return
+    const admission = await thirdPartyBackends.preflightAdmission(spec)
+    if (!admission) return
+    const supervisor = new PluginBackendSupervisor(spec, {
+      environment: createPluginBackendChildEnvironment(),
+      spawnProcess: admission.spawnProcess,
+      bridgeDispatcher: admission.bridgeDispatcher,
+      beforeSpawn: async () => {
+        verifyCurrentInstalledBackendTrust(spec)
+        await admission.beforeSpawn()
+      },
+    })
+    try {
+      await supervisor.start()
+    } finally {
+      await supervisor.close()
+    }
+    return
+  }
   const launch: BackendPluginLaunchSpec = {
     pluginId: activation.pluginId,
     packageVersion: activation.packageVersion,
@@ -980,6 +1014,102 @@ frontendPluginManager.setBackendSpawnTrustVerifier((activation) => {
     throw error
   }
 })
+// Third-party package backends are someone else's native code. They run only
+// under the OS sandbox, with the user's consent for the exact binary and
+// permission set, behind a global switch that is off by default.
+const nativeBackendRoot = join(app.getPath('userData'), 'plugin-native-backends')
+const nativeBackendStore = new NativeBackendStore(nativeBackendRoot)
+const thirdPartyBackends = new ThirdPartyBackendController({
+  store: nativeBackendStore,
+  dataRoot: join(nativeBackendRoot, 'data'),
+  filesystemPort: () => frontendPluginManager.createWorkspaceFilesystemPort(),
+  stopBackends: (pluginId) => frontendPluginManager.stopThirdPartyBackends(pluginId),
+  promptConsent: promptNativeBackendConsent,
+  promptWorkspaceWrite: promptNativeBackendWorkspaceWrite,
+})
+frontendPluginManager.setThirdPartyBackendAdmitter((activation, workspacePath) =>
+  isThirdPartyLaunchSpec(activation)
+    ? thirdPartyBackends.admit(activation, workspacePath)
+    : Promise.reject(new BackendPluginError('BACKEND_UNAVAILABLE', 'not a third-party backend')),
+)
+
+function thirdPartyBackendActivation(activation: PluginActivationCatalogEntry): BackendPluginLaunchSpec | null {
+  try {
+    return thirdPartyBackendLaunchSpec(activation)
+  } catch (error) {
+    console.warn(
+      `[main] third-party backend for ${activation.pluginId} is unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+    return null
+  }
+}
+
+function nativeBackendDialogParent(): BrowserWindow | null {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused && mainWindows.has(focused) && !focused.isDestroyed()) return focused
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+}
+
+async function promptNativeBackendConsent(prompt: NativeBackendConsentPrompt): Promise<boolean> {
+  const access = prompt.system.includes('fs')
+    ? 'It asks to read files in the workspace you open it in. Changing files needs your separate permission.'
+    : 'It asks for no access to your files.'
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'Native code',
+    message: prompt.update
+      ? `${prompt.name} ${prompt.packageVersion} changed its native code or permissions. Allow it to run?`
+      : `${prompt.name} contains native code that runs on your computer. Allow it to run?`,
+    detail: [
+      'Navide runs it in a sandbox: it has no network access and cannot read your home folder.',
+      access,
+      'You can disable it at any time in Settings → Extensions.',
+    ].filter(Boolean).join('\n\n'),
+    buttons: ['Not now', 'Allow'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  }
+  const parent = nativeBackendDialogParent()
+  const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+  return result.response === 1
+}
+
+async function promptNativeBackendWorkspaceWrite(prompt: NativeBackendWritePrompt): Promise<boolean> {
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'Allow file changes',
+    message: `Allow ${prompt.name} to change files in this workspace?`,
+    detail: `${prompt.workspacePath}\n\nYou can revoke this in Settings → Extensions.`,
+    buttons: ['Don\'t allow', 'Allow'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  }
+  const parent = nativeBackendDialogParent()
+  const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+  return result.response === 1
+}
+
+// Installed third-party backends from the previous session. Plans registers
+// through its own bundled/installed selection path.
+for (const activation of installedPluginLoad.activationCatalog) {
+  if (!activation.backend || activation.pluginId === 'navide.plans') continue
+  const spec = thirdPartyBackendActivation(activation)
+  if (!spec || frontendPluginManager.hasBackendActivation(activation.pluginId, activation.packageVersion)) continue
+  try {
+    frontendPluginManager.registerBackendActivation(spec)
+  } catch (error) {
+    console.warn(
+      `[main] third-party backend for ${activation.pluginId} was not registered: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+}
+
 frontendPluginManager.setExecutionPolicyResolver((workspacePath?: string): ExecutionPolicySnapshot => {
   try {
     if (!workspacePath) return executionPolicySourceStore.getGlobalEffectivePolicy()
@@ -1271,22 +1401,12 @@ const applyPluginActivationChange = ({
   activation?: (typeof approvedInstalledPluginActivations)[number]
 }): void => {
   if (activation?.backend) {
-    // Generic packages get a descriptor-matching backend tuple with no
-    // Host-approved methods, events, or bridge ports until a package-specific
-    // Host policy grants them. Plans retains its existing explicit allowlist.
+    // Every package backend other than Plans is third-party native code: its
+    // allowlists come from its manifest and it is launched only through the
+    // sandboxed third-party admission gate. Plans retains its explicit allowlist.
     const backend: BackendPluginLaunchSpec | null = activation.pluginId === 'navide.plans'
       ? plansBackendActivation(activation)
-      : {
-          pluginId: activation.pluginId,
-          packageVersion: activation.packageVersion,
-          packageDir: activation.packageDir,
-          entryFile: activation.backend.entryFile,
-          protocolVersion: activation.backend.protocolVersion,
-          activation: activation.backend.activation,
-          approvedMethods: [],
-          approvedEvents: [],
-          approvedBridgePorts: [],
-        }
+      : thirdPartyBackendActivation(activation)
     if (backend && !frontendPluginManager.hasBackendActivation(pluginId, activation.packageVersion)) {
       frontendPluginManager.registerBackendActivation(backend)
     }
@@ -1355,6 +1475,18 @@ ipcMain.handle('git:retryV2', (event) => {
   return retryGitV2AfterRecovery()
 })
 
+registerNativeBackendIpc(
+  (channel, listener) => ipcMain.handle(channel, listener),
+  (event) => isTrustedPluginManagementSender(event, mainWindows),
+  thirdPartyBackends,
+  () => approvedInstalledPluginActivations.flatMap((activation) => {
+    if (!activation.backend || activation.pluginId === 'navide.plans') return []
+    const spec = frontendPluginManager.getBackendActivation(activation.pluginId, activation.packageVersion)
+    return spec && isThirdPartyLaunchSpec(spec) ? [spec] : []
+  }),
+  () => nativeBackendStore.isEnabled(),
+)
+
 const pluginTrustRefresh = registerPluginIpc(
   frontendPluginManager,
   pluginsRoot(),
@@ -1368,6 +1500,7 @@ const pluginTrustRefresh = registerPluginIpc(
     preflightCandidateBackend,
     cleanupPluginStorage: async (pluginId) => {
       await pluginStorageStore.cleanupPlugin(pluginId)
+      nativeBackendStore.forget(pluginId)
       if (pluginId === 'navide.plans') plansStorageLifecycle.clear()
       if (pluginId === MINI_IDE_PLUGIN_ID) {
         miniIdeStorageLifecycle.clear()
