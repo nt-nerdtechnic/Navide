@@ -151,6 +151,22 @@
         }
       ]
     },
+    "beforePack": "./scripts/dmg-hide-support-files.mjs",
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
     "win": {
       "target": "nsis",
       "icon": "resources/icon.png",
