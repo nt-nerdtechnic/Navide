@@ -1940,3 +1940,49 @@ def test_the_fixed_secret_names_keep_the_file_they_already_have(tmp_path, monkey
         "navide-workspace-digest-salt",
     ):
         assert vault.app_secret_path(name).name == name
+
+
+class HexPrintingSecurity(FakeSecurity):
+    """`security -w` as it really behaves: a password with any byte that is not
+    printable ASCII is printed as lowercase hex instead of verbatim."""
+
+    def __call__(self, args: list[str], input_text: str | None = None) -> tuple[int, str]:
+        rc, out = super().__call__(args, input_text)
+        if rc == 0 and args[:1] == ["find-generic-password"]:
+            raw = out.rstrip("\n").encode("utf-8")
+            if not all(0x20 <= b < 0x7F for b in raw):
+                return 0, raw.hex() + "\n"
+        return rc, out
+
+
+def test_a_non_ascii_app_secret_survives_the_keychain_round_trip(tmp_path, monkeypatch):
+    """The device trust store writes JSON with ``ensure_ascii=False``, and a
+    `remote-command` notice records the pane name — on this user's machine a
+    Chinese one. `security -w` then hands the document back as hex, which
+    parsed as nothing, and every restart locked cross-device traffic with
+    "contents are missing or unreadable" over a record that was intact."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "dd"))
+    sec = HexPrintingSecurity()
+    vault = CredentialVault(
+        root=tmp_path / "root", real_home=tmp_path / "home",
+        security_runner=sec, platform="darwin",
+    )
+    doc = json.dumps({"notices": [{"paneName": "建立CLI視窗安排工作"}]},
+                     ensure_ascii=False, separators=(",", ":"))
+    vault.write_app_secret("navide-device-trust", doc)
+
+    assert vault.read_app_secret("navide-device-trust") == doc
+
+
+def test_an_app_secret_that_is_a_hex_string_is_not_decoded(tmp_path, monkeypatch):
+    """The other direction: `security` prints an all-printable password
+    verbatim, so a secret that genuinely is hex must come back unchanged."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "dd"))
+    sec = HexPrintingSecurity()
+    vault = CredentialVault(
+        root=tmp_path / "root", real_home=tmp_path / "home",
+        security_runner=sec, platform="darwin",
+    )
+    for token in ("4142", "deadbeef" * 8):
+        vault.write_app_secret("navide-server-token", token)
+        assert vault.read_app_secret("navide-server-token") == token

@@ -268,6 +268,30 @@ def _kc_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _unhex_security_output(secret: str | None) -> str | None:
+    """Undo `security find-generic-password -w` printing a password as hex.
+
+    `security` prints the stored bytes verbatim only when every one is
+    printable ASCII; otherwise it prints the whole password as lowercase hex.
+    A secret with any non-ASCII character in it — a JSON document holding a
+    Chinese pane name — therefore comes back as `7b22...7d` and parses as
+    nothing, which the device trust store reads as "the record is unreadable"
+    and locks on, offering to erase a record nothing was wrong with.
+
+    Decoded only when the result could not have been printed verbatim, so a
+    secret that genuinely is a hex string is left alone.
+    """
+    if not secret or len(secret) % 2 or not all(c in "0123456789abcdef" for c in secret):
+        return secret
+    raw = bytes.fromhex(secret)
+    if all(0x20 <= b < 0x7F for b in raw):
+        return secret
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return secret
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
@@ -704,7 +728,9 @@ class CredentialVault:
         Reading it was the only thing giving it any authority.
         """
         if self._is_macos:
-            return self._keychain_read(self.app_secret_service(name), strict=True)
+            return _unhex_security_output(
+                self._keychain_read(self.app_secret_service(name), strict=True)
+            )
         return _read_private_text(self.app_secret_path(name))
 
     def write_app_secret(self, name: str, secret: str | None) -> None:
