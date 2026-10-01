@@ -398,3 +398,41 @@ def test_oversized_command_is_graded_without_parsing():
     v = classify("bash", {"command": cmd}, cwd=WS, workspace=WS)
     assert time.monotonic() - started < 1.0
     assert v.level == "high" and not v.parseable and "too-long" in v.rule_ids
+
+
+# Heredoc bodies are input to a command, not commands. Reading them as shell
+# lines turned a TS/PHP `// comment` into "executes a script outside the
+# workspace" and a `$var` line into "command name is computed at run time",
+# which a tainted pane then had to confirm.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat > src/a.ts <<'TS'\n// a comment\nconst x = `${y}`;\nTS",
+        "cat > q.php <<'EOF'\n<?php\n// note\n$a = (array)$r;\nEOF\necho done",
+        "cat > notes.md <<-EOF\n\t// indented, stripped with <<-\n\tEOF",
+        "cat <<'A' > a.txt; cat <<'B' > b.txt\n// one\nA\n$two\nB",
+        "echo $((1<<2))",
+    ],
+)
+def test_heredoc_body_is_data(command):
+    v = sh(command)
+    assert (v.level, v.rule_ids, v.parseable) == ("normal", (), True)
+
+
+def test_heredoc_lines_after_the_delimiter_are_commands_again():
+    assert sh("cat > a.txt <<'EOF'\nhello\nEOF\nrm -rf ~").level == "critical"
+
+
+def test_heredoc_fed_to_a_shell_is_classified_as_its_script():
+    assert sh("bash <<'EOF'\nrm -rf ~\nEOF").level == "critical"
+    assert sh("sh -s <<EOF\nls\nEOF").rule_ids == ()
+
+
+def test_heredoc_fed_to_an_interpreter_is_inline_code():
+    v = sh("python3 - <<'PY'\n// not shell\nimport os\nPY")
+    assert not v.parseable and v.rule_ids == ("interpreter-inline-code",)
+
+
+def test_unquoted_heredoc_still_runs_its_substitutions():
+    assert sh("cat > a.txt <<EOF\n$(rm -rf ~)\nEOF").level == "critical"
+    assert sh("cat > a.txt <<'EOF'\n$(rm -rf ~)\nEOF").level == "normal"
