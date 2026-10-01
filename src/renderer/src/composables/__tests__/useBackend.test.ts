@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { effectScope, type EffectScope } from 'vue'
 import { useBackend } from '../useBackend'
+import { platformId, setPlatformId, type PlatformId } from '../../../../shared/osplat'
 
 // Minimal WebSocket stand-in: records instances, lets tests flip readyState
 // and fire events. Installed on globalThis so useBackend's `new WebSocket()`
@@ -278,16 +279,26 @@ describe('useBackend init() deadline', () => {
     expect(backend.lastError.value).toBe('backend did not start')
   })
 
-  it('falls back to the 45s default when the setting is unavailable', async () => {
-    const backend = setup({
-      getBackendInfo: vi.fn().mockResolvedValue({ status: 'starting' }),
-      onBackendChanged: vi.fn()
-    })
+  it.each<[PlatformId, number]>([
+    ['linux', 120_000],
+    ['darwin', 45_000],
+    ['win32', 45_000],
+  ])('falls back to the %s default when the setting is unavailable', async (platform, defaultMs) => {
+    const original = platformId()
+    setPlatformId(platform)
+    try {
+      const backend = setup({
+        getBackendInfo: vi.fn().mockResolvedValue({ status: 'starting' }),
+        onBackendChanged: vi.fn()
+      })
 
-    await vi.advanceTimersByTimeAsync(45_000)
-    expect(backend.status.value).not.toBe('error')
+      await vi.advanceTimersByTimeAsync(defaultMs)
+      expect(backend.status.value).not.toBe('error')
 
-    await vi.advanceTimersByTimeAsync(10_000) // past 45s + 5s margin
-    expect(backend.status.value).toBe('error')
+      await vi.advanceTimersByTimeAsync(10_000) // past the default + 5s margin
+      expect(backend.status.value).toBe('error')
+    } finally {
+      setPlatformId(original)
+    }
   })
 })
