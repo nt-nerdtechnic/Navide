@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.parse
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Iterator
@@ -10,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Upl
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from sqlmodel import Session
 
 from .auth import PublisherIdentity, get_publisher_identity
@@ -128,7 +129,56 @@ def create_app(
     from .publisher_web import create_publisher_router
 
     app.include_router(create_publisher_router())
+    app.add_middleware(_HtmlSecurityHeadersMiddleware, csp=html_content_security_policy(settings))
     return app
+
+
+def html_content_security_policy(settings: Settings) -> str:
+    """The policy every HTML page carries. The website is script-free, so
+    there is no script-src at all (default-src 'none' denies scripts). Forms
+    post to this registry, and two of them end in a redirect elsewhere: the
+    CLI login hands its code to the loopback listener, and sign-in goes to
+    navide-auth."""
+    form_action = ["'self'", "http://127.0.0.1:*"]
+    if settings.auth_url:
+        parts = urllib.parse.urlsplit(settings.auth_url)
+        form_action.append(f"{parts.scheme}://{parts.netloc}")
+    return "; ".join(
+        [
+            "default-src 'none'",
+            "style-src 'self'",
+            "img-src 'self' data:",
+            f"form-action {' '.join(form_action)}",
+            "base-uri 'none'",
+            "frame-ancestors 'none'",
+        ]
+    )
+
+
+class _HtmlSecurityHeadersMiddleware:
+    """Add the HTML Content-Security-Policy to text/html responses that do not
+    set their own (package assets already send a stricter sandbox policy)."""
+
+    def __init__(self, app: ASGIApp, csp: str) -> None:
+        self.app = app
+        self.csp = csp.encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_csp(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                names = {name.lower() for name, _ in headers}
+                content_type = next((v for n, v in headers if n.lower() == b"content-type"), b"")
+                if content_type.startswith(b"text/html") and b"content-security-policy" not in names:
+                    headers.append((b"content-security-policy", self.csp))
+                    message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_csp)
 
 
 class _RootPathMiddleware:

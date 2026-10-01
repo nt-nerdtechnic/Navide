@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ ext.display_name }} — Navide Marketplace{% endblock %}
+{% block description %}{{ ext.description or ext.display_name }}{% endblock %}
 
 {% block content %}
 <nav class="crumbs"><a href="{{ base }}/">← Marketplace</a></nav>
@@ -9,7 +10,7 @@
     {# Fixed-size box: the initial shows when there is no icon, and a broken
        image can never spill its alt text out of the box (no script needed). #}
     {% set initial = (ext.display_name or ext.name)[:1]|upper %}
-    <div class="ext-icon ext-icon-lg" aria-hidden="true">
+    <div class="ext-icon ext-icon-lg hue-{{ ext.identity|tile_hue }}" aria-hidden="true">
       <span class="ext-icon-initial">{{ initial }}</span>
       {% if icon_path and latest_version %}
       <img class="ext-icon-img" alt="" data-initial="{{ initial }}"
@@ -23,14 +24,14 @@
         {% if publisher_domain %}<span class="badge badge-verified" title="Publisher proved control of {{ publisher_domain }} (DNS)">✓ verified · {{ publisher_domain }}</span>{% endif %}
         {% if latest_version %}<span class="ver">v{{ latest_version }}</span>{% endif %}
         {% if ext.trust_tier == 'signed-verified' %}
-          <span class="badge badge-signed">✓ signed-verified</span>
+          <span class="badge badge-signed">✓ Signed &amp; verified</span>
         {% else %}
-          <span class="badge badge-unsigned">unsigned</span>
+          <span class="badge badge-unsigned">⚠ Unsigned</span>
         {% endif %}
       </div>
       <div class="detail-stats">
         {% if ext.min_navide_version %}<span class="requires" title="engines.navide: {{ ext.engines_navide }}">Requires Navide ≥ {{ ext.min_navide_version }}</span>{% endif %}
-        <span title="Total downloads">⬇ {{ download_count }} downloads</span>
+        <span title="Total downloads">⬇ {{ '{:,}'.format(download_count) }} downloads</span>
         {% if rating_count %}
           <span>★ {{ '%.1f'|format(rating_average) }} ({{ rating_count }} ratings)</span>
         {% else %}
@@ -50,100 +51,107 @@
   </header>
 
   {% if ext.sensitive_capabilities %}
-  <div class="warn warn-block">
+  <div class="warn warn-block detail-risk" role="note">
     ⚠ This extension requests sensitive capabilities:
-    <strong>{{ ext.sensitive_capabilities|join(', ') }}</strong>
-    (filesystem / terminal reach). Review before installing.
+    {% for c in ext.sensitive_capabilities %}<strong>{{ c }}</strong> ({{ c|capability_hint }}){{ ', ' if not loop.last else '' }}{% endfor %}.
+    Review before installing.
   </div>
   {% endif %}
 
-  {% if latest_version %}
-  <section class="install">
-    <h2 class="section-title">Install</h2>
-    {# navide:// only opens this extension's detail page in the app; nothing is
-       installed until the user confirms there (plan decision D4). #}
-    <div class="install-cta">
-      <a class="install-button" href="navide://extension/{{ ext.identity }}">⬇ Install in Navide</a>
-      <span class="muted">Opens this extension's page in the Navide app — nothing
-        is installed until you confirm there.</span>
-    </div>
-    <p class="deeplink-copy">
-      <code class="deeplink" title="Select to copy">navide://extension/{{ ext.identity }}</code>
-      <span class="muted">Copy this link if your browser blocks the redirect.</span>
-    </p>
-    <details class="install-fallback">
-      <summary>Nothing happened? Navide may not be installed.</summary>
-      <ol>
-        <li><a href="https://navide.dev">Download Navide</a> and install it.</li>
-        <li>Open Navide, then click <strong>Install in Navide</strong> again.</li>
-      </ol>
-      <p>Or in the app: open <strong>Settings → Marketplace</strong>,
-        search for <code>{{ ext.identity }}</code> and choose Install. The app
-        picks the build for its own platform and verifies the registry
-        signature before installing.</p>
-    </details>
-    <p>{% if 'universal' in latest_targets %}Or download the package directly (all platforms):{% else %}Or download the package for a platform directly:{% endif %}</p>
-    <ul class="download-list">
-      {% for t in latest_targets %}
-      {% set url = base ~ '/api/extensions/' ~ ext.namespace ~ '/' ~ ext.name ~ '/' ~ latest_version ~ '/download' ~ ('' if t == 'universal' else '?target=' ~ t) %}
-      <li><a class="download-link" href="{{ url }}">⬇ {{ 'All platforms' if t == 'universal' else t }}</a>
-        <code class="download-url">GET {{ url }}</code></li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% endif %}
-
-  {% if screenshots %}
-  <section class="screenshots">
-    <h2 class="section-title">Screenshots</h2>
-    <div class="shots">
-      {% for s in screenshots %}
-      <img src="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ s }}"
-           alt="screenshot" loading="lazy">
-      {% endfor %}
-    </div>
-  </section>
-  {% endif %}
-
-  <section class="readme">
-    <h2 class="section-title">README</h2>
-    {% if readme_html %}
-    <div class="markdown">{{ readme_html|safe }}</div>
-    {% else %}
-    <p class="empty">No README provided.</p>
-    {% endif %}
-  </section>
-
-  <section class="versions">
-    <h2 class="section-title">Versions</h2>
-    <table class="version-table">
-      <thead>
-        <tr><th>Version</th><th>Channel</th><th>Target</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
-      </thead>
-      <tbody>
-        {% for v in versions %}
-        <tr class="{% if v.yanked %}yanked{% endif %}">
-          <td>{{ v.version }}{% if v.yanked %} <span class="tag">yanked</span>{% endif %}</td>
-          <td>{% if v.channel == 'pre-release' %}<span class="badge badge-prerelease">pre-release</span>{% else %}<span class="channel-stable">stable</span>{% endif %}</td>
-          <td>{{ v.target }}</td>
-          <td>
-            {% if v.trust_tier == 'signed-verified' %}
-              <span class="badge badge-signed">✓ signed</span>
-            {% else %}
-              <span class="badge badge-unsigned">unsigned</span>
-            {% endif %}
-          </td>
-          <td>
-            {% for c in v.capabilities %}
-              <span class="chip {% if c in v.sensitive_capabilities %}chip-warn{% endif %}">{{ c }}</span>
-            {% endfor %}
-          </td>
-          <td>{{ v.download_count }}</td>
-          <td>{{ v.published_at.strftime('%Y-%m-%d') }}</td>
-        </tr>
+  <div class="detail-layout">
+    <aside class="detail-side" aria-label="Install and details">
+    {% if latest_version %}
+    <section class="install">
+      <h2 class="section-title">Install</h2>
+      {# navide:// only opens this extension's detail page in the app; nothing is
+         installed until the user confirms there (plan decision D4). #}
+      <div class="install-cta">
+        <a class="install-button" href="navide://extension/{{ ext.identity }}">⬇ Install in Navide</a>
+        <span class="muted">Opens this extension's page in the Navide app — nothing
+          is installed until you confirm there.</span>
+      </div>
+      <p class="deeplink-copy">
+        <code class="deeplink" title="Select to copy">navide://extension/{{ ext.identity }}</code>
+        <span class="muted">Copy this link if your browser blocks the redirect.</span>
+      </p>
+      <details class="install-fallback">
+        <summary>Nothing happened? Navide may not be installed.</summary>
+        <ol>
+          <li><a href="https://navide.dev">Download Navide</a> and install it.</li>
+          <li>Open Navide, then click <strong>Install in Navide</strong> again.</li>
+        </ol>
+        <p>Or in the app: open <strong>Settings → Marketplace</strong>,
+          search for <code>{{ ext.identity }}</code> and choose Install. The app
+          picks the build for its own platform and verifies the registry
+          signature before installing.</p>
+      </details>
+      <p>{% if 'universal' in latest_targets %}Or download the package directly (all platforms):{% else %}Or download the package for a platform directly:{% endif %}</p>
+      <ul class="download-list">
+        {% for t in latest_targets %}
+        {% set url = base ~ '/api/extensions/' ~ ext.namespace ~ '/' ~ ext.name ~ '/' ~ latest_version ~ '/download' ~ ('' if t == 'universal' else '?target=' ~ t) %}
+        <li><a class="download-link" href="{{ url }}">⬇ {{ 'All platforms' if t == 'universal' else t }}</a>
+          <code class="download-url">GET {{ url }}</code></li>
         {% endfor %}
-      </tbody>
-    </table>
-  </section>
+      </ul>
+    </section>
+    {% endif %}
+
+    </aside>
+    <div class="detail-main">
+
+    {% if screenshots %}
+    <section class="screenshots">
+      <h2 class="section-title">Screenshots</h2>
+      <div class="shots">
+        {% for s in screenshots %}
+        <img src="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ s }}"
+             alt="screenshot" loading="lazy">
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="readme">
+      <h2 class="section-title">README</h2>
+      {% if readme_html %}
+      <div class="markdown">{{ readme_html|safe }}</div>
+      {% else %}
+      <p class="empty">No README provided.</p>
+      {% endif %}
+    </section>
+
+    <section class="versions">
+      <h2 class="section-title">Versions</h2>
+      <table class="version-table">
+        <thead>
+          <tr><th>Version</th><th>Channel</th><th>Target</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
+        </thead>
+        <tbody>
+          {% for v in versions %}
+          <tr class="{% if v.yanked %}yanked{% endif %}">
+            <td>{{ v.version }}{% if v.yanked %} <span class="tag">yanked</span>{% endif %}</td>
+            <td>{% if v.channel == 'pre-release' %}<span class="badge badge-prerelease">pre-release</span>{% else %}<span class="channel-stable">stable</span>{% endif %}</td>
+            <td>{{ v.target }}</td>
+            <td>
+              {% if v.trust_tier == 'signed-verified' %}
+                <span class="badge badge-signed">✓ signed</span>
+              {% else %}
+                <span class="badge badge-unsigned">unsigned</span>
+              {% endif %}
+            </td>
+            <td>
+              {% for c in v.capabilities %}
+                <span class="chip {% if c in v.sensitive_capabilities %}chip-warn{% endif %}">{{ c }}</span>
+              {% endfor %}
+            </td>
+            <td>{{ v.download_count }}</td>
+            <td>{{ v.published_at.strftime('%Y-%m-%d') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    </div>
+  </div>
 </article>
 {% endblock %}

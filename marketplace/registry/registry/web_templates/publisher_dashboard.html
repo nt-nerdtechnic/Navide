@@ -5,7 +5,7 @@
 {% if owned_count > 1 %}<nav class="crumbs"><a href="{{ base }}/publisher">← Publisher dashboard</a></nav>{% endif %}
 <section class="panel">
   <div class="ns-head">
-    <span class="ns-avatar">{{ publisher.name[:1]|upper }}</span>
+    <span class="ns-avatar hue-{{ publisher.name|tile_hue }}">{{ publisher.name[:1]|upper }}</span>
     <div>
       <h1>{{ publisher.name }}</h1>
       <div class="detail-sub">
@@ -16,6 +16,16 @@
     </div>
     <a class="install-button ns-publish" href="#publish-cli">Publish new version</a>
   </div>
+  <nav class="page-toc" aria-label="On this page">
+    <a href="#publish-cli">CLI</a><a href="#versions">Versions</a><a href="#tokens">Tokens</a><a href="#signing-key">Signing key</a><a href="#verified">Verified publisher</a>
+  </nav>
+  {% if rows %}
+  <div class="stat-row summary-stats" aria-label="Versions">
+    <div class="stat stat--ok"><b>{{ rows|selectattr('status', 'equalto', 'approved')|list|length }}</b><span>live</span></div>
+    <div class="stat stat--risk"><b>{{ rows|selectattr('status', 'equalto', 'pending')|list|length }}</b><span>in review</span></div>
+    <div class="stat stat--danger"><b>{{ rows|selectattr('status', 'equalto', 'rejected')|list|length }}</b><span>rejected</span></div>
+  </div>
+  {% endif %}
 
   <h2 class="section-title" id="publish-cli">Publish with the CLI</h2>
   <pre class="code">navide-plugin login --registry {{ registry_url }}
@@ -26,7 +36,7 @@ navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry 
     Pending versions are not visible to the Navide app.</p>
   {% endif %}
 
-  <h2 class="section-title">Versions &amp; review status</h2>
+  <h2 class="section-title" id="versions">Versions &amp; review status</h2>
   {% if rows %}
   <div class="table-scroll">
   <table class="version-table review-status-table">
@@ -38,7 +48,7 @@ navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry 
         <td class="nowrap">{{ r.version }}</td>
         <td class="nowrap">{{ r.submitted_at.strftime('%Y-%m-%d') }}</td>
         <td class="nowrap">
-          {% if r.status == 'pending' %}<span class="tag">⏳ pending review</span>
+          {% if r.status == 'pending' %}<span class="tag tag-pending">pending review</span>
           {% elif r.status == 'approved' %}<span class="badge badge-signed">✓ approved</span>
           {% else %}<span class="badge badge-danger">✕ rejected</span>{% endif %}
         </td>
@@ -59,7 +69,7 @@ navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry 
   <p class="empty">Nothing published yet.</p>
   {% endif %}
 
-  <h2 class="section-title">Publisher tokens</h2>
+  <h2 class="section-title" id="tokens">Publisher tokens</h2>
   {% if new_token %}
   <div class="warn warn-block" role="status">
     New token “{{ new_token_label }}” (expires {{ new_token_expires.strftime('%Y-%m-%d') }}). Copy it now — it is not shown again:
@@ -87,7 +97,7 @@ navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry 
     <button type="submit">Create token</button>
   </form>
 
-  <h2 class="section-title">Signing key</h2>
+  <h2 class="section-title" id="signing-key">Signing key</h2>
   {% if publisher.key_fingerprint %}
     <p class="muted">Ed25519 key {{ publisher.key_fingerprint }}. Uploads must be signed with it.</p>
   {% else %}
@@ -100,7 +110,7 @@ navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry 
     <button type="submit">Save public key</button>
   </form>
 
-  <h2 class="section-title">Verified publisher (optional)</h2>
+  <h2 class="section-title" id="verified">Verified publisher (optional)</h2>
   {% if publisher.verified_domain %}
     <p class="ok-line">✓ You proved control of {{ publisher.verified_domain }}.</p>
   {% elif publisher.domain %}

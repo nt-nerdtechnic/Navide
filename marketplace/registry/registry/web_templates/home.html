@@ -5,7 +5,7 @@
 <a class="card" href="{{ base }}/extensions/{{ e.namespace }}/{{ e.name }}">
   <div class="card-head">
     {% set initial = (e.display_name or e.name)[:1]|upper %}
-    <div class="ext-icon" aria-hidden="true">
+    <div class="ext-icon hue-{{ (e.namespace ~ '.' ~ e.name)|tile_hue }}" aria-hidden="true">
       <span class="ext-icon-initial">{{ initial }}</span>
       {% if e.icon_path and e.latest_version %}
       <img class="ext-icon-img" alt="" loading="lazy" data-initial="{{ initial }}"
@@ -21,6 +21,7 @@
   </div>
   <div class="card-pub">{{ e.namespace }}{% if e.latest_version %} · v{{ e.latest_version }}{% endif %}</div>
   <p class="card-desc">{{ e.description }}</p>
+  <div class="card-chips">
   <div class="card-cats">
     {% for c in e.categories %}<span class="chip">{{ c|category_label }}</span>{% endfor %}
   </div>
@@ -30,6 +31,7 @@
     {% else %}{% for t in e.latest_targets %}<span class="chip chip-target">{{ t }}</span>{% endfor %}{% endif %}
   </div>
   {% endif %}
+  </div>
   {% if e.sensitive_capabilities %}
   <div class="warn" title="Requests filesystem/terminal access">
     ⚠ sensitive: {{ e.sensitive_capabilities|join(', ') }}
@@ -37,7 +39,7 @@
   {% endif %}
   <div class="card-meta">
     {% if e.min_navide_version %}<span class="requires" title="engines.navide: {{ e.engines_navide }}">Requires Navide ≥ {{ e.min_navide_version }}</span>{% endif %}
-    <span title="Downloads">⬇ {{ e.download_count }}</span>
+    <span title="Downloads">⬇ {{ '{:,}'.format(e.download_count) }}</span>
     {% if e.rating_count %}
       <span title="{{ e.rating_count }} ratings">★ {{ '%.1f'|format(e.rating_average) }} ({{ e.rating_count }})</span>
     {% else %}
@@ -47,8 +49,27 @@
 </a>
 {% endmacro %}
 
+{% macro browse_url(category) -%}
+{{ base }}/?{% if query %}q={{ query|urlencode }}&amp;{% endif %}{% if category %}category={{ category|urlencode }}&amp;{% endif %}sort={{ sort }}
+{%- endmacro %}
+
 {% block content %}
-{% if featured %}
+{% set filtered = query or active_category %}
+{% if not filtered %}
+<section class="hero">
+  <p class="hero-eyebrow">Extensions for Navide</p>
+  <h1>Make Navide yours — one verified extension at a time.</h1>
+  <p class="hero-lede">Git tools, themes and AI helpers built for Navide. Every install shows you the
+    permissions it asks for and is verified by the app before anything runs.</p>
+  <ul class="hero-points">
+    <li>Registry-signed packages</li>
+    <li>Permissions shown before install</li>
+    <li>Installs open in the Navide app</li>
+  </ul>
+</section>
+{% endif %}
+
+{% if featured and not filtered %}
 <section class="featured">
   <h2 class="section-title">Featured</h2>
   <div class="grid">
@@ -59,36 +80,40 @@
 
 <section class="browse">
   <div class="browse-head">
-    <h2 class="section-title">Browse{% if query %} — “{{ query }}”{% endif %}</h2>
-    <form class="filters" action="{{ base }}/" method="get">
-      <input type="hidden" name="q" value="{{ query }}">
-      <label>Category
-        <select name="category" onchange="this.form.submit()">
-          <option value="">All</option>
-          {% for c in categories %}
-          <option value="{{ c }}" {% if c == active_category %}selected{% endif %}>{{ c|category_label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>Sort
-        <select name="sort" onchange="this.form.submit()">
-          <option value="updated" {% if sort == 'updated' %}selected{% endif %}>Recently updated</option>
-          <option value="downloads" {% if sort == 'downloads' %}selected{% endif %}>Most downloaded</option>
-          <option value="rating" {% if sort == 'rating' %}selected{% endif %}>Top rated</option>
-        </select>
-      </label>
-      <noscript><button type="submit">Apply</button></noscript>
-    </form>
+    <div>
+      <h2 class="section-title">Browse{% if query %} — “{{ query }}”{% endif %}</h2>
+      <p class="result-count">{{ total }} extension{{ '' if total == 1 else 's' }}</p>
+    </div>
+    {# Sorting is a set of links: it applies at once, with no script and no Apply step. #}
+    <nav class="sort-tabs" aria-label="Sort">
+      {% for key, label in (('updated', 'Recently updated'), ('downloads', 'Most downloaded'), ('rating', 'Top rated')) %}
+      <a href="{{ base }}/?{% if query %}q={{ query|urlencode }}&amp;{% endif %}{% if active_category %}category={{ active_category|urlencode }}&amp;{% endif %}sort={{ key }}"{% if sort == key %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
   </div>
 
-  <p class="result-count">{{ total }} extension{{ '' if total == 1 else 's' }}</p>
+  {% if categories %}
+  <nav aria-label="Categories">
+    <ul class="cat-chips">
+      <li><a class="cat-chip" href="{{ browse_url('') }}"{% if not active_category %} aria-current="page"{% endif %}>All</a></li>
+      {% for c in categories %}
+      <li><a class="cat-chip" href="{{ browse_url(c) }}"{% if c == active_category %} aria-current="page"{% endif %}>{{ c|category_label }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+  {% endif %}
 
   {% if items %}
   <div class="grid">
     {% for e in items %}{{ card(e) }}{% endfor %}
   </div>
   {% else %}
-  <p class="empty">No extensions match your filters.</p>
+  <div class="empty-state">
+    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="10" y="10" width="20" height="20" rx="5" transform="rotate(45 20 20)"/><circle cx="29" cy="29" r="8"/><path d="m35 35 7 7"/></svg>
+    <h3>No extensions match your filters.</h3>
+    <p>Try a different search, or browse every category.</p>
+    <p><a href="{{ base }}/">Show all extensions</a></p>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

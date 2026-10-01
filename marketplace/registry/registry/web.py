@@ -192,6 +192,37 @@ def category_label(slug: str) -> str:
     return _CATEGORY_LABELS.get(slug.lower(), slug)
 
 
+TILE_HUES = 24
+
+
+def tile_hue(identity: str) -> int:
+    """Hue bucket (0..23, 15 degrees apart) of an extension or publisher tile.
+
+    The same hash the Navide app uses for its letter tiles
+    (MarketplaceIcon.vue), so an extension wears one colour in both places.
+    Buckets, not a free hue: the site is CSP-locked to its stylesheet, so each
+    colour is a class there.
+    """
+    data = identity.encode("utf-16-le")  # the code units JavaScript's charCodeAt sees
+    value = 0
+    for i in range(0, len(data), 2):
+        value = (value * 31 + (data[i] | data[i + 1] << 8)) & 0xFFFFFFFF
+    return value % TILE_HUES
+
+
+_CAPABILITY_HINTS = {
+    "fs": "reads and writes files",
+    "shell": "runs shell commands",
+    "terminal": "runs commands in a terminal",
+    "aiCli": "drives AI CLI agents",
+}
+
+
+def capability_hint(capability: str) -> str:
+    """What a sensitive capability lets a package do, in a few words."""
+    return _CAPABILITY_HINTS.get(capability, capability)
+
+
 def _base_path_context(request: Request) -> dict[str, str]:
     """Expose the public path prefix so every emitted link carries it."""
     return {"base": request.scope.get("root_path", "").rstrip("/")}
@@ -204,6 +235,8 @@ def create_web_router() -> APIRouter:
         context_processors=[_base_path_context, viewer_context],
     )
     templates.env.filters["category_label"] = category_label
+    templates.env.filters["tile_hue"] = tile_hue
+    templates.env.filters["capability_hint"] = capability_hint
 
     @router.get("/", response_class=HTMLResponse)
     def home(

@@ -4,12 +4,33 @@
 <section class="panel">
   <h1>Review queue <span class="tag">{{ items|length }} pending</span></h1>
   {% if oldest %}<p class="muted">Oldest waiting: {{ oldest }} · target: {{ sla_days }} business days</p>{% endif %}
+  {% set overdue = items|selectattr('overdue')|list|length %}
+  {% set with_findings = items|selectattr('secret_findings')|list|length %}
+  {% set sensitive = items|selectattr('sensitive_capabilities')|list|length %}
+  {% set blocked = items|selectattr('similarity_blocked')|list|length %}
+  <ul class="summary-bar" aria-label="Queue summary">
+    <li><b>{{ items|length }}</b><span>pending</span></li>
+    <li class="{{ 'is-alert' if overdue else '' }}"><b>{{ overdue }}</b><span>past SLA</span></li>
+    <li class="{{ 'is-alert' if with_findings else '' }}"><b>{{ with_findings }}</b><span>with secret findings</span></li>
+    <li class="{{ 'is-alert' if blocked else '' }}"><b>{{ blocked }}</b><span>name-blocked</span></li>
+    <li class="{{ 'is-risk' if sensitive else '' }}"><b>{{ sensitive }}</b><span>sensitive permissions</span></li>
+  </ul>
   {% for item in items %}
   <article class="review-item{% if item.overdue %} overdue{% endif %}">
     <h2 class="review-title"><code>{{ item.identity }}</code> {{ item.version }}
-      <span class="muted">· publisher <code>{{ item.publisher }}</code>{% if item.publisher_domain %} (✓ verified){% endif %} · {{ item.targets|join(', ') }}</span>
+      <span class="review-meta"><span>publisher <code>{{ item.publisher }}</code>{% if item.publisher_domain %} (✓ verified){% endif %}</span><span>{{ item.targets|join(', ') }}</span></span>
       {% if item.overdue %}<span class="badge badge-danger">past SLA</span>{% endif %}
     </h2>
+    {% set needs_look = item.similarity_blocked or item.similarity or item.secret_findings %}
+    <ul class="verdicts" aria-label="Check results">
+      <li class="verdict ok">✓ Signature</li>
+      <li class="verdict {{ 'bad' if item.similarity_blocked else ('warn' if item.similarity else 'ok') }}">{{ '✕' if item.similarity_blocked else ('⚠' if item.similarity else '✓') }} Name</li>
+      <li class="verdict {{ 'bad' if item.secret_findings else 'ok' }}">{{ '✕' if item.secret_findings else '✓' }} Secrets{% if item.secret_findings %} ({{ item.secret_findings|length }}){% endif %}</li>
+      <li class="verdict {{ 'warn' if item.sensitive_capabilities else 'ok' }}">{{ '⚠' if item.sensitive_capabilities else '✓' }} Permissions</li>
+      <li class="verdict ok">✓ Size</li>
+    </ul>
+    <details class="review-checks"{% if needs_look %} open{% endif %}>
+      <summary>All checks</summary>
     <table class="version-table review-table">
       <colgroup><col class="col-check"><col class="col-result"><col></colgroup>
       <thead><tr><th>Check</th><th>Result</th><th>Details</th></tr></thead>
@@ -31,9 +52,10 @@
           <td>{{ '%.1f'|format(item.size / 1048576) }} MiB / {{ (item.size_limit / 1048576)|int }} MiB</td></tr>
       </tbody>
     </table>
-    <div class="row">
+    </details>
+    <div class="review-actions">
       {% if not item.similarity_blocked %}
-      <form class="inline-form" method="post" action="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/approve">
+      <form class="inline-form review-approve" method="post" action="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/approve">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         {% for a in item.artifacts %}<input type="hidden" name="artifact" value="{{ a }}">{% endfor %}
         {% if item.secret_findings %}
@@ -42,20 +64,25 @@
         <button type="submit" class="install-button">Approve &amp; publish</button>
       </form>
       {% endif %}
-      <form class="inline-form" method="post" action="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/reject">
+      <form class="inline-form review-reject" method="post" action="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/reject">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         {% for a in item.artifacts %}<input type="hidden" name="artifact" value="{{ a }}">{% endfor %}
-        <input class="wide-input" name="reason" placeholder="Reason (shown to the publisher)" required maxlength="500">
-        <button type="submit">Reject…</button>
+        <fieldset>
+          <legend>Reject with a reason</legend>
+          <input class="wide-input" name="reason" placeholder="Reason (shown to the publisher)" aria-label="Reason (shown to the publisher)" required maxlength="500">
+          <button type="submit">Reject…</button>
+        </fieldset>
       </form>
-      {% for t in item.targets %}
-      <a href="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/{{ t }}/package">Download to inspect{% if item.targets|length > 1 %} ({{ t }}){% endif %}</a>
-      {% endfor %}
+      <p class="review-downloads">
+        {% for t in item.targets %}
+        <a href="{{ base }}/admin/review/{{ item.namespace }}/{{ item.name }}/{{ item.version }}/{{ t }}/package">Download to inspect{% if item.targets|length > 1 %} ({{ t }}){% endif %}</a>
+        {% endfor %}
+      </p>
     </div>
   </article>
   {% else %}
   <p class="empty">Nothing waiting for review.</p>
   {% endfor %}
-  <p><a href="{{ base }}/admin/blocklist">Blocklist →</a></p>
+  <p class="page-links"><a href="{{ base }}/admin/blocklist">Blocklist →</a></p>
 </section>
 {% endblock %}

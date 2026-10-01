@@ -48,7 +48,7 @@ from .self_service import (
 from .signing import public_key_fingerprint
 from .similarity import ClaimVerdict
 from .storage import StorageError
-from .web import _base_path_context
+from .web import _base_path_context, tile_hue
 
 _TEMPLATES_DIR = Path(__file__).parent / "web_templates"
 _NO_STORE = {"Cache-Control": "no-store"}
@@ -178,6 +178,7 @@ def create_publisher_router() -> APIRouter:
         directory=str(_TEMPLATES_DIR),
         context_processors=[_base_path_context, cloud_auth.viewer_context],
     )
+    templates.env.filters["tile_hue"] = tile_hue
 
     def page(request: Request, name: str, context: dict, status: int = 200) -> HTMLResponse:
         return templates.TemplateResponse(request, name, context, status_code=status, headers=_NO_STORE)

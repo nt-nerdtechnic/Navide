@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Claim a namespace — Navide Marketplace{% endblock %}
 {% block content %}
+<div class="narrow-page">
 <nav class="crumbs"><a href="{{ base }}/publisher">← Publisher dashboard</a></nav>
 <section class="panel narrow">
   <h1>Claim a namespace</h1>
@@ -9,10 +10,13 @@
   <form method="get" action="{{ base }}/publisher/claim" class="stack">
     <label for="ns-check">Namespace</label>
     <div class="row">
+      {% set refused = verdict and not verdict.ok %}
       <input id="ns-check" name="namespace" value="{{ namespace }}" placeholder="your-namespace" required
-             pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]" autocomplete="off">
+             pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]" autocomplete="off"
+             {% if refused %}aria-invalid="true" aria-describedby="ns-error"{% endif %}>
       <button type="submit">Check</button>
     </div>
+    <p class="ns-preview">Extension ids will look like <code><b>{{ namespace or 'your-namespace' }}</b>.my-extension</code></p>
   </form>
   {% if verdict %}
     {% if verdict.ok %}
@@ -23,7 +27,7 @@
         <button type="submit" class="install-button">Claim “{{ namespace }}”</button>
       </form>
     {% else %}
-      <p class="warn warn-block" role="alert">⚠ {{ verdict.message }}</p>
+      <p id="ns-error" class="field-error" role="alert">✕ {{ verdict.message }}</p>
     {% endif %}
   {% endif %}
   <p class="muted">First come, first served. Reserved names (such as
@@ -31,4 +35,5 @@
     blocked. After claiming you can prove a domain you own to show a verified
     badge — optional.</p>
 </section>
+</div>
 {% endblock %}
