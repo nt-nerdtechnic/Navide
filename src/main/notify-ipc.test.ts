@@ -36,6 +36,8 @@ vi.mock('./dock-tile-badge', () => ({
   setWindowDockTileBadge: (...args: unknown[]) => setWindowDockTileBadge(...args),
 }))
 
+// index.ts runs the Linux keyring preflight at import; never spawn dbus-send here.
+vi.mock('./linuxKeyring', () => ({ applyLinuxKeyringPreflight: () => false }))
 vi.mock('electron', () => {
   const app = {
     isPackaged: false,
