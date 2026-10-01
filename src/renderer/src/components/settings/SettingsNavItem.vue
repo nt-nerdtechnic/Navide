@@ -58,7 +58,8 @@ const emit = defineEmits<{
 }
 .settings-nav-item.active {
   background: var(--bg-selected);
-  color: var(--accent-fg);
+  /* accent-bright: the selected label stays >= 4.5:1 on its tinted row. */
+  color: var(--accent-bright);
   font-weight: 600;
 }
 /* Left indicator bar on the active row (Cursor-style). */

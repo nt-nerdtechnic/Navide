@@ -3,6 +3,7 @@
 // members that were installed only because of this pack are listed, each
 // unchecked, so the user chooses whether any of them go too.
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useDialogFocus } from '../composables/useDialogFocus'
 
 const props = defineProps<{ pack: InstalledPackRecord; busy: boolean }>()
 const emit = defineEmits<{ confirm: [members: string[]]; cancel: [] }>()
@@ -20,34 +21,58 @@ function onKeydown(event: KeyboardEvent): void {
 onMounted(() => window.addEventListener('keydown', onKeydown, true))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
 
+// Focus starts on Cancel, the non-destructive answer.
+const card = ref<HTMLElement | null>(null)
+const cancelButton = ref<HTMLButtonElement | null>(null)
+useDialogFocus(card, () => cancelButton.value)
+
 function confirm(): void {
   emit('confirm', chosen.value.filter((id) => props.pack.installedByPack.includes(id)))
 }
 </script>
 
 <template>
-  <div class="pack-uninstall-dialog" role="dialog" aria-modal="true">
-    <div class="pack-uninstall-body">
-      <h4>{{ $t('settings.extensions.pack.uninstallTitle', { name: pack.displayName || pack.id }) }}</h4>
-      <p v-if="pack.displayName" class="pack-uninstall-id"><code>{{ pack.id }}</code></p>
-      <p>{{ $t('settings.extensions.pack.uninstallBody') }}</p>
-      <template v-if="pack.installedByPack.length">
-        <p class="pack-uninstall-hint">{{ $t('settings.extensions.pack.uninstallMembersHint') }}</p>
-        <label v-for="id in pack.installedByPack" :key="id" class="pack-uninstall-member" :data-member="id">
-          <input v-model="chosen" type="checkbox" :value="id" />
-          {{ id }}
-        </label>
-      </template>
-      <div class="pack-uninstall-actions">
+  <div class="pack-uninstall-dialog nv-dialog-scrim">
+    <div
+      ref="card"
+      class="pack-uninstall-body nv-dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="pack-uninstall-title"
+      aria-describedby="pack-uninstall-desc"
+      tabindex="-1"
+    >
+      <div class="nv-dialog-head">
+        <span class="nv-dialog-icon nv-dialog-icon--danger" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg>
+        </span>
+        <div class="nv-dialog-heading">
+          <h4 id="pack-uninstall-title" class="nv-dialog-title">{{ $t('settings.extensions.pack.uninstallTitle', { name: pack.displayName || pack.id }) }}</h4>
+          <p v-if="pack.displayName" class="pack-uninstall-id nv-dialog-subtitle"><code>{{ pack.id }}</code></p>
+        </div>
+      </div>
+      <div id="pack-uninstall-desc" class="nv-dialog-body">
+        <p>{{ $t('settings.extensions.pack.uninstallBody') }}</p>
+        <template v-if="pack.installedByPack.length">
+          <p class="pack-uninstall-hint">{{ $t('settings.extensions.pack.uninstallMembersHint') }}</p>
+          <div class="pack-uninstall-members">
+            <label v-for="id in pack.installedByPack" :key="id" class="pack-uninstall-member" :data-member="id">
+              <input v-model="chosen" type="checkbox" class="nv-check" :value="id" />
+              <code>{{ id }}</code>
+            </label>
+          </div>
+        </template>
+      </div>
+      <div class="pack-uninstall-actions nv-dialog-actions">
+        <button ref="cancelButton" class="pack-uninstall-cancel nv-btn" :disabled="busy" @click="$emit('cancel')">
+          {{ $t('settings.extensions.trust.cancel') }}
+        </button>
         <button class="pack-uninstall-confirm nv-btn nv-btn--danger" :disabled="busy" @click="confirm">
           {{
             chosen.length
               ? $t('settings.extensions.pack.uninstallWithMembers', { count: chosen.length })
               : $t('settings.extensions.pack.uninstallOnly')
           }}
-        </button>
-        <button class="pack-uninstall-cancel nv-btn" :disabled="busy" @click="$emit('cancel')">
-          {{ $t('settings.extensions.trust.cancel') }}
         </button>
       </div>
     </div>
@@ -64,40 +89,36 @@ function confirm(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
 }
-.pack-uninstall-body {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border: 1px solid var(--border-default);
-  padding: 20px 24px;
-  border-radius: var(--radius-lg);
-  width: min(440px, calc(100vw - 32px));
-  font-size: var(--font-sm);
-}
-.pack-uninstall-body h4 {
-  margin: 0 0 8px;
-  color: var(--text-bright);
-  font-size: var(--font-md);
-}
-.pack-uninstall-id {
-  margin: -4px 0 8px;
-  color: var(--text-secondary);
-  font-size: var(--font-xs);
+.pack-uninstall-id code {
+  font-family: var(--font-mono);
 }
 .pack-uninstall-hint {
   color: var(--text-secondary);
   font-size: var(--font-xs);
 }
+.pack-uninstall-members {
+  display: grid;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
 .pack-uninstall-member {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 4px 0;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out);
 }
-.pack-uninstall-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
+.pack-uninstall-member + .pack-uninstall-member {
+  border-top: 1px solid var(--border-muted);
+}
+.pack-uninstall-member:hover {
+  background: var(--bg-hover-faint);
+}
+.pack-uninstall-member code {
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
 }
 </style>

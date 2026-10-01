@@ -1305,6 +1305,7 @@
       "cancel": "Cancel"
     },
     "extensions": {
+      "devUnpacked": "Unsigned local folder — Developer Mode only",
       "bundled": "Bundled",
       "bundledGit": "Bundled Git",
       "state": {
@@ -1336,11 +1337,14 @@
       },
       "installed": "Installed",
       "sensitive": "sensitive",
-      "empty": "No plugins installed.",
+      "empty": "No extensions installed.",
+      "permissionDetails": "Permissions and grants",
       "searchPlaceholder": "Search extensions",
       "search": "Search",
       "install": "Install",
       "marketplace": {
+        "installing": "Installing…",
+        "incompatibleInstalledDetail": "The installed {version} needs Navide {min} or newer (you have {current}), so it may not work until you update Navide.",
         "loading": "Loading extensions…",
         "loadFailed": "Could not load the marketplace: {error}",
         "noExtensions": "No extensions are published yet.",
@@ -1376,6 +1380,16 @@
         "uninstallConfirmBody": "{name} will be removed from this device. You can install it again from the Marketplace.",
         "updatesCount": "Updates available: {count}",
         "retry": "Retry",
+        "featured": "Featured",
+        "clearSearch": "Clear search",
+        "showAllCategories": "Show all categories",
+        "noResultsHint": "Try another word, or browse all categories.",
+        "noExtensionsHint": "Extensions appear here as soon as publishers release them.",
+        "loadFailedTitle": "Can't reach the Marketplace",
+        "loadFailedHint": "Check your connection and try again. Installed extensions keep working.",
+        "errorDetails": "Details",
+        "info": "Information",
+        "detailTabs": "Extension details",
         "installVersion": "Install {version}",
         "versionLabel": "Version {version}",
         "otherTarget": "Not for this platform ({target})",
@@ -1396,7 +1410,7 @@
         "allPlatforms": "All platforms",
         "navideAtLeast": "Navide ≥ {version}",
         "requiresNavide": "Requires Navide ≥ {version}",
-        "compatibleWith": "Navide {version} ✓",
+        "compatibleWith": "Works with Navide {version}",
         "updateNavideToInstall": "You have {current}. Update Navide to install.",
         "categoryLabel": "Category",
         "category": {
@@ -1427,6 +1441,8 @@
         "prereleaseAvailable": "pre-release {version} available"
       },
       "trust": {
+        "publisherRiskUnsigned": "{publisher}'s package {id} is not signed by the Registry. Trusting this publisher lets Navide run its code.",
+        "sensitiveHeading": "Sensitive capabilities",
         "publisherTitle": "Trust publisher",
         "permissionsTitle": "Confirm plugin permissions",
         "publisherRisk": "Trust publisher {publisher} for {id}. A valid Registry signature proves package integrity, not that you want to run this publisher's code.",
@@ -1436,19 +1452,26 @@
         "unsigned": "Unsigned — not cryptographically verified",
         "confirmPublisher": "Trust publisher",
         "confirmInstall": "Confirm and install",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "capability": {
+          "fs": "Read and write files in your workspace.",
+          "aiCli": "Run the AI CLI agents set up in Navide.",
+          "shell": "Run commands on your computer.",
+          "terminal": "Open and control Navide terminals."
+        }
       },
       "getPrereleases": "Get pre-releases",
       "incompatibleInstalled": "Needs Navide ≥ {version}",
       "incompatibleReason": "This version declares it needs Navide {version} or newer. It stays enabled, but may not work until you update Navide.",
       "pack": {
+        "countsLine": "{total} extensions · {ready} to install · {installed} already installed · {skipped} skipped",
         "badge": "Extension Pack",
         "install": "Install pack ({count})",
         "membersTitle": "Extensions in this pack",
         "membersNote": "Each member is verified and confirmed on its own. Installing the pack never grants a permission you have not seen.",
         "membersBadge": "Pack · {count} members",
         "includes": "Includes: {members}",
-        "summaryTitle": "Install “{name}”: {count} extensions to review",
+        "summaryTitle": "Install “{name}”: {total} extensions, {count} to review",
         "summaryNote": "Each extension below is verified and confirmed on its own. The pack itself asks for no permissions.",
         "review": "Review {count} extensions",
         "finish": "Finish",

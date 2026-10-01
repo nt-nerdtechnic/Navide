@@ -2,11 +2,14 @@
 // The publisher-trust / capability-risk confirmation shown between a verified
 // prepareInstall and its commit. Presentation only: usePluginInstallFlow owns
 // the pending package and decides which step is showing.
-import { onBeforeUnmount, onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PendingInstall } from '../composables/usePluginInstallFlow'
+import { useDialogFocus } from '../composables/useDialogFocus'
 
 defineProps<{ pending: PendingInstall; step: 'publisher' | 'risk' | null }>()
 const emit = defineEmits<{ confirmPublisher: []; confirmRisk: []; cancel: [] }>()
+const { t, te } = useI18n()
 
 // Esc cancels this confirmation only; it must not reach the settings modal,
 // which closes on any Escape nobody handled (this capture listener runs first).
@@ -18,44 +21,89 @@ function onKeydown(event: KeyboardEvent): void {
 }
 onMounted(() => window.addEventListener('keydown', onKeydown, true))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
+
+// Focus starts on Cancel: the safe answer to a security question.
+const card = ref<HTMLElement | null>(null)
+const cancelButton = ref<HTMLButtonElement | null>(null)
+useDialogFocus(card, () => cancelButton.value)
+
+/** One line on what a sensitive capability lets the extension do. */
+function capabilityHint(cap: string): string {
+  const key = `settings.extensions.trust.capability.${cap}`
+  return te(key) ? t(key) : ''
+}
 </script>
 
 <template>
-  <div class="ext-trust-dialog" role="dialog" aria-modal="true">
-    <div class="ext-trust-body">
-      <h4 v-if="step === 'publisher'">{{ $t('settings.extensions.trust.publisherTitle') }}</h4>
-      <h4 v-else>{{ $t('settings.extensions.trust.permissionsTitle') }}</h4>
-      <p v-if="step === 'publisher'" class="ext-publisher-risk">
-        {{
-          $t('settings.extensions.trust.publisherRisk', {
-            publisher: pending.prepared.publisherId,
-            id: pending.prepared.id,
-          })
-        }}
-      </p>
-      <p v-if="step === 'risk' && pending.prepared.containsBackendExecutable" class="ext-backend-risk">
-        {{ $t('settings.extensions.trust.backendRisk', { name: pending.label }) }}
-      </p>
-      <p v-if="step === 'risk' && pending.prepared.sensitive.length">
-        {{
-          $t('settings.extensions.trust.sensitiveRisk', {
-            name: pending.label,
-            capabilities: pending.prepared.sensitive.join(', '),
-          })
-        }}
-      </p>
-      <p class="ext-trust-tier">
+  <div class="ext-trust-dialog nv-dialog-scrim">
+    <div
+      ref="card"
+      class="ext-trust-body nv-dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="ext-trust-title"
+      aria-describedby="ext-trust-desc"
+      tabindex="-1"
+    >
+      <div class="nv-dialog-head">
         <span
-          v-if="pending.prepared.trustTier === 'signed-verified'"
-          class="ext-trust-badge ext-verified"
+          class="nv-dialog-icon"
+          :class="step === 'publisher' || pending.prepared.containsBackendExecutable || pending.prepared.sensitive.length ? 'nv-dialog-icon--risk' : 'nv-dialog-icon--ok'"
+          aria-hidden="true"
         >
-          {{ $t('settings.extensions.trust.signed') }}
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M8 1.8 13 3.7v4c0 3-2.1 5.4-5 6.5-2.9-1.1-5-3.5-5-6.5v-4L8 1.8Z" />
+            <path v-if="step === 'publisher'" d="M8 5.2v3.2M8 10.6v.1" />
+            <path v-else d="m5.7 8.1 1.6 1.6 3-3.2" />
+          </svg>
         </span>
-        <span v-else class="ext-trust-badge ext-unsigned">
-          {{ $t('settings.extensions.trust.unsigned') }}
-        </span>
-      </p>
-      <div class="ext-trust-actions">
+        <div class="nv-dialog-heading">
+          <h4 v-if="step === 'publisher'" id="ext-trust-title" class="nv-dialog-title">{{ $t('settings.extensions.trust.publisherTitle') }}</h4>
+          <h4 v-else id="ext-trust-title" class="nv-dialog-title">{{ $t('settings.extensions.trust.permissionsTitle') }}</h4>
+          <p class="nv-dialog-subtitle"><code>{{ pending.prepared.id }}</code> · {{ pending.prepared.version }}</p>
+        </div>
+      </div>
+      <div id="ext-trust-desc" class="nv-dialog-body">
+        <!-- An unsigned package cannot lean on the Registry signature the
+             signed wording mentions, so it gets its own sentence. -->
+        <p v-if="step === 'publisher'" class="ext-publisher-risk">
+          {{
+            $t(
+              pending.prepared.trustTier === 'signed-verified'
+                ? 'settings.extensions.trust.publisherRisk'
+                : 'settings.extensions.trust.publisherRiskUnsigned',
+              { publisher: pending.prepared.publisherId, id: pending.prepared.id }
+            )
+          }}
+        </p>
+        <p v-if="step === 'risk' && pending.prepared.containsBackendExecutable" class="ext-backend-risk ext-risk-callout">
+          {{ $t('settings.extensions.trust.backendRisk', { name: pending.label }) }}
+        </p>
+        <template v-if="step === 'risk' && pending.prepared.sensitive.length">
+          <h5 class="ext-cap-heading">{{ $t('settings.extensions.trust.sensitiveHeading') }}</h5>
+          <ul class="ext-cap-list" :aria-label="$t('settings.extensions.trust.sensitiveRisk', { name: pending.label, capabilities: pending.prepared.sensitive.join(', ') })">
+            <li v-for="cap in pending.prepared.sensitive" :key="cap">
+              <code class="ext-cap-name">{{ cap }}</code>
+              <span v-if="capabilityHint(cap)" class="ext-cap-hint">{{ capabilityHint(cap) }}</span>
+            </li>
+          </ul>
+        </template>
+        <p class="ext-trust-tier">
+          <span
+            v-if="pending.prepared.trustTier === 'signed-verified'"
+            class="ext-trust-badge ext-verified"
+          >
+            {{ $t('settings.extensions.trust.signed') }}
+          </span>
+          <span v-else class="ext-trust-badge ext-unsigned">
+            {{ $t('settings.extensions.trust.unsigned') }}
+          </span>
+        </p>
+      </div>
+      <div class="ext-trust-actions nv-dialog-actions">
+        <button ref="cancelButton" class="ext-cancel nv-btn" @click="$emit('cancel')">
+          {{ $t('settings.extensions.trust.cancel') }}
+        </button>
         <button
           v-if="step === 'publisher'"
           class="ext-confirm-publisher nv-btn nv-btn--primary"
@@ -65,9 +113,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
         </button>
         <button v-else class="ext-confirm-risk nv-btn nv-btn--primary" @click="$emit('confirmRisk')">
           {{ $t('settings.extensions.trust.confirmInstall') }}
-        </button>
-        <button class="ext-cancel nv-btn" @click="$emit('cancel')">
-          {{ $t('settings.extensions.trust.cancel') }}
         </button>
       </div>
     </div>
@@ -84,43 +129,73 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
 }
-.ext-trust-body {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border: 1px solid var(--border-default);
-  padding: 20px 24px;
-  border-radius: var(--radius-lg);
-  max-width: 420px;
-  font-size: var(--font-sm);
+.ext-risk-callout {
+  padding: 8px 10px 8px 12px;
+  border-left: 3px solid var(--risk-fg);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--risk-subtle);
+  color: var(--risk-fg);
 }
-.ext-trust-body h4 {
-  margin: 0 0 8px;
-  color: var(--text-bright);
-  font-size: var(--font-md);
-}
-.ext-trust-tier {
+.ext-cap-heading {
+  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-.ext-trust-badge {
-  display: inline-block;
+.ext-cap-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.ext-cap-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.ext-cap-name {
+  padding: 1px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--risk-subtle);
+  color: var(--risk-fg);
+  font-family: var(--font-mono);
   font-size: var(--font-2xs);
   font-weight: 600;
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
+}
+.ext-cap-hint {
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+.ext-trust-tier {
+  margin: 0;
+}
+.ext-trust-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-2xs);
+  font-weight: 600;
 }
 .ext-trust-badge.ext-verified {
-  color: var(--success-fg);
-  background: var(--success-subtle);
+  color: var(--trust-signed-fg);
+  background: var(--trust-signed-subtle);
 }
 .ext-trust-badge.ext-unsigned {
-  color: var(--attention-fg);
-  background: var(--attention-subtle);
+  color: var(--trust-unsigned-fg);
+  background: var(--trust-unsigned-subtle);
 }
-.ext-trust-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
+.ext-trust-badge.ext-unsigned::before {
+  content: '⚠';
+  margin-right: 4px;
+}
+.nv-dialog-subtitle code {
+  font-family: var(--font-mono);
 }
 </style>

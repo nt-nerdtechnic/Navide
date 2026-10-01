@@ -98,7 +98,43 @@
   /* ── Motion (2 durations + 1 curve) ─────────────────────────── */
   --motion-fast: 120ms; /* hover / active / color changes */
   --motion-base: 200ms; /* panel in-out / expand-collapse */
+  --motion-slow: 320ms; /* step / tab content transitions */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ── Spacing (4px grid) ──────────────────────────────────────
+   * The values the existing `var(--space-N, fallback)` uses already
+   * assume, so defining them is a visual no-op for those callers. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* ── Display type (marketplace detail / hero titles) ────────── */
+  --font-title: 20px;
+  --font-display: 28px;
+
+  /* Extension / app icon tiles. */
+  --radius-tile: 10px;
+
+  /* ── Trust roles ────────────────────────────────────────────
+   * One meaning per colour, everywhere a package's trust shows:
+   * verified publisher > signed > unsigned. Unsigned borrows the risk
+   * colour: nothing vouches for the bytes. They
+   * resolve through the theme's semantic families, so every theme
+   * gets them without a per-theme entry. */
+  --trust-verified-fg: var(--accent-fg);
+  --trust-signed-fg: var(--success-fg);
+  --trust-signed-subtle: var(--success-subtle);
+  --trust-unsigned-fg: var(--attention-fg);
+  --trust-unsigned-subtle: var(--attention-subtle);
+  --risk-fg: var(--attention-fg);
+  --risk-subtle: var(--attention-subtle);
+  --risk-muted: var(--attention-muted);
 
   /* ── Icon button containers (3 sizes) ───────────────────────── */
   --icon-btn-sm: 20px;
@@ -118,11 +154,16 @@
   :root {
     --motion-fast: 0ms;
     --motion-base: 0ms;
+    --motion-slow: 0ms;
   }
 }
 
 :root,
 :root[data-theme='dark-github'] {
+  /* Native controls (checkboxes, scrollbars) of surfaces that opt in with
+     `color-scheme: var(--nv-color-scheme)`. Dark unless a theme says light. */
+  --nv-color-scheme: dark;
+
   /* ── Backgrounds ──────────────────────────────────────────── */
   --bg-base: var(--gray-12);          /* #0d1117 — app canvas */
   --bg-inset: var(--gray-13);         /* #010409 — deepest wells, terminals */
@@ -492,6 +533,119 @@
 .nv-modal-shell--compact { width: min(var(--modal-w-compact), 92vw); }
 .nv-modal-shell--standard { width: min(var(--modal-w-standard), 92vw); }
 .nv-modal-shell--wide { width: min(var(--modal-w-wide), 92vw); }
+
+/* ── Dialog card ────────────────────────────────────────────────
+ * The house spec for a confirmation dialog's card: icon + title head,
+ * scrolling body, action footer. Visual only — each dialog keeps its own
+ * overlay positioning and z-index (they sit in different stacking
+ * contexts), and its own Escape semantics.
+ */
+.nv-dialog-scrim {
+  background: var(--modal-backdrop);
+  backdrop-filter: blur(var(--modal-backdrop-blur));
+  -webkit-backdrop-filter: blur(var(--modal-backdrop-blur));
+  animation: nv-modal-scrim-in var(--motion-fast) var(--ease-out);
+}
+.nv-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(var(--modal-w-compact), calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-modal);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-sm);
+  line-height: var(--lh-base);
+  animation: nv-dialog-in var(--motion-base) var(--ease-out);
+}
+.nv-dialog::before {
+  /* Signature shared with the Marketplace website's panels. */
+  content: '';
+  display: block;
+  flex: none;
+  height: 3px;
+  /* Full width and solid: a line that fades out reads as a progress bar. */
+  background: var(--accent-fg);
+}
+.nv-dialog--standard {
+  width: min(560px, calc(100vw - 32px));
+}
+.nv-dialog:focus {
+  outline: none;
+}
+.nv-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-5) var(--space-2);
+}
+.nv-dialog-icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+}
+.nv-dialog-icon svg {
+  width: 17px;
+  height: 17px;
+}
+.nv-dialog-icon--ok { background: var(--trust-signed-subtle); color: var(--trust-signed-fg); }
+.nv-dialog-icon--risk { background: var(--risk-subtle); color: var(--risk-fg); }
+.nv-dialog-icon--danger { background: var(--danger-subtle); color: var(--danger-bright); }
+.nv-dialog-heading {
+  min-width: 0;
+  padding-top: 5px;
+}
+.nv-dialog-title {
+  margin: 0;
+  color: var(--text-bright);
+  font-size: var(--font-md);
+  font-weight: 650;
+  line-height: 1.35;
+}
+.nv-dialog-subtitle {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+.nv-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-5) var(--space-5) calc(var(--space-5) + 32px + var(--space-3));
+}
+.nv-dialog-body > p {
+  margin: 0 0 var(--space-3);
+}
+.nv-dialog-body > :last-child {
+  margin-bottom: 0;
+}
+.nv-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
+}
+.nv-dialog-actions-start {
+  margin-right: auto;
+}
+@keyframes nv-dialog-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
 
 /* ── Popover ────────────────────────────────────────────────────
  * The formula the four status-bar popovers already agreed on.
