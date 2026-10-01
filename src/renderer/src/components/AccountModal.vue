@@ -847,12 +847,19 @@ const devices = computed<NetworkDevice[]>(() => network.value?.devices ?? [])
 const GROUP_ORDER = ['running', 'idle', 'not-opened'] as const
 type PaneGroupKey = (typeof GROUP_ORDER)[number]
 
-/** Which section a wire state belongs to. `not-opened` is decided on the wire
+/** Which section a pane belongs to. `not-opened` is decided on the wire
  *  word, not the badge word: the badge word for it is `waiting`, which is also
- *  what an old machine sends for a perfectly live idle pane. */
-function paneGroupOf(status: string): PaneGroupKey {
-  if (status === 'not-opened') return 'not-opened'
-  return badgeOf(status) === 'running' ? 'running' : 'idle'
+ *  what an old machine sends for a perfectly live idle pane.
+ *
+ *  A pane nobody can reach is neither running nor idle: `disconnected` is how
+ *  another machine reports its own restore placeholders (only this machine can
+ *  say `not-opened`), and a machine that is gone keeps its last rows on the
+ *  server. Filed under Idle they outnumbered the panes that were. */
+function paneGroupOf(pane: NetworkPane): PaneGroupKey {
+  if (pane.status === 'not-opened' || pane.status === 'disconnected' || !pane.hostOnline) {
+    return 'not-opened'
+  }
+  return badgeOf(pane.status) === 'running' ? 'running' : 'idle'
 }
 
 /** One line in a section: either a pane, or the workspace rule above the first
@@ -884,7 +891,7 @@ function groupsFor(device: NetworkDevice): PaneGroup[] {
     idle: [],
     'not-opened': [],
   }
-  for (const pane of device.panes) buckets[paneGroupOf(pane.status)].push(pane)
+  for (const pane of device.panes) buckets[paneGroupOf(pane)].push(pane)
 
   const out: PaneGroup[] = []
   for (const key of GROUP_ORDER) {
@@ -917,7 +924,7 @@ function groupsFor(device: NetworkDevice): PaneGroup[] {
 const paneTotals = computed<Record<PaneGroupKey, number>>(() => {
   const totals: Record<PaneGroupKey, number> = { running: 0, idle: 0, 'not-opened': 0 }
   for (const device of devices.value) {
-    for (const pane of device.panes) totals[paneGroupOf(pane.status)] += 1
+    for (const pane of device.panes) totals[paneGroupOf(pane)] += 1
   }
   return totals
 })

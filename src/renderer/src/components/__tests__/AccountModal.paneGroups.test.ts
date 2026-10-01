@@ -24,6 +24,7 @@ interface PaneSeed {
   status: string
   agentKey?: string
   startedAt?: string
+  hostOnline?: boolean
 }
 
 function pane(seed: PaneSeed, index: number): Record<string, unknown> {
@@ -35,7 +36,7 @@ function pane(seed: PaneSeed, index: number): Record<string, unknown> {
     workspace: seed.workspace,
     workspacePath: `/tmp/${seed.workspace}`,
     status: seed.status,
-    hostOnline: true,
+    hostOnline: seed.hostOnline ?? true,
     startedAt: seed.startedAt ?? '',
   }
 }
@@ -189,8 +190,8 @@ describe('the pane roster', () => {
     expect(paneTitles()).toHaveLength(WIRE.length)
     expect(sections()).toEqual([
       `${t('settings.p2p.network.group-running')} 1`,
-      `${t('settings.p2p.network.group-idle')} 8`,
-      `${t('settings.p2p.network.group-not-opened')} 1`,
+      `${t('settings.p2p.network.group-idle')} 7`,
+      `${t('settings.p2p.network.group-not-opened')} 2`,
     ])
   })
 
@@ -257,6 +258,24 @@ describe('the pane roster', () => {
     expect(sections()).toEqual([`${t('settings.p2p.network.group-running')} 1`])
     await wrapper!.findAll('.pane-tile')[0].trigger('click')
     expect(sections().length).toBe(3)
+  })
+
+  it('never counts a pane nobody can reach as running or idle', async () => {
+    // The real roster: another machine's restored placeholders arrive as
+    // "disconnected" (only this machine can say "not opened"), and a machine
+    // that has gone away keeps its last rows. Filed under Idle they were 45 of
+    // the 69 on the tile — panes a message sent now would never reach.
+    await mountModal(MIXED, {
+      name: 'Laptop',
+      seeds: [
+        { title: 'Placeholder there', workspace: 'W', status: 'disconnected' },
+        { title: 'Live there', workspace: 'W', status: 'idle' },
+        { title: 'Stale busy', workspace: 'W', status: 'running', hostOnline: false },
+        { title: 'Stale idle', workspace: 'W', status: 'idle', hostOnline: false },
+      ],
+    })
+    const tiles = wrapper!.findAll('.pane-tile .tile-n').map((node) => node.text())
+    expect(tiles).toEqual(['1', '3', '5'])
   })
 
   it('starts another machine folded, because this one is what was asked for', async () => {
