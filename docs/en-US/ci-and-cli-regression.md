@@ -68,9 +68,11 @@ can reproduce an interleaving a real child cannot reliably schedule.
 Vendor scenarios exercise the actual registered adapter, its argument and
 environment contracts, reader and attribution semantics, and the transports
 Navide wires for that vendor. Unsupported capabilities are negative contracts,
-not skipped tests. Ordinary shell terminals are not a CLI vendor. The source
-registries determine the supported roster; the coverage inventory must agree
-with both registries.
+not skipped tests. Platform-specific fixture requirements are declared in the
+coverage inventory so an intentional host exclusion is not counted as missing
+coverage. Ordinary shell terminals are not a CLI vendor. The source registries
+determine the supported roster; the coverage inventory must agree with both
+registries.
 
 | CLI | Contracts represented in the baseline |
 | --- | --- |
@@ -80,7 +82,7 @@ with both registries.
 | Codex | Rollout format, explicit turn completion, delayed discovery, launch-scoped SessionStart, pane homes, subagent exclusion and ESC interrupt |
 | Copilot | SQLite and legacy JSONL precedence, cumulative usage, completed turns, markers, hooks and resume |
 | Cursor | Executable aliases, SQLite WAL, JSON/protobuf discrimination, workspace markers, event ordering and reply tails |
-| Droid | Its own cwd encoding, session layouts, cumulative sidecars, split reply/outcome and inherited parent environment |
+| Droid | Its own cwd encoding, session layouts, cumulative sidecars, split reply/outcome and inherited parent environment; reader/resume fixtures are POSIX-only until native Windows folder naming is handled |
 | Grok | Official grok-build updates, cwd layouts, UUID resume claims, explicit completion and streamed text |
 | Kilo | Its own database/root/vendor identity plus the shared OpenCode schema and authenticated TUI push |
 | Kimi | Session-directory identity, wire records, cancellation, inferred idle completion and ESC timeout environment |
@@ -262,24 +264,14 @@ Each invocation prepares shared distributions before worker startup; separate
 jobs have separate workspaces. Reproduce native Windows or Linux failures on
 that platform; path swapping on macOS does not exercise ConPTY or Linux PTYs.
 
-## Known baseline failures deferred for PR review
+## Platform-scoped vendor fixtures
 
-The new composed reader tests expose three integration failures. They currently
-fail the required gate; they are not skipped or counted as passing coverage.
-At the user's direction, this infrastructure change leaves these cases intact
-for PR review. The PR body must record the failures and the implementation
-analysis below; deciding whether to correct a test contract or the existing
-product behavior is deferred. The fixtures are synthetic, and these scenarios
-have not been revalidated against live vendor CLIs in this change.
-
-| Case in `backend/tests/cli_regression/test_vendor_contracts.py` | Observed failure path | Minimal proposed correction |
-| --- | --- | --- |
-| `test_vendor_reader[droid]` | Parsed events have cwd, but Droid has no workspace/pane matching hooks, so attribution discards activity and usage | Implement the existing exact-cwd reader hooks |
-| `test_vendor_reader[codex]` | A later poll skips the already-seen session header and emits completion without cwd; this also reproduces without restarting the reader | Preserve header metadata independently of the activity high-water mark |
-| `test_vendor_reader[copilot]` | For a database created after registration, an early heartbeat can claim the only pane before the turn marker arrives; the later marker never announces/persists that same-pane binding | Complete same-owner marker confirmation once while retaining cross-pane ownership rejection |
-
-These failures demonstrate why parser-only tests were insufficient. They do
-not justify a lifecycle redesign or weakening the recorded contracts.
+Droid's synthetic reader and resume fixtures use POSIX session paths. Until
+native Windows folder naming is handled, the coverage inventory requires these
+two cases on POSIX hosts and excludes them from Windows required outcomes. The
+Windows tests visibly skip those fixtures; Droid launch and all other vendor
+contracts remain required. This is a test-fixture limitation, not validation
+that Droid session paths work on Windows.
 
 ## Implementation validation (2026-09-30)
 
@@ -350,9 +342,11 @@ Local validation after these corrections:
 | `pnpm build` and production Plans fixture-exclusion check | Passed |
 | Complete prepared artifact suite, including packaged/production Plans | 22 files, 201 tests passed |
 | Channel mirror suite, native macOS and Windows path seam | 37 passed in each run |
-| Complete backend suite | 8,709 passed, exactly the three deferred reader failures, 18 platform/capability skips; 333.26 seconds |
+| Complete backend suite before the subsequent reader fixes | 8,709 passed, exactly three deferred reader failures, 18 platform/capability skips; 333.26 seconds |
+| Complete backend suite after the Droid platform-scoped fixture change (macOS arm64) | 8,724 passed, 18 skipped, 15 warnings; 326.04 seconds |
 | Two consecutive standalone artifact preparations | Both passed; second run preserved the success stamp and sampled output contents/mtimes |
 
 Native Linux/Windows execution, live provider smoke and manual Electron checks
-remain separate from these local results. The three reader failures still fail
-the gate; no skip, xfail or product fix was added for them.
+remain separate from these local results. The two Droid reader/resume fixtures
+remain required on POSIX hosts and are explicitly excluded from Windows
+required outcomes until native Windows session folder naming is handled.

@@ -17,6 +17,7 @@ import websockets
 from agent_team_backend import pty_registry
 from agent_team_backend.applog import in_data_dir
 
+from .cli_shim import base_python_executable
 from .isolation import isolated_environment
 
 
@@ -161,7 +162,7 @@ class BackendProcess:
         return websockets.connect(self.url, proxy=None, max_size=4 * 1024 * 1024)
 
     def fake_command(self) -> list[str]:
-        return [sys.executable, "-u", str(Path(__file__).with_name("fake_cli.py"))]
+        return [base_python_executable(), "-u", str(Path(__file__).with_name("fake_cli.py"))]
 
     def track_child(self, pid: int) -> None:
         try:

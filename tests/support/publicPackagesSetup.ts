@@ -86,12 +86,19 @@ function artifactDigest(root: string, paths: string[], source = false): string {
   if (source) {
     // NODE_ENV is deliberately removed by pnpm() above. Include the toolchain
     // and build overrides that can otherwise change output without a source edit.
+    const windows = process.platform === 'win32'
+    const relevantEnvironmentKeys = new Set([
+      'NAVIDE_PLUGIN_ARTIFACT_VERSION', 'NAVIDE_MINI_IDE_DIST_DIR', 'NAVIDE_PNPM',
+      'npm_execpath', 'npm_config_user_agent', 'NODE_OPTIONS', 'SOURCE_DATE_EPOCH',
+      'LANG', 'LC_ALL', 'TZ',
+    ].map((key) => windows ? key.toUpperCase() : key))
+    const environment = Object.entries(process.env)
+      .map(([key, value]) => [windows ? key.toUpperCase() : key, value] as const)
+      .filter(([key]) => key.startsWith('VITE_') || relevantEnvironmentKeys.has(key))
+      .sort()
     hash.update(JSON.stringify({
       node: process.version, executable: process.execPath, platform: process.platform, arch: process.arch,
-      environment: Object.entries(process.env).filter(([key]) =>
-        key.startsWith('VITE_') || ['NAVIDE_PLUGIN_ARTIFACT_VERSION', 'NAVIDE_MINI_IDE_DIST_DIR',
-          'NAVIDE_PNPM', 'npm_execpath', 'npm_config_user_agent', 'NODE_OPTIONS',
-          'SOURCE_DATE_EPOCH', 'LANG', 'LC_ALL', 'TZ'].includes(key)).sort(),
+      environment,
     }))
   }
   return hash.digest('hex')

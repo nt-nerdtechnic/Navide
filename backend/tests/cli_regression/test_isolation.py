@@ -14,6 +14,7 @@ from agent_team_backend.applog import in_data_dir
 
 from .support.isolation import isolated_environment, real_cli_in
 from .support.backend_process import BackendProcess
+from .support.cli_shim import base_python_executable
 
 
 pytestmark = [pytest.mark.cli_regression, pytest.mark.cli_shared]
@@ -225,7 +226,7 @@ async def test_failure_cleanup_reaps_registry_child_before_create_ack(tmp_path):
                         "agent_key": "terminal",
                         "cwd": str(backend.root),
                         "command": [
-                            sys.executable,
+                            base_python_executable(),
                             "-c",
                             "import signal, time; s = getattr(signal, 'SIGHUP', None); "
                             "s is not None and signal.signal(s, signal.SIG_IGN); "

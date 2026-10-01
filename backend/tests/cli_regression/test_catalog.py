@@ -100,3 +100,26 @@ def test_a_supported_reader_cannot_be_exempted_on_another_supported_os():
     data = deepcopy(load_catalog())
     data["vendors"]["claude"]["cases"]["reader"]["requires"] = ["posix_pty"]
     assert any("platform exemptions" in error for error in validate_catalog(data, VENDORS))
+
+
+def test_droid_session_fixtures_are_exempt_only_on_windows(monkeypatch):
+    from . import catalog
+
+    data = load_catalog()["vendors"]["droid"]["cases"]
+    monkeypatch.setattr(catalog.sys, "platform", "win32")
+    required = catalog._required_cases()
+    assert data["reader"]["nodeid"] not in required
+    assert data["resume"]["nodeid"] not in required
+    assert data["launch"]["nodeid"] in required
+    assert load_catalog()["vendors"]["claude"]["cases"]["reader"]["nodeid"] in required
+
+    monkeypatch.setattr(catalog.sys, "platform", "linux")
+    required = catalog._required_cases()
+    assert data["reader"]["nodeid"] in required
+    assert data["resume"]["nodeid"] in required
+
+
+def test_droid_launch_cannot_inherit_the_session_platform_exemption():
+    data = deepcopy(load_catalog())
+    data["vendors"]["droid"]["cases"]["launch"]["requires"] = ["posix_pty"]
+    assert any("platform exemptions" in error for error in validate_catalog(data, VENDORS))

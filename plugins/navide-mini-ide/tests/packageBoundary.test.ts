@@ -14,7 +14,8 @@ import {
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
 type CommandResult = {
   status: number | null
@@ -23,6 +24,7 @@ type CommandResult = {
 }
 
 const repositoryRoot = resolve(import.meta.dirname, '../../..')
+const execFileAsync = promisify(execFile)
 
 function subprocessEnvironment(): NodeJS.ProcessEnv {
   const nodeDirectory = dirname(process.execPath)
@@ -37,31 +39,40 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
   }
 }
 
-function run(command: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): CommandResult {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: 'utf8',
-    env: { ...subprocessEnvironment(), ...extraEnv },
-    maxBuffer: 32 * 1024 * 1024,
-  })
-  if (result.error) throw result.error
-  return {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+async function run(command: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<CommandResult> {
+  try {
+    const result = await execFileAsync(command, args, {
+      cwd,
+      encoding: 'utf8',
+      env: { ...subprocessEnvironment(), ...extraEnv },
+      maxBuffer: 32 * 1024 * 1024,
+    })
+    return { status: 0, stdout: result.stdout, stderr: result.stderr }
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & {
+      code?: number | string
+      stdout?: string | Buffer
+      stderr?: string | Buffer
+    }
+    if (typeof failure.code !== 'number') throw error
+    return {
+      status: failure.code,
+      stdout: String(failure.stdout ?? ''),
+      stderr: String(failure.stderr ?? ''),
+    }
   }
 }
 
-function runNodeEntryOrThrow(entry: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): CommandResult {
-  const result = run(process.execPath, [entry, ...args], cwd, extraEnv)
+async function runNodeEntryOrThrow(entry: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<CommandResult> {
+  const result = await run(process.execPath, [entry, ...args], cwd, extraEnv)
   if (result.status !== 0) {
     throw new Error(`node ${entry} ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
   }
   return result
 }
 
-function runCommandOrThrow(command: string, args: string[], cwd: string): CommandResult {
-  const result = run(command, args, cwd)
+async function runCommandOrThrow(command: string, args: string[], cwd: string): Promise<CommandResult> {
+  const result = await run(command, args, cwd)
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
   }
@@ -104,9 +115,9 @@ function resolveInstalledPackageBin(
   return join(packageDirectory, bin)
 }
 
-function extractPackageTarball(tarball: string, packageDirectory: string, cwd: string): void {
+async function extractPackageTarball(tarball: string, packageDirectory: string, cwd: string): Promise<void> {
   mkdirSync(packageDirectory, { recursive: true })
-  runCommandOrThrow(
+  await runCommandOrThrow(
     'tar',
     ['-xzf', tarball, '--strip-components=1', '-C', packageDirectory],
     cwd,
@@ -149,7 +160,7 @@ function writeConsumerProject(project: string, packageRoot: string): void {
 describe('navide Mini-IDE public package boundary', () => {
   it(
     'builds a copied Mini-IDE against packed public packages with portable Monaco workers',
-    () => {
+    async () => {
       // The runner's TEMP can be an 8.3 short path (C:\Users\RUNNER~1); vite
       // resolves inputs to the long form, so a short root puts index.html outside it.
       const temporaryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'navide-mini-ide-external-')))
@@ -177,7 +188,7 @@ describe('navide Mini-IDE public package boundary', () => {
         expect(collectFiles(externalProject).some((path) => /[/\\]plugins[/\\]navide-(git|plans)[/\\]/.test(path))).toBe(false)
         for (const packageName of Object.keys(packageTarballs)) {
           const installedPackage = join(externalProject, 'node_modules', packageName)
-          extractPackageTarball(packageTarballs[packageName], installedPackage, externalProject)
+          await extractPackageTarball(packageTarballs[packageName], installedPackage, externalProject)
           expect(lstatSync(installedPackage).isSymbolicLink(), packageName).toBe(false)
           expect(realpathSync(installedPackage)).not.toContain(repositoryRoot)
         }
@@ -199,10 +210,10 @@ describe('navide Mini-IDE public package boundary', () => {
 
         const externalRequire = createRequire(join(externalProject, 'package.json'))
         const vueTscCli = resolveInstalledPackageBin(externalProject, 'vue-tsc', 'vue-tsc', externalRequire)
-        runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject)
+        await runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject)
 
         const viteCli = resolveInstalledPackageBin(externalProject, 'vite', 'vite', externalRequire)
-        runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject, {
+        await runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject, {
           NAVIDE_MINI_IDE_DIST_DIR: join(externalProject, 'dist'),
         })
 

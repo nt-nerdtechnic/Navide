@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shlex
-import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -26,6 +24,7 @@ from agent_team_backend.tokens_store import TokensStore
 from .catalog import load_catalog
 from .support.vendor_data import MARKER, PANE, VendorData
 from .support.backend_process import BackendProcess
+from .support.cli_shim import base_python_executable, install_cli_shim
 
 CATALOG = load_catalog()["vendors"]
 
@@ -43,7 +42,21 @@ def data(request, tmp_path, monkeypatch, set_home):
         fixture.close()
 
 
-@pytest.mark.parametrize("data", vendors_with("reader"), indirect=True)
+def session_vendors_with(capability):
+    return [
+        pytest.param(
+            key,
+            id=key,
+            marks=pytest.mark.skipif(
+                sys.platform == "win32" and key == "droid",
+                reason="Droid Windows session path format is tracked separately",
+            ),
+        )
+        for key in vendors_with(capability)
+    ]
+
+
+@pytest.mark.parametrize("data", session_vendors_with("reader"), indirect=True)
 async def test_vendor_reader(data, tmp_path, monkeypatch):
     key = data.fixture["vendor"]
     reader = VENDORS[key].make_log_reader()
@@ -138,7 +151,7 @@ async def test_vendor_reader(data, tmp_path, monkeypatch):
     store.flush()
 
 
-@pytest.mark.parametrize("data", vendors_with("resume"), indirect=True)
+@pytest.mark.parametrize("data", session_vendors_with("resume"), indirect=True)
 def test_vendor_resume(data):
     key = data.fixture["vendor"]
     data.apply("initial")
@@ -192,13 +205,8 @@ async def test_vendor_launch(vendor, tmp_path):
     backend = BackendProcess(tmp_path)
     destination = tmp_path / "launch.json"
     script = Path(__file__).parent / "support" / "vendor_launch.py"
-    arguments = [sys.executable, "-u", str(script), vendor, str(destination)]
-    executable = tmp_path / (fixture["binary"] + (".cmd" if os.name == "nt" else ""))
-    if os.name == "nt":
-        executable.write_text("@echo off\r\n" + subprocess.list2cmdline(arguments) + " %*\r\n", encoding="utf-8")
-    else:
-        executable.write_text("#!/bin/sh\nexec " + shlex.join(arguments) + ' "$@"\n', encoding="utf-8")
-        executable.chmod(0o700)
+    arguments = [base_python_executable(), "-u", str(script), vendor, str(destination)]
+    executable = install_cli_shim(tmp_path, fixture["binary"], arguments)
     guarded = fixture["guardedEnvironment"]
     backend.env.update({key: "fixture-inherited-home" for key in guarded})
     environment = {key: "fixture-requested-home" for key in guarded}

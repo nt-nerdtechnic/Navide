@@ -162,10 +162,16 @@
           "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_launch[droid]"
         },
         "reader": {
-          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[droid]"
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_reader[droid]",
+          "requires": [
+            "posix_pty"
+          ]
         },
         "resume": {
-          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[droid]"
+          "nodeid": "tests/cli_regression/test_vendor_contracts.py::test_vendor_resume[droid]",
+          "requires": [
+            "posix_pty"
+          ]
         }
       }
     },

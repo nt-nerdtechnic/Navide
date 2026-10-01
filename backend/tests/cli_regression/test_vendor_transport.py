@@ -3,17 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
-import shlex
 import subprocess
-import sys
 
 import httpx
 import pytest
 
 from agent_team_backend import osplat
 from .support.backend_process import BackendProcess
+from .support.cli_shim import base_python_executable, install_cli_shim
 
 pytestmark = [pytest.mark.cli_regression, pytest.mark.cli_vendor, pytest.mark.asyncio]
 
@@ -21,14 +19,29 @@ pytestmark = [pytest.mark.cli_regression, pytest.mark.cli_vendor, pytest.mark.as
 def _install(backend: BackendProcess, vendor: str) -> list[str]:
     """Install a named external stand-in; preserve all production spawn wiring."""
     script = Path(__file__).parent / "support" / "vendor_transport.py"
-    arguments = [sys.executable, "-u", str(script), vendor, str(backend.root)]
-    executable = backend.root / (f"{vendor}.cmd" if os.name == "nt" else vendor)
-    if os.name == "nt":
-        executable.write_text("@echo off\r\n" + subprocess.list2cmdline(arguments) + " %*\r\n", encoding="utf-8")
-    else:
-        executable.write_text("#!/bin/sh\nexec " + shlex.join(arguments) + ' "$@"\n', encoding="utf-8")
-        executable.chmod(0o700)
+    arguments = [base_python_executable(), "-u", str(script), vendor, str(backend.root)]
+    executable = install_cli_shim(backend.root, vendor, arguments)
     return osplat.paths.shell_command(osplat.paths.quote_arg(str(executable)))
+
+
+async def test_cli_shim_exits_after_version_probe(tmp_path):
+    script = Path(__file__).parent / "support" / "vendor_transport.py"
+    executable = install_cli_shim(
+        tmp_path,
+        "codex",
+        [base_python_executable(), "-u", str(script), "codex", str(tmp_path)],
+    )
+    command = osplat.paths.launch_argv(str(executable), ["--version"])
+    result = await asyncio.to_thread(
+        subprocess.run,
+        command,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0
+    assert "codex 99.0.0-regression" in result.stdout
 
 
 def _records(backend: BackendProcess, vendor: str) -> list[dict]:

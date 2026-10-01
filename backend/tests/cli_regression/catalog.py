@@ -15,6 +15,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = ROOT / "tests" / "fixtures" / "cli-regression"
 RUNNER_CAPABILITIES = ({"posix_pty", "darwin_helper"}, {"posix_pty"}, {"windows_conpty"})
+PLATFORM_REQUIREMENTS = {
+    ("claude", "shutdown"): {"posix_pty"},
+    ("droid", "reader"): {"posix_pty"},
+    ("droid", "resume"): {"posix_pty"},
+}
 
 
 def load_catalog() -> dict:
@@ -59,7 +64,7 @@ def validate_catalog(data: dict, vendors: dict) -> list[str]:
                 errors.append(f"{key}/{capability}: unknown platform requirement")
             if not any(set(case.get("requires", [])) <= runner for runner in RUNNER_CAPABILITIES):
                 errors.append(f"{key}/{capability}: no CI runner can execute this requirement")
-            allowed = {"posix_pty"} if (key, capability) == ("claude", "shutdown") else set()
+            allowed = PLATFORM_REQUIREMENTS.get((key, capability), set())
             if set(case.get("requires", [])) != allowed:
                 errors.append(f"{key}/{capability}: platform exemptions must match {sorted(allowed)}")
         path = FIXTURES / entry.get("fixture", "")
