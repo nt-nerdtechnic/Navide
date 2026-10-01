@@ -153,7 +153,7 @@ import { warnMain } from './main-log'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
-import { isMac } from '../shared/osplat'
+import { isLinux, isMac } from '../shared/osplat'
 import { installMediaPermissionHandlers } from './media-permissions'
 import { registerFnKeyIpc } from './fn-key-ipc'
 import { createDeepLinkRouter, registerDeepLinkIpc } from './deep-link'
@@ -163,6 +163,7 @@ import {
   type GitAccountCrypto,
   type GitAccountInput
 } from './gitAccountsStore'
+import { probeSecretService, runDbusSend } from './linuxKeyring'
 import type { EditorNativeHost } from './plugins/editorNativeCapability'
 import { NativeBackendStore } from './plugins/pluginNativeBackendStore'
 import { registerNativeBackendIpc } from './plugins/pluginNativeBackendIpc'
@@ -431,8 +432,14 @@ const cdpDebugPath = (): string => join(app.getPath('userData'), 'cdp-debug.json
 // workspace (see gitAccountsStore.ts). Built lazily so app.getPath / safeStorage
 // are only touched after the app is ready (IPC calls arrive from renderers).
 let gitAccountsStore: GitAccountsStore | null = null
+// Set by the pre-ready Linux keyring preflight when it fell back to
+// --password-store=basic (see probeSecretService below).
+let linuxKeyringDowngraded = false
 function getGitAccountsStore(): GitAccountsStore {
   if (!gitAccountsStore) {
+    // Under basic_text Electron reports encryption unavailable unless plain-text
+    // encryption is opted into explicitly.
+    if (linuxKeyringDowngraded) safeStorage.setUsePlainTextEncryption(true)
     const crypto: GitAccountCrypto = {
       get available(): boolean {
         return safeStorage.isEncryptionAvailable()
@@ -4892,6 +4899,23 @@ const cdpDebugConfig = readCdpDebugConfig(cdpDebugPath())
 if (cdpDebugConfig.enabled) {
   app.commandLine.appendSwitch('remote-debugging-port', String(cdpDebugConfig.port))
   app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+}
+
+// Linux keyring preflight. A missing or locked GNOME login keyring makes
+// Chromium's OSCrypt raise a keyring password dialog that blocks the main
+// process until answered. When the Secret Service default collection is not
+// already usable, fall back to basic encryption instead; this must run before
+// the app is ready. An explicit --password-store from the user always wins.
+if (isLinux() && !app.commandLine.hasSwitch('password-store')) {
+  const keyring = probeSecretService(runDbusSend)
+  if (!keyring.usable) {
+    app.commandLine.appendSwitch('password-store', 'basic')
+    linuxKeyringDowngraded = true
+    console.warn(
+      `[main] Secret Service keyring not usable (${keyring.reason}${keyring.detail ? `: ${keyring.detail}` : ''}) — ` +
+        'using --password-store=basic; stored Git account tokens may need to be re-entered.'
+    )
+  }
 }
 
 // Folder paths handed to the app from outside (Finder "Open With", a macOS
