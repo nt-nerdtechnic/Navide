@@ -7,12 +7,16 @@ kv key are touched.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from ..db import Database
+
+log = logging.getLogger(__name__)
 
 COMPONENT = "guard"
 KV_ENABLED = "guard.enabled"
@@ -102,6 +106,12 @@ def _v4(cur: sqlite3.Cursor) -> None:
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 
+#: Audit rows are written off the decision path: a hook decision must not
+#: wait behind navide.db's shared lock, which another thread can hold inside
+#: a slow SQLite call for seconds on a loaded machine. One thread keeps the
+#: rows in order.
+_AUDIT_WRITER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="navide-guard-audit")
+
 
 class GuardStore:
     def __init__(self, db: Database) -> None:
@@ -113,18 +123,42 @@ class GuardStore:
         self._inserts = 0
         self._terminal_cache: Any = None
         self._grading_cache: tuple[dict[str, str], frozenset[str]] | None = None
+        # What every decision reads, kept in memory so a warm decision takes
+        # no database lock; this store is their only writer.
+        self._enabled_cache: bool | None = None
+        self._rules_cache: list[dict[str, Any]] | None = None
+        self._taint_cache: dict[str, dict[str, Any]] | None = None
+        self._audit_last: Future | None = None
 
     # ── enabled ──────────────────────────────────────────────────────
 
     def enabled(self) -> bool:
-        return bool(self._db.kv_get(KV_ENABLED, True))
+        if self._enabled_cache is None:
+            self._enabled_cache = bool(self._db.kv_get(KV_ENABLED, True))
+        return self._enabled_cache
 
     def set_enabled(self, enabled: bool) -> None:
         self._db.kv_set(KV_ENABLED, bool(enabled), now=int(time.time()))
+        self._enabled_cache = bool(enabled)
 
     # ── audit ────────────────────────────────────────────────────────
 
     def audit_add(self, entry: dict[str, Any]) -> None:
+        """Queue the row; the audit reads below wait for it."""
+        self._audit_last = _AUDIT_WRITER.submit(self._audit_write, entry)
+
+    def _audit_flush(self) -> None:
+        last = self._audit_last
+        if last is not None:
+            last.exception()  # waits; a failed write was already logged
+
+    def _audit_write(self, entry: dict[str, Any]) -> None:
+        try:
+            self._audit_insert(entry)
+        except Exception:  # noqa: BLE001 - the decision it records already stands
+            log.warning("guard: audit write failed", exc_info=True)
+
+    def _audit_insert(self, entry: dict[str, Any]) -> None:
         with self._db.transaction() as cur:
             cur.execute(
                 "INSERT INTO guard_audit (ts, pane_id, vendor, source, tool, excerpt,"
@@ -145,6 +179,7 @@ class GuardStore:
 
     def audit_list(self, limit: int = 100, pane_id: str | None = None) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 100), 1000))
+        self._audit_flush()
         sql = "SELECT * FROM guard_audit"
         args: tuple = ()
         if pane_id:
@@ -159,6 +194,7 @@ class GuardStore:
         ]
 
     def audit_counts(self, since: float) -> dict[str, int]:
+        self._audit_flush()
         with self._db.transaction() as cur:
             row = cur.execute(
                 "SELECT"
@@ -171,10 +207,16 @@ class GuardStore:
 
     # ── taint ────────────────────────────────────────────────────────
 
+    def _taints(self) -> dict[str, dict[str, Any]]:
+        if self._taint_cache is None:
+            with self._db.transaction() as cur:
+                rows = cur.execute("SELECT * FROM guard_taint").fetchall()
+            self._taint_cache = {r["pane_id"]: self._taint_row(r) for r in rows}
+        return self._taint_cache
+
     def taint_get(self, pane_id: str) -> dict[str, Any] | None:
-        with self._db.transaction() as cur:
-            row = cur.execute("SELECT * FROM guard_taint WHERE pane_id = ?", (pane_id,)).fetchone()
-        return self._taint_row(row) if row else None
+        row = self._taints().get(pane_id)
+        return {**row, "sources": list(row["sources"])} if row else None
 
     def taint_upsert(self, pane_id: str, sources: list[str], since: float, detail: str) -> None:
         with self._db.transaction() as cur:
@@ -184,11 +226,19 @@ class GuardStore:
                 " detail = excluded.detail",
                 (pane_id, json.dumps(sorted(set(sources))), since, detail),
             )
+        taints = self._taints()
+        prior = taints.get(pane_id)
+        taints[pane_id] = {
+            "pane_id": pane_id, "sources": sorted(set(sources)),
+            "since": prior["since"] if prior else since, "detail": detail,
+        }
 
     def taint_delete(self, pane_id: str) -> bool:
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM guard_taint WHERE pane_id = ?", (pane_id,))
-            return cur.rowcount > 0
+            removed = cur.rowcount > 0
+        self._taints().pop(pane_id, None)
+        return removed
 
     def taint_list(self) -> list[dict[str, Any]]:
         with self._db.transaction() as cur:
@@ -244,9 +294,11 @@ class GuardStore:
     # ── user rules ───────────────────────────────────────────────────
 
     def rules_list(self) -> list[dict[str, Any]]:
-        with self._db.transaction() as cur:
-            rows = cur.execute("SELECT * FROM guard_rules ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
+        if self._rules_cache is None:
+            with self._db.transaction() as cur:
+                rows = cur.execute("SELECT * FROM guard_rules ORDER BY id").fetchall()
+            self._rules_cache = [dict(r) for r in rows]
+        return [dict(r) for r in self._rules_cache]
 
     def rules_add(self, kind: str, pattern: str, note: str = "", level: str = "critical") -> int:
         """``level``: what a matching deny raises to (critical or high); an
@@ -265,7 +317,9 @@ class GuardStore:
                 "INSERT INTO guard_rules (kind, pattern, note, created, level) VALUES (?,?,?,?,?)",
                 (kind, pattern[:500], (note or "")[:500], time.time(), level),
             )
-            return int(cur.lastrowid)
+            rule_id = int(cur.lastrowid)
+        self._rules_cache = None
+        return rule_id
 
     def rule_get(self, rule_id: int) -> dict[str, Any] | None:
         with self._db.transaction() as cur:
@@ -275,7 +329,9 @@ class GuardStore:
     def rules_remove(self, rule_id: int) -> bool:
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM guard_rules WHERE id = ?", (int(rule_id),))
-            return cur.rowcount > 0
+            removed = cur.rowcount > 0
+        self._rules_cache = None
+        return removed
 
     # ── built-in rule levels + protected branches ───────────────────
 
