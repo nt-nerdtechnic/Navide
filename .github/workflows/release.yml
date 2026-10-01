@@ -432,11 +432,14 @@ jobs:
           path: dist-release
 
       - name: Install the virtual display and FUSE
-        # libfuse2t64: an AppImage mounts itself through FUSE 2, which a
-        # stock Ubuntu 24.04 does not ship.
+        # The AppImage runtime is the static type2 one: it links no libfuse
+        # and only needs fusermount3, from fuse3. That mirrors what a stock
+        # Ubuntu 24.04 desktop already has; libfuse2 is deliberately absent so
+        # a regression back to a FUSE 2 runtime fails here, as it would for
+        # users.
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth libfuse2t64
+          sudo apt-get install -y xvfb xauth fuse3
 
       - name: Open the packaged app and run a command in a pane
         run: |
