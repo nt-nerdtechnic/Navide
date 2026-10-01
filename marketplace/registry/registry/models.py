@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, UniqueConstraint
+from sqlalchemy import JSON, Column, Index, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 
@@ -60,9 +60,13 @@ class Extension(SQLModel, table=True):
     download_count: int = Field(default=0)
     """Aggregate downloads across all versions of this extension."""
     rating_sum: int = Field(default=0)
-    """Sum of submitted rating scores; average = rating_sum / rating_count."""
+    """Sum of member rating scores (ExtensionRating); average = sum / count."""
     rating_count: int = Field(default=0)
-    """Number of submitted ratings."""
+    """Number of member ratings (ExtensionRating rows)."""
+    legacy_rating_sum: int = Field(default=0, sa_column_kwargs={"server_default": text("0")})
+    legacy_rating_count: int = Field(default=0, sa_column_kwargs={"server_default": text("0")})
+    """Anonymous ratings submitted before ratings required sign-in (migration
+    6). Kept for audit only; excluded from the public aggregate."""
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -177,3 +181,65 @@ class MemberSession(SQLModel, table=True):
 
     member_id: str = Field(primary_key=True)
     version: int = Field(default=0)
+
+
+class ExtensionRating(SQLModel, table=True):
+    """One 1-5 rating per Navide Cloud member per extension (ratings.py)."""
+
+    __tablename__ = "extension_rating"
+    __table_args__ = (
+        UniqueConstraint("extension_id", "member_id", name="uq_extension_rating_member"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    extension_id: int = Field(foreign_key="extension.id", index=True)
+    member_id: str = Field(index=True)
+    score: int
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ExtensionReport(SQLModel, table=True):
+    """A member's report about an extension (or one version), reports.py.
+    The reporter is never shown to the publisher."""
+
+    __tablename__ = "extension_report"
+    __table_args__ = (
+        # One open report per member per extension.
+        Index(
+            "uq_extension_report_open",
+            "extension_id",
+            "reporter_member_id",
+            unique=True,
+            sqlite_where=text("status = 'open'"),
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    extension_id: int = Field(foreign_key="extension.id", index=True)
+    version: str | None = None
+    reporter_member_id: str = Field(index=True)
+    reason: str
+    """'malware' | 'impersonation' | 'spam' | 'broken' | 'other'."""
+    detail: str = ""
+    status: str = Field(default="open", index=True)
+    """'open' | 'dismissed' | 'actioned'."""
+    created_at: datetime = Field(default_factory=_now)
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None
+    resolution: str | None = None
+    """The action taken: 'dismiss' | 'yank' | 'block-package' | 'block-publisher'."""
+    resolution_note: str | None = None
+
+
+class ReportAuditEntry(SQLModel, table=True):
+    """Append-only trail of every report event: who, when, what."""
+
+    __tablename__ = "report_audit"
+
+    id: int | None = Field(default=None, primary_key=True)
+    report_id: int = Field(foreign_key="extension_report.id", index=True)
+    actor: str
+    action: str
+    note: str | None = None
+    created_at: datetime = Field(default_factory=_now)

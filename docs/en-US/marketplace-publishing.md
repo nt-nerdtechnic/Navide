@@ -317,6 +317,23 @@ printf 'Authorization: Bearer %s\n' "$NAVIDE_PLUGIN_TOKEN" \
 
 A yank cannot be undone; publish a new version instead.
 
+## 9. How users report an extension
+
+Anyone signed in with a Navide account can report a listing with **Report it**
+on the extension's page on the Marketplace website
+(`/extensions/<namespace>/<name>/report`); a signed-out visitor is sent to
+sign in first and then returned to the form. A report names one reason —
+malware, impersonation, spam, broken, or other — with optional details. A
+member keeps at most one open report per extension and files at most 5
+reports an hour.
+
+Reports appear under **Reports from users** on your dashboard with their
+status and the moderator's resolution; the reporter's identity is not shown.
+Moderators handle them in the admin queue (`/admin/reports`) and either
+dismiss a report or act on it: yank the version, or block the package or the
+publisher. Removals, and why, are listed publicly at
+<https://server.navide.dev/registry/removed>.
+
 ## Troubleshooting
 
 | Message | Cause and fix |

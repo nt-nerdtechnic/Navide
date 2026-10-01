@@ -145,7 +145,12 @@ def test_head_schema_upgrades_with_data_preserved(tmp_path: Path) -> None:
 
     detail = client.get("/api/extensions/navide/skills").json()
     assert detail["download_count"] == 7
-    assert detail["rating_count"] == 2
+    # Anonymous ratings left the public aggregate (migration 6) but are kept.
+    assert detail["rating_count"] == 0
+    with sqlite3.connect(settings.db_path) as db:
+        assert db.execute(
+            "SELECT legacy_rating_sum, legacy_rating_count FROM extension"
+        ).fetchall() == [(9, 2)]
     assert [v["target"] for v in detail["versions"]] == ["darwin-arm64"]
     # The legacy blob key is read from the row, so the old artifact still serves.
     resp = client.get("/api/extensions/navide/skills/1.0.0/download")

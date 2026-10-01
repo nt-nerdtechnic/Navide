@@ -193,12 +193,108 @@ def _add_version_review_state(connection: sqlite3.Connection) -> None:
     )
 
 
+def _member_ratings(connection: sqlite3.Connection) -> None:
+    """Ratings now belong to signed-in members (one row per member and
+    extension). The anonymous counters cannot be attributed to anyone, so they
+    move to `legacy_rating_*` for audit and the public aggregate restarts from
+    member ratings only. The move happens only when the legacy columns are
+    added, so a rerun never zeroes member aggregates."""
+    columns = _columns(connection, "extension")
+    if "legacy_rating_sum" not in columns:
+        connection.execute(
+            "ALTER TABLE extension ADD COLUMN legacy_rating_sum INTEGER "
+            "NOT NULL DEFAULT 0"
+        )
+        connection.execute(
+            "ALTER TABLE extension ADD COLUMN legacy_rating_count INTEGER "
+            "NOT NULL DEFAULT 0"
+        )
+        connection.execute(
+            "UPDATE extension SET legacy_rating_sum = rating_sum, "
+            "legacy_rating_count = rating_count, rating_sum = 0, rating_count = 0"
+        )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS extension_rating (
+            id INTEGER NOT NULL,
+            extension_id INTEGER NOT NULL,
+            member_id VARCHAR NOT NULL,
+            score INTEGER NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            CONSTRAINT uq_extension_rating_member UNIQUE (extension_id, member_id),
+            FOREIGN KEY(extension_id) REFERENCES extension (id)
+        )
+        """
+    )
+    for column in ("extension_id", "member_id"):
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS ix_extension_rating_{column} "
+            f"ON extension_rating ({column})"
+        )
+
+
+def _extension_reports(connection: sqlite3.Connection) -> None:
+    """Member reports about extensions, and their audit trail."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS extension_report (
+            id INTEGER NOT NULL,
+            extension_id INTEGER NOT NULL,
+            version VARCHAR,
+            reporter_member_id VARCHAR NOT NULL,
+            reason VARCHAR NOT NULL,
+            detail VARCHAR NOT NULL,
+            status VARCHAR NOT NULL,
+            created_at DATETIME NOT NULL,
+            resolved_at DATETIME,
+            resolved_by VARCHAR,
+            resolution VARCHAR,
+            resolution_note VARCHAR,
+            PRIMARY KEY (id),
+            FOREIGN KEY(extension_id) REFERENCES extension (id)
+        )
+        """
+    )
+    for column in ("extension_id", "reporter_member_id", "status"):
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS ix_extension_report_{column} "
+            f"ON extension_report ({column})"
+        )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_extension_report_open "
+        "ON extension_report (extension_id, reporter_member_id) "
+        "WHERE status = 'open'"
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS report_audit (
+            id INTEGER NOT NULL,
+            report_id INTEGER NOT NULL,
+            actor VARCHAR NOT NULL,
+            action VARCHAR NOT NULL,
+            note VARCHAR,
+            created_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            FOREIGN KEY(report_id) REFERENCES extension_report (id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_report_audit_report_id "
+        "ON report_audit (report_id)"
+    )
+
+
 MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "discovery-columns", _add_discovery_columns),
     (2, "registry-signing-columns", _add_registry_signing_columns),
     (3, "artifact-per-target", _key_artifacts_by_target),
     (4, "publisher-cloud-identity", _add_publisher_cloud_identity),
     (5, "version-review-state", _add_version_review_state),
+    (6, "member-ratings", _member_ratings),
+    (7, "extension-reports", _extension_reports),
 )
 
 

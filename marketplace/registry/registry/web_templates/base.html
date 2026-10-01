@@ -39,7 +39,7 @@
       <nav class="site-nav">
         {% if viewer %}
           {% set here = request.url.path %}
-          {% if viewer.is_admin %}<a href="{{ base }}/admin/review"{% if here.endswith('/admin/review') %} aria-current="page"{% endif %}>Review</a>{% endif %}
+          {% if viewer.is_admin %}<a href="{{ base }}/admin/review"{% if here.endswith('/admin/review') %} aria-current="page"{% endif %}>Review</a><a href="{{ base }}/admin/reports"{% if here.endswith('/admin/reports') %} aria-current="page"{% endif %}>Reports</a>{% endif %}
           <a href="{{ base }}/publisher"{% if '/publisher' in here %} aria-current="page"{% endif %}>{{ viewer.name }} ▾</a>
           <form class="inline-form" method="post" action="{{ base }}/logout">
             <input type="hidden" name="csrf" value="{{ csrf }}">

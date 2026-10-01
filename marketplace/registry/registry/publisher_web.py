@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from . import cloud_auth, review
+from . import cloud_auth, ratings, reports, review
 from .blocklist import BlocklistError, add_entry, db_entries, remove_entry, removed_list
 from .dns_verify import DomainError, record_host, record_value
 from .models import Extension, ExtensionVersion, Publisher
@@ -94,14 +94,17 @@ def _redirect(request: Request, path: str) -> RedirectResponse:
     return RedirectResponse(_base(request) + path, status_code=303)
 
 
-def _require_viewer(request: Request) -> cloud_auth.Viewer:
+def _require_viewer(request: Request, next_path: str | None = None) -> cloud_auth.Viewer:
+    """`next_path` names the page to return to after sign-in; a form POST
+    passes it, since the POST path itself cannot be revisited with GET."""
     if not _settings(request).cloud_auth_enabled:
         raise HTTPException(status_code=503, detail="Navide Cloud sign-in is not configured")
     viewer = cloud_auth.current_viewer(request)
     if viewer is None:
-        next_path = request.url.path[len(_base(request)) :] or "/publisher"
-        if request.url.query:
-            next_path += "?" + request.url.query
+        if next_path is None:
+            next_path = request.url.path[len(_base(request)) :] or "/publisher"
+            if request.url.query:
+                next_path += "?" + request.url.query
         raise _Redirect("/login?" + urllib.parse.urlencode({"next": next_path}))
     return viewer
 
@@ -343,6 +346,8 @@ def create_publisher_router() -> APIRouter:
                     "review_required": publisher.review_required,
                 },
                 "rows": rows,
+                "reports": reports.publisher_reports(session, publisher),
+                "report_reasons": dict(reports.REASONS),
                 "extension_count": len({r["identity"] for r in rows}),
                 "in_review": sum(1 for r in rows if r["status"] == review.PENDING),
                 "tokens": tokens,
@@ -434,6 +439,136 @@ def create_publisher_router() -> APIRouter:
             if not revoke_token(session, publisher, token_id):
                 raise HTTPException(status_code=404, detail="token not found")
         return _redirect(request, f"/publisher/{namespace}")
+
+    # -- member ratings (p3-rating-auth) ---------------------------------
+    def _public_extension(session: Session, namespace: str, name: str) -> Extension:
+        extension = RegistryRepository(session).get_extension(namespace, name)
+        if extension is None:
+            raise HTTPException(status_code=404, detail="extension not found")
+        return extension
+
+    def _rate_limited(request: Request, limiter_name: str, viewer: cloud_auth.Viewer) -> None:
+        limiter = getattr(request.app.state.registry, limiter_name)
+        if not limiter.allow(viewer.member_id, time.time()):
+            raise HTTPException(status_code=429, detail="too many requests; try again later")
+
+    @router.post("/extensions/{namespace}/{name}/rating")
+    @guarded
+    def rate(request: Request, namespace: str, name: str, score: int = Form(0), csrf: str = Form("")) -> Response:
+        viewer = _require_viewer(request, f"/extensions/{namespace}/{name}")
+        _check_csrf(request, viewer, csrf)
+        with _session(request) as session:
+            extension = _public_extension(session, namespace, name)
+            if ratings.is_own_extension(session, extension, viewer.member_id):
+                raise HTTPException(status_code=403, detail="publishers cannot rate their own extensions")
+            _rate_limited(request, "rating_limiter", viewer)
+            try:
+                ratings.set_rating(session, extension, viewer.member_id, score)
+            except ratings.RatingError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _redirect(request, f"/extensions/{namespace}/{name}#rating")
+
+    @router.post("/extensions/{namespace}/{name}/rating/delete")
+    @guarded
+    def unrate(request: Request, namespace: str, name: str, csrf: str = Form("")) -> Response:
+        viewer = _require_viewer(request, f"/extensions/{namespace}/{name}")
+        _check_csrf(request, viewer, csrf)
+        with _session(request) as session:
+            extension = _public_extension(session, namespace, name)
+            _rate_limited(request, "rating_limiter", viewer)
+            ratings.remove_rating(session, extension, viewer.member_id)
+        return _redirect(request, f"/extensions/{namespace}/{name}#rating")
+
+    # -- member reports (p3-moderation) ---------------------------------
+    def _report_page(request: Request, extension: Extension, versions: list[str], extra: dict, status: int = 200) -> Response:
+        context = {
+            "ext": {"namespace": extension.namespace, "name": extension.name, "identity": extension.identity,
+                    "display_name": extension.display_name or extension.name},
+            "versions": versions,
+            "reasons": reports.REASONS,
+            "max_detail": reports.MAX_DETAIL_LENGTH,
+            "form": {"reason": "", "version": "", "detail": ""},
+        }
+        context.update(extra)
+        return page(request, "report.html", context, status=status)
+
+    def _version_names(session: Session, extension: Extension) -> list[str]:
+        rows = RegistryRepository(session).list_versions(extension.id)
+        return sorted({r.version for r in rows}, reverse=True)
+
+    @router.get("/extensions/{namespace}/{name}/report", response_class=HTMLResponse)
+    @guarded
+    def report_form(request: Request, namespace: str, name: str) -> Response:
+        viewer = _require_viewer(request)
+        with _session(request) as session:
+            extension = _public_extension(session, namespace, name)
+            already = reports.has_open_report(session, extension, viewer.member_id)
+            return _report_page(request, extension, _version_names(session, extension), {"already_open": already})
+
+    @router.post("/extensions/{namespace}/{name}/report")
+    @guarded
+    def submit_report(
+        request: Request,
+        namespace: str,
+        name: str,
+        reason: str = Form(""),
+        version: str = Form(""),
+        detail: str = Form(""),
+        csrf: str = Form(""),
+    ) -> Response:
+        viewer = _require_viewer(request, f"/extensions/{namespace}/{name}/report")
+        _check_csrf(request, viewer, csrf)
+        with _session(request) as session:
+            extension = _public_extension(session, namespace, name)
+            _rate_limited(request, "report_limiter", viewer)
+            try:
+                reports.create_report(
+                    session, extension=extension, member_id=viewer.member_id, reason=reason, detail=detail, version=version
+                )
+            except reports.ReportError as exc:
+                return _report_page(
+                    request,
+                    extension,
+                    _version_names(session, extension),
+                    {"error": str(exc), "form": {"reason": reason, "version": version, "detail": detail}},
+                    status=400,
+                )
+            return _report_page(request, extension, [], {"submitted": True})
+
+    @router.get("/admin/reports", response_class=HTMLResponse)
+    @guarded
+    def admin_reports(request: Request) -> Response:
+        _require_admin(request)
+        with _session(request) as session:
+            open_items, resolved = reports.admin_queue(session)
+        return page(
+            request,
+            "admin_reports.html",
+            {"open_items": open_items, "resolved": resolved, "reasons": dict(reports.REASONS)},
+        )
+
+    @router.post("/admin/reports/{report_id}/resolve")
+    @guarded
+    def admin_resolve_report(
+        request: Request, report_id: int, action: str = Form(""), note: str = Form(""), csrf: str = Form("")
+    ) -> Response:
+        viewer = _require_admin(request)
+        _check_csrf(request, viewer, csrf)
+        with _session(request) as session:
+            try:
+                reports.resolve(session, report_id=report_id, actor=f"member:{viewer.member_id}", action=action, note=note)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except reports.ReportError as exc:
+                open_items, resolved = reports.admin_queue(session)
+                return page(
+                    request,
+                    "admin_reports.html",
+                    {"open_items": open_items, "resolved": resolved, "reasons": dict(reports.REASONS),
+                     "error": f"Report #{report_id}: {exc}"},
+                    status=409,
+                )
+        return _redirect(request, "/admin/reports")
 
     # -- CLI login: browser + loopback + state + PKCE --------------------
     def _cli_params_ok(port: int, state: str, code_challenge: str) -> bool:

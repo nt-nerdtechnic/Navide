@@ -17,13 +17,14 @@
     <a class="install-button ns-publish" href="#publish-cli">Publish new version</a>
   </div>
   <nav class="page-toc" aria-label="On this page">
-    <a href="#publish-cli">CLI</a><a href="#versions">Versions</a><a href="#tokens">Tokens</a><a href="#signing-key">Signing key</a><a href="#verified">Verified publisher</a>
+    <a href="#publish-cli">CLI</a><a href="#versions">Versions</a><a href="#reports">Reports</a><a href="#tokens">Tokens</a><a href="#signing-key">Signing key</a><a href="#verified">Verified publisher</a>
   </nav>
   {% if rows %}
-  <div class="stat-row summary-stats" aria-label="Versions">
+  <div class="stat-row summary-stats" aria-label="Versions and reports">
     <div class="stat stat--ok"><b>{{ rows|selectattr('status', 'equalto', 'approved')|list|length }}</b><span>live</span></div>
     <div class="stat stat--risk"><b>{{ rows|selectattr('status', 'equalto', 'pending')|list|length }}</b><span>in review</span></div>
     <div class="stat stat--danger"><b>{{ rows|selectattr('status', 'equalto', 'rejected')|list|length }}</b><span>rejected</span></div>
+    <div class="stat"><b>{{ (reports or [])|selectattr('status', 'equalto', 'open')|list|length }}</b><span>open reports</span></div>
   </div>
   {% endif %}
 
@@ -67,6 +68,37 @@ navide-plugin publish ./{{ publisher.name }}.my-extension-1.0.0.vsix --registry 
   </div>
   {% else %}
   <p class="empty">Nothing published yet.</p>
+  {% endif %}
+
+  <h2 class="section-title" id="reports">Reports from users</h2>
+  {% if reports %}
+  <p class="muted">Members reported these extensions to the marketplace moderators. Reporter
+    identities are not shown.</p>
+  <div class="table-scroll">
+  <table class="version-table review-status-table">
+    <thead><tr><th>Extension</th><th>Reason</th><th>Received</th><th>Status</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for r in reports %}
+      <tr>
+        <td class="nowrap"><code>{{ r.identity }}</code>{% if r.version %} @ {{ r.version }}{% endif %}</td>
+        <td>{{ report_reasons.get(r.reason, r.reason) }}</td>
+        <td class="nowrap">{{ r.created_at.strftime('%Y-%m-%d') }}</td>
+        <td class="nowrap">
+          {% if r.status == 'open' %}<span class="tag">open</span>
+          {% elif r.status == 'dismissed' %}<span class="muted">dismissed</span>
+          {% else %}<span class="badge badge-danger">{{ r.resolution }}</span>{% endif %}
+        </td>
+        <td>
+          {% if r.detail %}<div class="report-detail">{{ r.detail }}</div>{% endif %}
+          {% if r.resolution_note %}<div class="muted">Moderator: {{ r.resolution_note }}</div>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty">No reports.</p>
   {% endif %}
 
   <h2 class="section-title" id="tokens">Publisher tokens</h2>

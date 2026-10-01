@@ -96,6 +96,42 @@
     </section>
     {% endif %}
 
+    <section class="panel rating-panel" id="rating">
+      <h2 class="section-title">Rating</h2>
+      <p>
+        {% if rating_count %}<strong>★ {{ '%.1f'|format(rating_average) }}</strong>
+          <span class="muted">from {{ rating_count }} signed-in member{{ '' if rating_count == 1 else 's' }}</span>
+        {% else %}<span class="muted">No ratings yet.</span>{% endif %}
+      </p>
+      {% if viewer %}
+        {% if own_extension %}
+          <p class="muted">You publish this extension, so you cannot rate it.</p>
+        {% else %}
+          <form method="post" action="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/rating" class="row star-row">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <span class="muted">{{ 'Your rating:' if my_rating else 'Rate it:' }}</span>
+            {% for n in range(1, 6) %}
+            <button type="submit" name="score" value="{{ n }}" class="star-button{% if my_rating == n %} is-current{% endif %}"
+                    aria-label="{{ n }} star{{ '' if n == 1 else 's' }}"{% if my_rating == n %} aria-pressed="true"{% endif %}>{{ '★' * n }}</button>
+            {% endfor %}
+          </form>
+          {% if my_rating %}
+          <form method="post" action="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/rating/delete" class="inline-form">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit" class="link-button">Remove my rating</button>
+          </form>
+          {% endif %}
+        {% endif %}
+      {% elif cloud_auth %}
+        <p><a href="{{ base }}/login?next=/extensions/{{ ext.namespace }}/{{ ext.name }}">Sign in with Navide Cloud</a>
+          <span class="muted">to rate this extension.</span></p>
+      {% endif %}
+      {% if cloud_auth %}
+      <p class="report-line muted">Something wrong with this extension?
+        <a href="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/report">Report it</a>{% if not viewer %} (sign-in required){% endif %}.</p>
+      {% endif %}
+    </section>
+
     </aside>
     <div class="detail-main">
 

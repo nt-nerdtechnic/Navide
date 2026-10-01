@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import urllib.parse
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
@@ -35,6 +35,9 @@ from .models import Extension, ExtensionVersion, Publisher
 from .manifest import ManifestV2, manifest_capabilities, manifest_icon
 from .package import MAX_ARCHIVE_SIZE, PackageError, read_package
 from .packs import pack_conflict
+from .ratelimit import SlidingWindowLimiter
+from .ratings import RATING_LIMIT_PER_HOUR
+from .reports import REPORT_LIMIT_PER_HOUR
 from .repository import RegistryRepository, rating_average
 from .registry_trust import RegistryTrustSigner
 from .schemas import (
@@ -50,8 +53,6 @@ from .schemas import (
     PublisherRegisterRequest,
     PublisherRegisterResponse,
     PublishResponse,
-    RatingRequest,
-    RatingResponse,
     ReadmeResponse,
     VersionInfo,
     YankResponse,
@@ -76,6 +77,12 @@ class RegistryState:
     trust_signer: RegistryTrustSigner
     txt_resolver: TxtResolver
     """DNS TXT lookup for publisher domain verification (injected in tests)."""
+    rating_limiter: SlidingWindowLimiter = field(
+        default_factory=lambda: SlidingWindowLimiter(RATING_LIMIT_PER_HOUR, 3600)
+    )
+    report_limiter: SlidingWindowLimiter = field(
+        default_factory=lambda: SlidingWindowLimiter(REPORT_LIMIT_PER_HOUR, 3600)
+    )
 
 
 def _make_verifier(settings: Settings) -> SignatureVerifier:
@@ -815,26 +822,16 @@ def _register_routes(app: FastAPI) -> None:
             targets=[a.target for a in artifacts],
         )
 
-    @app.post(
-        "/api/extensions/{namespace}/{name}/rating",
-        response_model=RatingResponse,
-    )
-    def submit_rating(
-        namespace: str,
-        name: str,
-        body: RatingRequest,
-        repo: RegistryRepository = Depends(_repo),
-    ) -> RatingResponse:
-        """Add a 1-5 rating. Per-user auth/dedup is deferred (see README)."""
-        extension = repo.get_extension(namespace, name)
-        if extension is None:
-            raise HTTPException(status_code=404, detail="extension not found")
-        extension = repo.add_rating(extension, body.score)
-        return RatingResponse(
-            namespace=namespace,
-            name=name,
-            rating_average=rating_average(extension),
-            rating_count=extension.rating_count,
+    @app.post("/api/extensions/{namespace}/{name}/rating")
+    def submit_rating(namespace: str, name: str) -> None:
+        """Anonymous ratings ended with member ratings (p3-rating-auth): rating
+        needs a Navide Cloud sign-in on the marketplace website."""
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Ratings require a signed-in Navide Cloud account: sign in on "
+                f"the marketplace website and rate on /extensions/{namespace}/{name}."
+            ),
         )
 
     @app.post(

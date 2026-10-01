@@ -5,6 +5,10 @@ download counter, ratings, featured flag, category filter + sort.
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
+
+from registry.ratings import set_rating
+from registry.repository import RegistryRepository
 
 from tests.fixtures import build_package, valid_manifest
 
@@ -58,37 +62,30 @@ def test_download_count_is_per_version(client: TestClient) -> None:
     assert detail["download_count"] == 3
 
 
-def test_rating_submit_and_average(client: TestClient) -> None:
+def _member_rate(client: TestClient, ident: str, member_id: str, score: int) -> None:
+    """Ratings are member-only (website); write one straight through ratings.py."""
+    ns, name = ident.split(".", 1)
+    with Session(client.app.state.registry.engine) as session:
+        extension = RegistryRepository(session).get_extension(ns, name)
+        set_rating(session, extension, member_id, score)
+
+
+def test_anonymous_rating_post_is_401_with_guidance(client: TestClient) -> None:
     _publish(client, build_package())
-    r1 = client.post("/api/extensions/acme/hello/rating", json={"score": 5})
-    assert r1.status_code == 200
-    assert r1.json()["rating_count"] == 1
-    r2 = client.post("/api/extensions/acme/hello/rating", json={"score": 3})
-    body = r2.json()
-    assert body["rating_count"] == 2
-    assert body["rating_average"] == 4.0
+    resp = client.post("/api/extensions/acme/hello/rating", json={"score": 5})
+    assert resp.status_code == 401
+    assert "signed-in Navide Cloud account" in resp.json()["detail"]
+    detail = client.get("/api/extensions/acme/hello").json()
+    assert (detail["rating_average"], detail["rating_count"]) == (0.0, 0)
+
+
+def test_member_ratings_feed_the_get_aggregate(client: TestClient) -> None:
+    _publish(client, build_package())
+    _member_rate(client, "acme.hello", "mem-a", 5)
+    _member_rate(client, "acme.hello", "mem-b", 3)
     detail = client.get("/api/extensions/acme/hello").json()
     assert detail["rating_average"] == 4.0
     assert detail["rating_count"] == 2
-
-
-def test_rating_out_of_range_rejected(client: TestClient) -> None:
-    _publish(client, build_package())
-    assert (
-        client.post("/api/extensions/acme/hello/rating", json={"score": 6}).status_code
-        == 422
-    )
-    assert (
-        client.post("/api/extensions/acme/hello/rating", json={"score": 0}).status_code
-        == 422
-    )
-
-
-def test_rating_missing_extension_404(client: TestClient) -> None:
-    assert (
-        client.post("/api/extensions/acme/ghost/rating", json={"score": 5}).status_code
-        == 404
-    )
 
 
 def test_featured_flag_defaults_false_and_can_be_set(client: TestClient) -> None:
@@ -120,8 +117,8 @@ def test_sort_by_downloads(client: TestClient) -> None:
 def test_sort_by_rating(client: TestClient) -> None:
     _publish_ext(client, "acme.good")
     _publish_ext(client, "acme.ok")
-    client.post("/api/extensions/acme/good/rating", json={"score": 5})
-    client.post("/api/extensions/acme/ok/rating", json={"score": 2})
+    _member_rate(client, "acme.good", "mem-a", 5)
+    _member_rate(client, "acme.ok", "mem-a", 2)
     ordered = client.get("/api/extensions", params={"sort": "rating"}).json()["items"]
     assert ordered[0]["name"] == "good"
     assert ordered[1]["name"] == "ok"

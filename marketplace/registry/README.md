@@ -49,7 +49,7 @@ uv --project marketplace/registry run pytest marketplace/registry/tests
 | GET | `/api/extensions/{namespace}/{name}` | Extension detail + full version list, registry envelopes/signatures, and root-signed trust metadata. |
 | GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream one artifact's blob **and increment** its download counter plus the aggregate one. `?target=` picks the artifact exactly (no fallback to `universal`); it may be omitted only when the version has a single artifact, else `400` lists the available targets. |
 | POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version — every target's artifact of it (excluded from latest resolution, still downloadable by exact version). |
-| POST | `/api/extensions/{namespace}/{name}/rating` | Add a `{ "score": 1..5 }` rating; returns the new average + count. Per-user auth/dedup is deferred (see below). |
+| POST | `/api/extensions/{namespace}/{name}/rating` | Retired: returns 401. Rating needs a Navide Cloud sign-in on the website (see below). |
 | POST | `/api/extensions/{namespace}/{name}/featured` | Set the curation flag `{ "featured": bool }`. Admin-gated by `X-Admin-Token` (same gate as `/api/publishers`). |
 
 `GET /api/extensions` also accepts `category` (exact category filter) and
@@ -124,10 +124,15 @@ is untouched.
 schemes (`javascript:` etc.) are dropped by the built-in link validator, so no
 user-authored active markup is ever emitted (`tests/test_web.py`).
 
-**Ratings limitation.** Ratings are stored as `rating_sum` + `rating_count`
-(average is derived); the submit endpoint has **no per-user auth or dedup** —
-this is a deliberate p3-discovery simplification. Real per-user rating auth is
-deferred.
+**Ratings and reports.** A signed-in Navide Cloud member rates an extension
+1-5 on its detail page (one rating per member, changeable and removable;
+publishers cannot rate their own). `rating_sum` / `rating_count` cache the
+member ratings only; anonymous ratings from before sign-in was required are
+kept in `legacy_rating_*` for audit and never counted (migration 6). Members
+report an extension from `/extensions/{namespace}/{name}/report`; admins
+dismiss or act (yank / block) at `/admin/reports`, every event lands in
+`report_audit`, and publishers see reports on their dashboard without the
+reporter's identity. Ratings and reports are rate-limited per member.
 
 ## Security model (p3-security + p3-publish)
 
