@@ -41,6 +41,7 @@ Navide は Agent 時代のエンジニアリングツールです。一人の人
 | [CLI Vendor Matrix — English](../en-US/cli-vendor-matrix.md) | 対応済み CLI の一覧：実際に実行されるコマンドと、各 spec が宣言する機能 |
 | [Plugin Development — English](../en-US/plugin-development.md) | フロントエンド View プラグインまたはバックエンドプラグインを開発し、パッケージ化して署名する |
 | [Plugin Development v2 — English](../en-US/plugin-development-v2.md) | 公開 Contracts、SDK、UI Package、外部 Frontend Package Workflow を使用する |
+| [Publishing to the Navide Marketplace — English](../en-US/marketplace-publishing.md) | `navide-plugin` でプラグインを作成・パッケージ化・署名し、Navide Marketplace に公開して審査を通す |
 | [外部 MCP 制御](external-mcp-control.md) | 外部 MCP クライアントを接続して実行中の Navide ウィンドウを操作し、セキュリティモデルを理解する |
 | [Release Guide — English](../en-US/releases.md) | Version、Package、署名、Notarization、公開、Release 復旧を行う |
 

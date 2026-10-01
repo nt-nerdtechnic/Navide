@@ -232,6 +232,18 @@ seam later without changing the Client wire contract.
 
 ## Packaging CLI (`navide-plugin`)
 
+> **Deprecated for plugin authors.** The public `navide-plugin` is the SDK CLI
+> (`packages/plugin-sdk/bin/navide-plugin.mjs`, shipped in
+> `@navide/plugin-sdk`): `init`, `validate`, `package`, `keygen`, `sign`,
+> `login`, `whoami`, `logout`, `publish`. See
+> [`docs/en-US/marketplace-publishing.md`](../../docs/en-US/marketplace-publishing.md).
+> This Python CLI prints a deprecation notice and stays for
+> `scripts/publish-first-party-plugins.sh` and the `plugin-packages.yml` CI
+> pack job: the SDK packages a backend only for its own host target, while
+> `pack --target` here packs every target on one Linux runner. Both CLIs share
+> `~/.config/navide-plugin/credentials.json` and produce signatures this
+> Registry verifies the same way (`tests/test_sdk_cli_compat.py`).
+
 Console entry point (see `registry/cli.py`):
 
 ```bash
@@ -240,11 +252,14 @@ navide-plugin pack    ./plugin-src --out my.vsix      # frontend-only, universal
 navide-plugin pack    ./backend-src --out mac.vsix --target darwin-arm64
 navide-plugin sign    my.vsix --key acme.key --out my.sig
 navide-plugin publish my.vsix --registry http://localhost:8787 \
-  --token <bearer> --signature my.sig [--target darwin-arm64]
+  --signature my.sig [--target darwin-arm64]
 ```
 
 `keygen` writes the private key owner-only (`0600`). `publish` reads the token
-from `NAVIDE_PLUGIN_TOKEN` when `--token` is omitted, and `--target` (default
+from `NAVIDE_PLUGIN_TOKEN` (or a stored `login`); a `--token` argument still
+works but is visible in the process list. `login` and `publish` refuse a
+plain-http registry that is not on loopback unless `--insecure-http` is given.
+`--target` (default
 `universal`) selects the Registry target bound into the signed envelope; a
 package with a native backend must be published for its exact
 `<platform>-<arch>` target.

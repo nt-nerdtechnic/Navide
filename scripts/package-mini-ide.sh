@@ -48,8 +48,8 @@ the app only installs 'navide.*' packages signed by the pinned official key):
   uv --project marketplace/registry run navide-plugin sign \\
       "$OUT_VSIX" --key /path/to/navide-official.key --out "$OUT_VSIX.sig"
 
-  # 2. Publish to the registry:
+  # 2. Publish to the registry (the publisher token in NAVIDE_PLUGIN_TOKEN):
   uv --project marketplace/registry run navide-plugin publish \\
-      "$OUT_VSIX" --registry https://<registry-host> --token <publisher-token> \\
+      "$OUT_VSIX" --registry https://<registry-host> \\
       --signature "$OUT_VSIX.sig"
 EOF

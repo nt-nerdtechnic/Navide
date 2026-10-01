@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select, update
 
-from .discovery import pack_members
+from .discovery import PACK_CATEGORY, pack_members
 from .manifest import manifest_capabilities
 from .models import Extension, ExtensionVersion, Publisher
 from .packs import pack_conflict
@@ -69,7 +69,11 @@ def manifest_listing(manifest: dict) -> tuple[str | None, str | None, list[str]]
     """(display name, description, categories) the way publish derives them."""
     if manifest.get("schemaVersion") == 2:
         marketplace = manifest.get("marketplace") or {}
-        return manifest.get("name"), marketplace.get("description"), list(marketplace.get("categories") or [])
+        categories = list(marketplace.get("categories") or [])
+        # A pack is listed under Extension Packs whatever it declares (as at publish).
+        if pack_members(manifest) and PACK_CATEGORY not in categories:
+            categories.append(PACK_CATEGORY)
+        return manifest.get("name"), marketplace.get("description"), categories
     return (
         manifest.get("displayName") or manifest.get("name"),
         manifest.get("description"),

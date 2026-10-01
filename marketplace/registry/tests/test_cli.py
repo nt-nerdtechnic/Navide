@@ -147,3 +147,52 @@ def test_publish_requires_a_token(
     pkg.write_bytes(b"")
     assert cli.main(["publish", str(pkg), "--registry", "http://127.0.0.1:9"]) == 2
     assert cli.TOKEN_ENV in capsys.readouterr().err
+
+
+def test_publish_refuses_plain_http_off_loopback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.setenv(cli.TOKEN_ENV, "nvp_env")
+    sent: list[str] = []
+    monkeypatch.setattr(cli, "post_package", lambda url, *a, **k: (sent.append(url), (201, "{}"))[1])
+    pkg = tmp_path / "x.vsix"
+    pkg.write_bytes(b"")
+    assert cli.main(["publish", str(pkg), "--registry", "http://registry.example.test"]) == 2
+    assert "over plain http" in capsys.readouterr().err
+    assert sent == []
+
+    for loopback in ("http://127.0.0.1:9", "http://localhost:9", "http://[::1]:9", "https://registry.example.test"):
+        assert cli.main(["publish", str(pkg), "--registry", loopback]) == 0
+    assert cli.main(["publish", str(pkg), "--registry", "http://registry.example.test", "--insecure-http"]) == 0
+    assert "--insecure-http sends the publish token" in capsys.readouterr().err
+    assert sent[-1] == "http://registry.example.test"
+
+
+def test_login_refuses_plain_http_off_loopback(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr(cli, "run_login", lambda *a, **k: pytest.fail("must not start a login"))
+    assert cli.main(["login", "--registry", "http://registry.example.test"]) == 2
+    assert "over plain http" in capsys.readouterr().err
+
+
+def test_login_callback_rejects_a_foreign_host_header() -> None:
+    import http.client
+    import threading
+
+    server, received, done = cli._loopback_server()
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        def get(host: str) -> int:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/callback?code=c&state=s", headers={"Host": host})
+            status = conn.getresponse().status
+            conn.close()
+            return status
+
+        assert get(f"attacker.example:{port}") == 400
+        assert not done.is_set() and received == {}
+        assert get(f"localhost:{port}") == 200
+        assert done.is_set() and received["code"] == "c"
+    finally:
+        server.shutdown()
+        server.server_close()

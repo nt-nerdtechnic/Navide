@@ -16,6 +16,13 @@ list. `login` never asks for a password: it opens the registry in the browser
 (Navide Cloud sign-in), receives a one-time code on a 127.0.0.1 loopback
 redirect checked against a random `state`, and exchanges it with a PKCE
 verifier for a short-lived publish token.
+
+Deprecated for plugin authors: the public developer CLI is the SDK's
+`navide-plugin` (packages/plugin-sdk/bin/navide-plugin.mjs), which also covers
+init, validate, whoami and logout and shares this CLI's credentials file. This
+copy stays as a working alias for scripts/publish-first-party-plugins.sh and
+the plugin-packages CI pack job, which packs every target on one Linux runner
+without the Node workspace.
 """
 
 from __future__ import annotations
@@ -50,6 +57,11 @@ from .signing import generate_keypair, read_private_key_file, sign_digest
 TOKEN_ENV = "NAVIDE_PLUGIN_TOKEN"
 CONFIG_DIR_ENV = "NAVIDE_PLUGIN_CONFIG_DIR"
 LOGIN_TIMEOUT_SECONDS = 300
+DEPRECATION_NOTICE = (
+    "navide-plugin (registry CLI) is deprecated for plugin authors; use the SDK CLI "
+    "`navide-plugin` from @navide/plugin-sdk (packages/plugin-sdk). "
+    "See docs/en-US/marketplace-publishing.md."
+)
 
 
 def _digest(data: bytes) -> str:
@@ -172,7 +184,36 @@ def _multipart(filename: str, data: bytes) -> tuple[bytes, str]:
     return pre + data + post, f"multipart/form-data; boundary={boundary}"
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def insecure_transport(registry_url: str, insecure_http: bool) -> str | None:
+    """Why a token must not go to `registry_url`, or None. Plain http is
+    allowed for a loopback host, or with `--insecure-http` (warned)."""
+    parts = urllib.parse.urlsplit(registry_url)
+    if parts.scheme == "https":
+        return None
+    if parts.scheme != "http":
+        return f"registry {registry_url} must use https"
+    if parts.hostname in LOOPBACK_HOSTS:
+        return None
+    if not insecure_http:
+        return (
+            f"refusing to send a publish token to {registry_url} over plain http; "
+            "use https, a loopback registry, or --insecure-http for local development"
+        )
+    print(
+        f"warning: --insecure-http sends the publish token to {registry_url} unencrypted",
+        file=sys.stderr,
+    )
+    return None
+
+
 def cmd_publish(args: argparse.Namespace) -> int:
+    refusal = insecure_transport(args.registry, args.insecure_http)
+    if refusal:
+        print(f"publish failed: {refusal}", file=sys.stderr)
+        return 2
     signature = None
     if args.signature:
         sig_path = Path(args.signature)
@@ -255,6 +296,13 @@ def _loopback_server() -> tuple[HTTPServer, dict, threading.Event]:
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - http.server API
+            # Only the browser redirect to this loopback port; a DNS-rebound
+            # page would carry its own host name.
+            port = self.server.server_address[1]
+            if self.headers.get("Host") not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
+                self.send_response(400)
+                self.end_headers()
+                return
             parsed = urllib.parse.urlsplit(self.path)
             if parsed.path != "/callback" or done.is_set():
                 self.send_response(404)
@@ -336,6 +384,10 @@ def run_login(
 
 
 def cmd_login(args: argparse.Namespace) -> int:
+    refusal = insecure_transport(args.registry, args.insecure_http)
+    if refusal:
+        print(f"login failed: {refusal}", file=sys.stderr)
+        return 2
     try:
         entry = run_login(args.registry, label=args.label)
     except LoginError as exc:
@@ -384,6 +436,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="registry target, e.g. universal or darwin-arm64",
     )
     p_pub.add_argument("--signature", help="signature string or a file path")
+    p_pub.add_argument(
+        "--insecure-http",
+        action="store_true",
+        help="allow a plain-http registry that is not on loopback (local dev only)",
+    )
     p_pub.set_defaults(func=cmd_publish)
 
     p_login = sub.add_parser(
@@ -391,12 +448,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_login.add_argument("--registry", required=True)
     p_login.add_argument("--label", default="navide-plugin CLI")
+    p_login.add_argument(
+        "--insecure-http",
+        action="store_true",
+        help="allow a plain-http registry that is not on loopback (local dev only)",
+    )
     p_login.set_defaults(func=cmd_login)
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    print(DEPRECATION_NOTICE, file=sys.stderr)
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

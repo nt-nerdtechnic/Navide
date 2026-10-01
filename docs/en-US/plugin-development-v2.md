@@ -23,11 +23,12 @@
 > execution adapters and persisted consent wiring also remain disabled.
 >
 > Issue 06 adds the public package boundary and the external frontend workflow.
-> The checked-in SDK CLI currently supports `validate` and frontend-only
-> `package`; `init`, `dev`, third-party backend packaging, signing, publishing,
-> and general runtime activation remain deferred to their owning issues. The
-> first-party Plans build scripts package the app's production artifact and are
-> not the public author workflow.
+> The SDK CLI (`navide-plugin`) now covers the whole publishing workflow —
+> `init`, `validate`, `package` (per target), `keygen`, `sign`, `login`, and
+> `publish` — see [Publishing to the Navide Marketplace](marketplace-publishing.md).
+> `dev` and general runtime activation remain deferred to their owning issues.
+> The first-party Plans build scripts package the app's production artifact
+> and are not the public author workflow.
 >
 > **Migration decision:** Plan B (the B0-B9 checkpoint path) was approved on
 > 2026-08-13. Plans A and C are not active implementation alternatives.
@@ -122,10 +123,16 @@ The SDK distribution includes a `navide-plugin` executable with these
 commands:
 
 ```text
-navide-plugin validate <directory>
+navide-plugin init <directory> --id <namespace.name> [--name <display name>]
+navide-plugin validate <directory> [--target <target>]
 navide-plugin package <directory> [--target <target>] [--out <file>]
+navide-plugin keygen [--out-dir <directory>] [--name <name>]
 navide-plugin sign <package> --key <private-key> [--out <signature>]
 navide-plugin verify <package> --key <public-key> --signature <signature>
+navide-plugin login [--registry <url>] [--label <label>] [--no-browser] [--insecure-http]
+navide-plugin whoami [--registry <url>]
+navide-plugin logout [--registry <url>]
+navide-plugin publish <package> [--registry <url>] [--target <target>] [--signature <file-or-value>] [--insecure-http]
 ```
 
 Every staging directory includes an `artifact-files.json` control file with one
@@ -136,9 +143,11 @@ their manifest. `package` emits a deterministic `.vsix` ZIP with a root
 `manifest.json`. Frontend-only packages use `universal`; backend and combined
 packages must name the build host's exact platform-architecture target and
 contain one self-contained executable. `sign` and `verify` use a detached
-Ed25519 signature over the SHA-256 digest of the complete archive. The CLI has
-no Host transport, process execution, registry publishing, scaffolding, or
-development server.
+Ed25519 signature over the SHA-256 digest of the complete archive. `init`
+scaffolds a frontend-only package that validates without a build step;
+`login` and `publish` talk to a Registry (see
+[Publishing to the Navide Marketplace](marketplace-publishing.md)). The CLI has
+no Host transport, process execution, or development server.
 
 ## Issue 06 external workspace workflow
 
@@ -1581,6 +1590,7 @@ Issue 06 supports the following external frontend workflow:
 5. Run the outside-workspace smoke test with an in-memory Host adapter. It
    covers one declared capability success and one undeclared capability denial.
 
-`navide-plugin init`, `navide-plugin dev`, backend executable packaging,
-signing, registry publishing, and target-specific artifact lifecycle are later
-contracts. This issue deliberately does not implement them.
+Scaffolding, per-target backend packaging, signing, sign-in and publishing
+to the Navide Marketplace are covered step by step in
+[Publishing to the Navide Marketplace](marketplace-publishing.md).
+`navide-plugin dev` remains a later contract.
