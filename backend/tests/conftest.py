@@ -30,6 +30,7 @@ os.environ["AGENT_TEAM_DATA_DIR"] = os.environ.get(
 
 from agent_team_backend import app, ws_handlers
 from agent_team_backend.credential_vault import CredentialVault
+from tests.keychain_fake import security_g_output
 
 
 # Executables of the agent CLIs this app drives. A test may start a fake one it
@@ -166,7 +167,7 @@ def _isolated_credential_vault(tmp_path, monkeypatch):
         if command == "find-generic-password":
             if service not in items:
                 return 44, "The specified item could not be found in the keychain."
-            return 0, items[service] + "\n"
+            return 0, security_g_output(items[service])
         if command == "delete-generic-password":
             return (0, "") if items.pop(service, None) is not None else (44, "")
         return 44, ""

@@ -12,6 +12,7 @@ from agent_team_backend.credential_vault import (
 )
 from agent_team_backend.profile_migration import migrate_legacy_claude_homes
 from agent_team_backend.profiles_store import CliProfilesStore
+from tests.keychain_fake import security_g_output
 
 
 class FakeSecurity:
@@ -27,7 +28,7 @@ class FakeSecurity:
         cmd = tokens[0]
         if cmd == "find-generic-password":
             if service in self.items:
-                return 0, self.items[service] + "\n"
+                return 0, security_g_output(self.items[service])
             return 44, ""
         if cmd == "add-generic-password":
             self.items[service] = tokens[tokens.index("-w") + 1]

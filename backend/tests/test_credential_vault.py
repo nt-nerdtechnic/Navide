@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from agent_team_backend import osplat
+from tests.keychain_fake import security_g_output, security_w_output
 from agent_team_backend.credential_vault import (
     CLAUDE_LIVE_KEYCHAIN_SERVICE,
     DEFAULT_SLOT_ID,
@@ -52,7 +53,7 @@ class FakeSecurity:
         cmd = tokens[0]
         if cmd == "find-generic-password":
             if service in self.items:
-                return 0, self.items[service] + "\n"
+                return 0, security_g_output(self.items[service])
             return 44, ""
         if cmd == "add-generic-password":
             self.items[service] = tokens[tokens.index("-w") + 1]
@@ -1942,16 +1943,20 @@ def test_the_fixed_secret_names_keep_the_file_they_already_have(tmp_path, monkey
         assert vault.app_secret_path(name).name == name
 
 
-class HexPrintingSecurity(FakeSecurity):
-    """`security -w` as it really behaves: a password with any byte that is not
-    printable ASCII is printed as lowercase hex instead of verbatim."""
+class PrintingSecurity(FakeSecurity):
+    """`security find-generic-password` as it really prints: `-w` gives the
+    password verbatim or, when any byte is not printable ASCII, as bare
+    lowercase hex; `-g` gives a `password:` line that says which form it is."""
 
     def __call__(self, args: list[str], input_text: str | None = None) -> tuple[int, str]:
         rc, out = super().__call__(args, input_text)
         if rc == 0 and args[:1] == ["find-generic-password"]:
-            raw = out.rstrip("\n").encode("utf-8")
-            if not all(0x20 <= b < 0x7F for b in raw):
-                return 0, raw.hex() + "\n"
+            secret = self.items[args[args.index("-s") + 1]]
+            if "-w" in args:
+                return 0, security_w_output(secret)
+            if "-g" in args:
+                return 0, 'keychain: "/x"\nattributes:\n' + security_g_output(secret)
+            return 0, ""
         return rc, out
 
 
@@ -1962,7 +1967,7 @@ def test_a_non_ascii_app_secret_survives_the_keychain_round_trip(tmp_path, monke
     parsed as nothing, and every restart locked cross-device traffic with
     "contents are missing or unreadable" over a record that was intact."""
     monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "dd"))
-    sec = HexPrintingSecurity()
+    sec = PrintingSecurity()
     vault = CredentialVault(
         root=tmp_path / "root", real_home=tmp_path / "home",
         security_runner=sec, platform="darwin",
@@ -1978,11 +1983,38 @@ def test_an_app_secret_that_is_a_hex_string_is_not_decoded(tmp_path, monkeypatch
     """The other direction: `security` prints an all-printable password
     verbatim, so a secret that genuinely is hex must come back unchanged."""
     monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "dd"))
-    sec = HexPrintingSecurity()
+    sec = PrintingSecurity()
     vault = CredentialVault(
         root=tmp_path / "root", real_home=tmp_path / "home",
         security_runner=sec, platform="darwin",
     )
     for token in ("4142", "deadbeef" * 8):
+        vault.write_app_secret("navide-server-token", token)
+        assert vault.read_app_secret("navide-server-token") == token
+
+
+def test_an_app_secret_that_looks_like_hex_is_read_back_exactly(tmp_path, monkeypatch):
+    """`-w` hex output and a plaintext secret that is itself lowercase hex are
+    indistinguishable: "0a" decodes to a newline, "1f..." to control bytes.
+    Any such secret must come back exactly as written."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "dd"))
+    sec = PrintingSecurity()
+    vault = CredentialVault(
+        root=tmp_path / "root", real_home=tmp_path / "home",
+        security_runner=sec, platform="darwin",
+    )
+    for token in ("0a", "7b0a7d", "1f" + "61" * 15, "00" * 16):
+        vault.write_app_secret("navide-server-token", token)
+        assert vault.read_app_secret("navide-server-token") == token
+
+
+def test_an_app_secret_with_a_backslash_or_quote_is_read_back_exactly(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "dd"))
+    sec = PrintingSecurity()
+    vault = CredentialVault(
+        root=tmp_path / "root", real_home=tmp_path / "home",
+        security_runner=sec, platform="darwin",
+    )
+    for token in ('{"a":"b\\"}', 'x"y', "tab\there"):
         vault.write_app_secret("navide-server-token", token)
         assert vault.read_app_secret("navide-server-token") == token

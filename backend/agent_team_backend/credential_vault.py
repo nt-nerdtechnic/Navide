@@ -258,7 +258,9 @@ def _default_security_runner(args: list[str], input_text: str | None = None) -> 
         timeout=10,
     )
     out = proc.stdout
-    if proc.returncode != 0 and proc.stderr:
+    # Always appended: besides error text, `find-generic-password -g` prints
+    # the password itself on stderr.
+    if proc.stderr:
         out = (out + "\n" if out else "") + proc.stderr.strip()
     return proc.returncode, out
 
@@ -268,28 +270,28 @@ def _kc_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _unhex_security_output(secret: str | None) -> str | None:
-    """Undo `security find-generic-password -w` printing a password as hex.
+def _parse_security_password(out: str) -> str:
+    """The password from `security find-generic-password -g` output.
 
-    `security` prints the stored bytes verbatim only when every one is
-    printable ASCII; otherwise it prints the whole password as lowercase hex.
-    A secret with any non-ASCII character in it — a JSON document holding a
-    Chinese pane name — therefore comes back as `7b22...7d` and parses as
-    nothing, which the device trust store reads as "the record is unreadable"
-    and locks on, offering to erase a record nothing was wrong with.
-
-    Decoded only when the result could not have been printed verbatim, so a
-    secret that genuinely is a hex string is left alone.
+    `-w` prints a password verbatim when every byte is printable ASCII and as
+    bare lowercase hex otherwise, so a plaintext secret that is itself hex
+    cannot be told apart from an encoded one. `-g` marks the form instead:
+    `password: "<verbatim>"` or `password: 0x<HEX>  "<escaped>"` (and a bare
+    `password: ` when empty). Raises ValueError when no such line is present
+    or the hex is not UTF-8.
     """
-    if not secret or len(secret) % 2 or not all(c in "0123456789abcdef" for c in secret):
-        return secret
-    raw = bytes.fromhex(secret)
-    if all(0x20 <= b < 0x7F for b in raw):
-        return secret
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return secret
+    for line in reversed(out.splitlines()):
+        if not line.startswith("password:"):
+            continue
+        value = line[len("password:"):].removeprefix(" ")
+        if value.startswith("0x"):
+            return bytes.fromhex(value[2:].split(" ", 1)[0]).decode("utf-8")
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            return value[1:-1]
+        if not value.strip():
+            return ""
+        break
+    raise ValueError("no password line in security output")
 
 
 def _read_text(path: Path) -> str | None:
@@ -427,7 +429,7 @@ class CredentialVault:
         if account:
             args += ["-a", account]
         try:
-            rc, out = self._security(args + ["-w"], None)
+            rc, out = self._security(args + ["-g"], None)
         except Exception as err:  # noqa: BLE001
             if strict:
                 raise CredentialVaultError(
@@ -447,7 +449,16 @@ class CredentialVault:
                 )
             log.warning("keychain read %s failed (rc %s)", service, rc)
             return None
-        secret = out.rstrip("\n")
+        try:
+            secret = _parse_security_password(out)
+        except ValueError as err:
+            # The message only, never the error: a decode error quotes bytes.
+            if strict:
+                raise CredentialVaultError(
+                    f"keychain read failed for {service!r}: unparsable output"
+                ) from err
+            log.warning("keychain read %s failed: unparsable output", service)
+            return None
         return secret or None
 
     def _keychain_write(
@@ -728,9 +739,7 @@ class CredentialVault:
         Reading it was the only thing giving it any authority.
         """
         if self._is_macos:
-            return _unhex_security_output(
-                self._keychain_read(self.app_secret_service(name), strict=True)
-            )
+            return self._keychain_read(self.app_secret_service(name), strict=True)
         return _read_private_text(self.app_secret_path(name))
 
     def write_app_secret(self, name: str, secret: str | None) -> None:
