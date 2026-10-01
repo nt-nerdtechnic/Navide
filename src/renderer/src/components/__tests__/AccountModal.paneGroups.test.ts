@@ -49,7 +49,11 @@ function sorted(seeds: PaneSeed[]): PaneSeed[] {
   )
 }
 
-async function mountModal(seeds: PaneSeed[], extraDevice?: { name: string; seeds: PaneSeed[] }) {
+async function mountModal(
+  seeds: PaneSeed[],
+  /** `online: null` sends a device row without the field at all. */
+  extraDevice?: { name: string; seeds: PaneSeed[]; online?: boolean | null },
+) {
   ;(window as unknown as Record<string, unknown>).agentTeam = { trustConfirm: vi.fn() }
   const mock = createMockBackend('connected')
   mock.setResponse('p2p.link.status', {
@@ -66,15 +70,17 @@ async function mountModal(seeds: PaneSeed[], extraDevice?: { name: string; seeds
     },
   ]
   if (extraDevice) {
-    devices.push({
+    const row: Record<string, unknown> = {
       deviceId: 'other',
       deviceName: extraDevice.name,
       isLocal: false,
-      online: true,
+      online: extraDevice.online ?? true,
       paneCount: extraDevice.seeds.length,
       panes: sorted(extraDevice.seeds).map(pane),
       trustState: 'trusted',
-    })
+    }
+    if (extraDevice.online === null) delete row.online
+    devices.push(row)
   }
   mock.setResponse('p2p.network.snapshot', { state: 'connected', deviceId: 'me', devices })
   wrapper = mount(AccountModal, {
@@ -263,19 +269,55 @@ describe('the pane roster', () => {
   it('never counts a pane nobody can reach as running or idle', async () => {
     // The real roster: another machine's restored placeholders arrive as
     // "disconnected" (only this machine can say "not opened"), and a machine
-    // that has gone away keeps its last rows. Filed under Idle they were 45 of
-    // the 69 on the tile — panes a message sent now would never reach.
+    // that has gone away keeps its last rows (next test). Filed under Idle they
+    // were 45 of the 69 on the tile — panes a message sent now would never reach.
     await mountModal(MIXED, {
       name: 'Laptop',
       seeds: [
         { title: 'Placeholder there', workspace: 'W', status: 'disconnected' },
         { title: 'Live there', workspace: 'W', status: 'idle' },
-        { title: 'Stale busy', workspace: 'W', status: 'running', hostOnline: false },
-        { title: 'Stale idle', workspace: 'W', status: 'idle', hostOnline: false },
       ],
     })
     const tiles = wrapper!.findAll('.pane-tile .tile-n').map((node) => node.text())
-    expect(tiles).toEqual(['1', '3', '5'])
+    expect(tiles).toEqual(['1', '3', '3'])
+  })
+
+  it('takes reachability from the device, not from the stale per-pane flag', async () => {
+    // The per-pane flag is a directory snapshot; presence moves the device's
+    // `online` without refreshing it. A machine that just went away still has
+    // rows saying hostOnline, and one that just came back has rows saying not.
+    await mountModal(MIXED, {
+      name: 'Laptop',
+      online: false,
+      seeds: [
+        { title: 'Was busy', workspace: 'W', status: 'running', hostOnline: true },
+        { title: 'Was idle', workspace: 'W', status: 'idle', hostOnline: true },
+      ],
+    })
+    expect(wrapper!.findAll('.pane-tile .tile-n').map((node) => node.text())).toEqual(['1', '2', '4'])
+    wrapper?.unmount()
+
+    await mountModal(MIXED, {
+      name: 'Laptop',
+      online: true,
+      seeds: [
+        { title: 'Back busy', workspace: 'W', status: 'running', hostOnline: false },
+        { title: 'Back idle', workspace: 'W', status: 'idle', hostOnline: false },
+      ],
+    })
+    expect(wrapper!.findAll('.pane-tile .tile-n').map((node) => node.text())).toEqual(['2', '3', '2'])
+  })
+
+  it('falls back to the per-pane flag when a device row does not say', async () => {
+    await mountModal(MIXED, {
+      name: 'Laptop',
+      online: null,
+      seeds: [
+        { title: 'Live', workspace: 'W', status: 'running', hostOnline: true },
+        { title: 'Gone', workspace: 'W', status: 'idle', hostOnline: false },
+      ],
+    })
+    expect(wrapper!.findAll('.pane-tile .tile-n').map((node) => node.text())).toEqual(['2', '2', '3'])
   })
 
   it('starts another machine folded, because this one is what was asked for', async () => {
