@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
@@ -85,6 +85,18 @@ describe('resolveBackendSandbox', () => {
       bubblewrap: () => '/usr/bin/bwrap',
     }))
     expect(resolved).toEqual({ available: false, reason: 'third-party backends are not supported on Windows yet' })
+  })
+
+  it('reports Windows as unsupported before it looks at (Windows) paths', () => {
+    const windowsPaths = {
+      packageDir: win32.join('C:\\', 'Users', 'me', 'AppData', 'Roaming', 'Navide', 'plugins', 'acme.files'),
+      dataDir: win32.join('C:\\', 'Users', 'me', 'AppData', 'Roaming', 'Navide', 'data', 'acme.files'),
+      entryFile: win32.join('C:\\', 'Users', 'me', 'AppData', 'Roaming', 'Navide', 'plugins', 'acme.files', 'backend', 'acme-files.exe'),
+    }
+    expect(resolveBackendSandbox(windowsPaths, probe({ platform: 'win32' }))).toEqual({
+      available: false,
+      reason: 'third-party backends are not supported on Windows yet',
+    })
   })
 
   it('refuses relative or control-character paths instead of encoding them', () => {

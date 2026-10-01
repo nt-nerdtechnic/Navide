@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendPluginError } from './pluginBackendSupervisor'
 import { PlansBridgeError, type PlansBridgeContext, type PlansFilesystemPort } from './plansBridge'
 import { SANDBOX_EXEC_PATH, type BackendSandboxProbe } from './pluginBackendSandbox'
 import { NativeBackendStore } from './pluginNativeBackendStore'
+import { isWindows } from '../../shared/osplat'
 import {
   BACKEND_RESTART_DELAYS_MS,
   backendPermissionsKey,
@@ -102,6 +103,12 @@ async function refusal(promise: Promise<unknown>): Promise<BackendPluginError> {
   return error as BackendPluginError
 }
 
+// These suites drive the macOS/Linux admission path with a mocked sandbox
+// probe and real package directories under the host's temp directory. On a
+// Windows host those paths are not POSIX paths and admission is refused
+// before any of it (covered by the 'Windows (unsupported in v1)' suite).
+const POSIX_SANDBOX_SKIPPED = isWindows()
+
 describe('thirdPartyBackendLaunchSpec', () => {
   it('projects the manifest allowlists, the fs bridge port and no agent methods', () => {
     const spec = writePackage({ system: ['fs'] })
@@ -127,7 +134,7 @@ describe('thirdPartyBackendLaunchSpec', () => {
   })
 })
 
-describe('admission', () => {
+describe.skipIf(POSIX_SANDBOX_SKIPPED)('admission', () => {
   it('is off by default, and off means off: no prompt, no spawn, never re-enabled', async () => {
     expect(new NativeBackendStore(join(root, 'fresh-store')).isEnabled()).toBe(false)
     store.setEnabled(false)
@@ -312,7 +319,37 @@ describe('admission', () => {
   })
 })
 
-describe('kill switches', () => {
+describe('Windows (unsupported in v1)', () => {
+  // Host-independent: a Windows spec with Windows paths, as the Host builds it there.
+  const root = win32.join('C:\\', 'Users', 'me', 'AppData', 'Roaming', 'Navide')
+  const windowsSpec = {
+    pluginId: 'acme.indexer',
+    packageVersion: '1.0.0',
+    packageDir: win32.join(root, 'plugins', 'acme.indexer'),
+    entryFile: win32.join(root, 'plugins', 'acme.indexer', 'backend', 'acme-indexer.exe'),
+    protocolVersion: 1,
+    activation: 'startup',
+    approvedMethods: ['files.search'],
+    agentMethods: [],
+    approvedEvents: [],
+    approvedBridgePorts: [],
+    thirdParty: { name: 'Indexer', system: [] },
+  } as ThirdPartyLaunchSpec
+  const WINDOWS: BackendSandboxProbe = { platform: 'win32', sandboxExec: () => null, bubblewrap: () => null }
+
+  it('reports "turned off" while the switch is off, and "not supported" when on - never a sandbox path error', async () => {
+    const { instance, spawnImpl } = controller({ promptConsent: allow, probe: WINDOWS, digestBackend: async () => 'digest' })
+    store.setEnabled(false)
+    expect((await refusal(instance.admit(windowsSpec))).message).toBe('third-party native backends are turned off')
+    store.setEnabled(true)
+    expect((await refusal(instance.admit(windowsSpec))).message).toBe('third-party backends are not supported on Windows yet')
+    expect(allow).not.toHaveBeenCalled()
+    expect(spawnImpl).not.toHaveBeenCalled()
+    expect(await instance.preflightAdmission(windowsSpec)).toBeNull()
+  })
+})
+
+describe.skipIf(POSIX_SANDBOX_SKIPPED)('kill switches', () => {
   it('turning the global switch off stops every third-party child and blocks respawn', async () => {
     const stopBackends = vi.fn(async () => undefined)
     const { instance } = controller({ promptConsent: allow, stopBackends })
@@ -338,7 +375,7 @@ describe('kill switches', () => {
   })
 })
 
-describe('crash breaker and resource violations', () => {
+describe.skipIf(POSIX_SANDBOX_SKIPPED)('crash breaker and resource violations', () => {
   it('restarts with backoff, then stays down until the user allows it again', async () => {
     let now = 0
     const { instance } = controller({ promptConsent: allow, now: () => now })
@@ -382,7 +419,7 @@ describe('crash breaker and resource violations', () => {
   })
 })
 
-describe('package bridge', () => {
+describe.skipIf(POSIX_SANDBOX_SKIPPED)('package bridge', () => {
   function context(root: string): PlansBridgeContext {
     return {
       runtime: {
@@ -448,7 +485,7 @@ describe('package bridge', () => {
   })
 })
 
-describe('install-time preflight', () => {
+describe.skipIf(POSIX_SANDBOX_SKIPPED)('install-time preflight', () => {
   it('needs the full admission for this exact content, never prompts, and runs under the watchdog', async () => {
     const watchResources = vi.fn(() => ({ dispose: vi.fn(), sample: async () => null }))
     const spawnImpl = vi.fn(() => ({ pid: 7, once: vi.fn() }))
@@ -487,12 +524,18 @@ describe('install-time preflight', () => {
 })
 
 describe('NativeBackendStore', () => {
-  it('persists decisions owner-only and reads a corrupt file as nothing allowed', () => {
+  // POSIX permission bits do not exist on Windows; ownerOnlyJsonPersistence
+  // accepts any mode there.
+  it.skipIf(isWindows())('writes the decision file owner-only', () => {
+    store.setEnabled(true)
+    expect(statSync(join(root, 'store', 'native-backends.json')).mode & 0o777).toBe(0o600)
+  })
+
+  it('persists decisions and reads a corrupt file as nothing allowed', () => {
     store.setEnabled(true)
     store.grantConsent('acme.indexer', { binarySha256: 'a'.repeat(64), permissionsKey: '{}', packageVersion: '1.0.0' })
     store.setWorkspaceWrite('acme.indexer', '/w', true)
     const file = join(root, 'store', 'native-backends.json')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
     const reloaded = new NativeBackendStore(join(root, 'store'))
     expect(reloaded.isEnabled()).toBe(true)
     expect(reloaded.record('acme.indexer')).toMatchObject({ workspaceWrite: ['/w'], consent: { packageVersion: '1.0.0' } })

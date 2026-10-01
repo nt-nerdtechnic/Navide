@@ -324,9 +324,10 @@ export class ThirdPartyBackendController {
 
   /** The gates that can change at any moment: switches, breaker, sandbox. */
   private assertAdmissible(spec: ThirdPartyLaunchSpec): void {
+    // The global switch first: while it is off, that is the answer.
+    if (!this.store.isEnabled()) throw unavailable('third-party native backends are turned off')
     const refusal = this.staticRefusal(spec)
     if (refusal) throw unavailable(refusal.reason)
-    if (!this.store.isEnabled()) throw unavailable('third-party native backends are turned off')
   }
 
   private consentMatches(spec: ThirdPartyLaunchSpec, digest: string): boolean {

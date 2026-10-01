@@ -173,6 +173,14 @@ export function resolveBackendSandbox(
   paths: BackendSandboxPaths,
   probe: BackendSandboxProbe,
 ): BackendSandboxResolution {
+  // Platform first: an unsupported platform is reported as such, never as a
+  // path problem (Windows paths are not POSIX paths and need not be).
+  if (probe.platform === 'win32') {
+    return { available: false, reason: 'third-party backends are not supported on Windows yet' }
+  }
+  if (probe.platform !== 'darwin' && probe.platform !== 'linux') {
+    return { available: false, reason: `no backend sandbox for platform ${probe.platform}` }
+  }
   try {
     assertSandboxPath(paths.packageDir)
     assertSandboxPath(paths.dataDir)
@@ -190,20 +198,14 @@ export function resolveBackendSandbox(
       args: ['-p', buildSeatbeltProfile(paths), paths.entryFile],
     }
   }
-  if (probe.platform === 'linux') {
-    const bwrap = probe.bubblewrap()
-    if (!bwrap) {
-      return {
-        available: false,
-        reason: 'bubblewrap is not installed or unprivileged user namespaces are disabled',
-      }
+  const bwrap = probe.bubblewrap()
+  if (!bwrap) {
+    return {
+      available: false,
+      reason: 'bubblewrap is not installed or unprivileged user namespaces are disabled',
     }
-    return { available: true, kind: 'bubblewrap', command: bwrap, args: [...buildBubblewrapArgs(paths), '--', paths.entryFile] }
   }
-  if (probe.platform === 'win32') {
-    return { available: false, reason: 'third-party backends are not supported on Windows yet' }
-  }
-  return { available: false, reason: `no backend sandbox for platform ${probe.platform}` }
+  return { available: true, kind: 'bubblewrap', command: bwrap, args: [...buildBubblewrapArgs(paths), '--', paths.entryFile] }
 }
 
 /** Environment every sandboxed child sees: the Host map with its home and

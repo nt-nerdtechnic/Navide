@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { platformId, setPlatformId } from '../../shared/osplat'
+import { isWindows, platformId, setPlatformId } from '../../shared/osplat'
 import { backendEntryOnDisk } from './installedPlugins'
 
 // Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
@@ -13815,7 +13815,9 @@ describe('plansQuery workspace alias', () => {
 })
 
 describe('third-party workspace filesystem (real package bridge, port and grant check)', () => {
-  it('reads and writes only through its own live grant, at the bound workspace root, without touching Plans rules', async () => {
+  // The package bridge is obtained through a macOS sandbox admission built on
+  // host temp paths; Windows refuses third-party backends before that (v1).
+  it.skipIf(isWindows())('reads and writes only through its own live grant, at the bound workspace root, without touching Plans rules', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'third-party-fs-')))
     const workspace = join(root, 'workspace')
     const packageDir = join(root, 'package')
