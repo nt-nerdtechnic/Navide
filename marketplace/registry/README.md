@@ -178,6 +178,7 @@ Extensions view to warn users. This is metadata/gating only — no runtime sandb
 | `REGISTRY_TRUST_PROFILE` | `self-hosted-dev` | `self-hosted-dev` for persistent locally generated trust material, or `official` for explicitly provisioned production material. |
 | `REGISTRY_TRUST_CONFIG_FILE` | _(unset)_ | Required with `official`; path to the complete signer, root, rotation, validity, and blocklist policy below. Rejected for the default profile. |
 | `REGISTRY_ROOT_PATH` | _(unset)_ | Public path prefix when served behind a reverse proxy, e.g. `/registry`. Requests are accepted with the prefix forwarded unchanged (AWS ALB) or stripped by the proxy, and every link the website emits carries it. `/registry-evil/...` is not served. Do not combine with `uvicorn --root-path`. |
+| `REGISTRY_FORWARDED_ALLOW_IPS` | `*` | Container only (`deploy/entrypoint.sh` passes it to uvicorn `--forwarded-allow-ips`, with `--proxy-headers`). Lets the ALB's `X-Forwarded-Proto` through, so `og:url`, `og:image` and the dashboard's `registry_url` come out `https://`. The default `*` assumes only the ALB can reach the container port; otherwise set it to the ALB's subnet, e.g. `10.0.0.0/16`. |
 
 ### Official Registry trust deployment
 

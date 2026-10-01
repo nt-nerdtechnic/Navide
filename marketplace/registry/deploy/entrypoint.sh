@@ -39,7 +39,16 @@ fi
 # REGISTRY_ROOT_PATH (e.g. /registry) is applied by the app itself, so a proxy
 # may forward the prefix unchanged (AWS ALB) or strip it. Do not also pass
 # uvicorn --root-path. One worker: the registry stores its index in SQLite.
+#
+# The load balancer terminates TLS and says so in X-Forwarded-Proto. Uvicorn
+# trusts that header only from 127.0.0.1 unless told otherwise, so behind the
+# ALB every absolute URL the site builds (og:image, og:url, the dashboard's
+# registry URL) came out as http://. Trust it from the proxy: the container
+# port is reachable only through the load balancer. Set
+# REGISTRY_FORWARDED_ALLOW_IPS to the proxy's addresses to narrow it.
 exec uvicorn registry.app:app \
   --host "${REGISTRY_HOST:-0.0.0.0}" \
   --port "${REGISTRY_PORT:-8787}" \
+  --proxy-headers \
+  --forwarded-allow-ips "${REGISTRY_FORWARDED_ALLOW_IPS:-*}" \
   "$@"
