@@ -18,7 +18,8 @@ import ChannelLinkGuide from './ChannelLinkGuide.vue'
 /**
  * Pane-header entry to chat channels. Unbound: a small button that opens a
  * popover listing every chat the configured, connected platforms know, grouped
- * by platform; one click binds the pane (or Settings → Channels opens when no
+ * by platform; picking one opens a confirmation step that asks what the chat
+ * receives, and only Connect binds (or Settings → Channels opens when no
  * platform is configured). Bound: a chip naming the platform and chat, with ✕
  * to unbind.
  */
@@ -41,7 +42,14 @@ const guard = props.guardStore ?? inject(guardKey, null)
 const binding = computed(() => store?.bindingFor(props.paneId) ?? null)
 const open = ref(false)
 const busy = ref(false)
-// The mirror level the next bind asks for: chosen in the popover before any chat is picked.
+// Step 2 of the popover: the chat picked in step 1, awaiting its level and Connect.
+interface PendingBind {
+  platform: ChannelPlatform
+  loc: ChannelLocation
+  mode: 'new' | 'existing'
+}
+const pending = ref<PendingBind | null>(null)
+// The mirror level the pending bind asks for.
 const bindLevel = ref<ChannelVerbosity>('replies')
 const error = ref('')
 interface PlatformGroup {
@@ -154,7 +162,7 @@ async function toggle(): Promise<void> {
     return
   }
   error.value = ''
-  bindLevel.value = binding.value?.verbosity ?? 'replies'
+  pending.value = null
   unguardedYolo.value =
     !!props.agentKey && guard?.hookSupportFor(props.agentKey) === 'none' && vendorRunsYolo(props.agentKey)
   open.value = true
@@ -167,6 +175,7 @@ async function toggle(): Promise<void> {
 
 function close(): void {
   open.value = false
+  pending.value = null
   loadSeq++
   document.removeEventListener('pointerdown', onPointerDown, true)
   document.removeEventListener('keydown', onKeydown, true)
@@ -182,10 +191,46 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
   event.preventDefault()
   event.stopPropagation()
-  close()
+  if (pending.value) back()
+  else close()
 }
 
 onBeforeUnmount(close)
+
+/** Level this pane last used for this very chat; a binding to any other chat or
+ *  platform never lends its level. A new binding starts at replies-only. */
+function previousLevel(platform: ChannelPlatform, chatId: string): ChannelVerbosity {
+  const prev = store?.bindings.value.find((b) => b.pane_id === props.paneId && b.platform === platform && b.chat_id === chatId)
+  return prev?.verbosity ?? 'replies'
+}
+
+async function choose(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
+  error.value = ''
+  bindLevel.value = previousLevel(platform, loc.chat_id)
+  pending.value = { platform, loc, mode }
+  await nextTick()
+  focusBindLevel()
+  position()
+}
+
+async function back(): Promise<void> {
+  const chatId = pending.value?.loc.chat_id
+  pending.value = null
+  error.value = ''
+  await nextTick()
+  popRef.value?.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(chatId ?? '')}"]`)?.focus()
+  position()
+}
+
+function focusBindLevel(): void {
+  popRef.value?.querySelector<HTMLElement>(`[data-testid="channel-bind-level-${bindLevel.value}"]`)?.focus()
+}
+
+async function confirmBind(): Promise<void> {
+  if (!pending.value || busy.value) return
+  const { platform, loc, mode } = pending.value
+  await bind(platform, loc, mode)
+}
 
 async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
   if (!store) return
@@ -252,6 +297,22 @@ function onMenuKeydown(event: KeyboardEvent): void {
 
 onBeforeUnmount(closeMenu)
 
+// Radiogroup arrow keys move the selection and the focus together, wrapping at
+// the ends; Enter connects with the selected level.
+function onBindLevelKey(e: KeyboardEvent): void {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    void confirmBind()
+    return
+  }
+  const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0
+  if (!step) return
+  e.preventDefault()
+  const i = VERBOSITIES.indexOf(bindLevel.value)
+  bindLevel.value = VERBOSITIES[(i + step + VERBOSITIES.length) % VERBOSITIES.length]
+  void nextTick(focusBindLevel)
+}
+
 async function pickVerbosity(v: ChannelVerbosity): Promise<void> {
   if (!store || v === verbosity.value) return
   busy.value = true
@@ -276,7 +337,7 @@ function openSettings(): void {
 
 <template>
   <span v-if="store" class="pane-channel">
-    <span v-if="binding" ref="chipRef" class="pch-chip" data-testid="channel-chip" :title="`${platformName(binding.platform)} · ${binding.title || binding.chat_id}`">
+    <span v-if="binding" ref="chipRef" class="pch-chip" data-testid="channel-chip" :title="`${platformName(binding.platform)} · ${binding.title || binding.chat_id} · ${t(`channels.pane.verbosity-${verbosity}`)}`">
       <button
         type="button"
         class="pch-chip-main"
@@ -289,6 +350,7 @@ function openSettings(): void {
       >
         <svg class="pch-icon pch-chip-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z" /><path d="M5.4 6.2h5.2M5.4 8.2h3.2" /></svg>
         <span class="pch-chip-label">{{ platformName(binding.platform) }} · {{ binding.title || binding.chat_id }}</span>
+        <span class="pch-chip-level" data-testid="channel-chip-level">{{ t(`channels.pane.verbosity-${verbosity}`) }}</span>
       </button>
       <button
         type="button"
@@ -333,7 +395,7 @@ function openSettings(): void {
           :key="v"
           type="button"
           class="pch-level"
-          :class="{ 'pch-row-active': v === verbosity }"
+          :class="{ 'pch-level-selected': v === verbosity }"
           role="menuitemradio"
           :aria-checked="v === verbosity"
           :data-testid="`channel-verbosity-${v}`"
@@ -341,6 +403,7 @@ function openSettings(): void {
           :title="t(`channels.pane.verbosity-${v}-hint`)"
           @click="pickVerbosity(v)"
         >
+          <span class="pch-level-dot" aria-hidden="true"></span>
           <span class="pch-level-name">{{ t(`channels.pane.verbosity-${v}`) }}</span>
           <span class="pch-level-hint">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
         </button>
@@ -362,67 +425,89 @@ function openSettings(): void {
         @click.stop
         @mousedown.stop
       >
-        <div class="pch-pop-head">{{ t('channels.pane.where') }}</div>
-        <p v-if="unguardedYolo" class="pch-warn" role="note" data-testid="channel-guard-warning">{{ t('guard.pane.no-hook-warning') }}</p>
-        <div class="pch-levels" role="radiogroup" :aria-label="t('channels.pane.bind-level-label')" data-testid="channel-bind-levels">
+        <template v-if="!pending">
+          <div class="pch-pop-head">{{ t('channels.pane.where') }}</div>
+          <p v-if="unguardedYolo" class="pch-warn" role="note" data-testid="channel-guard-warning">{{ t('guard.pane.no-hook-warning') }}</p>
+          <section v-for="g in groups" :key="g.platform" class="pch-group" data-testid="channel-group">
+            <div class="pch-group-head">
+              <span class="pch-mark" aria-hidden="true">{{ platformName(g.platform).charAt(0) }}</span>
+              <span class="pch-group-name">{{ platformName(g.platform) }}</span>
+              <span v-if="g.identity" class="pch-sub pch-ellipsis">{{ g.identity }}</span>
+            </div>
+            <div v-if="g.unavailable" class="pch-row pch-row-off" data-testid="channel-platform-off" aria-disabled="true">{{ g.unavailable }}</div>
+            <div v-else-if="g.loading" class="pch-sub">{{ t('channels.pane.loading') }}</div>
+            <p v-else-if="g.error" class="pch-error" role="alert">{{ g.error }}</p>
+            <div v-else-if="!g.locations.length" class="pch-empty" data-testid="channel-no-chats">
+              <span class="pch-next">{{ t('channels.link.next-step') }}</span>
+              <ChannelLinkGuide :store="store" :platform="g.platform" />
+            </div>
+            <div v-for="loc in g.locations" :key="loc.chat_id" class="pch-loc" data-testid="channel-location">
+              <button
+                type="button"
+                class="pch-row"
+                :class="{ 'pch-row-taken': holderOf(g.platform, loc.chat_id) }"
+                data-testid="channel-bind-existing"
+                :data-chat-id="loc.chat_id"
+                :disabled="busy || !!holderOf(g.platform, loc.chat_id)"
+                :title="holderOf(g.platform, loc.chat_id) ? t('channels.pane.taken-hint') : t('channels.pane.use-existing')"
+                @click="choose(g.platform, loc, 'existing')"
+              >
+                <span class="pch-loc-title pch-ellipsis">{{ loc.title || loc.chat_id }}</span>
+                <span v-if="holderOf(g.platform, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, loc.chat_id) }) }}</span>
+                <span v-else class="pch-kind">{{ kindLabel(loc) }}</span>
+              </button>
+              <button
+                v-if="loc.supports_topics && canCreate(g.platform)"
+                type="button"
+                class="pch-new"
+                data-testid="channel-bind-new"
+                :disabled="busy"
+                :title="t('channels.pane.new-topic', { name: paneName })"
+                @click="choose(g.platform, loc, 'new')"
+              >{{ t('channels.pane.new-topic-short') }}</button>
+            </div>
+          </section>
+        </template>
+        <template v-else>
+          <div class="pch-step-head">
+            <button type="button" class="pch-link pch-back" data-testid="channel-bind-back" :disabled="busy" @click="back">‹ {{ t('channels.pane.back') }}</button>
+          </div>
+          <div class="pch-chosen" data-testid="channel-bind-chosen">
+            <span class="pch-mark" aria-hidden="true">{{ platformName(pending.platform).charAt(0) }}</span>
+            <span class="pch-chosen-text">
+              <span class="pch-loc-title pch-ellipsis">{{ pending.loc.title || pending.loc.chat_id }}</span>
+              <span class="pch-sub pch-ellipsis">{{ platformName(pending.platform) }} · {{ pending.mode === 'new' ? t('channels.pane.new-topic', { name: paneName }) : kindLabel(pending.loc) }}</span>
+            </span>
+          </div>
           <div class="pch-levels-head">{{ t('channels.pane.bind-level-label') }}</div>
-          <button
-            v-for="v in VERBOSITIES"
-            :key="v"
-            type="button"
-            class="pch-level"
-            :class="{ 'pch-row-active': v === bindLevel }"
-            role="radio"
-            :aria-checked="v === bindLevel"
-            :data-testid="`channel-bind-level-${v}`"
-            :disabled="busy"
-            @click="bindLevel = v"
-          >
-            <span class="pch-level-name">{{ t(`channels.pane.verbosity-${v}`) }}</span>
-            <span class="pch-level-hint">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
-          </button>
-          <p class="pch-sub pch-note" data-testid="channel-redact-note">{{ t('channels.pane.redact-note') }}</p>
-        </div>
-        <section v-for="g in groups" :key="g.platform" class="pch-group" data-testid="channel-group">
-          <div class="pch-group-head">
-            <span class="pch-mark" aria-hidden="true">{{ platformName(g.platform).charAt(0) }}</span>
-            <span class="pch-group-name">{{ platformName(g.platform) }}</span>
-            <span v-if="g.identity" class="pch-sub pch-ellipsis">{{ g.identity }}</span>
-          </div>
-          <div v-if="g.unavailable" class="pch-row pch-row-off" data-testid="channel-platform-off" aria-disabled="true">{{ g.unavailable }}</div>
-          <div v-else-if="g.loading" class="pch-sub">{{ t('channels.pane.loading') }}</div>
-          <p v-else-if="g.error" class="pch-error" role="alert">{{ g.error }}</p>
-          <div v-else-if="!g.locations.length" class="pch-empty" data-testid="channel-no-chats">
-            <span class="pch-next">{{ t('channels.link.next-step') }}</span>
-            <ChannelLinkGuide :store="store" :platform="g.platform" />
-          </div>
-          <div v-for="loc in g.locations" :key="loc.chat_id" class="pch-loc" data-testid="channel-location">
+          <div class="pch-levels" role="radiogroup" :aria-label="t('channels.pane.bind-level-label')" data-testid="channel-bind-levels">
             <button
+              v-for="v in VERBOSITIES"
+              :key="v"
               type="button"
-              class="pch-row"
-              :class="{ 'pch-row-taken': holderOf(g.platform, loc.chat_id) }"
-              data-testid="channel-bind-existing"
-              :disabled="busy || !!holderOf(g.platform, loc.chat_id)"
-              :title="holderOf(g.platform, loc.chat_id) ? t('channels.pane.taken-hint') : t('channels.pane.use-existing')"
-              @click="bind(g.platform, loc, 'existing')"
-            >
-              <span class="pch-loc-title pch-ellipsis">{{ loc.title || loc.chat_id }}</span>
-              <span v-if="holderOf(g.platform, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, loc.chat_id) }) }}</span>
-              <span v-else class="pch-kind">{{ kindLabel(loc) }}</span>
-            </button>
-            <button
-              v-if="loc.supports_topics && canCreate(g.platform)"
-              type="button"
-              class="pch-new"
-              data-testid="channel-bind-new"
+              class="pch-level"
+              :class="{ 'pch-level-selected': v === bindLevel }"
+              role="radio"
+              :aria-checked="v === bindLevel"
+              :tabindex="v === bindLevel ? 0 : -1"
+              :data-testid="`channel-bind-level-${v}`"
               :disabled="busy"
-              :title="t('channels.pane.new-topic', { name: paneName })"
-              @click="bind(g.platform, loc, 'new')"
-            >{{ t('channels.pane.new-topic-short') }}</button>
+              @click="bindLevel = v"
+              @keydown="onBindLevelKey"
+            >
+              <span class="pch-level-dot" aria-hidden="true"></span>
+              <span class="pch-level-name">{{ t(`channels.pane.verbosity-${v}`) }}</span>
+              <span class="pch-level-hint">{{ t(`channels.pane.verbosity-${v}-hint`) }}</span>
+            </button>
           </div>
-        </section>
+          <p class="pch-sub pch-note" data-testid="channel-redact-note">{{ t('channels.pane.redact-note') }}</p>
+          <div class="pch-actions">
+            <button type="button" class="pch-cancel" data-testid="channel-bind-cancel" :disabled="busy" @click="close">{{ t('channels.pane.cancel') }}</button>
+            <button type="button" class="pch-confirm" data-testid="channel-bind-confirm" :disabled="busy" @click="confirmBind">{{ t('channels.pane.confirm') }}</button>
+          </div>
+        </template>
         <p v-if="error" class="pch-error" role="alert">{{ error }}</p>
-        <button type="button" class="pch-link pch-foot" data-testid="channel-manage" @click="openSettings">{{ t('channels.pane.manage-chats') }}</button>
+        <button v-if="!pending" type="button" class="pch-link pch-foot" data-testid="channel-manage" @click="openSettings">{{ t('channels.pane.manage-chats') }}</button>
       </div>
     </Teleport>
   </span>
@@ -434,11 +519,12 @@ function openSettings(): void {
    icon buttons (TerminalPane.vue, next to .rebuild-btn / .minimize-btn). */
 .pch-icon { display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 /* Same height and type as the header's status badge. */
-.pch-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 1; max-width: 200px; font-size: var(--font-3xs); color: var(--accent-fg); background: var(--accent-subtle); border: 1px solid var(--accent-muted); border-radius: 999px; padding: 1px 2px 1px 7px; }
+.pch-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 1; max-width: 260px; font-size: var(--font-3xs); color: var(--accent-fg); background: var(--accent-subtle); border: 1px solid var(--accent-muted); border-radius: 999px; padding: 1px 2px 1px 7px; }
 .pch-chip-main { display: inline-flex; align-items: center; gap: 4px; min-width: 0; font: inherit; color: inherit; background: transparent; border: none; padding: 0; cursor: pointer; }
-.pch-row-active { border-color: var(--accent-muted); background: var(--accent-subtle); }
 .pch-children-head { margin-top: 4px; }
 .pch-chip-icon { width: 11px; height: 11px; flex-shrink: 0; }
+.pch-chip-level { flex-shrink: 0; opacity: 0.75; }
+.pch-chip-level::before { content: '·'; margin-right: 4px; }
 .pch-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pch-chip-x { font: inherit; line-height: 1; color: inherit; background: transparent; border: none; padding: 0 3px; cursor: pointer; opacity: 0.8; }
 .pch-chip-x:hover { opacity: 1; }
@@ -446,12 +532,30 @@ function openSettings(): void {
 .pch-pop-head { font-weight: 600; color: var(--text-bright); margin-bottom: 2px; }
 .pch-sub { color: var(--text-secondary); }
 .pch-note { margin: 0; font-size: var(--font-3xs); }
-.pch-levels { display: flex; flex-direction: column; gap: 3px; padding: 2px 0 6px; border-bottom: 1px solid var(--border-muted); }
-.pch-levels-head { font-size: var(--font-3xs); color: var(--text-secondary); }
-.pch-level { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; font: inherit; text-align: left; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); padding: 4px 8px; cursor: pointer; }
+.pch-levels { display: flex; flex-direction: column; gap: 3px; }
+.pch-levels-head { margin-top: 4px; font-size: var(--font-3xs); color: var(--text-secondary); }
+.pch-step-head { display: flex; }
+.pch-back { padding: 0; }
+.pch-back:disabled, .pch-cancel:disabled, .pch-confirm:disabled { opacity: 0.5; cursor: default; }
+.pch-chosen { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); }
+.pch-chosen-text { display: flex; flex-direction: column; min-width: 0; }
+.pch-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border-muted); }
+.pch-cancel, .pch-confirm { font: inherit; border-radius: var(--radius-xs); padding: 3px 12px; cursor: pointer; }
+.pch-cancel { color: var(--text-primary); background: transparent; border: 1px solid var(--border-default); }
+.pch-confirm { font-weight: 600; color: var(--text-on-emphasis); background: var(--accent-emphasis); border: 1px solid var(--accent-emphasis); }
+.pch-cancel:focus-visible, .pch-confirm:focus-visible, .pch-back:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
+/* Dot in the first column, name over hint in the second. */
+.pch-level { display: grid; grid-template-columns: auto 1fr; column-gap: 7px; row-gap: 1px; align-items: center; width: 100%; font: inherit; text-align: left; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); padding: 4px 8px; cursor: pointer; }
 .pch-level:hover:not(:disabled) { border-color: var(--border-default); }
 .pch-level:disabled { opacity: 0.5; cursor: default; }
+.pch-level:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
+.pch-level-dot { grid-row: 1 / span 2; box-sizing: border-box; width: 12px; height: 12px; border: 1.5px solid var(--border-default); border-radius: 50%; }
+.pch-level-name, .pch-level-hint { grid-column: 2; }
 .pch-level-hint { font-size: var(--font-3xs); color: var(--text-secondary); line-height: 1.35; }
+/* Declared after .pch-level so the selected skin wins at equal specificity. */
+.pch-level-selected, .pch-level-selected:hover:not(:disabled) { border-color: var(--accent-emphasis); background: var(--accent-subtle); }
+.pch-level-selected .pch-level-name { font-weight: 600; color: var(--accent-fg); }
+.pch-level-selected .pch-level-dot { border-color: var(--accent-emphasis); background: radial-gradient(circle, var(--accent-emphasis) 0 3px, transparent 3.5px); }
 .pch-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pch-link { font: inherit; text-align: left; color: var(--accent-fg); background: transparent; border: none; padding: 2px 0; cursor: pointer; }
 .pch-foot { margin-top: 2px; padding-top: 6px; border-top: 1px solid var(--border-muted); }
