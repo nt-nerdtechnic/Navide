@@ -25,6 +25,12 @@ def store() -> GuardStore:
     return _store
 
 
+def flush() -> None:
+    """Write the queued audit rows, if a store was ever opened."""
+    if _store is not None:
+        _store.flush()
+
+
 def set_store_for_test(s: GuardStore | None) -> None:
     global _store
     _store = s

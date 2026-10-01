@@ -2331,6 +2331,10 @@ async def _stop_log_watcher() -> None:
         plugin_wiring.shutdown(plugin_host)
     except Exception as err:  # noqa: BLE001
         log.warning("plugin host shutdown failed: %s", err)
+    try:
+        guard_runtime.flush()
+    except Exception as err:  # noqa: BLE001
+        log.warning("guard audit flush failed: %s", err)
     # Last: nothing may touch the databases after this point.
     try:
         workspace_databases.close_all()
