@@ -355,6 +355,28 @@ class TestKills:
         _windows.process_tree.kill_tree(1, force=True)
         assert order == [1, 2, 3]
 
+    def test_kill_tree_still_kills_children_if_root_exits_after_snapshot(
+        self, kernel32, monkeypatch
+    ):
+        attempted: list[int] = []
+
+        class Proc:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def children(self, recursive=False):
+                assert recursive
+                return [Proc(2)]
+
+            def kill(self):
+                attempted.append(self.pid)
+                if self.pid == 1:
+                    raise psutil.NoSuchProcess(self.pid)
+
+        monkeypatch.setattr(_windows.psutil, "Process", Proc)
+        _windows.process_tree.kill_tree(1, force=True)
+        assert attempted == [1, 2]
+
     # Both force values are TerminateProcess: Windows has no graceful signal.
     def test_kill_ignores_force_and_translates_psutil_errors(self, monkeypatch):
         killed: list[int] = []

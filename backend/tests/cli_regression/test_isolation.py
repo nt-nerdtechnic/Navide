@@ -200,6 +200,7 @@ def test_failure_cleanup_reaps_a_tracked_orphan(tmp_path):
         # Model a backend that has exited without reaping this known child.
         # It is no longer reachable through the backend's process tree.
         assert backend.process is None
+        assert backend._owned_children[child.pid].is_running()
         assert backend._reap_surviving_children() == [child.pid]
         child.wait(timeout=5)
         assert child.poll() is not None
@@ -214,7 +215,12 @@ async def test_failure_cleanup_reaps_registry_child_before_create_ack(tmp_path):
     backend = BackendProcess(tmp_path / "backend")
     child_pids = []
     child_start_times = {}
-    alive_before_cleanup = []
+
+    def same_child_is_alive(pid, start_time):
+        return bool(start_time) and osplat.process_tree.is_alive(pid) and (
+            osplat.process_tree.start_time(pid) == start_time
+        )
+
     with pytest.raises(AssertionError, match="backend exited before requested shutdown"):
         async with backend:
             async with backend.connect() as ws:
@@ -259,20 +265,36 @@ async def test_failure_cleanup_reaps_registry_child_before_create_ack(tmp_path):
                 assert backend.children == set()
                 backend.process.kill()
                 await asyncio.to_thread(backend.process.wait, timeout=5)
-                alive_before_cleanup = [
-                    pid for pid in child_pids if osplat.process_tree.is_alive(pid)
-                ]
 
-    scenario = json.loads((backend.root / "scenario.json").read_text(encoding="utf-8"))
-    assert set(alive_before_cleanup).issubset(scenario["registry_reaped"])
-    assert scenario["children"] == []
-    assert all(child_start_times.values())
-    async with asyncio.timeout(5):
-        while any(
-            osplat.process_tree.start_time(pid) == start_time
-            for pid, start_time in child_start_times.items()
-        ):
-            await asyncio.sleep(0.02)
+    try:
+        scenario = json.loads((backend.root / "scenario.json").read_text(encoding="utf-8"))
+        # Windows' kill-on-close PTY job and registry recovery are both valid
+        # cleanup owners. The harness's direct-PID fallback is not: the response
+        # was withheld, so it must not discover the child.
+        assert scenario["survivors"] == []
+        assert scenario["children"] == []
+        assert all(child_start_times.values())
+        async with asyncio.timeout(5):
+            while any(
+                same_child_is_alive(pid, start_time)
+                for pid, start_time in child_start_times.items()
+            ):
+                await asyncio.sleep(0.02)
+    finally:
+        # Keep a failed cleanup assertion from leaking the deliberately orphaned
+        # process into later tests; this runs only after the assertions above.
+        for pid, start_time in child_start_times.items():
+            if same_child_is_alive(pid, start_time):
+                try:
+                    await asyncio.to_thread(osplat.process_tree.kill_tree, pid, force=True)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        async with asyncio.timeout(5):
+            while any(
+                same_child_is_alive(pid, start_time)
+                for pid, start_time in child_start_times.items()
+            ):
+                await asyncio.sleep(0.02)
 
 
 def test_readiness_waits_for_discovery_file_contents(tmp_path):

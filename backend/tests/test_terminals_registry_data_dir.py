@@ -11,14 +11,15 @@ and recording the pid in a registry that never spawned it.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import threading
 
 import pytest
 
-from agent_team_backend import osplat, pty_registry
+from agent_team_backend import osplat, pty_registry, terminals as terminals_module
 from agent_team_backend.db import DB_FILENAME, Database
-from agent_team_backend.terminals import TerminalService
+from agent_team_backend.terminals import TerminalService, TerminalSession
 
 
 async def _emit(_event) -> None:
@@ -69,6 +70,135 @@ async def test_a_late_register_writes_to_the_data_dir_it_was_queued_under(tmp_pa
     finally:
         gate.set()
         await service.kill_all(grace=0.2)
+
+
+@pytest.mark.asyncio
+async def test_kill_all_waits_for_registry_cleanup_before_returning(tmp_path, monkeypatch):
+    registered = threading.Event()
+    unregister_started = threading.Event()
+    release_unregister = threading.Event()
+    final_sweep_started = threading.Event()
+    real_register = pty_registry.register
+    real_unregister = pty_registry.unregister
+
+    def register(*args) -> None:
+        real_register(*args)
+        registered.set()
+
+    def held_unregister(pid: int) -> None:
+        unregister_started.set()
+        release_unregister.wait(5)
+        real_unregister(pid)
+
+    monkeypatch.setattr(pty_registry, "register", register)
+    monkeypatch.setattr(pty_registry, "unregister", held_unregister)
+    monkeypatch.setattr(terminals_module, "_ps_snapshot", lambda: {})
+    monkeypatch.setattr(
+        terminals_module, "_kill_breakaway", lambda _pids: final_sweep_started.set()
+    )
+    service = TerminalService(_emit)
+    session = service.create(
+        pane_id="shutdown-registry",
+        agent_key=None,
+        command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=str(tmp_path),
+    )
+    shutdown = None
+    try:
+        assert await asyncio.to_thread(registered.wait, 5)
+        shutdown = asyncio.create_task(service.kill_all(grace=0.2))
+        assert await asyncio.to_thread(unregister_started.wait, 5)
+        assert await asyncio.to_thread(final_sweep_started.wait, 5)
+        await asyncio.sleep(0.05)
+        assert not shutdown.done(), "kill_all returned while registry cleanup still used the database"
+        release_unregister.set()
+        await asyncio.wait_for(shutdown, 5)
+        assert session.proc.poll() is not None
+    finally:
+        release_unregister.set()
+        if shutdown is not None and not shutdown.done():
+            await asyncio.wait_for(shutdown, 5)
+
+
+@pytest.mark.asyncio
+async def test_kill_all_waits_for_an_inflight_descendant_registry_write(tmp_path, monkeypatch):
+    update_started = threading.Event()
+    release_update = threading.Event()
+    update_finished = threading.Event()
+    final_sweep_started = threading.Event()
+    service = TerminalService(_emit)
+    pid = 987654
+
+    class Proc:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return self.returncode
+
+    class Handle:
+        def stop_reading(self):
+            pass
+
+        def unwatch_writable(self):
+            pass
+
+        def close(self):
+            pass
+
+        def foreground_group(self):
+            return 0
+
+    proc = Proc()
+    proc.pid = pid
+    session = TerminalSession(
+        id="shutdown-snapshot",
+        pane_id="shutdown-snapshot",
+        agent_key=None,
+        command=["fake"],
+        cwd=str(tmp_path),
+        handle=Handle(),
+        proc=proc,
+    )
+    service._sessions[session.id] = session
+
+    def snapshot():
+        return {pid: (os.getpid(), pid, "child-start")}
+
+    def held_update(descendants) -> None:
+        update_started.set()
+        release_update.wait(5)
+        update_finished.set()
+
+    def kill_group(_pid, *, force):
+        proc.returncode = 0
+
+    monkeypatch.setattr(terminals_module, "_ps_snapshot", snapshot)
+    monkeypatch.setattr(pty_registry, "update_descendants", held_update)
+    monkeypatch.setattr(osplat.process_tree, "group_of", lambda _pid: pid)
+    monkeypatch.setattr(osplat.process_tree, "kill_group", kill_group)
+    monkeypatch.setattr(
+        terminals_module, "_kill_breakaway", lambda _pids: final_sweep_started.set()
+    )
+    shutdown = None
+    try:
+        service._snapshot_task = asyncio.create_task(service._snapshot_loop())
+        assert await asyncio.to_thread(update_started.wait, 5)
+        shutdown = asyncio.create_task(service.kill_all(grace=0.2))
+        await asyncio.sleep(0.05)
+        assert not final_sweep_started.is_set(), (
+            "kill_all advanced while a snapshot worker still used the database"
+        )
+        release_update.set()
+        await asyncio.wait_for(shutdown, 5)
+        assert update_finished.is_set() and final_sweep_started.is_set()
+    finally:
+        release_update.set()
+        if shutdown is not None and not shutdown.done():
+            await asyncio.wait_for(shutdown, 5)
 
 
 def _sync_service(monkeypatch, first):

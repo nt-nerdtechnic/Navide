@@ -28,7 +28,7 @@ vi.mock('electron', () => {
     // Never resolves: no window, no backend — the state this fast path is for.
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
-    commandLine: { appendSwitch: () => {} },
+    commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
     setAboutPanelOptions: () => {},
   }
   class BrowserWindow {

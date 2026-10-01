@@ -8,7 +8,11 @@ definitive failures (missing binary, nonzero exit) still block.
 """
 
 import subprocess
+import sys
+import time
+from pathlib import Path
 
+import psutil
 import pytest
 
 from agent_team_backend import app
@@ -31,16 +35,56 @@ def fake_claude(monkeypatch):
 
 
 def _run_returns(monkeypatch, *, returncode=0, stdout="2.1.205 (Claude Code)"):
-    def run(cmd, **kwargs):
-        assert kwargs.get("timeout") == _SPAWN_PROBE_TIMEOUT_S  # uses the aligned timeout
-        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
-    monkeypatch.setattr(app.subprocess, "run", run)
+    def run(command):
+        return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
+    monkeypatch.setattr(app, "_run_spawn_probe", run)
 
 
 def _run_raises(monkeypatch, exc):
-    def run(cmd, **kwargs):
+    def run(_command):
         raise exc
-    monkeypatch.setattr(app.subprocess, "run", run)
+    monkeypatch.setattr(app, "_run_spawn_probe", run)
+
+
+def _probe_child(path):
+    try:
+        return psutil.Process(int(path.read_text(encoding="utf-8")))
+    except psutil.NoSuchProcess:
+        return None
+
+
+def _wait_for_probe_child(monkeypatch, pid_file: Path):
+    """Wait for the probe child to be observable before its timeout starts."""
+    popen = app.subprocess.Popen
+
+    def popen_and_wait(*args, **kwargs):
+        proc = popen(*args, **kwargs)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                int(pid_file.read_text(encoding="utf-8"))
+                break
+            except (OSError, ValueError):
+                time.sleep(0.01)
+        else:
+            proc.kill()
+            proc.wait(timeout=5)
+            raise AssertionError("probe child did not report its pid")
+        return proc
+
+    monkeypatch.setattr(app.subprocess, "Popen", popen_and_wait)
+
+
+def _kill_probe_child(process):
+    if process is None:
+        return
+    try:
+        if process.is_running():
+            process.kill()
+    except psutil.NoSuchProcess:
+        return
+    _, still_alive = psutil.wait_procs([process], timeout=5)
+    assert not still_alive
 
 
 def test_timeout_degrades_and_lets_spawn_proceed(fake_claude, monkeypatch):
@@ -49,6 +93,78 @@ def test_timeout_degrades_and_lets_spawn_proceed(fake_claude, monkeypatch):
     assert result is not None
     assert result["reason"] == "timeout"
     assert result["degraded"] is True  # no raise → terminal.create keeps going
+
+
+def test_timeout_kills_probe_descendants(tmp_path, monkeypatch):
+    """A timed-out probe must not leave its child alive."""
+    child_pid_file = tmp_path / "child.pid"
+    shim = [
+        sys.executable,
+        "-u",
+        "-c",
+        "import subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); "
+        "open(sys.argv[1], 'w').write(str(child.pid)); time.sleep(5)",
+        str(child_pid_file),
+    ]
+    monkeypatch.setattr(app, "_SPAWN_PROBE_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: sys.executable
+    )
+    monkeypatch.setattr(app.osplat.paths, "launch_argv", lambda _exe, _args: shim)
+    _wait_for_probe_child(monkeypatch, child_pid_file)
+
+    started = time.monotonic()
+    result = _probe_agent_cli_for_spawn("claude")
+    elapsed = time.monotonic() - started
+
+    child = _probe_child(child_pid_file)
+    try:
+        assert result is not None and result["reason"] == "timeout"
+        assert elapsed < 3, "probe timeout waited for the child's inherited output pipe"
+        deadline = time.monotonic() + 2
+        while child is not None and child.is_running() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert child is None or not child.is_running()
+    finally:
+        _kill_probe_child(child)
+
+
+def test_timeout_still_degrades_if_tree_cleanup_fails(tmp_path, monkeypatch, caplog):
+    child_pid_file = tmp_path / "child.pid"
+    shim = [
+        sys.executable,
+        "-u",
+        "-c",
+        "import subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); "
+        "open(sys.argv[1], 'w').write(str(child.pid)); time.sleep(5)",
+        str(child_pid_file),
+    ]
+    monkeypatch.setattr(app, "_SPAWN_PROBE_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(app, "_SPAWN_PROBE_CLEANUP_TIMEOUT_S", 0.25)
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: sys.executable
+    )
+    monkeypatch.setattr(app.osplat.paths, "launch_argv", lambda _exe, _args: shim)
+    _wait_for_probe_child(monkeypatch, child_pid_file)
+
+    def fail_tree_cleanup(_pid, *, force):
+        raise OSError("simulated tree cleanup failure")
+
+    monkeypatch.setattr(app.osplat.process_tree, "kill_tree", fail_tree_cleanup)
+    started = time.monotonic()
+    result = _probe_agent_cli_for_spawn("claude")
+    elapsed = time.monotonic() - started
+
+    child = _probe_child(child_pid_file)
+    try:
+        assert result is not None and result["reason"] == "timeout"
+        assert elapsed < 3, "failed tree cleanup delayed the timed probe"
+        assert child is not None and child.is_running()
+        assert "simulated tree cleanup failure" in caplog.text
+    finally:
+        _kill_probe_child(child)
 
 
 def test_exec_error_degrades(fake_claude, monkeypatch):

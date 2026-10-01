@@ -25,7 +25,7 @@ vi.mock('electron', () => {
     // Never resolves: nothing that waits for app-ready runs in this test.
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
-    commandLine: { appendSwitch: () => {} },
+    commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
     setAboutPanelOptions: () => {},
   }
   class BrowserWindow {

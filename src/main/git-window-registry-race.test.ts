@@ -68,7 +68,7 @@ vi.mock('electron', () => {
     quit: () => {},
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
-    commandLine: { appendSwitch: () => {} },
+    commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
     setAboutPanelOptions: () => {},
   }
   class BrowserWindow extends FakeWindow {

@@ -147,10 +147,14 @@ class BackendProcess:
                 source = self.root / name
                 if source.exists():
                     shutil.copyfile(source, destination / name)
+        assert exit_error is None, exit_error
+        assert not registry_reaped, (
+            f"PTY children survived backend shutdown (registry cleanup reaped them): "
+            f"{registry_reaped}; {self.log_path}"
+        )
         assert not survivors, f"PTY children survived backend shutdown (harness cleaned them): {survivors}; {self.log_path}"
         refusals = self.root / "refusals.jsonl"
         assert not refusals.exists(), f"external boundary reached: {refusals.read_text()}"
-        assert exit_error is None, exit_error
 
     async def _reap_registry_children(self) -> list[int]:
         """Apply Navide's crash-recovery registry to this isolated data dir."""
@@ -182,7 +186,7 @@ class BackendProcess:
                 pass
 
     def _reap_surviving_children(self) -> list[int]:
-        survivors = []
+        survivors: list[psutil.Process] = []
         for process in self._owned_children.values():
             # psutil.is_running compares cached (pid, creation time). The
             # public kill method repeats that identity check before signalling.
@@ -193,6 +197,7 @@ class BackendProcess:
                 except psutil.NoSuchProcess:
                     pass
         psutil.wait_procs(survivors, timeout=5)
+        # Report what the harness had to rescue, even when the rescue worked.
         return [process.pid for process in survivors]
 
     async def receive(self, ws) -> dict | None:

@@ -23,7 +23,7 @@ vi.mock('electron', () => {
     // Never resolves: this test is about module evaluation, not app readiness.
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
-    commandLine: { appendSwitch: () => {} },
+    commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
     setAboutPanelOptions: () => {},
   }
   class BrowserWindow {

@@ -470,6 +470,16 @@ def _kill_breakaway(pids: dict[int, str]) -> None:
             pass
 
 
+async def _to_thread_and_drain_on_cancel(func: Callable[..., Any], *args: Any) -> Any:
+    """Do not leave blocking DB work running after its awaiting task is cancelled."""
+    worker = asyncio.create_task(asyncio.to_thread(func, *args))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        await asyncio.gather(worker, return_exceptions=True)
+        raise
+
+
 class TerminalService:
     def __init__(
         self,
@@ -553,6 +563,7 @@ class TerminalService:
         # finish before shutdown.
         self._snapshot_task: "asyncio.Task[None] | None" = None
         self._snapshot_wakeup = asyncio.Event()
+        self._lifecycle_futures: set[asyncio.Future[Any]] = set()
         self._pending_reaps: dict[int, str] = {}
         self._reap_task: "asyncio.Task[None] | None" = None
         self._last_persisted: dict[int, dict[int, str]] = {}
@@ -613,8 +624,8 @@ class TerminalService:
         # terminal.create ack isn't delayed behind it.
         registry_future: asyncio.Future[Any] | None = None
         try:
-            registry_future = asyncio.get_running_loop().run_in_executor(
-                _LIFECYCLE_EXECUTOR,
+            asyncio.get_running_loop()
+            registry_future = self._submit_lifecycle(
                 in_data_dir(self._data_dir, pty_registry.register, proc.pid, argv),
             )
         except RuntimeError:
@@ -720,12 +731,24 @@ class TerminalService:
         # failed child in the crash-recovery registry.
         if registry_future is not None:
             registry_future.add_done_callback(
-                lambda future: self._loop.run_in_executor(
-                    _LIFECYCLE_EXECUTOR, in_data_dir(self._data_dir, unregister, future)
+                lambda _future: self._submit_lifecycle(
+                    in_data_dir(self._data_dir, unregister)
                 )
             )
         else:
             in_data_dir(self._data_dir, unregister)()
+
+    def _submit_lifecycle(self, operation: Callable[[], Any]) -> asyncio.Future[Any]:
+        """Run a registry operation and retain it until its DB use completes."""
+        future = self._loop.run_in_executor(_LIFECYCLE_EXECUTOR, operation)
+        self._lifecycle_futures.add(future)
+        future.add_done_callback(self._lifecycle_futures.discard)
+        return future
+
+    async def _drain_lifecycle(self) -> None:
+        """Wait for registry work that could still touch the shared database."""
+        while self._lifecycle_futures:
+            await asyncio.gather(*tuple(self._lifecycle_futures), return_exceptions=True)
 
     def get(self, session_id: str) -> TerminalSession | None:
         """The session for ``session_id``, or None when unknown."""
@@ -1385,8 +1408,7 @@ class TerminalService:
         # Reap breakaway grandchildren that escaped the process group via setsid.
         await asyncio.to_thread(_kill_breakaway, descendants or {})
         if session.proc.poll() is not None:
-            await self._loop.run_in_executor(
-                _LIFECYCLE_EXECUTOR,
+            await self._submit_lifecycle(
                 in_data_dir(self._data_dir, pty_registry.unregister, session.proc.pid),
             )
 
@@ -1412,7 +1434,7 @@ class TerminalService:
                 # Skipped entirely when nothing changed since the last write
                 # (steady state) — no lock, no file read.
                 if payload and payload != self._last_persisted:
-                    await asyncio.to_thread(
+                    await _to_thread_and_drain_on_cancel(
                         in_data_dir(self._data_dir, pty_registry.update_descendants, payload)
                     )
                     self._last_persisted = payload
@@ -1515,8 +1537,11 @@ class TerminalService:
         never propagates to them — without this explicit sweep on shutdown
         they outlive the app as orphans."""
         if self._snapshot_task is not None:
-            self._snapshot_task.cancel()
-            self._snapshot_task = None
+            snapshot_task = self._snapshot_task
+            snapshot_task.cancel()
+            await asyncio.gather(snapshot_task, return_exceptions=True)
+            if self._snapshot_task is snapshot_task:
+                self._snapshot_task = None
         targets: list[tuple[TerminalSession, int]] = []
         breakaway: dict[int, str] = {}
         # One shared ps snapshot for every session's descendant sweep. The
@@ -1595,6 +1620,10 @@ class TerminalService:
             await asyncio.gather(self._reap_task, return_exceptions=True)
         # Reap breakaway grandchildren that escaped every process group.
         await asyncio.to_thread(_kill_breakaway, breakaway)
+        # _close() schedules registry writes in the lifecycle executor. The
+        # app closes the shared database immediately after this sweep, so let
+        # those writes finish first.
+        await self._drain_lifecycle()
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)
@@ -1990,7 +2019,6 @@ class TerminalService:
         # visible to the next start's reap_stale. kill()'s escalation task
         # and kill_all() unregister the survivors they put down.
         if session.proc.poll() is not None:
-            self._loop.run_in_executor(
-                _LIFECYCLE_EXECUTOR,
+            self._submit_lifecycle(
                 in_data_dir(self._data_dir, pty_registry.unregister, session.proc.pid),
             )
