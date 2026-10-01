@@ -1525,6 +1525,7 @@ def track_live_session(
     elif session_file and not state["session_file"]:
         state["session_file"] = session_file
     state["panes"].add(pane_id)
+    pane_account_history.bind_session(session_id, pane_id)
     _schedule_live_scan(key)
 
 
@@ -1617,8 +1618,8 @@ async def scan_session_turns(
             raise FileNotFoundError(session_id)
         return path, tokens_store.turns_for(
             reader, path, session_id, include_calls=include_calls,
-            profile_resolver=lambda started_at: pane_account_history.profile_at(
-                account_pane, parse_event_time(started_at or "")
+            profile_resolver=lambda started_at: pane_account_history.profile_for_session(
+                session_id, account_pane, parse_event_time(started_at or "")
             ),
         )
 

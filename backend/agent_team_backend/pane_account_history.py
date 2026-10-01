@@ -14,6 +14,11 @@ attribution registration is dropped (kill, unspawn, PTY death after the
 grace period). Readers: the token ingestion sink and the per-turn scan ask
 ``profile_at(pane_id, ts)``.
 
+A session resumed into a fresh pane runs under a new pane id each time, so
+its earlier turns were pinned under ids the pane holding it now never had.
+``pane_session_binding`` remembers every pane a session log was bound to, and
+the per-turn scan asks ``profile_for_session`` across all of them.
+
 ``profile_id`` is stored normalized: "" (a pane older than pinning, or a
 vendor without accounts) becomes "unknown", the bucket the UI shows as
 "未知". "__default__" stays as-is (the unmanaged real-home account).
@@ -89,6 +94,15 @@ def _create_schema(cur: sqlite3.Cursor) -> None:
     )
 
 
+def _create_session_binding(cur: sqlite3.Cursor) -> None:
+    cur.execute(
+        "CREATE TABLE pane_session_binding ("
+        " session_id TEXT NOT NULL,"
+        " pane_id TEXT NOT NULL,"
+        " PRIMARY KEY (session_id, pane_id))"
+    )
+
+
 class _Interval:
     __slots__ = ("row_id", "profile_id", "since", "until")
 
@@ -103,9 +117,12 @@ class PaneAccountHistory:
     def __init__(self, db: Database) -> None:
         self._db = db
         self._db.migrate(_COMPONENT, 1, _create_schema)
+        self._db.migrate(_COMPONENT, 2, _create_session_binding)
         self._lock = RLock()
         # pane_id -> intervals ordered by `since`
         self._by_pane: dict[str, list[_Interval]] = {}
+        # session_id -> every pane id that session was bound to
+        self._panes_by_session: dict[str, set[str]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -118,6 +135,14 @@ class PaneAccountHistory:
             self._by_pane.setdefault(str(row["pane_id"]), []).append(
                 _Interval(int(row["id"]), str(row["profile_id"]),
                           float(row["since"]), row["until"])
+            )
+        with self._db.transaction() as cur:
+            rows = cur.execute(
+                "SELECT session_id, pane_id FROM pane_session_binding"
+            ).fetchall()
+        for row in rows:
+            self._panes_by_session.setdefault(str(row["session_id"]), set()).add(
+                str(row["pane_id"])
             )
 
     # ── writers ──────────────────────────────────────────────────────
@@ -161,6 +186,23 @@ class PaneAccountHistory:
             self._close_locked(intervals[-1], now)
             return True
 
+    def bind_session(self, session_id: str, pane_id: str) -> None:
+        """Record that ``pane_id`` ran ``session_id``. Repeats are free (the
+        live tally calls this on every ingested event)."""
+        if not (session_id and pane_id):
+            return
+        with self._lock:
+            panes = self._panes_by_session.setdefault(session_id, set())
+            if pane_id in panes:
+                return
+            with self._db.transaction() as cur:
+                cur.execute(
+                    "INSERT OR IGNORE INTO pane_session_binding (session_id, pane_id)"
+                    " VALUES (?, ?)",
+                    (session_id, pane_id),
+                )
+            panes.add(pane_id)
+
     def _close_locked(self, interval: _Interval, until: float) -> None:
         until = max(until, interval.since)
         with self._db.transaction() as cur:
@@ -185,16 +227,39 @@ class PaneAccountHistory:
             if ts is None:
                 last = intervals[-1]
                 return last.profile_id if last.until is None else UNKNOWN_PROFILE_ID
-            when = float(ts)
-            # Rightmost interval starting at or before `when`.
-            idx = bisect_right([iv.since for iv in intervals], when) - 1
-            if idx >= 0:
-                iv = intervals[idx]
-                if iv.until is None or when < iv.until:
-                    return iv.profile_id
-            elif when >= intervals[0].since - PIN_LEAD_TOLERANCE_S:
-                return intervals[0].profile_id
-            return UNKNOWN_PROFILE_ID
+            iv = self._covering_locked(pane_id, float(ts))
+            return iv.profile_id if iv is not None else UNKNOWN_PROFILE_ID
+
+    def profile_for_session(self, session_id: str, pane_id: str, ts: float | None) -> str:
+        """The account a turn of ``session_id`` at ``ts`` ran on: ``pane_id``
+        and every pane the session was ever bound to are asked. An interval
+        left open by a quit that never released it would cover every later
+        moment, so of the panes that answer, the most recent pin wins."""
+        with self._lock:
+            panes = set(self._panes_by_session.get(session_id, ()))
+            if pane_id:
+                panes.add(pane_id)
+            if ts is None:
+                return self.profile_at(pane_id, None)
+            best: _Interval | None = None
+            for pane in panes:
+                iv = self._covering_locked(pane, float(ts))
+                if iv is not None and (best is None or iv.since > best.since):
+                    best = iv
+            return best.profile_id if best is not None else UNKNOWN_PROFILE_ID
+
+    def _covering_locked(self, pane_id: str, when: float) -> _Interval | None:
+        intervals = self._by_pane.get(pane_id)
+        if not intervals:
+            return None
+        # Rightmost interval starting at or before `when`.
+        idx = bisect_right([iv.since for iv in intervals], when) - 1
+        if idx >= 0:
+            iv = intervals[idx]
+            return iv if iv.until is None or when < iv.until else None
+        if when >= intervals[0].since - PIN_LEAD_TOLERANCE_S:
+            return intervals[0]
+        return None
 
     def current_profile(self, pane_id: str) -> str:
         return self.profile_at(pane_id, None)

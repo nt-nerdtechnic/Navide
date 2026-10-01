@@ -173,3 +173,28 @@ async def test_a_reader_crash_is_scan_failed(reader: _Reader, tmp_path: Path, mo
     monkeypatch.setattr(reader, "turns_for_session", boom)
     reply = (await _call(pane_id="pane-a"))["payload"]
     assert reply == {"ok": False, "error": "scan-failed", "detail": "corrupt"}
+
+
+async def test_a_turn_run_under_an_earlier_pane_reads_that_panes_account(
+    reader: _Reader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The turn (2026-09-16T00:00:00Z) ran in a pane since replaced by a
+    # resume under a new id; the new pane was pinned only afterwards.
+    from agent_team_backend.db import Database
+    from agent_team_backend.pane_account_history import PaneAccountHistory, parse_event_time
+
+    db = Database(tmp_path / "navide.db")
+    history = PaneAccountHistory(db)
+    monkeypatch.setattr(app, "pane_account_history", history)
+    turn_at = parse_event_time("2026-09-16T00:00:00Z")
+    history.pin("pane-old", "acct-a", ts=turn_at - 60)
+    app.track_live_session(workspace_path=str(tmp_path), pane_id="pane-old",
+                           vendor="fake", session_id="sess-1")
+    app.forget_pane_live_sessions("pane-old")
+    history.pin("pane-new", "acct-b", ts=turn_at + 3600)
+    _bind(tmp_path, "pane-new", "sess-1")
+    try:
+        reply = (await _call(pane_id="pane-new"))["payload"]
+        assert reply["turns"][0]["profile_id"] == "acct-a"
+    finally:
+        db.close()
