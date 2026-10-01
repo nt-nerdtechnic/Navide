@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 import threading
 import tomllib
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -137,7 +138,7 @@ def test_codex_trust_gate_leaves_the_guard_hook_out_too(tmp_path, monkeypatch) -
     assert codex_session_hooks.wire("codex", {}, {}, tmp_path, tmp_path / "p", tmp_path / "a") == "codex"
 
 
-def _serve_once(body: bytes, status: int = 200):
+def _serve_once(body: bytes, status: int, listen_s: float):
     received: list[tuple[str, bytes]] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -152,7 +153,7 @@ def _serve_once(body: bytes, status: int = 200):
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = 45
+    server.timeout = listen_s
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     return server, thread, received
@@ -166,12 +167,21 @@ def _serve_once(body: bytes, status: int = 200):
 def test_claude_guard_hook_prints_the_decision_and_exits_zero(tmp_path, status, body, expected) -> None:
     port_file = tmp_path / "backend.port"
     argv = hook_shell.shell_argv(osplat.scripts.hook_entry(claude_hooks._build_guard_command(str(port_file))))
-    server, thread, received = _serve_once(body, status)
+    ceiling = hook_shell.hang_ceiling(argv, 45)
+    # The listener outlives the client, or a slow shell would reach a closed
+    # port and the 403 case would pass for the wrong reason.
+    server, thread, received = _serve_once(body, status, listen_s=ceiling + 10)
     port_file.write_text(str(server.server_port), encoding="utf-8")
     try:
-        result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
+        result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=ceiling)
+    except subprocess.TimeoutExpired:
+        # Which side of the request it stalled on is the first question.
+        pytest.fail(
+            f"hook still running after {ceiling:.0f}s (shell cold start "
+            f"{hook_shell.cold_start_s(argv):.1f}s); request reached the server: {bool(received)}"
+        )
     finally:
-        thread.join(timeout=46)
+        thread.join(timeout=ceiling + 11)
         server.server_close()
     assert received and received[0][0] == "/hooks/claude/pretooluse"
     assert result.returncode == 0
@@ -182,7 +192,7 @@ def test_claude_guard_hook_without_a_backend_is_no_decision(tmp_path) -> None:
     argv = hook_shell.shell_argv(osplat.scripts.hook_entry(
         claude_hooks._build_guard_command(str(tmp_path / "absent.port"))
     ))
-    result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
+    result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=hook_shell.hang_ceiling(argv, 45))
     assert result.returncode == 0
     assert result.stdout == ""
 
@@ -222,15 +232,16 @@ def test_guard_hook_sends_the_pane_token_from_its_environment(tmp_path, monkeypa
 
     port_file = tmp_path / "backend.port"
     argv = hook_shell.shell_argv(build(str(port_file)))
+    ceiling = hook_shell.hang_ceiling(argv, 45)
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = 45
+    server.timeout = ceiling + 10
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     port_file.write_text(str(server.server_port), encoding="utf-8")
     try:
-        result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
+        result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=ceiling)
     finally:
-        thread.join(timeout=46)
+        thread.join(timeout=ceiling + 11)
         server.server_close()
     assert result.returncode == 0
     # Unset, the header is absent or empty: the backend reads both as "no token".
@@ -244,3 +255,12 @@ def test_powershell_guard_hook_sends_the_pane_token_header() -> None:
     command = copilot_hooks._build_guard_command("C:/port", "powershell")
     assert f"-H ('{guard_hooks.PANE_TOKEN_HEADER}: ' + $env:{guard_hooks.PANE_TOKEN_ENV})" in command
     assert command.rstrip().endswith("exit 0")
+
+
+def test_the_hang_ceiling_grows_with_the_shell_cold_start(monkeypatch) -> None:
+    # The fixed 45 s budget held on x64 and failed on the windows-11-arm
+    # runner, where one PowerShell cold start alone averages about 24 s.
+    monkeypatch.setitem(hook_shell._cold_start_s, "slow-shell", 24.0)
+    monkeypatch.setitem(hook_shell._cold_start_s, "fast-shell", 0.5)
+    assert hook_shell.hang_ceiling(["slow-shell", "-c", "x"], 45) > 45 + 2 * 24.0
+    assert hook_shell.hang_ceiling(["fast-shell", "-c", "x"], 45) < 50
