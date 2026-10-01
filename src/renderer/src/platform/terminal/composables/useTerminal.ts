@@ -850,8 +850,12 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // so ids that already ended are remembered and a late start for one is
   // ignored. Fused like delivered-pending: a task killed outside TaskStop (a
   // `kill <pid>`, a dev server left running) writes no end record, and nothing
-  // but a respawn would otherwise take the badge off RUNNING. Past the fuse a
-  // task no longer holds the badge; its id stays tracked so an end still clears it.
+  // but a respawn would otherwise take the badge off RUNNING. The fuse is an
+  // inactivity window, not a lifetime: it runs from the latest sign of life
+  // (the task's start, clean output, a turn end), so a long watch the agent
+  // keeps checking on holds RUNNING however long it runs, and only a pane that
+  // has gone quiet for the whole window lets it lapse. Past the fuse a task no
+  // longer holds the badge; its id stays tracked so an end still clears it.
   const BACKGROUND_TASK_FUSE_MS = 30 * 60_000
   const backgroundTaskIds = ref<Map<string, number>>(new Map())
   const endedBackgroundTaskIds = new Set<string>()
@@ -963,8 +967,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // Background work still running is work, whatever the turn end says. Below
     // both AWAITING paths for the same reason as the delivered-pending check
     // that follows: a pane parked on a prompt needs the user, not patience.
+    const lastSignOfLife = Math.max(lastCleanBurstAt.value, turnCompleteAt.value)
     for (const startedAt of backgroundTaskIds.value.values()) {
-      if (nowTick.value - startedAt <= BACKGROUND_TASK_FUSE_MS) return 'running'
+      if (nowTick.value - Math.max(startedAt, lastSignOfLife) <= BACKGROUND_TASK_FUSE_MS) return 'running'
     }
     // A message we delivered that the CLI has not consumed yet means it still
     // has work queued, whatever the PTY says. Below both AWAITING paths on
