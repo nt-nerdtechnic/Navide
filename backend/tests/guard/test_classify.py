@@ -555,6 +555,12 @@ def test_herestring_dynamic_is_opaque():
         "echo a#b; rm -rf ~",
         "echo $(echo x)#y; rm -rf ~",
         "# leading comment\nrm -rf ~",
+        'echo "a # b"\nrm -rf ~',
+        "echo 'a # b'; rm -rf ~",
+        "cat > a.txt <<EOF\n# in a body\nEOF\nrm -rf ~",
+        "echo $#\nrm -rf ~",
+        "echo ${#x}; rm -rf ~",
+        "echo \\# x; rm -rf ~",
     ],
 )
 def test_comment_does_not_hide_later_commands(command):
