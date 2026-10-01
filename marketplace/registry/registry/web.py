@@ -26,9 +26,10 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 from sqlmodel import Session
 
-from .cloud_auth import viewer_context
+from .cloud_auth import current_viewer, viewer_context
 from .discovery import CATEGORIES, engine_requirement, min_navide_version
 from .manifest import manifest_capabilities, manifest_icon
+from .ratings import is_own_extension, member_score
 from .models import Extension, ExtensionVersion, Publisher
 from .repository import RegistryRepository, rating_average
 from .self_service import verified_domain
@@ -192,6 +193,37 @@ def category_label(slug: str) -> str:
     return _CATEGORY_LABELS.get(slug.lower(), slug)
 
 
+TILE_HUES = 24
+
+
+def tile_hue(identity: str) -> int:
+    """Hue bucket (0..23, 15 degrees apart) of an extension or publisher tile.
+
+    The same hash the Navide app uses for its letter tiles
+    (MarketplaceIcon.vue), so an extension wears one colour in both places.
+    Buckets, not a free hue: the site is CSP-locked to its stylesheet, so each
+    colour is a class there.
+    """
+    data = identity.encode("utf-16-le")  # the code units JavaScript's charCodeAt sees
+    value = 0
+    for i in range(0, len(data), 2):
+        value = (value * 31 + (data[i] | data[i + 1] << 8)) & 0xFFFFFFFF
+    return value % TILE_HUES
+
+
+_CAPABILITY_HINTS = {
+    "fs": "reads and writes files",
+    "shell": "runs shell commands",
+    "terminal": "runs commands in a terminal",
+    "aiCli": "drives AI CLI agents",
+}
+
+
+def capability_hint(capability: str) -> str:
+    """What a sensitive capability lets a package do, in a few words."""
+    return _CAPABILITY_HINTS.get(capability, capability)
+
+
 def _base_path_context(request: Request) -> dict[str, str]:
     """Expose the public path prefix so every emitted link carries it."""
     return {"base": request.scope.get("root_path", "").rstrip("/")}
@@ -204,6 +236,8 @@ def create_web_router() -> APIRouter:
         context_processors=[_base_path_context, viewer_context],
     )
     templates.env.filters["category_label"] = category_label
+    templates.env.filters["tile_hue"] = tile_hue
+    templates.env.filters["capability_hint"] = capability_hint
 
     @router.get("/", response_class=HTMLResponse)
     def home(
@@ -273,6 +307,7 @@ def create_web_router() -> APIRouter:
             screenshots = _screenshots(repo, latest) if latest else []
             icon_path = _safe_icon(repo, latest)
             pub = repo.session.get(Publisher, extension.publisher_id)
+            viewer = current_viewer(request)
             publisher_display = pub.name if pub else extension.namespace
             context = {
                 "ext": _card(extension, versions, repo),
@@ -291,6 +326,12 @@ def create_web_router() -> APIRouter:
                 "download_count": extension.download_count,
                 "rating_average": rating_average(extension),
                 "rating_count": extension.rating_count,
+                "my_rating": (
+                    member_score(repo.session, extension, viewer.member_id) if viewer else None
+                ),
+                "own_extension": (
+                    is_own_extension(repo.session, extension, viewer.member_id) if viewer else False
+                ),
             }
         finally:
             session.close()

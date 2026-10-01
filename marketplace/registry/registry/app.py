@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import urllib.parse
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
@@ -10,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Upl
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from sqlmodel import Session
 
 from .auth import PublisherIdentity, get_publisher_identity
@@ -31,9 +32,13 @@ from .discovery import (
     pack_members,
 )
 from .models import Extension, ExtensionVersion, Publisher
+from .native_backend import native_backend_publish_problem
 from .manifest import ManifestV2, manifest_capabilities, manifest_icon
 from .package import MAX_ARCHIVE_SIZE, PackageError, read_package
 from .packs import pack_conflict
+from .ratelimit import SlidingWindowLimiter
+from .ratings import RATING_LIMIT_PER_HOUR
+from .reports import REPORT_LIMIT_PER_HOUR
 from .repository import RegistryRepository, rating_average
 from .registry_trust import RegistryTrustSigner
 from .schemas import (
@@ -49,8 +54,6 @@ from .schemas import (
     PublisherRegisterRequest,
     PublisherRegisterResponse,
     PublishResponse,
-    RatingRequest,
-    RatingResponse,
     ReadmeResponse,
     VersionInfo,
     YankResponse,
@@ -75,6 +78,12 @@ class RegistryState:
     trust_signer: RegistryTrustSigner
     txt_resolver: TxtResolver
     """DNS TXT lookup for publisher domain verification (injected in tests)."""
+    rating_limiter: SlidingWindowLimiter = field(
+        default_factory=lambda: SlidingWindowLimiter(RATING_LIMIT_PER_HOUR, 3600)
+    )
+    report_limiter: SlidingWindowLimiter = field(
+        default_factory=lambda: SlidingWindowLimiter(REPORT_LIMIT_PER_HOUR, 3600)
+    )
 
 
 def _make_verifier(settings: Settings) -> SignatureVerifier:
@@ -128,7 +137,56 @@ def create_app(
     from .publisher_web import create_publisher_router
 
     app.include_router(create_publisher_router())
+    app.add_middleware(_HtmlSecurityHeadersMiddleware, csp=html_content_security_policy(settings))
     return app
+
+
+def html_content_security_policy(settings: Settings) -> str:
+    """The policy every HTML page carries. The website is script-free, so
+    there is no script-src at all (default-src 'none' denies scripts). Forms
+    post to this registry, and two of them end in a redirect elsewhere: the
+    CLI login hands its code to the loopback listener, and sign-in goes to
+    navide-auth."""
+    form_action = ["'self'", "http://127.0.0.1:*"]
+    if settings.auth_url:
+        parts = urllib.parse.urlsplit(settings.auth_url)
+        form_action.append(f"{parts.scheme}://{parts.netloc}")
+    return "; ".join(
+        [
+            "default-src 'none'",
+            "style-src 'self'",
+            "img-src 'self' data:",
+            f"form-action {' '.join(form_action)}",
+            "base-uri 'none'",
+            "frame-ancestors 'none'",
+        ]
+    )
+
+
+class _HtmlSecurityHeadersMiddleware:
+    """Add the HTML Content-Security-Policy to text/html responses that do not
+    set their own (package assets already send a stricter sandbox policy)."""
+
+    def __init__(self, app: ASGIApp, csp: str) -> None:
+        self.app = app
+        self.csp = csp.encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_csp(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                names = {name.lower() for name, _ in headers}
+                content_type = next((v for n, v in headers if n.lower() == b"content-type"), b"")
+                if content_type.startswith(b"text/html") and b"content-security-policy" not in names:
+                    headers.append((b"content-security-policy", self.csp))
+                    message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_csp)
 
 
 class _RootPathMiddleware:
@@ -454,6 +512,11 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail=pack_conflict)
 
         if isinstance(manifest, ManifestV2):
+            backend_problem = native_backend_publish_problem(publisher, manifest)
+            if backend_problem is not None:
+                raise HTTPException(status_code=403, detail=backend_problem)
+
+        if isinstance(manifest, ManifestV2):
             display_name = manifest.name
             description = manifest.marketplace.description
             categories = manifest.marketplace.categories
@@ -765,26 +828,16 @@ def _register_routes(app: FastAPI) -> None:
             targets=[a.target for a in artifacts],
         )
 
-    @app.post(
-        "/api/extensions/{namespace}/{name}/rating",
-        response_model=RatingResponse,
-    )
-    def submit_rating(
-        namespace: str,
-        name: str,
-        body: RatingRequest,
-        repo: RegistryRepository = Depends(_repo),
-    ) -> RatingResponse:
-        """Add a 1-5 rating. Per-user auth/dedup is deferred (see README)."""
-        extension = repo.get_extension(namespace, name)
-        if extension is None:
-            raise HTTPException(status_code=404, detail="extension not found")
-        extension = repo.add_rating(extension, body.score)
-        return RatingResponse(
-            namespace=namespace,
-            name=name,
-            rating_average=rating_average(extension),
-            rating_count=extension.rating_count,
+    @app.post("/api/extensions/{namespace}/{name}/rating")
+    def submit_rating(namespace: str, name: str) -> None:
+        """Anonymous ratings ended with member ratings (p3-rating-auth): rating
+        needs a Navide Cloud sign-in on the marketplace website."""
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Ratings require a signed-in Navide Cloud account: sign in on "
+                f"the marketplace website and rate on /extensions/{namespace}/{name}."
+            ),
         )
 
     @app.post(

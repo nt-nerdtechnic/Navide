@@ -8,6 +8,7 @@ import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import SettingsNavItem from '../settings/SettingsNavItem.vue'
 import { usePluginUpdates } from '../../composables/usePluginUpdates'
 import MarketplacePane from '../MarketplacePane.vue'
+import MarketplaceIcon from '../MarketplaceIcon.vue'
 import ExtensionsPane from '../ExtensionsPane.vue'
 
 function mountMarketplace() {
@@ -147,7 +148,7 @@ describe('MarketplacePane', () => {
     // The two pages are separate components; the inventory they read is not.
     // Before the split this was free — one component held both lists — so this
     // is the case that would silently break: install succeeds, no error, and
-    // the Extensions page still shows "No plugins installed".
+    // the Extensions page still shows "No extensions installed".
     // Both pages refresh the inventory on mount, so model the install itself
     // rather than counting listInstalled calls.
     let committed = false
@@ -164,7 +165,7 @@ describe('MarketplacePane', () => {
     await flushPromises()
     // The Marketplace now lists on mount, so scope to the Extensions page.
     expect(wrapper.find('.extensions-pane [data-id="acme.demo"]').exists()).toBe(false)
-    expect(wrapper.get('.ext-empty').text()).toContain('No plugins installed')
+    expect(wrapper.get('.ext-empty').text()).toContain('No extensions installed')
 
     await wrapper.get('.ext-search button').trigger('click')
     await flushPromises()
@@ -233,7 +234,8 @@ describe('MarketplacePane', () => {
     await wrapper.get('.ext-confirm-publisher').trigger('click')
     await flushPromises()
     expect(wrapper.find('.ext-backend-risk').exists()).toBe(false)
-    expect(wrapper.text()).toContain('requests sensitive capabilities')
+    // The risk step lists the sensitive capabilities under a heading.
+    expect(wrapper.get('.ext-cap-heading').text()).toBe('Sensitive capabilities')
     expect(api.commitInstall).not.toHaveBeenCalled()
 
     await wrapper.get('.ext-confirm-risk').trigger('click')
@@ -498,7 +500,8 @@ describe('MarketplacePane', () => {
     expect(view.text()).toContain('42 downloads')
     expect(view.text()).toContain('Version 1.1.0')
     expect(view.text()).toContain('4.5')
-    expect(view.get('.mkt-readme h3').text()).toBe('Demo')
+    // A first heading that only repeats the extension name is left out.
+    expect(view.find('.mkt-readme h3').exists()).toBe(false)
     expect(view.get('.mkt-readme strong').text()).toBe('world')
     // Raw HTML in a README stays inert text — no element is created from it.
     expect(view.find('.mkt-readme script').exists()).toBe(false)
@@ -909,7 +912,7 @@ describe('MarketplacePane', () => {
     wrapper = mountMarketplace()
     await flushPromises()
     const ok = wrapper.get('[data-id="acme.ok"]')
-    expect(ok.get('.ext-compatible-badge').text()).toBe('Navide 0.2.13 ✓')
+    expect(ok.get('.ext-compatible-badge').text()).toBe('Works with Navide 0.2.13')
     expect(ok.get('.ext-install').attributes('disabled')).toBeUndefined()
 
     const incompatible = wrapper.get('[data-id="acme.new"]')
@@ -1026,7 +1029,10 @@ describe('MarketplacePane', () => {
     await wrapper.get('[data-id="acme.demo"]').trigger('click')
     await flushPromises()
     const links = wrapper.get('.mkt-links')
-    expect(links.findAll('.mkt-link').map((l) => l.text())).toEqual(['Repository ↗', 'Homepage ↗', 'Changelog'])
+    expect(links.findAll('.mkt-link').map((l) => l.text())).toEqual(['Repository ↗', 'Homepage ↗'])
+    // The changelog is a tab next to README and Versions, fetched on first open.
+    expect(wrapper.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['Details', 'Changelog', 'Versions'])
+    expect(api.marketplaceChangelog).not.toHaveBeenCalled()
     expect(links.get('.mkt-license').text()).toBe('License: MIT')
     const worksWith = wrapper.get('.mkt-works-with')
     expect(worksWith.get('.mkt-works-with-version').text()).toBe('Version 1.1.0')
@@ -1248,8 +1254,13 @@ describe('MarketplacePane', () => {
       // The same "fs · sensitive" label as the install dialog, spaces included.
       expect(members[1].findAll('.mkt-pack-cap--sensitive').map((c) => c.text())).toEqual(['fs · sensitive', 'shell · sensitive'])
       expect(members[1].findAll('.mkt-pack-cap:not(.mkt-pack-cap--sensitive)').map((c) => c.text())).toEqual(['ui'])
-      expect(members[2].get('.mkt-pack-status').classes()).toContain('mkt-badge--ok')
+      // Already installed is a neutral fact, here as in the install dialog.
+      expect(members[2].get('.mkt-pack-status').classes()).toContain('mkt-badge--muted')
+      // One count rule for the page, the button and the dialog.
+      expect(wrapper!.get('.mkt-pack-counts').text()).toBe('4 extensions · 2 to install · 1 already installed · 1 skipped')
       expect(members[3].get('.mkt-pack-status').text()).toContain('Not in the Marketplace')
+      // A skipped member gets the grey tile an incompatible card gets in the list.
+      expect(members.map((m) => m.classes().includes('mkt-pack-member--skipped'))).toEqual([false, false, false, true])
       // The pack itself grants nothing; it does not say "declares no permissions".
       expect(wrapper!.get('.mkt-no-permissions').text()).toContain('This pack grants no permissions itself')
       expect(wrapper!.get('.mkt-actions .mkt-pack-install').text()).toBe('Install pack (4)')
@@ -1274,6 +1285,9 @@ describe('MarketplacePane', () => {
       expect(wrapper!.get('.pack-member--summary[data-member="acme.lint"] .pack-member-caps').findAll('.pack-cap--sensitive').map((c) => c.text())).toEqual(['fs · sensitive', 'shell · sensitive'])
       // Summary: no member has been prepared or installed yet, and there is no accept-all.
       expect(wrapper!.find('.pack-review').text()).toBe('Review 3 extensions')
+      // The title counts every member and the ones to review, like the detail page.
+      const total = wrapper!.findAll('.pack-member--summary').length
+      expect(wrapper!.get('#pack-dialog-title').text()).toBe(`Install “Demo Pack”: ${total} extensions, 3 to review`)
       expect(api.prepareInstall).not.toHaveBeenCalled()
       expect(wrapper!.text()).not.toMatch(/accept all/i)
 
@@ -1501,7 +1515,7 @@ describe('MarketplacePane', () => {
       await flushPromises()
       await wrapper.get('[data-id="acme.demo"]').trigger('click')
       await flushPromises()
-      expect(wrapper.findAll('.mkt-tags .mkt-tag').slice(0, 2).map((t) => t.text())).toEqual(['Productivity', 'tools'])
+      expect(wrapper.findAll('.mkt-categories .mkt-tag').map((t) => t.text())).toEqual(['Productivity', 'tools'])
       expect(wrapper.findAll('.mkt-versions th').map((th) => th.text())).toEqual([
         'Version',
         'Published',
@@ -1525,7 +1539,7 @@ describe('MarketplacePane', () => {
         expect(wrapper.get('[data-category="version-control"]').text()).toBe('版本控制')
         await wrapper.get('[data-id="acme.demo"]').trigger('click')
         await flushPromises()
-        expect(wrapper.get('.mkt-tags .mkt-tag').text()).toBe('擴充套件組合')
+        expect(wrapper.get('.mkt-categories .mkt-tag').text()).toBe('擴充套件組合')
       } finally {
         i18n.global.locale.value = previous
       }
@@ -1581,6 +1595,280 @@ describe('MarketplacePane', () => {
       const ok = wrapper.get('[data-id="acme.ok"]')
       expect(ok.find('.ext-compatible-badge').exists()).toBe(true)
       expect(ok.find('.ext-signed-badge').exists()).toBe(false)
+    })
+  })
+
+  describe('browsing interactions', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('searches once after typing pauses, and Enter searches at once without a second call', async () => {
+      const api = mockPlugins()
+      wrapper = mountMarketplace()
+      await flushPromises()
+      expect(api.marketplaceSearch).toHaveBeenCalledTimes(1)
+      vi.useFakeTimers()
+
+      const input = wrapper.get('.ext-search input')
+      for (const text of ['d', 'de', 'dem']) {
+        await input.setValue(text)
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      // Still typing: nothing has been sent for the partial words.
+      expect(api.marketplaceSearch).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(api.marketplaceSearch).toHaveBeenCalledTimes(2)
+      expect(api.marketplaceSearch).toHaveBeenLastCalledWith('dem', 'downloads', expect.anything())
+
+      await input.setValue('demo')
+      await input.trigger('keyup', { key: 'Enter' })
+      expect(api.marketplaceSearch).toHaveBeenCalledTimes(3)
+      expect(api.marketplaceSearch).toHaveBeenLastCalledWith('demo', 'downloads', expect.anything())
+      // The pending debounced search was dropped, so the query is not sent twice.
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(api.marketplaceSearch).toHaveBeenCalledTimes(3)
+    })
+
+    it('shows skeleton cards and a status line while the listing loads', async () => {
+      mockPlugins({ marketplaceSearch: vi.fn(() => new Promise(() => {})) })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      expect(wrapper.findAll('.mkt-skeleton-card')).toHaveLength(5)
+      expect(wrapper.get('.mkt-loading').attributes('role')).toBe('status')
+    })
+
+    it('offers a way out of an empty search', async () => {
+      const api = mockPlugins()
+      wrapper = mountMarketplace()
+      await flushPromises()
+      api.marketplaceSearch.mockResolvedValue({ items: [], total: 0, offset: 0, limit: 20 })
+      await wrapper.get('.ext-search input').setValue('zzz')
+      await wrapper.get('.ext-search button').trigger('click')
+      await flushPromises()
+      await wrapper.get('.mkt-empty .mkt-state-actions .nv-btn').trigger('click')
+      await flushPromises()
+      expect((wrapper.get('.ext-search input').element as HTMLInputElement).value).toBe('')
+      expect(api.marketplaceSearch).toHaveBeenLastCalledWith(undefined, 'downloads', expect.anything())
+    })
+
+    it('shelves the Registry featured extensions while browsing everything, not while searching', async () => {
+      const item = (name: string, featured: boolean) => ({
+        namespace: 'acme', name, identity: `acme.${name}`, display_name: name, description: `${name} description`,
+        categories: [], latest_version: '1.0.0', download_count: 1200, rating_average: 4.5, featured,
+      })
+      const api = mockPlugins({
+        marketplaceSearch: vi.fn().mockResolvedValue({ items: [item('star', true), item('plain', false)], total: 2, offset: 0, limit: 20 }),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      const shelf = wrapper.findAll('.mkt-featured-card')
+      expect(shelf.map((card) => card.attributes('data-featured-id'))).toEqual(['acme.star'])
+      // The first featured extension leads the shelf; nothing rotates on its own.
+      expect(shelf[0].classes()).toContain('mkt-featured-card--hero')
+      await shelf[0].trigger('click')
+      await flushPromises()
+      expect(api.marketplaceDetail).toHaveBeenCalledWith({ namespace: 'acme', name: 'star' })
+
+      await wrapper.get('.mkt-back').trigger('click')
+      await wrapper.get('.ext-search input').setValue('star')
+      await wrapper.get('.ext-search button').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.mkt-featured').exists()).toBe(false)
+    })
+
+    it('switches detail tabs with the arrow keys', async () => {
+      mockPlugins()
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      const tabs = () => wrapper!.findAll('[role="tab"]')
+      expect(tabs().map((tab) => tab.attributes('aria-selected'))).toEqual(['true', 'false'])
+      await tabs()[0].trigger('keydown', { key: 'ArrowRight' })
+      expect(tabs().map((tab) => tab.attributes('aria-selected'))).toEqual(['false', 'true'])
+      expect(tabs()[1].attributes('tabindex')).toBe('0')
+      expect((wrapper.get('#mkt-panel-versions').element as HTMLElement).style.display).toBe('')
+      expect((wrapper.get('#mkt-panel-readme').element as HTMLElement).style.display).toBe('none')
+      await tabs()[1].trigger('keydown', { key: 'ArrowRight' })
+      expect(tabs()[0].attributes('aria-selected')).toBe('true')
+    })
+
+    it('labels the trust dialog, starts on Cancel, keeps Tab inside and returns focus after', async () => {
+      mockPlugins({
+        prepareInstall: vi.fn().mockResolvedValue({
+          id: 'acme.demo',
+          version: '1.0.0',
+          trustTier: 'signed-verified',
+          sensitive: ['fs'],
+          containsBackendExecutable: false,
+          requiresConfirmation: true,
+        }),
+      })
+      wrapper = mount(MarketplacePane, { global: { plugins: [i18n] }, attachTo: document.body })
+      await flushPromises()
+      const install = wrapper.get('.ext-install').element as HTMLElement
+      install.focus()
+      await wrapper.get('.ext-install').trigger('click')
+      await flushPromises()
+
+      const card = wrapper.get('.ext-trust-body')
+      expect(card.attributes('role')).toBe('alertdialog')
+      expect(document.getElementById(card.attributes('aria-labelledby')!)?.textContent).toContain('Confirm plugin permissions')
+      expect(card.text()).toContain('Read and write files in your workspace.')
+      const cancel = wrapper.get('.ext-cancel').element
+      const confirm = wrapper.get('.ext-confirm-risk').element
+      expect(document.activeElement).toBe(cancel)
+
+      const tab = (shiftKey: boolean) =>
+        document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true }))
+      tab(true)
+      expect(document.activeElement).toBe(confirm)
+      tab(false)
+      expect(document.activeElement).toBe(cancel)
+
+      await wrapper.get('.ext-cancel').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.ext-trust-dialog').exists()).toBe(false)
+      expect(document.activeElement).toBe(install)
+    })
+
+    it('says what an installed but incompatible version needs, never that Install is disabled (D9)', async () => {
+      mockPlugins({
+        listInstalled: vi.fn().mockResolvedValue([{ id: 'acme.demo', requires: [], sensitive: [], packageVersion: '1.1.0' }]),
+        marketplaceDetail: vi.fn().mockResolvedValue(
+          demoDetail({
+            app_version: '0.2.13',
+            latest_compatible_version: '1.0.0',
+            versions: [
+              { version: '1.1.0', published_at: '2026-09-01T00:00:00Z', target: 'universal', yanked: false, trust_tier: 'signed-verified', capabilities: [], sensitive_capabilities: [], download_count: 1, installable: true, compatible: false, min_navide_version: '0.3.0' },
+              { version: '1.0.0', published_at: '2026-08-01T00:00:00Z', target: 'universal', yanked: false, trust_tier: 'signed-verified', capabilities: [], sensitive_capabilities: [], download_count: 1, installable: true, compatible: true },
+            ],
+          })
+        ),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      const banner = wrapper.get('.mkt-incompatible-banner')
+      expect(banner.text()).toContain('The installed 1.1.0 needs Navide 0.3.0 or newer (you have 0.2.13)')
+      expect(banner.text()).not.toContain('Install is disabled')
+    })
+
+    it('does not cite a Registry signature when the publisher step is for an unsigned package (D10)', async () => {
+      const step = (trustTier: string) =>
+        mockPlugins({
+          prepareInstall: vi.fn().mockResolvedValue({
+            id: 'acme.demo', version: '1.0.0', trustTier, sensitive: [], containsBackendExecutable: false,
+            requiresConfirmation: false, publisherId: 'acme', requiresPublisherTrust: true, requiresRiskConfirmation: false,
+          }),
+        })
+      step('unsigned')
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('.ext-install').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.ext-publisher-risk').text()).toContain('is not signed by the Registry')
+      expect(wrapper.get('.ext-publisher-risk').text()).not.toContain('valid Registry signature')
+      wrapper.unmount()
+
+      step('signed-verified')
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('.ext-install').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.ext-publisher-risk').text()).toContain('valid Registry signature')
+    })
+
+    it('leaves the shelved featured extensions out of the list below', async () => {
+      const item = (name: string, featured: boolean) => ({
+        namespace: 'acme', name, identity: `acme.${name}`, display_name: name, description: null,
+        categories: [], latest_version: '1.0.0', download_count: 0, rating_average: 0, featured,
+      })
+      mockPlugins({
+        marketplaceSearch: vi.fn().mockResolvedValue({ items: [item('star', true), item('plain', false)], total: 2, offset: 0, limit: 20 }),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      expect(wrapper.findAll('.ext-result').map((r) => r.attributes('data-id'))).toEqual(['acme.plain'])
+      // Still counted as shown: the shelf shows it.
+      expect(wrapper.get('.mkt-showing').text()).toBe('Showing 2 of 2')
+    })
+
+    it('shows which Install is working while it runs', async () => {
+      let finish: (value: unknown) => void = () => {}
+      mockPlugins({
+        prepareInstall: vi.fn(() => new Promise((resolve) => { finish = resolve })),
+      })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('.ext-install').trigger('click')
+      const button = wrapper.get('.ext-install')
+      expect(button.text()).toBe('Installing…')
+      expect(button.attributes('aria-busy')).toBe('true')
+      finish({ id: 'acme.demo', version: '1.0.0', trustTier: 'unsigned', sensitive: [], containsBackendExecutable: false, requiresConfirmation: false })
+      await flushPromises()
+      expect(wrapper.find('.ext-install').exists() ? wrapper.get('.ext-install').text() : 'Install').toBe('Install')
+    })
+
+    it('does not repeat the extension name as the first README heading', async () => {
+      mockPlugins({ marketplaceDetail: vi.fn().mockResolvedValue(demoDetail({ readme: '# Demo\n\nIntro line.\n\n## Usage\n\nRun it.' })) })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      await wrapper.get('[data-id="acme.demo"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('.mkt-readme .mkt-md-h').map((h) => h.text())).toEqual(['Usage'])
+    })
+
+    it('does not announce updates on an Extensions page with nothing installed (D7)', async () => {
+      let push: (updates: unknown[]) => void = () => {}
+      mockPlugins({
+        listInstalled: vi.fn().mockResolvedValue([]),
+        pendingUpdates: vi.fn().mockResolvedValue([]),
+        onUpdatesChanged: vi.fn((handler: (updates: unknown[]) => void) => {
+          push = handler
+          return () => {}
+        }),
+      })
+      const pluginUpdates = usePluginUpdates()
+      const stop = pluginUpdates.subscribe()
+      wrapper = mount(ExtensionsPane, { global: { plugins: [i18n] } })
+      await flushPromises()
+      push([{ id: 'acme.demo', namespace: 'acme', name: 'demo', installedVersion: '1.0.0', latestVersion: '1.1.0' }])
+      await flushPromises()
+      expect(wrapper.find('.ext-updates-summary').exists()).toBe(false)
+      expect(wrapper.get('.ext-empty').text()).toContain('No extensions installed')
+      push([])
+      stop()
+    })
+
+    it('colours a letter tile with the same hue bucket as the Marketplace website', () => {
+      // Same ids and buckets as marketplace/registry/tests/test_web_identity.py.
+      const fixtures: Array<[string, string, number]> = [
+        ['navide', 'git-graph', 12],
+        ['acme', 'hello', 14],
+        ['labs', 'diagram-studio', 8],
+        ['navide', 'essentials', 20],
+      ]
+      for (const [namespace, name, bucket] of fixtures) {
+        const icon = mount(MarketplaceIcon, { props: { namespace, name, label: name } })
+        expect(icon.get('.mkt-icon--letter').attributes('style')).toContain(`hsl(${bucket * 15} 44% 32%)`)
+        icon.unmount()
+      }
+    })
+
+    it('marks every state page with the signature diamond', async () => {
+      mockPlugins({ marketplaceSearch: vi.fn().mockRejectedValue(new Error('offline')) })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      expect(wrapper.find('.mkt-list-error .mkt-sigil.mkt-sigil--danger').exists()).toBe(true)
+      wrapper.unmount()
+
+      mockPlugins({ marketplaceSearch: vi.fn().mockResolvedValue({ items: [], total: 0, offset: 0, limit: 20 }) })
+      wrapper = mountMarketplace()
+      await flushPromises()
+      expect(wrapper.find('.mkt-empty .mkt-sigil').exists()).toBe(true)
     })
   })
 })

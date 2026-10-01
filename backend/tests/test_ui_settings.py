@@ -87,7 +87,7 @@ def test_set_rewrites_bootstrap_mirror_atomically(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.set({"a": 1})
     files = sorted(p.name for p in tmp_path.iterdir())
-    assert files == ["navide.db", SETTINGS_FILE]
+    assert files == ["navide.db", "navide.db-journal", SETTINGS_FILE]
     # Mirror on disk is complete, valid JSON matching the stored document.
     assert json.loads(legacy_path(tmp_path).read_text(encoding="utf-8")) == {"a": 1}
 

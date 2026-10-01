@@ -74,6 +74,7 @@ _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?=/|$)")  # Git Bash's /c/Users/...
 _HOME_TOKENS = ("${HOME}", "$HOME", "${env:USERPROFILE}", "$env:USERPROFILE", "$USERPROFILE", "%USERPROFILE%")
 _PLACEHOLDER = "\x00SUBST"
+_HEREDOC = "\x00HEREDOC"
 
 
 @dataclass(frozen=True)
@@ -90,10 +91,14 @@ class _Acc:
     rules: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     parseable: bool = True
+    # The level each hit() raised its rule to (opaque-only rules are absent).
+    levels: dict[str, str] = field(default_factory=dict)
 
     def hit(self, level: str, rule: str, reason: str) -> None:
         if LEVEL_ORDER[level] > LEVEL_ORDER[self.level]:
             self.level = level
+        if LEVEL_ORDER[level] > LEVEL_ORDER[self.levels.get(rule, "normal")]:
+            self.levels[rule] = level
         if rule not in self.rules:
             self.rules.append(rule)
             self.reasons.append(reason)
@@ -117,6 +122,11 @@ class _Ctx:
     # Windows: $HOME when it differs from %USERPROFILE% (Git Bash with a custom HOME).
     env_home: str = ""
     protected: frozenset[str] = frozenset(PROTECTED_BRANCHES)
+    # Heredoc bodies cut out of the command, as (body, delimiter quoted).
+    heredocs: list[tuple[str, bool]] = field(default_factory=list)
+    # A heredoc whose delimiter could not be parsed or whose terminator line
+    # never came: its text was left in place and read as shell lines.
+    heredoc_unparsed: bool = False
 
 
 # ---------------------------------------------------------------- paths
@@ -274,6 +284,160 @@ def _check_path(acc: _Acc, path: str, ctx: _Ctx, *, write: bool, list_only: bool
 # ---------------------------------------------------------------- shell parsing
 
 
+#: Paths through which a program reads its own stdin.
+_STDIN_PATHS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
+#: Rules a data screen drops: a `// comment` or `$var = 1` line in a body is
+#: not a script outside the workspace or a computed command name.
+_SCREEN_IGNORED = {"unknown-script", "dynamic-command"}
+
+
+def _heredoc_delimiter(text: str, j: int) -> tuple[str, bool, int] | None:
+    """The delimiter word starting at ``j`` as (word after quote removal,
+    any part quoted, end), or None when it is not one this parser can match
+    exactly as bash would (expansions, an unclosed quote, an empty word)."""
+    word: list[str] = []
+    quoted = False
+    n = len(text)
+    while j < n and not text[j].isspace() and text[j] not in ";&|<>()":
+        c = text[j]
+        if c in "$`":
+            return None
+        if c == "\\":
+            if j + 1 >= n or text[j + 1] == "\n":
+                return None
+            word.append(text[j + 1])
+            quoted = True
+            j += 2
+        elif c == "'":
+            end = text.find("'", j + 1)
+            if end < 0:
+                return None
+            word.append(text[j + 1:end])
+            quoted = True
+            j = end + 1
+        elif c == '"':
+            k = j + 1
+            while k < n and text[k] != '"':
+                if text[k] in "$`":
+                    return None
+                if text[k] == "\\" and k + 1 < n and text[k + 1] in '"\\':
+                    k += 1
+                word.append(text[k])
+                k += 1
+            if k >= n:
+                return None
+            quoted = True
+            j = k + 1
+        else:
+            word.append(c)
+            j += 1
+    return ("".join(word), quoted, j) if word else None
+
+
+def _extract_heredocs(text: str, ctx: _Ctx) -> str:
+    """Cut each heredoc body out of the command and leave a ``<<`` redirect
+    to a marker in its place, so a body is never read as shell lines: it is
+    input, and _classify_pipeline decides what it means for its command."""
+    out: list[str] = []
+    pending: list[tuple[str, bool, int]] = []  # (delimiter, strip tabs, index)
+    first = len(ctx.heredocs)
+    i, n = 0, len(text)
+    in_single = in_double = False
+    while i < n:
+        c = text[i]
+        if c == "\\" and not in_single and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double and c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+            # A comment starts no heredoc: `# <<X` must not hide the lines after it.
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(text[i:end])
+            i = end
+            continue
+        elif not in_single and not in_double and text.startswith("((", i):
+            # Arithmetic: `$((1<<2))` shifts, it starts no heredoc.
+            depth, j = 0, i
+            while j < n:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+                if depth == 0:
+                    break
+            out.append(text[i:j])
+            i = j
+            continue
+        elif not in_single and not in_double and text.startswith("<<<", i):
+            out.append("<<<")  # a here-string, not a heredoc
+            i += 3
+            continue
+        elif not in_single and not in_double and text.startswith("<<", i):
+            j = i + 2
+            strip = text.startswith("-", j)
+            j += strip
+            while j < n and text[j] in " \t":
+                j += 1
+            if text.startswith(_HEREDOC, j):
+                # A marker left by an outer pass (this text is a $( ) inner).
+                end = text.index("\x00", j + 1) + 1
+                out.append(text[i:end])
+                i = end
+                continue
+            delim = _heredoc_delimiter(text, j)
+            if delim is None:
+                return _heredoc_unparsed(text, ctx, first)
+            word, quoted, end = delim
+            ctx.heredocs.append(("", quoted))
+            pending.append((word, strip, len(ctx.heredocs) - 1))
+            out.append(f"<< {_HEREDOC}{len(ctx.heredocs) - 1}\x00 ")
+            i = end
+            continue
+        elif c == "\n" and pending and not in_single and not in_double:
+            out.append(c)
+            i += 1
+            for word, strip, idx in pending:
+                lines: list[str] = []
+                while True:
+                    if i >= n:
+                        return _heredoc_unparsed(text, ctx, first)
+                    end = text.find("\n", i)
+                    end = n if end < 0 else end
+                    line = text[i:end].lstrip("\t") if strip else text[i:end]
+                    i = end + 1
+                    if line == word:
+                        break
+                    lines.append(line)
+                ctx.heredocs[idx] = ("\n".join(lines), ctx.heredocs[idx][1])
+            pending = []
+            continue
+        out.append(c)
+        i += 1
+    if pending:
+        return _heredoc_unparsed(text, ctx, first)
+    return "".join(out)
+
+
+def _heredoc_unparsed(text: str, ctx: _Ctx, first: int) -> str:
+    """Fail closed: a body this parser cannot bound exactly is read as shell
+    lines, as before heredocs were cut out, and the verdict is opaque."""
+    del ctx.heredocs[first:]
+    ctx.heredoc_unparsed = True
+    return text
+
+
+def _heredoc_bodies(cmd: _Cmd, ctx: _Ctx) -> list[tuple[str, bool]]:
+    bodies = []
+    for op, target in cmd.redirects:
+        m = re.fullmatch(re.escape(_HEREDOC) + r"(\d+)\x00", target) if op in ("<<", "<<-") else None
+        if m and int(m.group(1)) < len(ctx.heredocs):
+            bodies.append(ctx.heredocs[int(m.group(1))])
+    return bodies
+
+
 def _extract_substitutions(text: str) -> tuple[str, list[tuple[str, str]]]:
     """Replace $(...), `...`, <(...), >(...) with placeholders and turn
     unquoted newlines into ';'. Returns (flat text, [(kind, inner)])."""
@@ -295,7 +459,7 @@ def _extract_substitutions(text: str) -> tuple[str, list[tuple[str, str]]]:
         elif c == '"' and not in_single:
             in_double = not in_double
         elif not in_single and (text.startswith("$(", i) or (not in_double and text[i:i + 2] in ("<(", ">("))):
-            kind = "process" if c in "<>" else "command"
+            kind = "process" if c in "<>" else "arith" if text.startswith("$((", i) else "command"
             depth, j = 1, i + 2
             while j < n and depth:
                 if text[j] == "(":
@@ -313,6 +477,12 @@ def _extract_substitutions(text: str) -> tuple[str, list[tuple[str, str]]]:
             subs.append(("command", text[i + 1:j]))
             out.append(f"{_PLACEHOLDER}{len(subs) - 1}\x00")
             i = j + 1
+            continue
+        elif c == "#" and not in_single and not in_double and (not out or out[-1][-1] in " \t;&|()<>"):
+            # A comment runs to the end of its line only; shlex would take the
+            # rest of the flattened text with it once newlines become ';'.
+            end = text.find("\n", i)
+            i = n if end < 0 else end
             continue
         elif c == "\n" and not in_single and not in_double:
             out.append(";")
@@ -337,7 +507,9 @@ def _split(text: str) -> list[list[_Cmd]]:
     """Lists of pipelines; raises ValueError on unbalanced quotes."""
     lex = shlex.shlex(text, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
-    lex.commenters = "#"
+    # Comments are already gone (_extract_substitutions); shlex would also end
+    # a word at a `#` inside it, which bash does not.
+    lex.commenters = ""
     pipelines: list[list[_Cmd]] = []
     pipeline: list[_Cmd] = []
     cur = _Cmd([], [])
@@ -440,15 +612,22 @@ def _classify_script(text: str, ctx: _Ctx, acc: _Acc, depth: int = 0) -> None:
         for pipeline in pipelines:
             _classify_pipeline(pipeline, ctx, acc, set(), depth)
         return
-    flat, subs = _extract_substitutions(text)
+    flat, subs = _extract_substitutions(_extract_heredocs(text, ctx))
+    if ctx.heredoc_unparsed:
+        acc.opaque("heredoc-unparsed", "a heredoc's delimiter or end cannot be determined")
     try:
         pipelines = _split(flat)
     except ValueError:
         acc.opaque("unbalanced-quotes", "command has unbalanced quotes")
         return
     sub_downloads = {i for i, (_, inner) in enumerate(subs) if _mentions_downloader(inner)}
-    for _, inner in subs:
-        _classify_script(inner, ctx, acc, depth + 1)
+    for kind, inner in subs:
+        if kind == "arith":
+            # `$((1<<2))` is arithmetic: only the substitutions inside it run.
+            for _, nested in _extract_substitutions(inner)[1]:
+                _classify_script(nested, ctx, acc, depth + 1)
+        else:
+            _classify_script(inner, ctx, acc, depth + 1)
     for pipeline in pipelines:
         _classify_pipeline(pipeline, ctx, acc, sub_downloads, depth)
 
@@ -464,10 +643,28 @@ def _sub_index(arg: str) -> int | None:
 
 def _classify_pipeline(pipeline: list[_Cmd], ctx: _Ctx, acc: _Acc, sub_downloads: set[int], depth: int) -> None:
     upstream: set[str] = set()  # kinds of producers earlier in this pipeline
+    piped: list[str] = []  # heredoc bodies and here-strings flowing down the pipe
     for idx, cmd in enumerate(pipeline):
         argv, from_stdin = _unwrap(list(cmd.argv), acc)
         from_stdin = from_stdin or idx > 0
+        heredocs = _heredoc_bodies(cmd, ctx)
+        for body, quoted in heredocs:
+            if not quoted:
+                # An unquoted body still expands: its $( ) and ` ` run.
+                for _, inner in _extract_substitutions(body)[1]:
+                    _classify_script(inner, ctx, acc, depth + 1)
+        inputs = [body for body, _ in heredocs] + [t for op, t in cmd.redirects if op == "<<<"]
+        if inputs and not _shell_reads_stdin(argv):
+            # Not a shell's program: data, unless it can still reach one.
+            last = idx == len(pipeline) - 1
+            if not (last and _stdout_to_file(cmd, ctx) and os.path.basename(argv[0] if argv else "") not in INTERPRETERS):
+                for body in inputs:
+                    _screen_data(body, ctx, acc, depth)
+            if not last:
+                piped.extend(inputs)
         for op, target in cmd.redirects:
+            if op in ("<<", "<<-"):
+                continue
             path = _resolve(target, ctx)
             if path:
                 _check_path(acc, path, ctx, write=">" in op)
@@ -487,11 +684,15 @@ def _classify_pipeline(pipeline: list[_Cmd], ctx: _Ctx, acc: _Acc, sub_downloads
             _classify_script(" ".join(argv[1:]), ctx, acc, depth + 1)
             continue
         if word in {"source", "."} and len(argv) > 1:
-            _check_script_exec(argv[1], ctx, acc, sub_downloads)
+            if argv[1] in _STDIN_PATHS:
+                # Sources its stdin: the same as a shell reading its program there.
+                _classify_interpreter("sh", ["sh"], ctx, acc, upstream, sub_downloads, depth, inputs, piped)
+            else:
+                _check_script_exec(argv[1], ctx, acc, sub_downloads)
             continue
 
         if word in INTERPRETERS:
-            _classify_interpreter(word, argv, ctx, acc, upstream, sub_downloads, depth)
+            _classify_interpreter(word, argv, ctx, acc, upstream, sub_downloads, depth, inputs, piped)
         else:
             if "/" in word_raw:
                 _check_script_exec(word_raw, ctx, acc, sub_downloads)
@@ -506,26 +707,73 @@ def _classify_pipeline(pipeline: list[_Cmd], ctx: _Ctx, acc: _Acc, sub_downloads
             upstream.add("other")
 
 
-def _classify_interpreter(word, argv, ctx, acc, upstream, sub_downloads, depth) -> None:
-    args = argv[1:]
+def _interpreter_args(word: str, args: list[str]) -> tuple[str | None, str | None, bool]:
+    """(inline code, script, runs a named module); neither code nor script
+    means the program is read from stdin."""
     code_flag = {"-c"} if word in SHELLS else {"-c", "-e", "-E", "--eval", "-r"}
-    script: str | None = None
-    code: str | None = None
     i = 0
     while i < len(args):
         a = args[i]
         if a in code_flag or (word in SHELLS and a.startswith("-") and not a.startswith("--") and "c" in a[1:]):
-            code = args[i + 1] if i + 1 < len(args) else ""
-            break
+            return (args[i + 1] if i + 1 < len(args) else ""), None, False
         if a == "-" or a == "-s":
             break
         if a.startswith("-"):
             if word not in SHELLS and a in {"-m"}:
-                return  # python -m module: a named module, not a script
+                return None, None, True  # python -m module: a named module, not a script
             i += 1
             continue
-        script = a
-        break
+        return None, (None if a in _STDIN_PATHS else a), False
+    return None, None, False
+
+
+def _shell_reads_stdin(argv: list[str]) -> bool:
+    """A shell (or source/.) that takes its program from stdin."""
+    if not argv:
+        return False
+    word = os.path.basename(argv[0])
+    if word in {"source", "."}:
+        return len(argv) > 1 and argv[1] in _STDIN_PATHS
+    if word not in SHELLS:
+        return False
+    code, script, _ = _interpreter_args(word, argv[1:])
+    return code is None and script is None
+
+
+def _stdout_to_file(cmd: _Cmd, ctx: _Ctx) -> bool:
+    """Output redirected to a regular file, where nothing in this command
+    reads it back (a device or /proc path may be the pipe itself). The last
+    redirect wins, as in the shell; a bare number among the words may be the
+    fd of a split `2>` or `>&1`, which cannot be told apart, so it is not one."""
+    if any(a.isdigit() for a in cmd.argv):
+        return False
+    targets = [target for op, target in cmd.redirects if ">" in op]
+    path = _resolve(targets[-1], ctx) if targets else None
+    return bool(path) and not path.startswith(("/dev/", "/proc/"))
+
+
+def _screen_data(body: str, ctx: _Ctx, acc: _Acc, depth: int) -> None:
+    """Escalate-only screen of input that no analysed shell consumes but
+    that may still reach one (a pipe, a substitution, eval): each line is
+    read as shell and only its high/critical hits count."""
+    copy = _Ctx(ctx.cwd, ctx.workspace, ctx.home, set(ctx.downloaded), env_home=ctx.env_home, protected=ctx.protected)
+    for line in body.splitlines():
+        sub = _Acc()
+        _classify_script(line, copy, sub, depth + 1)
+        if "unbalanced-quotes" in sub.rules:
+            # Prose with an apostrophe: still screen its words.
+            sub = _Acc()
+            _classify_script(re.sub(r"[\"'`]", " ", line), copy, sub, depth + 1)
+        for rule, reason in zip(sub.rules, sub.reasons):
+            level = sub.levels.get(rule)
+            if level and rule not in _SCREEN_IGNORED:
+                acc.hit(level, rule, reason)
+
+
+def _classify_interpreter(word, argv, ctx, acc, upstream, sub_downloads, depth, inputs=(), piped=()) -> None:
+    code, script, module = _interpreter_args(word, argv[1:])
+    if module:
+        return
     if code is not None:
         if word in SHELLS:
             idx = _sub_index(code)
@@ -543,13 +791,32 @@ def _classify_interpreter(word, argv, ctx, acc, upstream, sub_downloads, depth) 
         _check_script_exec(script, ctx, acc, sub_downloads)
         return
     # No script and no -c: the interpreter reads its program from stdin.
-    if "download" in upstream:
+    if inputs:
+        if word in SHELLS:
+            for body in inputs:
+                idx = _sub_index(body)
+                if idx is not None:
+                    # A here-string built at run time: `bash <<< "$(...)"`.
+                    if idx in sub_downloads:
+                        acc.hit("critical", "pipe-download-to-shell", "executes a script fetched from the network")
+                    else:
+                        acc.hit("high", "dynamic-stdin-script", "shell runs a program computed at run time")
+                    acc.opaque("dynamic-stdin-script", "shell runs a program computed at run time")
+                _classify_script(body, ctx, acc, depth + 1)
+        else:
+            acc.opaque("interpreter-inline-code", f"{word} runs inline code that is not analysed")
+    elif "download" in upstream:
         acc.hit("critical", "pipe-download-to-shell", "pipes a network download into an interpreter")
     elif "decode" in upstream:
         acc.hit("high", "decode-and-exec", "pipes decoded data into an interpreter")
         acc.opaque("decode-and-exec", "pipes decoded data into an interpreter")
     elif upstream:
         acc.opaque("stdin-script", "interpreter runs a program read from a pipe")
+        if word in SHELLS:
+            # What a heredoc or here-string upstream carries: an earlier
+            # stage may have reshaped it, so it is screened, not trusted.
+            for body in piped:
+                _classify_script(body, ctx, acc, depth + 1)
 
 
 def _track_downloads(word: str, argv: list[str], ctx: _Ctx) -> None:

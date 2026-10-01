@@ -356,7 +356,7 @@ def test_dashboard_matches_card_9(client):
     assert 'href="#publish-cli">Publish new version</a>' in html
     assert 'id="publish-cli"' in html
     assert '<td class="nowrap"><code>acme-tools.lint-guard</code></td>' in html
-    assert "⏳ pending review" in html
+    assert "pending review" in html and "⏳" not in html  # no emoji (D28)
 
 
 def test_review_queue_badges_ids_and_columns(client):

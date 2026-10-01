@@ -97,6 +97,10 @@ export type PluginManifestV2 = {
     entry: string
     protocolVersion: 1
     activation: 'startup'
+    /** Package-local methods the Host may forward to this backend. */
+    methods?: string[]
+    /** Package-local events this backend may publish. */
+    events?: string[]
   }
   /** Extension Pack members (package ids). A pack carries no runtime surface
    *  and no permissions of its own: every member is installed, verified and
@@ -520,7 +524,7 @@ function parseViews(value: unknown): { views: PluginManifestV2View[] } {
 
 function parseBackend(value: unknown): PluginManifestV2['backend'] {
   const backend = assertObject(value, 'manifest backend')
-  assertOnlyKeys(backend, ['entry', 'protocolVersion', 'activation'], 'manifest backend')
+  assertOnlyKeys(backend, ['entry', 'protocolVersion', 'activation', 'methods', 'events'], 'manifest backend')
   const entry = safePath(required(backend, 'entry', 'manifest backend'), 'manifest backend.entry')
   const filename = entry.slice(entry.lastIndexOf('/') + 1).toLowerCase()
   const extension = filename.slice(filename.lastIndexOf('.'))
@@ -529,7 +533,34 @@ function parseBackend(value: unknown): PluginManifestV2['backend'] {
   }
   if (backend.protocolVersion !== 1) fail('manifest backend.protocolVersion must be 1')
   if (backend.activation !== 'startup') fail("manifest backend.activation must be 'startup'")
-  return { entry, protocolVersion: 1, activation: 'startup' }
+  const methods = backend.methods === undefined
+    ? undefined
+    : backendNameList(backend.methods, 'manifest backend.methods', MAX_BACKEND_METHODS)
+  const events = backend.events === undefined
+    ? undefined
+    : backendNameList(backend.events, 'manifest backend.events', MAX_BACKEND_EVENTS)
+  return {
+    entry,
+    protocolVersion: 1,
+    activation: 'startup',
+    ...(methods ? { methods } : {}),
+    ...(events ? { events } : {}),
+  }
+}
+
+/** Most package-local methods / events one backend may declare. */
+export const MAX_BACKEND_METHODS = 64
+export const MAX_BACKEND_EVENTS = 32
+const BACKEND_NAME_PATTERN = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$/
+
+function backendNameList(value: unknown, label: string, maxItems: number): string[] {
+  const names = uniqueStringArray(value, label, 1, maxItems)
+  for (const name of names) {
+    if (name.length > 128 || !BACKEND_NAME_PATTERN.test(name)) {
+      fail(`${label} contains an invalid name`)
+    }
+  }
+  return names
 }
 
 export function parseManifestV2(raw: unknown): PluginManifestV2 {

@@ -459,6 +459,23 @@ describe('useTerminal — RUNNING badge vs self-triggered repaints', () => {
     scope.stop()
   })
 
+  it('restarts the fuse on activity, so a watch the agent keeps checking holds RUNNING', async () => {
+    // A release watcher polled for 38 minutes while the agent woke every few
+    // minutes to report on it; a fuse counted from the task's start dropped the
+    // badge to IDLE at 30 with the work plainly still running.
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.noteBackgroundTasks('start', ['bwatch'])
+    result.markTurnComplete()
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    result.markTurnComplete()
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    expect(result.displayStatus.value).toBe('running')
+    await vi.advanceTimersByTimeAsync(11 * 60_000)
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
   it('still lets AWAITING outrank a running background task', async () => {
     const { result, mock, scope } = await spawnedFake()
     await chunkThenWait(mock, 0, 100)

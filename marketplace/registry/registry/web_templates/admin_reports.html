@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Reports — Navide Marketplace{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ base }}/admin/review">← Review queue</a> · <a href="{{ base }}/admin/blocklist">Blocklist</a></nav>
+<section class="panel">
+  <h1>Reports</h1>
+  <p class="muted">Member reports about published extensions. Dismiss a report, or act on
+    it: yank the reported version, or block the package or its publisher. Blocking uses
+    the resolution note as the public reason on the
+    <a href="{{ base }}/removed">removed extensions</a> list. Every action is recorded below.</p>
+  <ul class="summary-bar" aria-label="Reports summary">
+    <li class="{{ 'is-alert' if open_items else '' }}"><b>{{ open_items|length }}</b><span>open</span></li>
+    <li><b>{{ open_items|selectattr('version')|list|length }}</b><span>version-specific</span></li>
+    <li><b>{{ resolved|length }}</b><span>recently resolved</span></li>
+  </ul>
+  {% if error %}<p class="warn warn-block" role="alert">{{ error }}</p>{% endif %}
+
+  <h2 class="section-title">Open ({{ open_items|length }})</h2>
+  {% for r in open_items %}
+  <div class="review-item">
+    <h3 class="review-title"><span class="mini-tile hue-{{ r.identity|tile_hue }}" aria-hidden="true">{{ r.name[:1]|upper }}</span>#{{ r.id }} · <a href="{{ base }}/extensions/{{ r.namespace }}/{{ r.name }}">{{ r.identity }}</a>{% if r.version %} @ {{ r.version }}{% endif %}
+      <span class="badge badge-danger">{{ reasons.get(r.reason, r.reason) }}</span></h3>
+    <div class="muted">Reported {{ r.created_at.strftime('%Y-%m-%d %H:%M') }} UTC by <code>{{ r.reporter }}</code></div>
+    {% if r.detail %}<p class="report-detail">{{ r.detail }}</p>{% else %}<p class="muted">No details given.</p>{% endif %}
+    <form method="post" action="{{ base }}/admin/reports/{{ r.id }}/resolve" class="row">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <select name="action" aria-label="Action">
+        <option value="dismiss">Dismiss</option>
+        {% if r.version %}<option value="yank">Yank {{ r.version }}</option>{% endif %}
+        <option value="block-package">Block package {{ r.identity }}</option>
+        <option value="block-publisher">Block publisher {{ r.namespace }}</option>
+      </select>
+      <input class="wide-input" name="note" placeholder="Resolution note (public reason when blocking)" required maxlength="500">
+      <button type="submit">Resolve</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="empty">No open reports.</p>
+  {% endfor %}
+
+  <h2 class="section-title">Recently resolved</h2>
+  {% for r in resolved %}
+  <div class="review-item">
+    <h3 class="review-title"><span class="mini-tile hue-{{ r.identity|tile_hue }}" aria-hidden="true">{{ r.identity.split('.')[-1][:1]|upper }}</span>#{{ r.id }} · {{ r.identity }}{% if r.version %} @ {{ r.version }}{% endif %}
+      {% if r.status == 'dismissed' %}<span class="tag">dismissed</span>{% else %}<span class="badge badge-danger">{{ r.resolution }}</span>{% endif %}</h3>
+    {% if r.detail %}<p class="report-detail">{{ r.detail }}</p>{% endif %}
+    <ul class="audit-list">
+      {% for a in r.audit %}
+      <li>{{ a.created_at.strftime('%Y-%m-%d %H:%M') }} UTC · <code>{{ a.actor }}</code> · {{ a.action }}{% if a.note %} — {{ a.note }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% else %}
+  <p class="empty">Nothing resolved yet.</p>
+  {% endfor %}
+</section>
+{% endblock %}

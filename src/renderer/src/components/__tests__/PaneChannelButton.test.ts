@@ -352,7 +352,31 @@ describe('PaneChannelButton', () => {
     expect(q('[data-testid="channel-popover"]')).toBeNull()
   })
 
-  it('binds a new topic named after the pane', async () => {
+  const levelTestids = ['channel-bind-level-replies', 'channel-bind-level-minimal', 'channel-bind-level-standard', 'channel-bind-level-full']
+  const checkedLevels = (): (string | null)[] => qa('[data-testid^="channel-bind-level-"]').map((e) => e.getAttribute('aria-checked'))
+  const selectedLevels = (): boolean[] => qa('[data-testid^="channel-bind-level-"]').map((e) => e.classList.contains('pch-level-selected'))
+  const bindsSent = () => mock.sent.filter((s) => s.type === 'channels.bind')
+
+  it('lists only chats in step 1, and picking one opens step 2 without binding', async () => {
+    seed({ configured: true })
+    const w = await render()
+    await openPopover(w)
+    expect(q('[data-testid="channel-bind-levels"]')).toBeNull()
+    expect(q('[data-testid="channel-bind-confirm"]')).toBeNull()
+    q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    expect(bindsSent()).toEqual([])
+    expect(q('[data-testid="channel-bind-existing"]')).toBeNull()
+    expect(q('[data-testid="channel-manage"]')).toBeNull()
+    expect(q('[data-testid="channel-bind-chosen"]')?.textContent).toContain('Navide')
+    expect(q('[data-testid="channel-bind-chosen"]')?.textContent).toContain('Telegram')
+    expect(q('[data-testid="channel-bind-back"]')?.textContent).toContain('Back')
+    expect(q('[data-testid="channel-bind-confirm"]')?.textContent).toBe('Connect')
+    expect(q('[data-testid="channel-bind-cancel"]')?.textContent).toBe('Cancel')
+    expect(q('[data-testid="channel-popover"] [data-testid="channel-redact-note"]')?.textContent).toContain('only masks this channel')
+  })
+
+  it('binds a new topic named after the pane on Connect', async () => {
     seed({ configured: true })
     const w = await render()
     await openPopover(w)
@@ -362,6 +386,10 @@ describe('PaneChannelButton', () => {
     newBtn.click()
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.locations')?.payload).toEqual({ platform: 'telegram' })
+    expect(bindsSent()).toEqual([])
+    expect(q('[data-testid="channel-bind-chosen"]')?.textContent).toContain('New topic “api-refactor”')
+    q('[data-testid="channel-bind-confirm"]')!.click()
+    await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
       pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'new', chat_id: '-100', title: 'api-refactor',
       verbosity: 'replies',
@@ -369,11 +397,13 @@ describe('PaneChannelButton', () => {
     expect(document.querySelector('[data-testid="channel-popover"]')).toBeNull()
   })
 
-  it('binds an existing chat', async () => {
+  it('binds an existing chat on Connect', async () => {
     seed({ configured: true })
     const w = await render()
     await openPopover(w)
     q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    q('[data-testid="channel-bind-confirm"]')!.click()
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
       pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'existing', chat_id: '-100',
@@ -382,26 +412,145 @@ describe('PaneChannelButton', () => {
     expect(q('[data-testid="channel-popover"]')).toBeNull()
   })
 
-  it('asks what the chat receives before binding, replies-only preselected', async () => {
+  it('preselects replies-only, marks exactly the selected level, and sends Full after clicking it', async () => {
     seed({ configured: true })
     const w = await render()
     await openPopover(w)
-    const options = qa('[data-testid^="channel-bind-level-"]')
-    expect(options.map((e) => e.getAttribute('data-testid'))).toEqual([
-      'channel-bind-level-replies',
-      'channel-bind-level-minimal',
-      'channel-bind-level-standard',
-      'channel-bind-level-full',
-    ])
-    expect(options.map((e) => e.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false'])
-    expect(q('[data-testid="channel-bind-level-full"]')?.textContent).toContain('what you type on this machine')
-    expect(q('[data-testid="channel-popover"] [data-testid="channel-redact-note"]')?.textContent).toContain('only masks this channel')
-    q('[data-testid="channel-bind-level-full"]')!.click()
-    await flushPromises()
-    expect(q('[data-testid="channel-bind-level-full"]')?.getAttribute('aria-checked')).toBe('true')
     q('[data-testid="channel-bind-existing"]')!.click()
     await flushPromises()
-    expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toMatchObject({ chat_id: '-100', verbosity: 'full' })
+    const options = qa('[data-testid^="channel-bind-level-"]')
+    expect(options.map((e) => e.getAttribute('data-testid'))).toEqual(levelTestids)
+    expect(options.map((e) => e.getAttribute('role'))).toEqual(['radio', 'radio', 'radio', 'radio'])
+    expect(checkedLevels()).toEqual(['true', 'false', 'false', 'false'])
+    expect(selectedLevels()).toEqual([true, false, false, false])
+    // Every option carries the radio dot; only the selected one is in the tab order.
+    expect(options.every((e) => e.querySelector('.pch-level-dot'))).toBe(true)
+    expect(options.map((e) => e.getAttribute('tabindex'))).toEqual(['0', '-1', '-1', '-1'])
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('channel-bind-level-replies')
+    expect(q('[data-testid="channel-bind-level-full"]')?.textContent).toContain('what you type on this machine')
+    q('[data-testid="channel-bind-level-full"]')!.click()
+    await flushPromises()
+    expect(checkedLevels()).toEqual(['false', 'false', 'false', 'true'])
+    expect(selectedLevels()).toEqual([false, false, false, true])
+    expect(bindsSent()).toEqual([])
+    q('[data-testid="channel-bind-confirm"]')!.click()
+    await flushPromises()
+    expect(bindsSent().map((s) => s.payload)).toEqual([expect.objectContaining({ chat_id: '-100', verbosity: 'full' })])
+  })
+
+  it('Back returns to the chat list and Cancel closes, neither binding', async () => {
+    seed({ configured: true })
+    const w = await render()
+    await openPopover(w)
+    q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    q('[data-testid="channel-bind-level-full"]')!.click()
+    q('[data-testid="channel-bind-back"]')!.click()
+    await flushPromises()
+    expect(q('[data-testid="channel-bind-levels"]')).toBeNull()
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('channel-bind-existing')
+    q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    // A fresh pick starts from the chat's own level again, not the abandoned choice.
+    expect(checkedLevels()).toEqual(['true', 'false', 'false', 'false'])
+    q('[data-testid="channel-bind-cancel"]')!.click()
+    await flushPromises()
+    expect(q('[data-testid="channel-popover"]')).toBeNull()
+    expect(bindsSent()).toEqual([])
+  })
+
+  it('keyboard: arrows move the level with focus, Esc goes back, Enter connects', async () => {
+    seed({ configured: true })
+    const w = await render()
+    await openPopover(w)
+    const key = (testid: string, k: string): void => {
+      q(`[data-testid="${testid}"]`)!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }))
+    }
+    q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    key('channel-bind-level-replies', 'ArrowDown')
+    await flushPromises()
+    expect(checkedLevels()).toEqual(['false', 'true', 'false', 'false'])
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('channel-bind-level-minimal')
+    key('channel-bind-level-minimal', 'ArrowUp')
+    key('channel-bind-level-replies', 'ArrowUp')
+    await flushPromises()
+    expect(checkedLevels()).toEqual(['false', 'false', 'false', 'true'])
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('channel-bind-level-full')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(q('[data-testid="channel-popover"]')).not.toBeNull()
+    expect(q('[data-testid="channel-bind-levels"]')).toBeNull()
+    expect(bindsSent()).toEqual([])
+    q('[data-testid="channel-bind-existing"]')!.click()
+    await flushPromises()
+    key('channel-bind-level-replies', 'ArrowDown')
+    key('channel-bind-level-minimal', 'Enter')
+    await flushPromises()
+    expect(bindsSent().map((s) => s.payload)).toEqual([expect.objectContaining({ verbosity: 'minimal' })])
+  })
+
+  it("preselects a chat's own previous level and never borrows another chat's", async () => {
+    seed({
+      configured: true,
+      locations: [
+        { chat_id: 'A', title: 'Chat A', kind: 'supergroup', supports_topics: false },
+        { chat_id: 'B', title: 'Chat B', kind: 'supergroup', supports_topics: false },
+      ],
+      // Chat B serves another pane at Full; this pane last used Chat A at Standard.
+      bindings: [
+        { pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: 'B', thread_id: '', title: 'Chat B', verbosity: 'full' },
+      ],
+    })
+    const w = await render()
+    await openPopover(w)
+    lastStore!.bindings.value = [
+      ...lastStore!.bindings.value,
+      { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: 'A', thread_id: '', title: 'Chat A', verbosity: 'standard' },
+    ]
+    await flushPromises()
+    q('[data-chat-id="A"]')!.click()
+    await flushPromises()
+    expect(checkedLevels()).toEqual(['false', 'false', 'true', 'false'])
+    q('[data-testid="channel-bind-back"]')!.click()
+    await flushPromises()
+    lastStore!.bindings.value = lastStore!.bindings.value.filter((b) => b.pane_id !== 'p1')
+    await flushPromises()
+    q('[data-chat-id="A"]')!.click()
+    await flushPromises()
+    // No binding of its own: replies-only, not Chat B's Full.
+    expect(checkedLevels()).toEqual(['true', 'false', 'false', 'false'])
+  })
+
+  it('keeps each binding on its own level', async () => {
+    seed({
+      configured: true,
+      bindings: [
+        { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: 'A', thread_id: '', title: 'Chat A', verbosity: 'minimal' },
+        { pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: 'B', thread_id: '', title: 'Chat B', verbosity: 'full' },
+      ],
+    })
+    mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
+    const store = useChannels(mock.backend)
+    const a = mount(PaneChannelButton, { props: { paneId: 'p1', paneName: 'a', store }, global: { plugins: [i18n] }, attachTo: document.body })
+    const b = mount(PaneChannelButton, { props: { paneId: 'p2', paneName: 'b', store }, global: { plugins: [i18n] }, attachTo: document.body })
+    await flushPromises()
+    expect(a.get('[data-testid="channel-chip-level"]').text()).toBe('Minimal')
+    expect(b.get('[data-testid="channel-chip-level"]').text()).toBe('Full')
+    await a.get('[data-testid="channel-chip-menu"]').trigger('click')
+    await flushPromises()
+    expect(qa('[data-testid^="channel-verbosity-"]').map((e) => e.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false', 'false'])
+    q('[data-testid="channel-verbosity-standard"]')!.click()
+    await flushPromises()
+    expect(mock.sent.filter((m) => m.type === 'channels.set_binding_options').map((m) => m.payload)).toEqual([
+      { pane_id: 'p1', verbosity: 'standard' },
+    ])
+    await b.get('[data-testid="channel-chip-menu"]').trigger('click')
+    await flushPromises()
+    const bMenu = qa('[data-testid="channel-menu"]').at(-1)!
+    expect(Array.from(bMenu.querySelectorAll('[role="menuitemradio"]')).map((e) => e.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'true'])
+    a.unmount()
+    b.unmount()
   })
 
   describe('Guard warning for a CLI Guard cannot block', () => {
@@ -558,6 +707,10 @@ describe('PaneChannelButton', () => {
     await w.get('[data-testid="channel-chip-menu"]').trigger('click')
     await flushPromises()
     expect(q('[data-testid="channel-verbosity-standard"]')?.getAttribute('aria-checked')).toBe('true')
+    const levels = qa('[data-testid^="channel-verbosity-"]')
+    expect(levels.map((e) => e.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true', 'false'])
+    expect(levels.map((e) => e.classList.contains('pch-level-selected'))).toEqual([false, false, true, false])
+    expect(levels.every((e) => e.querySelector('.pch-level-dot'))).toBe(true)
     expect(qa('[data-testid="channel-child"]').map((e) => e.textContent)).toEqual(['↳ ↳ worker'])
   })
 })

@@ -311,7 +311,7 @@ describe('ExtensionsPane', () => {
 
     expect(api.remove).toHaveBeenCalledWith('acme.backend')
     expect(wrapper.find('[data-id="acme.backend"]').exists()).toBe(false)
-    expect(wrapper.get('.ext-empty').text()).toContain('No plugins installed')
+    expect(wrapper.get('.ext-empty').text()).toContain('No extensions installed')
   })
 
 
@@ -587,6 +587,22 @@ describe('ExtensionsPane', () => {
     expect(wrapper.get('[data-id="acme.local"] .ext-dev-warning').text()).toContain(
       'Developer Mode only'
     )
+  })
+
+  it('translates the Developer Mode warning (D1)', async () => {
+    mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        { id: 'acme.local', requires: [], sensitive: [], provenance: 'developer-local-unpacked', warning: 'Unsigned local unpacked plugin — Developer Mode only' },
+      ]),
+    })
+    i18n.global.locale.value = 'zh-TW'
+    try {
+      wrapper = mountExtensions()
+      await flushPromises()
+      expect(wrapper.get('[data-id="acme.local"] .ext-dev-warning').text()).toBe('未簽章的本機資料夾，僅限開發者模式')
+    } finally {
+      i18n.global.locale.value = 'en-US'
+    }
   })
 
   it('shows each plugin its own manifest permissions and package-version grant', async () => {

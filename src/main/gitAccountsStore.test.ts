@@ -191,4 +191,33 @@ describe('GitAccountsStore', () => {
     expect(store.list()).toEqual([])
     expect(store.getCredentialForWorkspace('/ws')).toBeNull()
   })
+
+  it('keeps tokens it can no longer decrypt (Linux keyring downgrade) and accepts a re-entered one', () => {
+    const before = new GitAccountsStore(file, fakeCrypto())
+    const account = before.add({
+      label: 'work',
+      host: 'github.com',
+      username: 'nt-nerdtechnic',
+      token: 'ghp_secret1234' // gitleaks:allow — fixture token, not a real credential
+    })
+    before.bind('/ws', account.id)
+    const onDisk = readFileSync(file, 'utf-8')
+
+    // Same file, but the keyring-backed key is gone: every decrypt throws.
+    const downgraded = new GitAccountsStore(file, {
+      ...fakeCrypto(),
+      decrypt: () => {
+        throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.')
+      }
+    })
+    expect(downgraded.list()).toEqual([before.list()[0]])
+    expect(downgraded.getBinding('/ws')).toBe(account.id)
+    expect(downgraded.getCredentialForWorkspace('/ws')).toBeNull()
+    expect(readFileSync(file, 'utf-8')).toBe(onDisk)
+
+    downgraded.update(account.id, { token: 'ghp_fresh5678' }) // gitleaks:allow — fixture token
+    const repaired = new GitAccountsStore(file, fakeCrypto())
+    expect(repaired.getCredentialForWorkspace('/ws')?.token).toBe('ghp_fresh5678')
+    expect(repaired.list()[0].tokenLast4).toBe('5678')
+  })
 })

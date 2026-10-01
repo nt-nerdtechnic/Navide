@@ -290,5 +290,5 @@ def test_category_chips_show_display_names_under_root_path(prefixed: TestClient)
         # A slug outside the closed list is shown as-is.
         assert '<span class="chip">custom-thing</span>' in html
         assert '<span class="chip">version-control</span>' not in html
-    # The filter keeps the slug as its value and shows the label.
-    assert '<option value="version-control" >Version control</option>' in home
+    # The category filter links carry the slug and show the label.
+    assert re.search(r'href="[^"]*category=version-control[^"]*">Version control</a>', home)

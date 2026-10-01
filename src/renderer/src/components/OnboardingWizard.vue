@@ -174,10 +174,12 @@ watch(current, () => {
   infoKey.value = ''
 })
 
-// Without an explicit pick, the first unfinished card is the open one.
+// Without an explicit pick, the first unfinished card is the open one. With
+// every card finished none opens: falling back to the last card left it
+// expanded with its install actions, reading as "this one is still missing".
 const activeKey = computed(() => {
   if (picked.value && cards.value.some((c) => c.key === picked.value)) return picked.value
-  return (cards.value.find((c) => !c.done) ?? cards.value[cards.value.length - 1])?.key ?? ''
+  return cards.value.find((c) => !c.done)?.key ?? ''
 })
 
 const infoKey = ref('')
@@ -333,15 +335,17 @@ async function saveComplete(): Promise<boolean> {
             @toggle="togglePick(d.id)"
           >
             <template #actions>
+              <!-- A finished card opens only to re-check; offering to install
+                   what was just detected reads as "still missing". -->
               <button
-                v-if="d.can_install"
+                v-if="d.can_install && d.status !== 'ok'"
                 class="ob-btn primary"
                 :disabled="busy"
                 @click="ob.install(d)"
               >
                 {{ installLabel(d) }}
               </button>
-              <a v-else-if="d.docs_url" class="ob-btn primary" :href="d.docs_url" target="_blank" rel="noreferrer">
+              <a v-else-if="d.docs_url && d.status !== 'ok'" class="ob-btn primary" :href="d.docs_url" target="_blank" rel="noreferrer">
                 {{ $t('onboard.install-guide') }}
               </a>
               <!-- The prerequisite has its own card; take the user to it rather
@@ -360,6 +364,7 @@ async function saveComplete(): Promise<boolean> {
           </OnboardingStepCard>
 
           <button
+            v-if="ob.foundationDeps.value.some((d) => d.status !== 'ok' && d.can_install)"
             class="ob-linkbtn"
             :disabled="busy"
             @click="installMissing(ob.foundationDeps.value)"
@@ -393,14 +398,14 @@ async function saveComplete(): Promise<boolean> {
                 {{ $t('action.start-ollama') }}
               </button>
               <button
-                v-else-if="d.can_install"
+                v-else-if="d.can_install && d.status !== 'ok'"
                 class="ob-btn primary"
                 :disabled="busy"
                 @click="ob.install(d)"
               >
                 {{ installLabel(d) }}
               </button>
-              <a v-else-if="d.docs_url" class="ob-btn primary" :href="d.docs_url" target="_blank" rel="noreferrer">
+              <a v-else-if="d.docs_url && d.status !== 'ok'" class="ob-btn primary" :href="d.docs_url" target="_blank" rel="noreferrer">
                 {{ $t('onboard.install-guide') }}
               </a>
               <button

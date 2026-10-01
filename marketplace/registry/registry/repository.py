@@ -224,7 +224,7 @@ class RegistryRepository:
                 seen.update(e.categories)
         return sorted(seen)
 
-    # -- downloads + ratings -------------------------------------------
+    # -- downloads -------------------------------------------
     def increment_download(
         self, extension: Extension, version_row: ExtensionVersion
     ) -> None:
@@ -234,15 +234,6 @@ class RegistryRepository:
         self.session.add(version_row)
         self.session.add(extension)
         self.session.commit()
-
-    def add_rating(self, extension: Extension, score: int) -> Extension:
-        """Record a rating score (1-5); no per-user dedup (see schemas/docs)."""
-        extension.rating_sum += score
-        extension.rating_count += 1
-        self.session.add(extension)
-        self.session.commit()
-        self.session.refresh(extension)
-        return extension
 
     # -- versions -------------------------------------------------------
     def get_version(

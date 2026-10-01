@@ -96,3 +96,34 @@ def test_a_listed_member_cannot_later_become_a_pack(client: TestClient) -> None:
 def test_a_pack_may_list_members_not_published_yet(client: TestClient) -> None:
     # Missing members are resolved (and skipped) by the App at install time.
     assert _publish(client, _pack(members=["acme.later"])).status_code == 201
+
+
+def test_a_reviewed_pack_keeps_the_extension_packs_category_after_approval(tmp_path) -> None:
+    """Approval rewrites a review-required extension's listing from its
+    manifest; that path must add the pack category the way publish does."""
+    from tests.phase2_helpers import (
+        ADMIN_HEADERS,
+        claim,
+        cloud_settings,
+        make_client,
+        new_token,
+        publish,
+        queued_artifacts,
+        sign_in,
+    )
+
+    client = make_client(cloud_settings(tmp_path))
+    sign_in(client)
+    assert claim(client, "zeta").status_code == 303
+    manifest = _pack("zeta.starter-pack", ["zeta.one"])
+    manifest["publisher"] = "zeta"
+    resp = publish(client, new_token(client, "zeta"), build_v2_package(manifest))
+    assert resp.status_code == 201, resp.text
+    approved = client.post(
+        "/api/admin/review/zeta/starter-pack/1.0.0/approve",
+        json={"artifacts": queued_artifacts(client, "zeta", "starter-pack")},
+        headers=ADMIN_HEADERS,
+    )
+    assert approved.status_code == 200, approved.text
+    listed = client.get("/api/extensions", params={"category": "extension-packs"}).json()
+    assert [item["identity"] for item in listed["items"]] == ["zeta.starter-pack"]

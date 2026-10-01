@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Native backend publishers — Navide Marketplace{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ base }}/admin/review">← Review queue</a></nav>
+<section class="panel">
+  <h1>Native backend publishers</h1>
+  <p class="muted">A self-service publisher may upload a package with a native backend only when it is
+    allowed here and its domain is verified. Every such version still waits in the review queue.</p>
+  <table class="version-table">
+    <thead><tr><th>Publisher</th><th>Verified domain</th><th>Native backends</th><th></th></tr></thead>
+    <tbody>
+    {% for p in publishers %}
+      <tr>
+        <td><code>{{ p.name }}</code></td>
+        <td>{{ p.domain or '— (not verified)' }}</td>
+        <td>{{ 'allowed' if p.allowed else 'not allowed' }}</td>
+        <td>
+          <form class="inline-form" method="post" action="{{ base }}/admin/native-backends/{{ p.name }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="allowed" value="{{ '' if p.allowed else 'yes' }}">
+            <button type="submit" class="link-button">{{ 'revoke' if p.allowed else 'allow' }}</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="empty">No self-service publishers.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

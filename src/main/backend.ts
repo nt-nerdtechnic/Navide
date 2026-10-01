@@ -13,6 +13,7 @@ import {
   needsLoginShellPath,
 } from '../shared/osplat'
 import { registerPendingBackend, releasePendingBackend } from './backend-pending'
+import { defaultHealthCheckTimeoutSec } from './health-timeout'
 import { killProcessTree } from './process-tree'
 import {
   writeBackendPluginActivationCatalog,
@@ -285,7 +286,7 @@ export function stopBackendProcess(proc: ChildProcess): Promise<void> {
 }
 
 export async function startBackend(
-  healthCheckTimeoutMs = 45_000,
+  healthCheckTimeoutMs = defaultHealthCheckTimeoutSec() * 1000,
   approvedPluginCatalog?: BackendPluginActivationCatalogFile
 ): Promise<BackendHandle> {
   guardStdioStreams()
@@ -415,7 +416,7 @@ export async function startBackend(
     // by macOS Gatekeeper scanning the bundled binary on first launch after
     // download — 15s was too tight and surfaced as "backend failed to start"
     // even though the process would have come up given more time. Now
-    // configurable via Settings (default 45s) — see src/main/health-timeout.ts.
+    // configurable via Settings (default 45s, 120s on Linux) — see src/main/health-timeout.ts.
     await waitForHealth(host, port, healthCheckTimeoutMs)
   } catch (err) {
     // Health never came up — kill the orphaned child so it can't linger and

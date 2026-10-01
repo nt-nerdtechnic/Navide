@@ -548,4 +548,58 @@ describe('OnboardingWizard', () => {
     expect(wrapper.text()).toContain(i18n.global.t('action.start-ollama'))
     expect(wrapper.text()).toContain(i18n.global.t('onboard.ollama-stopped'))
   })
+
+  describe('environment step with everything detected', () => {
+    function allFoundationOk(): OnboardStatus {
+      const s = status()
+      s.deps = [
+        dep({ id: 'homebrew', group: 'foundation', status: 'ok', version: '5.0.14' }),
+        dep({ id: 'python', group: 'foundation', status: 'ok', version: '3.13.11', min_version: '3.12.0' }),
+        dep({ id: 'uv', group: 'foundation', status: 'ok', version: '0.6.6', docs_url: 'https://docs.astral.sh/uv' }),
+      ]
+      s.gate = { ...s.gate, foundation_ready: true }
+      return s
+    }
+
+    it('leaves every card collapsed and drops "Install missing"', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', allFoundationOk())
+      wrapper = await open(mock)
+
+      // Used to fall back to the last card (uv), expanded with an Install button.
+      expect(wrapper.findAll('.oc-card.expanded')).toHaveLength(0)
+      expect(wrapper.findAll('.oc-card.done')).toHaveLength(3)
+      expect(wrapper.find('.ob-linkbtn').exists()).toBe(false)
+    })
+
+    it('opens a finished card to re-detect only, without an install action', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', allFoundationOk())
+      wrapper = await open(mock)
+
+      await wrapper.findAll('.oc-head')[2].trigger('click')
+      await flushPromises()
+
+      const card = wrapper.get('.oc-card.expanded')
+      expect(card.findAll('.ob-btn.primary')).toHaveLength(0)
+      expect(card.text()).toContain(i18n.global.t('action.re-detect'))
+    })
+
+    it('still flags an outdated dep instead of a checkmark, and offers its install', async () => {
+      const s = allFoundationOk()
+      s.deps = s.deps.map((d) => (d.id === 'python'
+        ? { ...d, status: 'outdated' as const, version: '3.9.6' }
+        : d))
+      s.gate = { ...s.gate, foundation_ready: false }
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', s)
+      wrapper = await open(mock)
+
+      const card = wrapper.get('.oc-card.expanded')
+      expect(card.classes()).not.toContain('done')
+      expect(card.get('.oc-warn').text()).toBe(i18n.global.t('onboard.outdated', { min: '3.12.0' }))
+      expect(card.get('.ob-btn.primary').text()).toBe(i18n.global.t('onboard.install'))
+      expect(wrapper.find('.ob-linkbtn').exists()).toBe(true)
+    })
+  })
 })

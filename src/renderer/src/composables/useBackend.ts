@@ -1,5 +1,6 @@
 import { onScopeDispose, ref } from 'vue'
 import { createWsClient, type WsRequest, type WsResponse } from '../../../shared/wsClient'
+import { defaultHealthCheckTimeoutSec } from './useSettings'
 
 export type BackendStatus = 'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -135,7 +136,7 @@ export function useBackend() {
     // src/main/health-timeout.ts), so derive the deadline from that same
     // setting plus margin — a hardcoded 50s below it surfaced false
     // 'backend did not start' errors on slow-but-successful starts.
-    let healthTimeoutSec = 45
+    let healthTimeoutSec = defaultHealthCheckTimeoutSec()
     try {
       const cfg = await window.agentTeam?.readHealthCheckTimeout?.()
       if (cfg?.ok && typeof cfg.timeoutSec === 'number') healthTimeoutSec = cfg.timeoutSec

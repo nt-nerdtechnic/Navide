@@ -10,7 +10,7 @@
     <thead><tr><th>Kind</th><th>Id</th><th>Reason</th><th>Removed</th></tr></thead>
     <tbody>
     {% for i in items %}
-      <tr><td>{{ i.kind }}</td><td>{{ i.value }}</td><td>{{ i.reason or '—' }}</td>
+      <tr><td><span class="chip">{{ i.kind }}</span></td><td><span class="id-cell"><span class="mini-tile hue-{{ i.value.split('@')[0]|tile_hue }}" aria-hidden="true">{{ i.value.split('@')[0].split('.')[-1][:1]|upper }}</span><code>{{ i.value }}</code></span></td><td>{{ i.reason or '—' }}</td>
         <td>{{ i.removed_at.strftime('%Y-%m-%d') if i.removed_at else '—' }}</td></tr>
     {% else %}
       <tr><td colspan="4" class="empty">Nothing has been removed.</td></tr>

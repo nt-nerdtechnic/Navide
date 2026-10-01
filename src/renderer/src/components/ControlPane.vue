@@ -2465,15 +2465,32 @@ function onWsDragEnd(e: DragEvent, path: string): void {
   if (outside) emit('detach-workspace', path, e.screenX, e.screenY)
 }
 
-/** Roughly what the menu occupies, for the edge flip below.
- *
- *  Measured rather than guessed would be better, but the element does not
- *  exist until this sets wsMenu — and a menu that appears in the wrong place
- *  and then jumps is worse than one placed from a constant. Kept generous:
- *  overshooting flips a menu that would have fitted, undershooting lets one
- *  hang off the edge, and only the second is a bug. */
+/** A first guess at what the menu occupies, for the edge flip below. The menu
+ *  is measured and re-placed once it renders (fitWsMenu) — this constant alone
+ *  went stale as rows were added (group list, reclaim, two close rows) and the
+ *  menu, judged to fit at 124px, opened downward off the bottom of the window. */
 const WS_MENU_H = 124
 const WS_MENU_W = 170
+const wsMenuEl = ref<HTMLElement | null>(null)
+
+/** Re-place the open menu from its real size. Runs in the same tick the menu
+ *  is patched in, before the browser paints, so it never visibly jumps. */
+async function fitWsMenu(clientX: number, clientY: number): Promise<void> {
+  await nextTick()
+  const el = wsMenuEl.value
+  const m = wsMenu.value
+  if (!el || !m) return
+  const h = el.offsetHeight
+  const w = el.offsetWidth
+  if (!h || !w) return
+  const vh = window.innerHeight
+  const vw = window.innerWidth
+  // Below the cursor if it fits, else above it, else pinned to the bottom edge
+  // (the CSS max-height keeps a menu taller than the window scrollable).
+  const y = clientY + h <= vh ? clientY : clientY - h >= 0 ? clientY - h : Math.max(0, vh - h)
+  const x = Math.max(0, Math.min(clientX, vw - w))
+  if (y !== m.y || x !== m.x) wsMenu.value = { ...m, x, y }
+}
 
 function openWsMenu(ev: MouseEvent, path: string, canClose: boolean): void {
   ev.preventDefault()
@@ -2487,6 +2504,7 @@ function openWsMenu(ev: MouseEvent, path: string, canClose: boolean): void {
     : ev.clientY
   const x = Math.max(0, Math.min(ev.clientX, window.innerWidth - WS_MENU_W))
   wsMenu.value = { path, canClose, x, y }
+  void fitWsMenu(ev.clientX, ev.clientY)
 }
 function closeWsMenu(): void {
   wsMenu.value = null
@@ -4026,6 +4044,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
 
       <div
         v-if="wsMenu"
+        ref="wsMenuEl"
         class="ws-ctx-menu"
         :style="{ top: `${wsMenu.y}px`, left: `${wsMenu.x}px` }"
         @click.stop
@@ -6256,6 +6275,9 @@ button.icon-btn.muted:hover {
      over the bottom of any menu opened near it. */
   z-index: 300;
   min-width: 150px;
+  max-height: 100vh;
+  overflow-y: auto;
+  box-sizing: border-box;
   padding: 4px 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

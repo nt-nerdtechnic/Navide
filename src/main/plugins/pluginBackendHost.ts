@@ -27,6 +27,7 @@ import {
   createProductionPlansBridgeDispatcher,
   type BackendBridgeDispatcher,
 } from './plansBridge'
+import type { ThirdPartyAdmission } from './pluginThirdPartyBackends'
 import {
   canonicalExistingDirectory,
   isWorkspaceContainedPath,
@@ -64,7 +65,17 @@ export interface PluginBackendHostOptions {
   onStderr?: (chunk: string) => void
   /** Re-check Host-owned trust immediately before every backend child spawn. */
   reverifyBeforeSpawn?: (activation: Readonly<BackendPluginLaunchSpec>) => void | Promise<void>
+  /** Admit a third-party backend (sandbox, consent, kill switches). Without
+   * it every third-party activation is refused. */
+  admitThirdParty?: ThirdPartyAdmitter
+  /** Idle stop delay for third-party children (default THIRD_PARTY_BACKEND_IDLE_MS). */
+  thirdPartyIdleMs?: number
 }
+
+export type ThirdPartyAdmitter = (
+  activation: BackendPluginLaunchSpec,
+  workspacePath: string | undefined,
+) => Promise<ThirdPartyAdmission>
 
 interface RegisteredBackend {
   activation: BackendPluginLaunchSpec
@@ -85,7 +96,21 @@ interface BoundView {
   calls: Set<AbortController>
   subscriptions: Set<BackendPluginSubscription>
   pendingSubscriptions: number
+  /** Third-party only: idle auto-shutdown state. */
+  idle?: ThirdPartyIdleState
 }
+
+interface ThirdPartyIdleState {
+  timer?: ReturnType<typeof setTimeout>
+  /** The child was closed for inactivity; the next call re-admits it. */
+  stopped: boolean
+  inFlight: number
+  waking?: Promise<void>
+}
+
+/** A third-party child with no call, subscription or bridge traffic for this
+ * long is closed; the next call starts it again through the admission gate. */
+export const THIRD_PARTY_BACKEND_IDLE_MS = 10 * 60_000
 
 function backendKey(pluginId: string, packageVersion: string): string {
   return `${pluginId}\u0000${packageVersion}`
@@ -186,6 +211,8 @@ export class PluginBackendHost {
   private readonly onBackendFailure?: PluginBackendHostOptions['onBackendFailure']
   private readonly onStderr?: PluginBackendHostOptions['onStderr']
   private reverifyBeforeSpawn?: PluginBackendHostOptions['reverifyBeforeSpawn']
+  private admitThirdParty?: ThirdPartyAdmitter
+  private readonly thirdPartyIdleMs: number
   private readonly backends = new Map<string, RegisteredBackend>()
   private readonly views = new Map<string, BoundView>()
   /** Package-version revocations are serialized and also act as an admission
@@ -207,7 +234,32 @@ export class PluginBackendHost {
     this.onBackendFailure = options.onBackendFailure
     this.onStderr = options.onStderr
     this.reverifyBeforeSpawn = options.reverifyBeforeSpawn
+    this.admitThirdParty = options.admitThirdParty
+    this.thirdPartyIdleMs = options.thirdPartyIdleMs ?? THIRD_PARTY_BACKEND_IDLE_MS
     this.createSupervisor = options.createSupervisor ?? defaultSupervisor
+  }
+
+  /** Install the third-party admission gate before views are bound. */
+  setThirdPartyAdmitter(admitter: ThirdPartyAdmitter | undefined): void {
+    if (this.views.size > 0) {
+      throw new BackendPluginError(
+        'INVALID_RUNTIME',
+        'Third-party backend admission cannot change while a view is bound.',
+      )
+    }
+    this.admitThirdParty = admitter
+  }
+
+  /** Kill switch: stop running third-party children (one plugin, or all). The
+   * activations stay registered; a new bind is admitted again from scratch. */
+  async stopThirdPartyBackends(pluginId: string | null): Promise<void> {
+    const instances = [...this.views.entries()]
+      .filter(([, view]) =>
+        view.activation.thirdParty !== undefined &&
+        (pluginId === null || view.activation.pluginId === pluginId),
+      )
+      .map(([instanceId]) => instanceId)
+    await Promise.allSettled(instances.map((instanceId) => this.unbindView(instanceId, 'plugin-stopping')))
   }
 
   /** Replace the Host-owned bridge composition before any package runtime is
@@ -356,6 +408,7 @@ export class PluginBackendHost {
       calls: new Set(),
       subscriptions: new Set(),
       pendingSubscriptions: 0,
+      ...(backend.activation.thirdParty !== undefined ? { idle: { stopped: false, inFlight: 0 } } : {}),
     }
     this.views.set(instanceId, view)
     this.reservedChildSlots++
@@ -370,6 +423,7 @@ export class PluginBackendHost {
   }
 
   private async finishBinding(view: BoundView): Promise<void> {
+    if (view.activation.thirdParty !== undefined) return this.finishThirdPartyBinding(view)
     try {
       const needsFilesystem = view.activation.approvedBridgePorts?.includes('filesystem') ?? false
       if (needsFilesystem) {
@@ -438,6 +492,64 @@ export class PluginBackendHost {
     }
   }
 
+  /** Third-party children never reach the Plans root resolver or the Plans
+   * bridge: their bridge is the admission's package dispatcher, their root is
+   * the bound workspace itself, and their process is the sandboxed spawn. */
+  private async finishThirdPartyBinding(view: BoundView): Promise<void> {
+    try {
+      if (!this.admitThirdParty) {
+        throw new BackendPluginError('BACKEND_UNAVAILABLE', 'Third-party backends are not available.')
+      }
+      const admission = await this.admitThirdParty(view.activation, view.workspacePath)
+      if (view.bindingController.signal.aborted || view.closing) {
+        throw new BackendPluginError('USER_CANCELLED')
+      }
+      if (
+        admission.workspaceRoot &&
+        view.workspacePath &&
+        isWorkspaceContainedPath(admission.workspaceRoot, view.workspacePath)
+      ) {
+        view.authorizedPlanRoot.value = admission.workspaceRoot
+      }
+      const instanceId = view.runtime.instanceId ?? ''
+      const supervisor: PluginBackendSupervisor = this.createSupervisor(view.activation, {
+        environment: this.environment,
+        clientInfo: { name: 'navide-host', version: view.activation.packageVersion },
+        spawnProcess: admission.spawnProcess,
+        bridgeDispatcher: admission.bridgeDispatcher,
+        authorizedPlanRoot: view.authorizedPlanRoot,
+        beforeSpawn: async () => {
+          await this.reverifyBeforeSpawn?.(view.activation)
+          await admission.beforeSpawn()
+        },
+        ...(this.onStderr ? { onStderr: this.onStderr } : {}),
+        onFailure: (error: BackendPluginError): void => {
+          if (this.views.get(instanceId) !== view || view.supervisor !== supervisor) return
+          console.warn(`[plugin-backend] ${view.runtime.pluginId} child failed: ${error.code}`)
+          try {
+            this.onBackendFailure?.(view.runtime, error)
+          } catch {
+            // A liveness observer must not change the child failure result.
+          }
+          const delay = admission.noteFailure()
+          if (delay === null) return
+          const timer = setTimeout(() => {
+            if (this.views.get(instanceId) !== view || view.closing || view.supervisor !== supervisor) return
+            supervisor.restart().catch(() => {
+              // The next failure is reported through onFailure again.
+            })
+          }, delay)
+          timer.unref?.()
+        },
+      })
+      view.supervisor = supervisor
+      this.scheduleIdleStop(view)
+    } catch (error) {
+      if (error instanceof BackendPluginError) throw error
+      throw new BackendPluginError('BACKEND_UNAVAILABLE')
+    }
+  }
+
   private async refreshPlanRoot(view: BoundView, signal: AbortSignal): Promise<string> {
     if (!this.resolvePlanRoot || !view.workspacePath) {
       throw new BackendPluginError('INVALID_RUNTIME')
@@ -498,6 +610,7 @@ export class PluginBackendHost {
     const packageKey = backendKey(view.activation.pluginId, view.activation.packageVersion)
     const task = (async (): Promise<void> => {
       this.views.delete(instanceId)
+      this.clearIdleTimer(view)
       view.closing = true
       view.closingReason = reason
       if (reason === 'plugin-stopping') view.bindingController.abort('plugin-stopping')
@@ -575,6 +688,27 @@ export class PluginBackendHost {
     args: JsonValue,
     options?: BackendPluginCallOptions,
   ): Promise<Result> {
+    const thirdPartyView = this.views.get(instanceId)
+    if (thirdPartyView?.idle === undefined) return this.callBound<Result>(instanceId, name, args, options)
+    // Bridge requests only exist inside a call or subscription origin, so the
+    // whole call - including the child's bridge traffic - counts as activity.
+    const idle = thirdPartyView.idle
+    idle.inFlight++
+    this.clearIdleTimer(thirdPartyView)
+    try {
+      return await this.callBound<Result>(instanceId, name, args, options)
+    } finally {
+      idle.inFlight--
+      this.scheduleIdleStop(thirdPartyView)
+    }
+  }
+
+  private async callBound<Result extends JsonValue>(
+    instanceId: string,
+    name: string,
+    args: JsonValue,
+    options?: BackendPluginCallOptions,
+  ): Promise<Result> {
     const unbinding = this.unbindTasks.get(instanceId)
     if (unbinding && this.packageRevocations.has(unbinding.packageKey)) {
       throw new BackendPluginError('PLUGIN_STOPPING')
@@ -614,6 +748,7 @@ export class PluginBackendHost {
         }
         throw error
       }
+      await this.wakeIfIdleStopped(view)
       if (controller.signal.aborted) {
         throw new BackendPluginError(
           controller.signal.reason === 'plugin-stopping' ? 'PLUGIN_STOPPING' : 'USER_CANCELLED',
@@ -680,6 +815,7 @@ export class PluginBackendHost {
         }
         throw error
       }
+      await this.wakeIfIdleStopped(view)
       if (options?.signal?.aborted) {
         throw new BackendPluginError(
           options.signal.reason === 'plugin-stopping' ? 'PLUGIN_STOPPING' : 'USER_CANCELLED',
@@ -703,10 +839,74 @@ export class PluginBackendHost {
       )
       view.subscriptions.add(subscription)
       void subscription.settled.then(() => view.subscriptions.delete(subscription))
+      if (view.idle) {
+        const reschedule = (): void => this.scheduleIdleStop(view)
+        void subscription.settled.then(reschedule, reschedule)
+      }
       return subscription
     } finally {
       view.pendingSubscriptions--
+      if (view.idle) this.scheduleIdleStop(view)
     }
+  }
+
+  private clearIdleTimer(view: BoundView): void {
+    if (view.idle?.timer === undefined) return
+    clearTimeout(view.idle.timer)
+    view.idle.timer = undefined
+  }
+
+  /** Arm the idle stop when nothing is in flight; any activity re-arms it. */
+  private scheduleIdleStop(view: BoundView): void {
+    const idle = view.idle
+    if (!idle) return
+    this.clearIdleTimer(view)
+    if (view.closing || idle.stopped || idle.inFlight > 0) return
+    if (view.subscriptions.size + view.pendingSubscriptions > 0) return
+    idle.timer = setTimeout(() => {
+      idle.timer = undefined
+      void this.stopIdleChild(view)
+    }, this.thirdPartyIdleMs)
+    idle.timer.unref?.()
+  }
+
+  private async stopIdleChild(view: BoundView): Promise<void> {
+    const idle = view.idle
+    if (
+      !idle ||
+      idle.stopped ||
+      idle.inFlight > 0 ||
+      view.closing ||
+      view.subscriptions.size + view.pendingSubscriptions > 0 ||
+      this.views.get(view.runtime.instanceId ?? '') !== view
+    ) return
+    idle.stopped = true
+    const supervisor = view.supervisor
+    view.supervisor = undefined
+    try {
+      await supervisor?.close()
+    } catch (error) {
+      console.warn(
+        `[plugin-backend] ${view.activation.pluginId} idle close failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+
+  /** Re-admit an idle-stopped third-party child (consent, switches, sandbox
+   * are all checked again); concurrent callers share one admission. */
+  private async wakeIfIdleStopped(view: BoundView): Promise<void> {
+    const idle = view.idle
+    if (!idle?.stopped) return
+    idle.waking ??= this.finishThirdPartyBinding(view)
+      .then(() => {
+        idle.stopped = false
+      })
+      .finally(() => {
+        idle.waking = undefined
+      })
+    await idle.waking
   }
 
   async close(): Promise<void> {

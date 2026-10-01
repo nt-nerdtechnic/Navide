@@ -105,10 +105,11 @@ _RULE_CATEGORY = {
 _PIPELINE_RULES = {"pipe-download-to-shell", "download-then-exec", "decode-and-exec"}
 #: Opaque verdicts that mean "cannot be judged" rather than "an unknown script".
 _UNANALYZABLE_RULES = {"dynamic-command", "eval", "unbalanced-quotes", "nesting-too-deep", "too-long",
-                       "decode-and-exec", "stdin-script"}
+                       "decode-and-exec", "stdin-script", "dynamic-stdin-script"}
 #: Opaque-only notes that are not a danger by themselves (an unknown script, a
-#: python -c): they share the verdict's level but never decide a refusal.
-_NOTE_RULES = {"unknown-script", "interpreter-inline-code", "dynamic-path"}
+#: python -c): they share the verdict's level but never decide a refusal. An
+#: unparsed heredoc's lines were screened as shell, which decides on its own.
+_NOTE_RULES = {"unknown-script", "interpreter-inline-code", "dynamic-path", "heredoc-unparsed"}
 
 _MAX_PATTERN = 500
 _MAX_TEXT = MAX_COMMAND_CHARS

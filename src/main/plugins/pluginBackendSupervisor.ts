@@ -91,6 +91,13 @@ export interface BackendPluginLaunchSpec {
   approvedEvents: readonly string[]
   /** Host-private core ports projected for this package activation. */
   approvedBridgePorts?: readonly PlansBridgePort[]
+  /** Present only for a third-party package: the Host admits and launches it
+   *  under the OS sandbox (see pluginThirdPartyBackends.ts). */
+  thirdParty?: {
+    name: string
+    system: readonly PluginSystemNamespace[]
+    shell?: 'allowlist' | 'full'
+  }
 }
 
 const AUTHENTICATED_RUNTIME = Symbol('navide.authenticatedBackendRuntime')

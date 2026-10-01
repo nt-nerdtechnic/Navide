@@ -49,7 +49,7 @@ uv --project marketplace/registry run pytest marketplace/registry/tests
 | GET | `/api/extensions/{namespace}/{name}` | Extension detail + full version list, registry envelopes/signatures, and root-signed trust metadata. |
 | GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream one artifact's blob **and increment** its download counter plus the aggregate one. `?target=` picks the artifact exactly (no fallback to `universal`); it may be omitted only when the version has a single artifact, else `400` lists the available targets. |
 | POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version — every target's artifact of it (excluded from latest resolution, still downloadable by exact version). |
-| POST | `/api/extensions/{namespace}/{name}/rating` | Add a `{ "score": 1..5 }` rating; returns the new average + count. Per-user auth/dedup is deferred (see below). |
+| POST | `/api/extensions/{namespace}/{name}/rating` | Retired: returns 401. Rating needs a Navide Cloud sign-in on the website (see below). |
 | POST | `/api/extensions/{namespace}/{name}/featured` | Set the curation flag `{ "featured": bool }`. Admin-gated by `X-Admin-Token` (same gate as `/api/publishers`). |
 
 `GET /api/extensions` also accepts `category` (exact category filter) and
@@ -124,10 +124,15 @@ is untouched.
 schemes (`javascript:` etc.) are dropped by the built-in link validator, so no
 user-authored active markup is ever emitted (`tests/test_web.py`).
 
-**Ratings limitation.** Ratings are stored as `rating_sum` + `rating_count`
-(average is derived); the submit endpoint has **no per-user auth or dedup** —
-this is a deliberate p3-discovery simplification. Real per-user rating auth is
-deferred.
+**Ratings and reports.** A signed-in Navide Cloud member rates an extension
+1-5 on its detail page (one rating per member, changeable and removable;
+publishers cannot rate their own). `rating_sum` / `rating_count` cache the
+member ratings only; anonymous ratings from before sign-in was required are
+kept in `legacy_rating_*` for audit and never counted (migration 6). Members
+report an extension from `/extensions/{namespace}/{name}/report`; admins
+dismiss or act (yank / block) at `/admin/reports`, every event lands in
+`report_audit`, and publishers see reports on their dashboard without the
+reporter's identity. Ratings and reports are rate-limited per member.
 
 ## Security model (p3-security + p3-publish)
 
@@ -178,6 +183,7 @@ Extensions view to warn users. This is metadata/gating only — no runtime sandb
 | `REGISTRY_TRUST_PROFILE` | `self-hosted-dev` | `self-hosted-dev` for persistent locally generated trust material, or `official` for explicitly provisioned production material. |
 | `REGISTRY_TRUST_CONFIG_FILE` | _(unset)_ | Required with `official`; path to the complete signer, root, rotation, validity, and blocklist policy below. Rejected for the default profile. |
 | `REGISTRY_ROOT_PATH` | _(unset)_ | Public path prefix when served behind a reverse proxy, e.g. `/registry`. Requests are accepted with the prefix forwarded unchanged (AWS ALB) or stripped by the proxy, and every link the website emits carries it. `/registry-evil/...` is not served. Do not combine with `uvicorn --root-path`. |
+| `REGISTRY_FORWARDED_ALLOW_IPS` | `*` | Container only (`deploy/entrypoint.sh` passes it to uvicorn `--forwarded-allow-ips`, with `--proxy-headers`). Lets the ALB's `X-Forwarded-Proto` through, so `og:url`, `og:image` and the dashboard's `registry_url` come out `https://`. The default `*` assumes only the ALB can reach the container port; otherwise set it to the ALB's subnet, e.g. `10.0.0.0/16`. |
 
 ### Official Registry trust deployment
 
@@ -232,6 +238,18 @@ seam later without changing the Client wire contract.
 
 ## Packaging CLI (`navide-plugin`)
 
+> **Deprecated for plugin authors.** The public `navide-plugin` is the SDK CLI
+> (`packages/plugin-sdk/bin/navide-plugin.mjs`, shipped in
+> `@navide/plugin-sdk`): `init`, `validate`, `package`, `keygen`, `sign`,
+> `login`, `whoami`, `logout`, `publish`. See
+> [`docs/en-US/marketplace-publishing.md`](../../docs/en-US/marketplace-publishing.md).
+> This Python CLI prints a deprecation notice and stays for
+> `scripts/publish-first-party-plugins.sh` and the `plugin-packages.yml` CI
+> pack job: the SDK packages a backend only for its own host target, while
+> `pack --target` here packs every target on one Linux runner. Both CLIs share
+> `~/.config/navide-plugin/credentials.json` and produce signatures this
+> Registry verifies the same way (`tests/test_sdk_cli_compat.py`).
+
 Console entry point (see `registry/cli.py`):
 
 ```bash
@@ -240,11 +258,14 @@ navide-plugin pack    ./plugin-src --out my.vsix      # frontend-only, universal
 navide-plugin pack    ./backend-src --out mac.vsix --target darwin-arm64
 navide-plugin sign    my.vsix --key acme.key --out my.sig
 navide-plugin publish my.vsix --registry http://localhost:8787 \
-  --token <bearer> --signature my.sig [--target darwin-arm64]
+  --signature my.sig [--target darwin-arm64]
 ```
 
 `keygen` writes the private key owner-only (`0600`). `publish` reads the token
-from `NAVIDE_PLUGIN_TOKEN` when `--token` is omitted, and `--target` (default
+from `NAVIDE_PLUGIN_TOKEN` (or a stored `login`); a `--token` argument still
+works but is visible in the process list. `login` and `publish` refuse a
+plain-http registry that is not on loopback unless `--insecure-http` is given.
+`--target` (default
 `universal`) selects the Registry target bound into the signed envelope; a
 package with a native backend must be published for its exact
 `<platform>-<arch>` target.

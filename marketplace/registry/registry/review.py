@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select, update
 
-from .discovery import pack_members
+from .discovery import PACK_CATEGORY, pack_members
 from .manifest import manifest_capabilities
 from .models import Extension, ExtensionVersion, Publisher
 from .packs import pack_conflict
@@ -69,7 +69,11 @@ def manifest_listing(manifest: dict) -> tuple[str | None, str | None, list[str]]
     """(display name, description, categories) the way publish derives them."""
     if manifest.get("schemaVersion") == 2:
         marketplace = manifest.get("marketplace") or {}
-        return manifest.get("name"), marketplace.get("description"), list(marketplace.get("categories") or [])
+        categories = list(marketplace.get("categories") or [])
+        # A pack is listed under Extension Packs whatever it declares (as at publish).
+        if pack_members(manifest) and PACK_CATEGORY not in categories:
+            categories.append(PACK_CATEGORY)
+        return manifest.get("name"), marketplace.get("description"), categories
     return (
         manifest.get("displayName") or manifest.get("name"),
         manifest.get("description"),
@@ -92,12 +96,18 @@ def submission_report(
         (row.namespace, row.name)
         for row in session.exec(select(Extension)).all()
     ]
-    similarity = [f.as_dict() for f in check_extension_name(namespace, name, others)]
+    has_backend = manifest.get("backend") is not None
+    similarity = [
+        f.as_dict() for f in check_extension_name(namespace, name, others, strict=has_backend)
+    ]
     capabilities = manifest_capabilities(manifest)
     return {
         "signature": "publisher-signed" if signature_present else "unsigned",
         "similarity": similarity,
-        "secret_scan": scan_package(data).as_dict(),
+        "secret_scan": scan_package(
+            data, backend_prefix="backend/" if has_backend else None
+        ).as_dict(),
+        "native_backend": has_backend,
         "capabilities": capabilities,
         "sensitive_capabilities": sensitive_capabilities(capabilities),
         "size": len(data),
@@ -174,6 +184,7 @@ def approve(
     reviewer: str,
     artifacts: Sequence[str],
     acknowledge_secret_findings: bool = False,
+    inspected_native_backend: bool = False,
 ) -> list[ExtensionVersion]:
     """Sign and publish the pending artifacts of `extension@version`, which
     must be exactly `artifacts` (the package digests the reviewer saw)."""
@@ -202,6 +213,11 @@ def approve(
         if secret_findings(row.review_report) and not acknowledge_secret_findings:
             raise ReviewError(
                 "secret scan has findings; confirm they are false positives to approve"
+            )
+        if (row.review_report or {}).get("native_backend") and not inspected_native_backend:
+            raise ReviewError(
+                "this version ships a native backend; confirm every target's "
+                "executable was inspected to approve"
             )
     previously_public = [
         v.version

@@ -15,18 +15,17 @@ model, and the packaging and signing rules.
 For the package archive format alone, see
 [`marketplace/registry/FORMAT.md`](../../marketplace/registry/FORMAT.md).
 
-## Status: third-party publishing is not open yet
+## Status: third-party publishing is open for Manifest v2
 
-Navide currently ships first-party plugins only. There is no public marketplace
-registry to publish to — the registry service in `marketplace/registry/` runs
-locally for development, and the plugins that ship with the app are bundled into
-the package rather than installed from it.
+Third-party plugins are published to the Navide Marketplace at
+`https://server.navide.dev/registry` as **Manifest v2** packages, after a
+review. Follow [Publishing to the Navide Marketplace](marketplace-publishing.md)
+for the whole workflow, from `navide-plugin init` to a reviewed listing. This
+guide's manifest v1 runtime is legacy: the Registry still accepts v1 packages,
+but new packages should use v2.
 
-Two consequences worth knowing before you invest time:
+Worth knowing before you invest time:
 
-- **You cannot publish a plugin for other users to install yet.** You can build
-  and run one locally against a local registry, and everything in this guide
-  works for that.
 - **The capability whitelist is centrally maintained.** `requires` accepts only
   the namespaces listed under [Capability reference](#capability-reference); a
   plugin asking for anything else is refused as scope over-reach. Adding a new
@@ -447,28 +446,25 @@ is rejected.
 
 ## Packaging and publishing
 
-Build the plugin, then package the output directory:
+Packaging, signing and publishing use the SDK CLI, `navide-plugin` from
+`@navide/plugin-sdk`; [Publishing to the Navide Marketplace](marketplace-publishing.md)
+walks through every step:
 
 ```bash
-pnpm run build:<name>
+navide-plugin validate <staging-dir>
+navide-plugin package <staging-dir> [--target <platform-arch>]
 navide-plugin keygen --out-dir <dir> --name <publisher>   # first time only
-navide-plugin pack dist-plugins/<name>                    # → <id>-<version>.vsix
 navide-plugin sign <package> --key <privkey>
-navide-plugin publish <package> --registry <url> --token <token> --signature <sig>
+navide-plugin login
+navide-plugin publish <package> --signature <sig> [--target <platform-arch>]
 ```
 
-`pack` requires a `manifest.json` in the source directory and names the output
-`<id>-<version>.vsix` unless `--out` says otherwise. `--signature` accepts either
-the signature string or a path to a signature file. `--registry` and `--token`
-are required for `publish`.
+The Python `navide-plugin` in `marketplace/registry/` (`pack`, `sign`,
+`publish`, `login`) is deprecated for plugin authors and kept only for
+Navide's first-party release scripts.
 
-The `navide-plugin` CLI ships with the registry service
-(`marketplace/registry/`). Run it through
-`uv --project marketplace/registry run navide-plugin`.
-
-The archive is a ZIP with `manifest.json` at its root. Any other file is
-recorded as an asset. If `manifest.icon` is set, the referenced path must exist
-inside the archive.
+The archive is a ZIP with `manifest.json` at its root; its format is
+[`marketplace/registry/FORMAT.md`](../../marketplace/registry/FORMAT.md).
 
 **Registry endpoints.** Packaged Navide builds use the Official Registry at
 `https://server.navide.dev/registry`. Its root key is pinned in the App build
@@ -478,9 +474,8 @@ Registry authority. Development builds default to a local self-hosted Registry
 at `http://localhost:8787`. `AGENT_TEAM_MARKETPLACE_URL` overrides either
 default, and plaintext HTTP is rejected outside loopback in production builds.
 Publishing requires a publisher account on the registry instance you are
-targeting. Third-party publishing to the Official Registry is not open, so
-third-party distribution today means running your own instance or installing
-from a local package.
+targeting; on the Official Registry that is a namespace claimed with your
+Navide account (see [Publishing to the Navide Marketplace](marketplace-publishing.md)).
 
 The local endpoint is not the Official Registry identity and does not inherit
 the App-shipped root pin. Before Navide contacts a self-hosted Registry, set

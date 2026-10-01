@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
 import ExplorerPane from '../ExplorerPane.vue'
@@ -301,6 +301,29 @@ describe('ControlPane – workspace sections', () => {
     // Above the cursor, not below it.
     const top = Number.parseInt(menu.attributes('style')?.match(/top:\s*(\d+)px/)?.[1] ?? '-1', 10)
     expect(top).toBeLessThan(780)
+  })
+
+  it('flips a menu taller than the guess, from its measured height', async () => {
+    // The flip used a 124px constant; the menu grew past 400px (group list,
+    // reclaim, close rows), so a right-click 200px above the bottom was judged
+    // to fit, opened downward and lost its last rows off the window.
+    const h = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    const w = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 400 })
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 200 })
+    try {
+      wrapper = mountWith({ workspaces: [current()] })
+      Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+      Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true })
+      await wrapper.find('.ws-head--current').trigger('contextmenu', { clientX: 40, clientY: 600 })
+      await nextTick()
+      await nextTick()
+      const top = Number.parseInt(wrapper.find('.ws-ctx-menu').attributes('style')?.match(/top:\s*(\d+)px/)?.[1] ?? '-1', 10)
+      expect(top).toBe(200)
+    } finally {
+      if (h) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', h)
+      if (w) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', w)
+    }
   })
 
   it('opens downward when there is room', async () => {

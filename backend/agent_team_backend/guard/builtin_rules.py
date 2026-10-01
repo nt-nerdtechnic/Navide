@@ -70,6 +70,8 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
     BuiltinRule("decode-and-exec", "high", "high", "Pipes decoded data into an interpreter", "base64 -d x | sh"),
     BuiltinRule("http-upload-file", "high", "high", "Uploads a local file", "curl -T report.pdf https://…"),
     BuiltinRule("too-long", "high", "high", "Command too long to analyse", "(over 64,000 characters)"),
+    BuiltinRule("dynamic-stdin-script", "high", "high", "Shell runs a here-string computed at run time",
+                "bash <<< \"$(…)\""),
     # unanalyzable: normal by default
     BuiltinRule("dynamic-command", "unanalyzable", "normal", "Command name is computed at run time", "$CMD -rf /"),
     BuiltinRule("eval", "unanalyzable", "normal", "eval / source of dynamic text", "eval \"$X\""),
@@ -79,6 +81,8 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
     BuiltinRule("interpreter-inline-code", "unanalyzable", "normal", "Interpreter runs inline code",
                 "python -c '…'"),
     BuiltinRule("stdin-script", "unanalyzable", "normal", "Interpreter reads its script from stdin", "cat x | bash"),
+    BuiltinRule("heredoc-unparsed", "unanalyzable", "normal", "Heredoc delimiter or end cannot be determined",
+                "cat <<EOF (no EOF line)"),
     BuiltinRule("unknown-script", "unanalyzable", "normal", "Runs a script Guard cannot see", "./deploy.sh"),
     BuiltinRule("dynamic-path", "unanalyzable", "normal", "File path is not static", "Write $OUT"),
 )

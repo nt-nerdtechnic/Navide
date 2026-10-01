@@ -24,7 +24,7 @@ def _race(client, monkeypatch, first: str, artifacts: list[str]) -> None:
             if first == "reject":
                 review.reject(session, reason="malware", **kwargs)
             else:
-                review.approve(session, state.trust_signer, **kwargs)
+                review.approve(session, state.trust_signer, inspected_native_backend=True, **kwargs)
 
     def pending_rows_then_race(session, extension, version):
         rows = real(session, extension, version)

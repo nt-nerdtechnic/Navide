@@ -15,6 +15,7 @@ _V2_CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 PACKAGE_ID_BODY_PATTERN = r"[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+"
 PACKAGE_ID_RE = re.compile(rf"^{PACKAGE_ID_BODY_PATTERN}$")
 _V2_DISPLAY_TEXT_RE = r"^[^\r\n<>]+$"
+_V2_BACKEND_NAME_RE = re.compile(r"^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$")
 V2_SYSTEM_NAMESPACES: frozenset[str] = frozenset({"fs", "ui", "aiCli"})
 V2_SHELL_MODES: frozenset[str] = frozenset({"allowlist", "full"})
 MAX_EXTENSION_PACK_MEMBERS = 20
@@ -185,6 +186,20 @@ class ManifestV2Backend(ManifestV2Model):
     entry: str = Field(min_length=1)
     protocolVersion: Literal[1]
     activation: Literal["startup"]
+    methods: list[str] | None = Field(default=None, min_length=1, max_length=64)
+    events: list[str] | None = Field(default=None, min_length=1, max_length=32)
+
+    @field_validator("methods", "events")
+    @classmethod
+    def _check_names(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        if len(set(value)) != len(value):
+            raise ValueError("must not contain duplicate names")
+        for name in value:
+            if len(name) > 128 or not _V2_BACKEND_NAME_RE.fullmatch(name):
+                raise ValueError("contains an invalid name")
+        return value
 
     @field_validator("protocolVersion", mode="before")
     @classmethod

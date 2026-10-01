@@ -4,16 +4,21 @@ import {
   createHash,
   createPrivateKey,
   createPublicKey,
+  generateKeyPairSync,
   sign as signDigest,
   verify as verifyDigest,
 } from 'node:crypto'
 import {
+  closeSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
+  openSync,
   realpathSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { deflateRawSync } from 'node:zlib'
 import {
@@ -24,7 +29,10 @@ import {
   parseManifestV2,
   validatePortableArchiveEntries,
 } from '@navide/plugin-contracts'
+import { runDevBackend } from './dev-backend.mjs'
+import { initPlugin } from './init-template.mjs'
 import { readRegularFileNoFollow } from './package-files.mjs'
+import { assertSecureTransport, credentialsPath, login, publish, registryUrl, removeCredentials, storedCredentials } from './registry-client.mjs'
 
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
@@ -102,8 +110,10 @@ function artifactTarget(manifest, target) {
   return target
 }
 
+// Same rule as the Host's backendEntryOnDisk and the Registry's
+// backend_entry_for_target: only a bare entry gains `.exe` on win32.
 function backendEntryForTarget(entry, target) {
-  return target.startsWith('win32-') && !entry.toLowerCase().endsWith('.exe') ? `${entry}.exe` : entry
+  return target.startsWith('win32-') && posix.extname(entry) === '' ? `${entry}.exe` : entry
 }
 
 function backendMatchesTarget(bytes, target) {
@@ -397,50 +407,174 @@ function verifyPackage(packagePath, publicKeyPath, signaturePath) {
   return digest
 }
 
+/** Ed25519 keypair as <name>.key (PKCS#8, 0600, never overwritten) and
+ *  <name>.pub (SPKI): the formats the Registry and `sign` read. */
+function generateKeys(outDir, name) {
+  const keys = generateKeyPairSync('ed25519')
+  mkdirSync(outDir, { recursive: true })
+  const privatePath = resolve(outDir, `${name}.key`)
+  const publicPath = resolve(outDir, `${name}.pub`)
+  const fd = openSync(privatePath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600)
+  try {
+    writeSync(fd, keys.privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  } finally {
+    closeSync(fd)
+  }
+  writeFileSync(publicPath, keys.publicKey.export({ type: 'spki', format: 'pem' }))
+  return { privatePath, publicPath }
+}
+
 function usage() {
   return [
     'Usage:',
+    '  navide-plugin init <directory> --id <namespace.name> [--name <display name>]',
     '  navide-plugin validate <directory> [--target <target>]',
     '  navide-plugin package <directory> [--target <target>] [--out <file>]',
+    '  navide-plugin keygen [--out-dir <directory>] [--name <name>]',
     '  navide-plugin sign <package> --key <private-key> [--out <signature>]',
     '  navide-plugin verify <package> --key <public-key> --signature <signature>',
+    '  navide-plugin login [--registry <url>] [--label <label>] [--no-browser] [--insecure-http]',
+    '  navide-plugin whoami [--registry <url>]',
+    '  navide-plugin logout [--registry <url>]',
+    '  navide-plugin publish <package> [--registry <url>] [--target <target>] [--signature <file-or-value>] [--insecure-http]',
+    '  navide-plugin dev-backend <directory> [--call <method>] [--args <json>] [--subscribe <event,...>] [--data <directory>]',
+    '',
+    `The registry defaults to $NAVIDE_REGISTRY_URL, then https://server.navide.dev/registry.`,
+    'publish reads its token from NAVIDE_PLUGIN_TOKEN, then `navide-plugin login`. Registries must use https unless they are on loopback.',
   ].join('\n')
 }
 
-function main(argv) {
-  const [command, directory, ...rest] = argv
-  if (!command || !directory || !['validate', 'package', 'sign', 'verify'].includes(command)) fail(usage())
+// command -> [positional argument count, value options, boolean flags]
+const COMMANDS = {
+  init: [1, ['--id', '--name'], []],
+  validate: [1, ['--target'], []],
+  package: [1, ['--target', '--out'], []],
+  keygen: [0, ['--out-dir', '--name'], []],
+  sign: [1, ['--key', '--out'], []],
+  verify: [1, ['--key', '--signature'], []],
+  login: [0, ['--registry', '--label'], ['--no-browser', '--insecure-http']],
+  whoami: [0, ['--registry'], []],
+  logout: [0, ['--registry'], []],
+  publish: [1, ['--registry', '--target', '--signature', '--token'], ['--insecure-http']],
+  'dev-backend': [1, ['--call', '--args', '--subscribe', '--data'], []],
+}
+
+function parseArgs(argv) {
+  const [command, ...rest] = argv
+  const spec = COMMANDS[command]
+  if (!spec) fail(usage())
+  const [positionalCount, valueOptions, flags] = spec
+  const positional = rest.slice(0, positionalCount)
+  if (positional.length !== positionalCount || positional.some((value) => value.startsWith('--'))) fail(usage())
   const options = new Map()
-  for (let index = 0; index < rest.length; index += 2) {
-    if (!rest[index]?.startsWith('--') || rest[index + 1] === undefined || options.has(rest[index])) fail(usage())
-    options.set(rest[index], rest[index + 1])
+  for (let index = positionalCount; index < rest.length; index += 1) {
+    const key = rest[index]
+    if (options.has(key)) fail(usage())
+    if (flags.includes(key)) {
+      options.set(key, true)
+    } else if (valueOptions.includes(key) && rest[index + 1] !== undefined) {
+      options.set(key, rest[index + 1])
+      index += 1
+    } else {
+      fail(usage())
+    }
+  }
+  return { command, positional, options }
+}
+
+async function main(argv) {
+  const { command, positional, options } = parseArgs(argv)
+  const [argument] = positional
+  if (command === 'init') {
+    if (!options.get('--id')) fail(usage())
+    const result = initPlugin(argument, options.get('--id'), options.get('--name'))
+    console.log(`Created ${result.id} (${result.name}) in ${result.root}`)
+    console.log(`Next: navide-plugin validate ${argument}`)
+    return
   }
   if (command === 'validate') {
-    if ([...options.keys()].some((key) => key !== '--target')) fail(usage())
-    const result = validateDirectory(directory, options.get('--target') ?? 'universal')
+    const result = validateDirectory(argument, options.get('--target') ?? 'universal')
     console.log(`Validated ${result.manifest.id}@${result.manifest.version} for ${result.target}`)
     return
   }
   if (command === 'package') {
-    if ([...options.keys()].some((key) => key !== '--target' && key !== '--out')) fail(usage())
-    const result = packageDirectory(directory, options.get('--out'), options.get('--target') ?? 'universal')
+    const result = packageDirectory(argument, options.get('--out'), options.get('--target') ?? 'universal')
     console.log(`Packaged ${result.manifest.id}@${result.manifest.version} for ${result.target} to ${result.outputPath}`)
     return
   }
+  if (command === 'keygen') {
+    const result = generateKeys(options.get('--out-dir') ?? '.', options.get('--name') ?? 'publisher')
+    console.log(`private key: ${result.privatePath}`)
+    console.log(`public key:  ${result.publicPath}`)
+    return
+  }
   if (command === 'sign') {
-    if ([...options.keys()].some((key) => key !== '--key' && key !== '--out') || !options.get('--key')) fail(usage())
-    const result = signPackage(directory, options.get('--key'), options.get('--out'))
+    if (!options.get('--key')) fail(usage())
+    const result = signPackage(argument, options.get('--key'), options.get('--out'))
     console.log(`Signed complete archive digest ${result.digest} to ${result.outputPath}`)
     return
   }
-  if ([...options.keys()].some((key) => key !== '--key' && key !== '--signature') || !options.get('--key') || !options.get('--signature')) fail(usage())
-  const digest = verifyPackage(directory, options.get('--key'), options.get('--signature'))
-  console.log(`Verified complete archive digest ${digest}`)
+  if (command === 'verify') {
+    if (!options.get('--key') || !options.get('--signature')) fail(usage())
+    const digest = verifyPackage(argument, options.get('--key'), options.get('--signature'))
+    console.log(`Verified complete archive digest ${digest}`)
+    return
+  }
+  if (command === 'dev-backend') {
+    process.exitCode = await runDevBackend(argument, readManifest(argument), {
+      call: options.get('--call'),
+      args: options.get('--args'),
+      subscribe: (options.get('--subscribe') ?? '').split(',').filter(Boolean),
+      dataDir: options.get('--data'),
+    })
+    return
+  }
+  const registry = registryUrl(options.get('--registry'))
+  if (command === 'login' || command === 'publish') {
+    assertSecureTransport(registry, { insecureHttp: options.get('--insecure-http') === true })
+  }
+  if (command === 'login') {
+    const { entry, path } = await login(registry, {
+      label: options.get('--label') ?? 'navide-plugin CLI',
+      noBrowser: options.get('--no-browser') === true,
+    })
+    console.log(`Logged in to ${registry} as ${entry.namespace}; token expires ${entry.expires_at} (saved to ${path}).`)
+    return
+  }
+  if (command === 'whoami') {
+    const entry = storedCredentials(registry)
+    if (!entry) fail(`not logged in to ${registry}; run \`navide-plugin login --registry ${registry}\``)
+    // The Registry writes expires_at as naive UTC; read an offset-less value as UTC.
+    const expiresAt = typeof entry.expires_at === 'string' && !/(?:Z|[+-]\d\d:\d\d)$/i.test(entry.expires_at) ? `${entry.expires_at}Z` : entry.expires_at
+    const expired = expiresAt && Date.parse(expiresAt) <= Date.now()
+    console.log(`${entry.namespace} on ${registry}; token ${expired ? 'expired' : 'expires'} ${entry.expires_at}`)
+    if (expired) process.exitCode = 1
+    return
+  }
+  if (command === 'logout') {
+    const removed = removeCredentials(registry)
+    console.log(
+      removed
+        ? `Removed the stored token for ${registry} from ${credentialsPath()}. Revoke it on the publisher dashboard to invalidate it on the registry.`
+        : `No stored token for ${registry}.`,
+    )
+    return
+  }
+  if (options.has('--token')) {
+    console.error('navide-plugin: warning: --token is visible in the process list and shell history; set NAVIDE_PLUGIN_TOKEN or run `navide-plugin login` instead')
+  }
+  const target = options.get('--target') ?? 'universal'
+  console.log(`Publishing ${argument} (${target}) to ${registry}`)
+  const result = await publish(registry, argument, {
+    target,
+    signature: options.get('--signature'),
+    token: options.get('--token'),
+  })
+  console.log(`${result.status} ${result.body}`)
+  if (result.status < 200 || result.status >= 300) process.exitCode = 1
 }
 
-try {
-  main(process.argv.slice(2))
-} catch (error) {
+main(process.argv.slice(2)).catch((error) => {
   console.error(`navide-plugin: ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1
-}
+})

@@ -106,3 +106,36 @@ def test_parse_event_time_accepts_iso_and_epoch_millis() -> None:
     assert parse_event_time("1789516800") == 1789516800.0
     assert parse_event_time("") is None
     assert parse_event_time("not a date") is None
+
+
+def test_a_resumed_session_reads_the_account_of_the_pane_that_ran_each_turn(
+    tmp_path: Path,
+) -> None:
+    # A session resumed into a fresh pane gets a new pane id every time, and
+    # its earlier turns were pinned under the earlier ids. Asking only the
+    # pane that holds the session now read every one of them as "unknown".
+    db = Database(tmp_path / "navide.db")
+    first = PaneAccountHistory(db)
+    first.pin("pane-old", "acct-a", ts=1000.0)
+    first.bind_session("sess-1", "pane-old")
+    # The app quit without releasing it: the interval stays open forever.
+    first.pin("pane-new", "acct-b", ts=5000.0)
+    first.bind_session("sess-1", "pane-new")
+    db.close()
+
+    db = Database(tmp_path / "navide.db")
+    try:
+        history = PaneAccountHistory(db)
+        assert history.profile_at("pane-new", 1500.0) == "unknown"
+        assert history.profile_for_session("sess-1", "pane-new", 1500.0) == "acct-a"
+        # Both intervals are open at 6000: the most recent pin is the pane
+        # running the session then, not the stale one left open.
+        assert history.profile_for_session("sess-1", "pane-new", 6000.0) == "acct-b"
+        # Before any pin, and a session nobody bound, stay unknown.
+        assert history.profile_for_session("sess-1", "pane-new", 10.0) == "unknown"
+        assert history.profile_for_session("sess-x", "pane-zz", 1500.0) == "unknown"
+        # A pane never bound to the session still answers for itself.
+        history.pin("pane-solo", "acct-c", ts=100.0)
+        assert history.profile_for_session("sess-2", "pane-solo", 200.0) == "acct-c"
+    finally:
+        db.close()

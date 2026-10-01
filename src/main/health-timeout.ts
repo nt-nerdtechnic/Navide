@@ -1,4 +1,5 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { isLinux } from '../shared/osplat'
 
 // Health-check timeout (seconds): how long startBackend() waits for /health
 // before giving up. User-configurable (Settings UI), persisted in a small
@@ -7,6 +8,14 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 // app.whenReady() → startBackend() ordering).
 
 export const DEFAULT_HEALTH_CHECK_TIMEOUT_SEC = 45
+// Linux ships the backend as a PyInstaller onefile inside an AppImage: the
+// first launch unpacks through the FUSE mount and imports cold, measured at up
+// to 44s on an arm64 VM — right at the 45s default. Linux alone gets headroom.
+export const LINUX_DEFAULT_HEALTH_CHECK_TIMEOUT_SEC = 120
+
+export function defaultHealthCheckTimeoutSec(): number {
+  return isLinux() ? LINUX_DEFAULT_HEALTH_CHECK_TIMEOUT_SEC : DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+}
 export const MIN_HEALTH_CHECK_TIMEOUT_SEC = 15
 // Ceiling on what the user may configure. Waiting longer costs nothing but
 // patience, while too low a ceiling turns a slow first launch — building the
@@ -15,13 +24,13 @@ export const MIN_HEALTH_CHECK_TIMEOUT_SEC = 15
 export const MAX_HEALTH_CHECK_TIMEOUT_SEC = 600
 
 export function clampHealthCheckTimeoutSec(raw: number): number {
-  if (!Number.isFinite(raw)) return DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+  if (!Number.isFinite(raw)) return defaultHealthCheckTimeoutSec()
   return Math.min(MAX_HEALTH_CHECK_TIMEOUT_SEC, Math.max(MIN_HEALTH_CHECK_TIMEOUT_SEC, Math.round(raw)))
 }
 
 /** Parse a health-timeout file's text, tolerating missing/corrupt content. */
 export function parseHealthCheckTimeoutDoc(text: string | null): number {
-  if (!text) return DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+  if (!text) return defaultHealthCheckTimeoutSec()
   try {
     const data = JSON.parse(text)
     return clampHealthCheckTimeoutSec(Number(data?.timeoutSec))
@@ -30,7 +39,7 @@ export function parseHealthCheckTimeoutDoc(text: string | null): number {
     // user gets the default with no way to tell it apart from never having set
     // one. Say so: silently reverting a preference is the failure to avoid.
     console.warn('[health-timeout] corrupt document; falling back to the default', err)
-    return DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+    return defaultHealthCheckTimeoutSec()
   }
 }
 

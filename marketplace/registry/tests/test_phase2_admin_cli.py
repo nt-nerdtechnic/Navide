@@ -293,9 +293,9 @@ def _schema(path) -> tuple[dict[str, set], set[str]]:
 
 def test_fresh_and_upgraded_databases_end_at_the_same_schema(tmp_path):
     """A fresh database and one upgraded from the pre-Phase-2 head schema must
-    end at the same schema and the same recorded steps, 1..5 in order."""
+    end at the same schema and the same recorded steps, 1..8 in order."""
     numbers = [number for number, _name, _step in MIGRATIONS]
-    assert numbers == [1, 2, 3, 4, 5]
+    assert numbers == [1, 2, 3, 4, 5, 6, 7, 8]
 
     fresh = tmp_path / "fresh.db"
     fresh_engine = create_db_engine(fresh)
@@ -313,6 +313,11 @@ def test_fresh_and_upgraded_databases_end_at_the_same_schema(tmp_path):
     fresh_columns, fresh_indexes = _schema(fresh)
     upgraded_columns, upgraded_indexes = _schema(upgraded)
     assert fresh_columns == upgraded_columns
+    # Migration 6's legacy rating columns carry the same SQL default on both.
+    for path in (fresh, upgraded):
+        with sqlite3.connect(path) as db:
+            defaults = {row[1]: row[4] for row in db.execute("PRAGMA table_info(extension)")}
+        assert (defaults["legacy_rating_sum"], defaults["legacy_rating_count"]) == ("0", "0"), path
     # Only the indexes Phase 2 adds: HEAD_SCHEMA is a hand-written fixture
     # that already lacks some `create_all` indexes on the older tables.
     phase2_indexes = {"ix_publisher_navide_member_id", "ix_extension_version_review_status"}

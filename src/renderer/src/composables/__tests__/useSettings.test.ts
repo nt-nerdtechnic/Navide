@@ -7,7 +7,8 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { initSettingsBackend, seedSettings, settingsGet, settingsReadiness } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import { createMockBackend } from './mockBackend'
-import { ensureLanguageSettingsSubscription, useSettings } from '../useSettings'
+import { defaultHealthCheckTimeoutSec, ensureLanguageSettingsSubscription, useSettings } from '../useSettings'
+import { platformId, setPlatformId, type PlatformId } from '../../../../shared/osplat'
 
 const LANGUAGE_KEY = 'agent-team:language'
 
@@ -22,6 +23,20 @@ describe('useSettings — health-check timeout', () => {
   it('defaults to 45 seconds', () => {
     const { healthCheckTimeoutSec } = useSettings()
     expect(healthCheckTimeoutSec.value).toBe(45)
+  })
+
+  it.each<[PlatformId, number]>([
+    ['linux', 120],
+    ['darwin', 45],
+    ['win32', 45],
+  ])('the %s default matches main (%is)', (platform, expected) => {
+    const original = platformId()
+    setPlatformId(platform)
+    try {
+      expect(defaultHealthCheckTimeoutSec()).toBe(expected)
+    } finally {
+      setPlatformId(original)
+    }
   })
 
   it('loadHealthCheckTimeoutSec adopts the value read via IPC', async () => {

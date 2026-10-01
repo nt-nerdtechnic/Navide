@@ -1,70 +1,191 @@
 # Navide plugin package format (`.vsix`-style)
 
-> **Status: manifest v1 reader; the registry also accepts Manifest v2.** This
-> file documents the legacy (v1) registry reader and includes legacy fields such
-> as `requires` and `activationEvents`. `parse_manifest` routes any manifest
-> with a `schemaVersion`, `permissions`, or `marketplace` key to the v2 model
-> (`registry/manifest_v2.py`), and each published artifact is keyed by
-> `(extension_id, version, target)`. This file is not the Manifest v2 author
-> contract. The v2
-> target archive layout, path safety, target-specific backend artifact, and
-> signing requirements are defined in
-> [`docs/en-US/plugin-development-v2.md`](../../docs/en-US/plugin-development-v2.md).
-
-A publishable plugin is a single **ZIP archive** (conventionally `*.vsix`) that
-contains a `manifest.json` at its root plus optional asset files. The layout is
-intentionally close to the VS Code `.vsix` idea (a ZIP with a manifest and
-assets) but uses Navide's own trimmed manifest vocabulary — the same fields the
-in-app plugin host already validates
-(`backend/agent_team_backend/plugins/manifest.py`).
+> **Status: Manifest v2 is the package format.** Every new package is a
+> Manifest v2 archive built with the SDK CLI (`navide-plugin package`, see
+> [Publishing to the Navide Marketplace](../../docs/en-US/marketplace-publishing.md)).
+> The Registry still reads [legacy Manifest v1](#legacy-manifest-v1) archives
+> so existing rows keep working; do not author new v1 packages.
+>
+> `parse_manifest` (`registry/manifest.py`) routes a manifest with a
+> `schemaVersion`, `permissions` or `marketplace` key to the v2 model
+> (`registry/manifest_v2.py`) and anything else to v1
+> (`registry/manifest_v1.py`). The archive reader is `registry/package.py`; the
+> author-side packager is `packages/plugin-sdk/bin/navide-plugin.mjs`, which
+> validates the same rules with `@navide/plugin-contracts` before it writes the
+> archive. The runtime contract behind each field is in
+> [Plugin Developer Spec v2](../../docs/en-US/plugin-development-v2.md).
 
 ## Archive layout
 
+A package is one ZIP archive, conventionally `<id>-<version>-<target>.vsix`.
+The filename carries no meaning: identity and version come from the manifest,
+and the target from the publish request.
+
 ```
-my-plugin-0.1.0.vsix   (a ZIP archive)
-├── manifest.json      (required, at archive root)
-├── README.md          (optional)
-├── icon.png           (optional; path is whatever manifest.icon points to)
-└── screenshots/       (optional)
-    └── main.png
+acme.files-1.0.0-darwin-arm64.vsix   (a ZIP archive)
+├── manifest.json        (required, at the archive root)
+├── README.md            (optional; shown on the listing page)
+├── frontend/            (present when contributes.views exists)
+│   └── main/
+│       ├── index.html
+│       └── main.js
+├── backend/             (present when backend exists)
+│   └── acme-files       (one executable for this target; acme-files.exe on win32)
+└── assets/
+    └── icon.png
 ```
 
-Rules enforced by the reader (`registry/package.py`):
+The author-side staging directory also holds `artifact-files.json`, a JSON
+object with exactly one key, `files`: the explicit list of files to put in the
+archive. The packager never zips a directory recursively, and
+`artifact-files.json` itself is not archived.
 
-- The archive MUST be a valid ZIP.
-- `manifest.json` MUST exist at the archive root and be valid JSON.
-- The manifest MUST validate against the manifest schema below.
-- If `manifest.icon` is set, the referenced path MUST exist inside the archive.
-- Any other file is treated as an asset and recorded as an asset reference
-  (path, size, guessed content-type).
-- Archive paths MUST use canonical relative POSIX segments: no empty, `.`, or
-  `..` segments, backslashes, duplicate canonical paths, or regular-file
-  ancestor collisions. A directory entry may have one trailing `/`.
+## Archive rules
 
-A malformed archive is rejected with a clear `PackageError`.
+Enforced by `read_package` at publish (and by the SDK packager before it
+writes):
 
-## `manifest.json` fields
+- The archive is a valid ZIP without ZIP64 records.
+- `manifest.json` is a regular file at the archive root: UTF-8 without a BOM,
+  one JSON object, no duplicate keys, valid against the manifest model.
+- Entry paths are canonical relative POSIX paths of at most 1024 characters:
+  no absolute paths, empty, `.` or `..` segments, backslashes, duplicate
+  (case-folded) entries or regular-file ancestor collisions. A directory entry
+  may have one trailing `/`. Symlinks and special files are refused.
+- An entry is at most 50 MiB; the expanded archive is at most 200 MiB.
+- These Host-owned names never appear in an archive:
+  `.navide-receipt.json`, `.navide-registry-receipt.json`,
+  `.navide-package.zip`, `.navide-registry-trust.json`,
+  `.navide-backend-activation.json`, `.navide-quarantined.json`.
+- Source-only and secret material is refused: any path under
+  `node_modules`, `.venv`, `venv`, `__pycache__` or `tests`; `package.json`,
+  lock files and `pyproject.toml`; `.py`, `.pyc`, `.pyo`, `.ts`, `.tsx`,
+  `.vue` and `.map` files; `.env*` files and `.key`, `.pem`, `.p12`, `.pfx`
+  files. (The SDK packager also refuses `vite.config.*`.)
+- Every file the manifest references exists in the archive: each view
+  `entry`, view `icon` and `targetSchema`, `marketplace.icon`, and the
+  target's [backend entry](#targets-and-backend-entry).
+- Apart from `manifest.json` and `README.md`, the SDK packager keeps files
+  inside `frontend/`, `assets/` and `backend/`, plus any declared view
+  `targetSchema`.
+- A package without `contributes` has no `frontend/` entries; a package
+  without `backend` has no `backend/` entries.
 
-The **core fields are identical** to the in-app plugin manifest, so a package
-that the registry accepts is also loadable by the app's plugin host. The
-registry adds a few **optional presentation fields** (marked *marketplace*)
-needed for discovery — these are an additive superset, not a divergent schema.
+## `manifest.json` (Manifest v2)
+
+Unknown fields are refused at every level, and so is an explicit `null`.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `id` | string | yes | `<namespace>.<name>`, lowercase; regex `^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$`. This is the registry identity. |
-| `name` | string | yes | Non-empty. Human name (as in the app manifest). |
-| `version` | string | yes | Manifest v1: strict semver `MAJOR.MINOR.PATCH` (no pre-release/build). Manifest v2 accepts full SemVer 2.0.0; see [Release channels](#release-channels). |
-| `publisher` | string | yes | Non-empty publisher id. |
-| `engines` | object | yes | Non-empty `{host: range}`; host-API compat lives here, e.g. `{"navide": "^0.1.0"}`. |
-| `entry` | string | no | Plugin entry file. |
-| `contributes` | object | no | `{ "views": [{id,title}], "commands": [{id,title}] }`. |
-| `requires` | string[] | no | Capabilities; each must be one of `fs, git, terminal, search, chat, ui, issues, plans`. |
-| `activationEvents` | string[] | no | Each matches `onStartup` \| `onView:<id>` \| `onCommand:<id>`. Honored for backend plugins; frontend views ignore it (they start when the host opens them). |
-| `displayName` | string | no | *marketplace* — falls back to `name` when absent. |
-| `description` | string | no | *marketplace* — used by search. |
-| `categories` | string[] | no | *marketplace* — used by search/filter. |
-| `icon` | string | no | *marketplace* — archive-relative path to an icon asset. |
+| `schemaVersion` | `2` | yes | Selects this model. |
+| `apiVersion` | string | yes | The public SDK/capability API range the plugin is written against, `^1.0.0`-style: an optional `^` or `~` and `MAJOR.MINOR.PATCH`. |
+| `id` | string | yes | `<namespace>.<name>[.<more>]`, each segment `[a-z0-9][a-z0-9-]*`. The Registry identity; never changes between versions. |
+| `name` | string | yes | Display name, 1-80 characters, no newlines or `<` `>`. |
+| `version` | string | yes | Manifest v2: full SemVer 2.0.0, including a pre-release suffix and build metadata; see [Release channels](#release-channels). (Manifest v1 accepted only `MAJOR.MINOR.PATCH`.) |
+| `publisher` | string | yes | `[a-z0-9][a-z0-9-]*`; must equal the first segment of `id`, which is the namespace the publishing account owns. |
+| `engines` | object | no | `{ "navide": "<range>" }`, the lowest Navide release the version supports; see [`engines.navide`](#enginesnavide). |
+| `permissions` | object | yes | `{}` or the grants below. |
+| `marketplace` | object | yes | Listing metadata, below. |
+| `contributes` | object | one of | `{ "views": [...] }`, 1-16 views. |
+| `backend` | object | one of | The native backend, below. |
+| `extensionPack` | string[] | one of | An [Extension Pack](#extension-packs): 1-20 member ids. |
+
+A manifest declares `contributes`, `backend` or both, or else it is an
+Extension Pack and declares neither.
+
+### `permissions`
+
+| Field | Type | Notes |
+|---|---|---|
+| `system` | string[] | 1-3 unique namespaces from `fs`, `ui`, `aiCli`. |
+| `shell` | string | `allowlist` or `full`. |
+
+### `marketplace`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `description` | string | yes | 1-280 characters, one line, no `<` `>`. Used by search. |
+| `license` | string | yes | An SPDX-style expression, up to 100 characters. |
+| `repository` | string | no | An `https://` URL. |
+| `homepage` | string | no | An `https://` URL. |
+| `categories` | string[] | no | Up to 5 unique slugs `[a-z0-9][a-z0-9-]{0,39}`. |
+| `icon` | string | no | Archive path of the listing icon. |
+
+### `contributes.views[]`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `id` | string | yes | `[a-z][a-z0-9-]*`, unique in the package. |
+| `kind` | `"custom"` | yes | |
+| `location` | string | yes | `top`, `bottom`, `right`, `left`, `main`, `window` or `detail`. |
+| `title` | string | yes | 1-80 characters, no newlines or `<` `>`. |
+| `entry` | string | yes | Archive path of the view's HTML file. |
+| `icon` | string | no | Archive path. |
+| `detailView` | string | no | `left` views only: the id of a `detail` view in the same package. |
+| `targetSchema` | string | no | `detail` views only: archive path of a `.json` schema. |
+| `receives` | object | no | `window` views only: `{ "protocolVersion": 1, "locations": ["left" and/or "detail"], "editorTargets"?: { "protocolVersion": 1 }, "closeGuard"?: { "protocolVersion": 1 } }`. |
+
+### `backend`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `entry` | string | yes | Archive path of the executable, written without an extension (see below). A script name (`.py`, `.js`, `.sh`, `.ps1`, `.bat`, …) is refused. |
+| `protocolVersion` | `1` | yes | Navide Backend Wire v1. |
+| `activation` | `"startup"` | yes | |
+| `methods` | string[] | no | 1-64 unique package-local method names, dotted lowerCamel segments such as `files.list` (at most 128 characters). The Host forwards only declared methods. |
+| `events` | string[] | no | 1-32 unique package-local event names, same form as `methods`. The Host forwards only declared events. |
+
+## Targets and backend entry
+
+Every artifact is published for one target, the `target` query parameter of
+`POST /api/publish`:
+
+- A package **without** a backend is published once as `universal`.
+- A package **with** a backend is published once per platform target,
+  `<platform>-<arch>` as Node reports it. The archive holds exactly one file
+  under `backend/`, the executable for that target, and its bytes must match
+  the target: ELF for `linux-x64` / `linux-arm64`, PE for `win32-x64` /
+  `win32-arm64`, Mach-O 64-bit for `darwin-x64` / `darwin-arm64`. A file that
+  starts with `#!` is refused.
+- **Windows entry rule.** One manifest serves every target, so `backend.entry`
+  is written without an extension (`backend/acme-files`). For a `win32-*`
+  target that bare entry names `backend/acme-files.exe`, which is the file the
+  archive must contain; on every other target it names the file as written.
+  An entry that already has an extension is read as written everywhere.
+- **Executable bit.** On non-Windows targets the backend entry's ZIP mode has
+  an executable bit; on `win32-*` the `.exe` extension stands in for it.
+- A version is either one `universal` artifact or a set of platform
+  artifacts, never both, and each target is published at most once (`409`
+  otherwise). The App installs the artifact for its exact host target, else
+  `universal`. Yanking yanks the version on every target.
+- The SDK packager builds a backend package only for the build host's own
+  target, so each target is packaged on a machine of that platform and
+  architecture (the first-party CI matrix does this).
+
+## Extension packs
+
+A manifest with `extensionPack` lists 1-20 unique member ids installed
+together:
+
+- It declares no `contributes`, no `backend`, and empty `permissions` (no
+  `system`, no `shell`); it is published as `universal`.
+- It may not list its own id, and a member may not itself be a pack; nor may
+  a pack version be published for an id another pack lists as a member. The
+  Registry refuses such a publish, and approval re-checks it.
+- The Registry lists every pack under the `extension-packs` category, whatever
+  categories it declares. Each member is installed, verified and confirmed on
+  its own, with the member's own permissions.
+
+## `engines.navide`
+
+`engines.navide` names the **lowest** Navide release a version supports, the
+way VS Code reads `engines.vscode`: `^0.2.9`, `~0.2.9`, `>=0.2.9` and a bare
+`0.2.9` all mean "0.2.9 or newer", and `*` means any release. Upper bounds are
+not enforced, so a package keeps working on newer Navide releases. A Navide
+release older than the minimum is not offered that version. An absent or
+unreadable requirement is treated as unknown rather than incompatible. The
+Registry (`registry/discovery.py`) and the App
+(`src/main/plugins/pluginEngineCompat.ts`) apply the same rule.
 
 ## Release channels
 
@@ -93,12 +214,39 @@ There are two deliberately separate signatures:
 
 A package submission carries a **detached publisher signature** supplied to `POST /api/publish` as
 the `signature` query param (not stored inside the ZIP). It is the **base64
-encoding of an Ed25519 signature over the package's sha256 digest** (the same
-digest the registry computes from the uploaded bytes). The registry verifies it
+encoding of an Ed25519 signature over the package's sha256 digest** (the
+64-character lowercase hex string, as ASCII bytes — the same digest the
+registry computes from the uploaded bytes). The registry verifies it
 against the publisher's registered Ed25519 public key
 (`registry/signing.py :: Ed25519SignatureVerifier`). This authenticates the
 submission only; it is not returned as the Client trust contract. Once accepted,
 the registry signs the full artifact digest and immutable listing envelope with
 its registry signer and returns root-signed signer/blocklist metadata. Produce
-the submission signature with `navide-plugin sign <package> --key <privkey>`.
-See the README "Security model" section for the publish gate and policy config.
+the submission signature with `navide-plugin sign <package> --key <privkey>`
+(keys from `navide-plugin keygen`: PKCS#8 private key, SPKI public key, both
+PEM). See the README "Security model" section for the publish gate and policy
+config.
+
+## Legacy: Manifest v1
+
+The Registry still parses v1 manifests, so packages published before Manifest
+v2 keep working; new packages should use v2. A v1 archive is a ZIP with
+`manifest.json` at its root; every other file is recorded as an asset, and
+`manifest.icon`, when set, must exist in the archive. The archive path rules
+above apply to v1 too.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `id` | string | yes | `<namespace>.<name>`, lowercase; regex `^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$`. |
+| `name` | string | yes | Non-empty. |
+| `version` | string | yes | Strict `MAJOR.MINOR.PATCH` (no pre-release/build). |
+| `publisher` | string | yes | Non-empty publisher id. |
+| `engines` | object | yes | Non-empty `{host: range}`, e.g. `{"navide": "^0.1.0"}`. |
+| `entry` | string | no | Plugin entry file. |
+| `contributes` | object | no | `{ "views": [{id,title}], "commands": [{id,title}] }`. |
+| `requires` | string[] | no | Capabilities; each one of `fs, git, terminal, search, chat, ui, issues, plans`. |
+| `activationEvents` | string[] | no | Each `onStartup` \| `onView:<id>` \| `onCommand:<id>`. |
+| `displayName` | string | no | Falls back to `name`. |
+| `description` | string | no | Used by search. |
+| `categories` | string[] | no | Used by search/filter. |
+| `icon` | string | no | Archive-relative path to an icon asset. |

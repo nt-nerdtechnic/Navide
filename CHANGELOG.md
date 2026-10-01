@@ -4,6 +4,10 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Fixed
+
+- The macOS installer window no longer shows `.background.tiff` and `.VolumeIcon.icns` above the Navide → Applications layout when Finder is set to show hidden files.
+
 ## [0.2.13] — 2026-09-30 — signed release
 
 ### Added

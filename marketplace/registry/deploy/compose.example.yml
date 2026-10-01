@@ -16,6 +16,10 @@ services:
       REGISTRY_TRUST_PROFILE: official
       REGISTRY_TRUST_CONFIG_FILE: /etc/navide-registry/official-trust.json
       REGISTRY_ROOT_PATH: /registry
+      # Proxies whose X-Forwarded-Proto/-For uvicorn trusts (default "*": the
+      # port is reachable only through the load balancer). Narrow to the
+      # proxy's subnet if it is not.
+      # REGISTRY_FORWARDED_ALLOW_IPS: "10.0.0.0/16"
       REGISTRY_ADMIN_TOKEN_FILE: /run/secrets/navide-registry-admin-token
       # Navide Cloud sign-in (Phase 2). Leave these four unset to keep
       # self-service publishing off.

@@ -44,6 +44,7 @@ STATUS_EDIT_MAX_FAILURES = 3
 STATUS_EDIT_EVERY_S = 5.0
 TYPING_EVERY_S = 4.0
 AWAITING_PROBE_EVERY_S = 5.0
+AWAITING_RETRY_MAX = 3  # relay attempts per awaiting prompt before giving up
 RUN_TICK_S = 0.5
 RUN_WATCH_MAX_S = 1800.0  # stop typing/editing after this; a late turn_complete still replies
 VERDICT_POLL_S = 5.0
@@ -210,6 +211,7 @@ class ChannelManager:
         self._workers: dict[str, _Worker] = {}
         self._known_panes: set[str] = set()
         self._awaiting_posted: set[str] = set()
+        self._awaiting_failures: dict[str, int] = {}
         self._turn_source: dict[str, str] = {}
         self.mirror = Mirror(self)
 
@@ -730,6 +732,7 @@ class ChannelManager:
             pending.task.cancel()
         self.relay.expire_pane(pane_id)
         self._awaiting_posted.discard(pane_id)
+        self._awaiting_failures.pop(pane_id, None)
         self._spawn(self._send_reply(pending, str(entry.get("text") or "")))
 
     def _mirror_unclaimed_turn(self, pane_id: str, text: str) -> None:
@@ -1185,6 +1188,7 @@ class ChannelManager:
                 self.relay.expire_pane(pane_id)  # the prompt was answered at the keyboard
             pending.awaiting_posted = False
             self._awaiting_posted.discard(pane_id)
+            self._awaiting_failures.pop(pane_id, None)
             return
         if pending.awaiting_posted or pane_id in self._awaiting_posted:
             return
@@ -1196,11 +1200,15 @@ class ChannelManager:
         """Relay a pane's permission/question to ``loc`` (always pushed, whoever started the turn)."""
         adapter = self._adapters.get(loc.platform)
         if adapter is None:
+            self._awaiting_failed(pane_id, "not connected")
             return
         try:
             info = await self._seams.awaiting_info(pane_id)
-        except Exception:  # noqa: BLE001
-            info = {}
+        except Exception as exc:  # noqa: BLE001
+            if self._awaiting_failures.get(pane_id, 0) + 1 < AWAITING_RETRY_MAX:
+                self._awaiting_failed(pane_id, f"awaiting_info: {exc}")
+                return
+            info = {}  # last attempt: a generic prompt beats none
         kind = str(info.get("kind") or "") or "permission"
         options = [str(o) for o in (info.get("options") or [])]
         # Claude's AskUserQuestion reports "permission"; the options tell them apart.
@@ -1219,12 +1227,30 @@ class ChannelManager:
             ids = await self.mirror.send(loc, text, owner=pane_id, buttons=buttons or None)
         except Exception as exc:  # noqa: BLE001
             log.warning("channels: relay prompt to %s failed: %s", loc.key(), exc)
+            self.relay.expire_pane(pane_id)  # never delivered: nothing may answer it
+            self._awaiting_failed(pane_id, str(exc))
+            return
+        self._awaiting_failures.pop(pane_id, None)
+
+    def _awaiting_failed(self, pane_id: str, why: str) -> None:
+        """An awaiting prompt did not reach the chat: unmark it so the next probe or
+        status change retries, up to AWAITING_RETRY_MAX attempts per prompt."""
+        failures = self._awaiting_failures.get(pane_id, 0) + 1
+        self._awaiting_failures[pane_id] = failures
+        if failures >= AWAITING_RETRY_MAX:
+            log.warning("channels: giving up relaying %s's awaiting prompt: %s", pane_id, why)
+            return
+        self._awaiting_posted.discard(pane_id)
+        pending = self._pending.get(pane_id)
+        if pending is not None:
+            pending.awaiting_posted = False
 
     def _drop_pending(self, pane_id: str) -> None:
         pending = self._pending.pop(pane_id, None)
         if pending and pending.task:
             pending.task.cancel()
         self._awaiting_posted.discard(pane_id)
+        self._awaiting_failures.pop(pane_id, None)
 
 
 def _check_platform(platform: str) -> None:

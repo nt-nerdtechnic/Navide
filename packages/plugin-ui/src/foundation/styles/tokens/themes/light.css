@@ -4,6 +4,8 @@
  */
 
 :root[data-theme='light'] {
+  --nv-color-scheme: light;
+
   /* Backgrounds */
   --bg-base: #ffffff;
   --bg-inset: #f6f8fa;

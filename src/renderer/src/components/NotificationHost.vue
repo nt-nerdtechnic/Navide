@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { useNotify } from '@navide/plugin-ui/foundation'
+import { useDialogFocus } from '../composables/useDialogFocus'
 
 const { toasts, dialog, promptValue, dialogCheckbox, dismissToast, resolveDialog } = useNotify()
 
@@ -8,6 +9,9 @@ const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
 
 const modalEl = ref<HTMLDivElement | null>(null)
 const promptInput = ref<HTMLInputElement | null>(null)
+// Tab stays inside the open dialog and focus returns to its opener after.
+// Initial focus is the same as the watcher below gives it.
+useDialogFocus(modalEl, () => (dialog.value?.kind === 'prompt' ? promptInput.value : modalEl.value))
 watch(dialog, async (d) => {
   if (d) {
     await nextTick()
@@ -39,12 +43,19 @@ watch(dialog, async (d) => {
 
     <!-- Alert / Confirm dialog (blocking) -->
     <div v-if="dialog" ref="modalEl" class="modal" tabindex="-1" @click.self="resolveDialog(false)" @keydown.esc="resolveDialog(false)" @keydown.enter="resolveDialog(true)">
-      <div class="card" :class="[dialog.kind, { danger: dialog.danger }]">
+      <div
+        class="card"
+        :class="[dialog.kind, { danger: dialog.danger }]"
+        :role="dialog.kind === 'prompt' ? 'dialog' : 'alertdialog'"
+        aria-modal="true"
+        aria-labelledby="notify-dialog-title"
+        aria-describedby="notify-dialog-body"
+      >
         <header>
           <span class="dot"></span>
-          <strong>{{ dialog.title }}</strong>
+          <strong id="notify-dialog-title">{{ dialog.title }}</strong>
         </header>
-        <div class="body">
+        <div id="notify-dialog-body" class="body">
           <pre :class="{ prose: dialog.detail !== undefined }">{{ dialog.message }}</pre>
           <pre v-if="dialog.detail !== undefined" class="detail">{{ dialog.detail }}</pre>
           <input
@@ -164,62 +175,82 @@ watch(dialog, async (d) => {
 }
 
 /* ── Dialog (alert / confirm) ─────────────────────────────────────────── */
+/* Same look as the nv-dialog card the other dialogs use (icon tile, blurred
+   scrim, accent hairline); the markup and classes are unchanged. */
 .modal {
   position: fixed;
   inset: 0;
-  background: var(--shadow-overlay);
+  background: var(--modal-backdrop);
+  backdrop-filter: blur(var(--modal-backdrop-blur));
+  -webkit-backdrop-filter: blur(var(--modal-backdrop-blur));
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: calc(var(--z-toast) + 1);
+  animation: nv-modal-scrim-in var(--motion-fast) var(--ease-out);
 }
 .modal:focus {
   outline: none;
 }
 .card {
-  background: var(--bg-base);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
-  border-left: 4px solid var(--accent-fg);
   border-radius: var(--radius-lg);
-  width: min(520px, 92vw);
+  width: min(var(--modal-w-compact), 92vw);
   max-height: 80vh;
   display: flex;
   flex-direction: column;
   color: var(--text-bright);
-  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  font-family: var(--font-ui);
   font-size: var(--font-sm);
   box-shadow: var(--shadow-modal);
   overflow: hidden;
+  animation: nv-dialog-in var(--motion-base) var(--ease-out);
 }
-.card.confirm {
-  border-left-color: var(--attention-fg);
+.card::before {
+  content: '';
+  flex: none;
+  height: 3px;
+  background: var(--accent-fg);
 }
 header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-muted);
-  background: var(--bg-subtle);
+  gap: 12px;
+  padding: 18px 20px 6px;
 }
+/* The tone dot becomes the icon tile the other dialogs use. */
 .dot {
-  width: 10px;
-  height: 10px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: var(--accent-fg);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-fg) 20%, transparent);
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+}
+.dot::after {
+  content: 'i';
 }
 .card.confirm .dot {
-  background: var(--attention-fg);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--attention-fg) 20%, transparent);
+  background: var(--attention-subtle);
+  color: var(--attention-fg);
+}
+.card.confirm .dot::after {
+  content: '?';
 }
 header strong {
   color: var(--text-bright);
+  font-size: var(--font-md);
 }
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 18px;
+  padding: 4px 20px 18px 64px;
 }
 .body pre {
   margin: 0;
@@ -265,9 +296,9 @@ footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 18px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border-muted);
-  background: var(--bg-base);
+  background: var(--bg-subtle);
 }
 button {
   border: 1px solid var(--border-default);
@@ -294,12 +325,12 @@ button.primary:hover {
 }
 /* Destructive confirm (opt-in via `danger`): red action, and prose rather
    than the monospace the default body keeps for paths and command output. */
-.card.danger {
-  border-left-color: var(--danger-fg);
-}
 .card.danger .dot {
-  background: var(--danger-fg);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger-fg) 20%, transparent);
+  background: var(--danger-subtle);
+  color: var(--danger-bright);
+}
+.card.danger .dot::after {
+  content: '!';
 }
 .card.danger .body pre {
   font-family: inherit;

@@ -19,6 +19,7 @@ from agent_team_backend.credential_vault import (
     CredentialVaultError,
     LiveCredentials,
 )
+from tests.keychain_fake import security_g_output
 
 
 class FakeSecurity:
@@ -38,9 +39,9 @@ class FakeSecurity:
         if cmd == "find-generic-password":
             if account is None:
                 hits = [v for (s, _a), v in self.items.items() if s == service]
-                return (0, hits[0] + "\n") if hits else (44, "")
+                return (0, security_g_output(hits[0])) if hits else (44, "")
             value = self.items.get((service, account))
-            return (0, value + "\n") if value is not None else (44, "")
+            return (0, security_g_output(value)) if value is not None else (44, "")
         if cmd == "add-generic-password":
             self.items[(service, account)] = tokens[tokens.index("-w") + 1]
             return 0, ""

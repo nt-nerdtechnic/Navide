@@ -41,6 +41,7 @@ Root [繁體中文 README](../../README.zh-TW.md) 負責介紹產品與目前發
 | [CLI Vendor Matrix — English](../en-US/cli-vendor-matrix.md) | 已支援的 CLI 總覽：實際執行的指令，以及每家 spec 宣告的能力 |
 | [Plugin Development — English](../en-US/plugin-development.md) | 開發前端 View 插件或後端插件，並打包簽章發布 |
 | [Plugin Development v2 — English](../en-US/plugin-development-v2.md) | 使用公開 Contracts、SDK、UI Package 與外部 Frontend Package Workflow |
+| [Publishing to the Navide Marketplace — English](../en-US/marketplace-publishing.md) | 用 `navide-plugin` 建立、打包、簽章並發布插件到 Navide Marketplace，通過審核上架 |
 | [外部 MCP 控制](external-mcp-control.md) | 連接外部 MCP Client 控制執行中的 Navide 視窗，並理解安全模型 |
 | [Release Guide — English](../en-US/releases.md) | 版本、封裝、簽章、Notarization、發布與復原 Release |
 

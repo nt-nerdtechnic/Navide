@@ -143,18 +143,6 @@ class PublisherRegisterResponse(BaseModel):
     has_token: bool
 
 
-class RatingRequest(BaseModel):
-    score: int = Field(ge=1, le=5)
-    """A 1-5 rating. Per-user auth/dedup is deferred (see README)."""
-
-
-class RatingResponse(BaseModel):
-    namespace: str
-    name: str
-    rating_average: float
-    rating_count: int
-
-
 class FeaturedRequest(BaseModel):
     featured: bool = True
 

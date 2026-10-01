@@ -1,6 +1,6 @@
 {
   "name": "agent-team",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "private": true,
   "author": "Navide Team",
   "description": "Navide: the AI-native engineering environment for one engineer directing multiple coding agents",
@@ -155,6 +155,22 @@
           "filter": [
             "navide-stt"
           ]
+        }
+      ]
+    },
+    "beforePack": "./scripts/dmg-hide-support-files.mjs",
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
         }
       ]
     },

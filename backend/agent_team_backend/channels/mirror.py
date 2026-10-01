@@ -535,9 +535,11 @@ class Mirror:
             if route is not None and shows(route.binding.verbosity, "minimal"):
                 self.m._awaiting_posted.add(pane_id)
                 self.m._spawn(self.m._post_awaiting(pane_id, route.binding.location(), route.child))
-        elif pane_id in self.m._awaiting_posted:
-            self.m._awaiting_posted.discard(pane_id)
-            self.m.relay.expire_pane(pane_id)
+        else:
+            self.m._awaiting_failures.pop(pane_id, None)
+            if pane_id in self.m._awaiting_posted:
+                self.m._awaiting_posted.discard(pane_id)
+                self.m.relay.expire_pane(pane_id)
 
     # --- lineage --------------------------------------------------------------------
 

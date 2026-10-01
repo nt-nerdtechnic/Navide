@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Report {{ ext.display_name }} — Navide Marketplace{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}">← {{ ext.display_name }}</a></nav>
+<section class="panel narrow">
+  <h1>Report {{ ext.display_name }}</h1>
+  <p class="muted"><code>{{ ext.identity }}</code></p>
+  {% if submitted %}
+    <p class="ok-line" role="status">✓ Thanks — your report was sent to the marketplace moderators.
+      The publisher sees the report but not who sent it.</p>
+    <p><a href="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}">Back to the extension</a></p>
+  {% elif already_open %}
+    <p class="warn warn-block" role="status">You already have an open report for this extension.
+      A moderator will review it; you can report again once it is resolved.</p>
+  {% else %}
+    <p class="muted">Moderators review every report. The publisher sees the reason and
+      your details, but never who sent the report.</p>
+    {% if error %}<p class="warn warn-block" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/report" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="report-reason">Reason <span class="required-mark">required</span></label>
+      <select id="report-reason" name="reason" required>
+        <option value="" {% if not form.reason %}selected{% endif %} disabled>Choose a reason…</option>
+        {% for key, label in reasons %}
+        <option value="{{ key }}" {% if form.reason == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <label for="report-version">Version</label>
+      <select id="report-version" name="version">
+        <option value="">All versions</option>
+        {% for v in versions %}
+        <option value="{{ v }}" {% if form.version == v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+      <label for="report-detail">Details <span class="muted">(optional, up to {{ max_detail }} characters)</span></label>
+      <textarea id="report-detail" class="prose-input" name="detail" rows="6" maxlength="{{ max_detail }}"
+                placeholder="What did you notice? Links or steps help moderators act faster.">{{ form.detail }}</textarea>
+      <button type="submit" class="install-button">Send report</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

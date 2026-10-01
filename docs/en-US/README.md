@@ -42,6 +42,7 @@ The root [README](../../README.md) introduces the product and current distributi
 | [CLI vendor matrix](cli-vendor-matrix.md) | See every shipped CLI, the command it runs, and the capabilities its spec declares |
 | [Plugin development](plugin-development.md) | Build a frontend view plugin or a backend plugin, then package and sign it |
 | [Plugin development v2](plugin-development-v2.md) | Use the public contracts, SDK, UI package, and external frontend package workflow |
+| [Publishing to the Navide Marketplace](marketplace-publishing.md) | Scaffold, package, sign, and publish a plugin with `navide-plugin`, then pass review |
 | [External MCP control](external-mcp-control.md) | Connect an external MCP client to control a running Navide window, and understand the security model |
 | [Release guide](releases.md) | Version, package, sign, notarize, publish, and recover a release |
 | [Release announcements](release-announcements.md) | Add a version's in-app What's New entry and its guided tour |
