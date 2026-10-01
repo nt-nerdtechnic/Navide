@@ -161,7 +161,8 @@ A local Registry exercises the same publish checks as the Marketplace without
 an account. From the Navide checkout:
 
 ```bash
-REGISTRY_DATA_DIR=/tmp/navide-registry REGISTRY_ADMIN_TOKEN=local-admin \
+node -p 'require("crypto").randomBytes(24).toString("base64url")' > /tmp/navide-registry-admin-token
+REGISTRY_DATA_DIR=/tmp/navide-registry REGISTRY_ADMIN_TOKEN="$(cat /tmp/navide-registry-admin-token)" \
   uv --project marketplace/registry run uvicorn registry.app:app --port 8787
 ```
 
@@ -174,7 +175,8 @@ navide-plugin keygen --out-dir keys --name acme
 export NAVIDE_PLUGIN_TOKEN="$(node -p 'require("crypto").randomBytes(24).toString("base64url")')"
 node -e 'const fs=require("fs");process.stdout.write(JSON.stringify({name:"acme",token:process.env.NAVIDE_PLUGIN_TOKEN,public_key:fs.readFileSync("keys/acme.pub","utf8")}))' \
   | curl -sS -X POST http://127.0.0.1:8787/api/publishers \
-      -H "X-Admin-Token: local-admin" -H "Content-Type: application/json" --data-binary @-
+      -H @<(printf 'X-Admin-Token: %s\n' "$(cat /tmp/navide-registry-admin-token)") \
+      -H "Content-Type: application/json" --data-binary @-
 
 navide-plugin sign acme.hello-0.1.0-universal.vsix --key keys/acme.key
 navide-plugin publish acme.hello-0.1.0-universal.vsix --registry http://127.0.0.1:8787 \
@@ -183,8 +185,9 @@ curl -sS "http://127.0.0.1:8787/api/extensions?q=hello"
 ```
 
 `publish` reads the token from `NAVIDE_PLUGIN_TOKEN`, so it never appears on
-a command line. (`local-admin` is only this throwaway Registry's admin
-token.)
+a command line; the throwaway Registry's admin token stays in
+`/tmp/navide-registry-admin-token` and reaches curl through a header file for
+the same reason.
 
 A publisher created with the admin token is trusted, so its versions are
 listed at once; a namespace claimed on the Marketplace is reviewed first
