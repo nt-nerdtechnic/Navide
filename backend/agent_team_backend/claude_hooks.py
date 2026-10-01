@@ -30,7 +30,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -166,10 +170,146 @@ def _build_guard_command(port_file: str, endpoint: str = "claude") -> str:
 
 
 def guard_hook_entry(port_file: str, endpoint: str = "claude") -> dict[str, Any]:
+    script = _windows_guard_script(port_file) if endpoint == "claude" else None
+    if script is not None:
+        # Exec form: Claude Code starts cmd.exe itself, with no PowerShell in
+        # between. A PowerShell 5.1 cold start alone can outlast the hook
+        # timeout on a loaded arm64 machine, where Claude Code cancels the
+        # hook and lets the tool call through undecided.
+        return {
+            "type": "command",
+            "command": "cmd.exe",
+            "args": ["/d", "/c", str(script)],
+            "timeout": _GUARD_TIMEOUT_S,
+        }
     return {
         **osplat.scripts.hook_entry(_build_guard_command(port_file, endpoint)),
         "timeout": _GUARD_TIMEOUT_S,
     }
+
+
+#: The first Claude Code build that runs a hook's `args` (exec form) without a
+#: shell. An older one ignores `args` and runs a bare `cmd.exe` under the
+#: shell, which reads the hook's JSON as commands — so the exec form is written
+#: only once a probe has seen a new enough build, and the PowerShell hook stays
+#: otherwise.
+_EXEC_FORM_SINCE = (2, 1, 139)
+_GUARD_SCRIPT_NAME = "navide-guard.cmd"
+_CLAUDE_VERSION_KV_KEY = "claude_hooks_cli_version"
+#: `cmd /c "<path>"` keeps the quotes Node puts around a path with a space only
+#: when none of these sit between them (`cmd /?`); a path with one falls back.
+_CMD_UNSAFE = frozenset('&<>()@^|"%!')
+_version_refresh_started = False
+
+
+def _guard_script_text(port_name: str, header_name: str) -> str:
+    """The batch file behind the exec-form guard hook.
+
+    ASCII only, because cmd reads a batch file in the OEM code page: the paths
+    it needs are siblings of the script and reach it through `%~dp0`, which
+    cmd expands as Unicode at run time. Same request, headers and output
+    contract as the PowerShell hook: the body is the decision, and every path
+    exits 0, which is "no decision". An unset pane token expands to nothing
+    in a batch file, as it does in PowerShell.
+    """
+    from . import guard_hooks
+
+    lines = [
+        "@echo off",
+        f"rem {_AGENT_TEAM_MARKER} kind=guard: Navide Guard for Claude Code, rewritten on every hook install",
+        'set "NAVIDE_PORT="',
+        f'for /f "usebackq delims=" %%p in ("%~dp0{port_name}") do set "NAVIDE_PORT=%%p"',
+        "if not defined NAVIDE_PORT exit /b 0",
+        f"curl.exe -fsS -m {_GUARD_CURL_TIMEOUT_S} -X POST "
+        '-H "Content-Type: application/json" '
+        '-H "X-Agent-Team-Event: pre_tool_use" '
+        f'-H "@%~dp0{header_name}" '
+        f'-H "{guard_hooks.PANE_TOKEN_HEADER}: %{guard_hooks.PANE_TOKEN_ENV}%" '
+        "--data-binary @- "
+        '"http://127.0.0.1:%NAVIDE_PORT%/hooks/claude/pretooluse"',
+        "exit /b 0",
+    ]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _windows_guard_script(port_file: str) -> Path | None:
+    """Write the exec-form guard script and return its path, or None to keep
+    the PowerShell hook: not Windows, no probe has seen a Claude Code that runs
+    `args`, or a path the script cannot reach safely."""
+    from . import hook_auth
+
+    if osplat.platform_id != "win32":
+        return None
+    version = _known_claude_version()
+    if version is None or version < _EXEC_FORM_SINCE:
+        return None
+    port = Path(port_file)
+    header = hook_auth.header_file()
+    script = port.parent / _GUARD_SCRIPT_NAME
+    if header.parent != port.parent or _CMD_UNSAFE & set(str(script)):
+        return None
+    if not (port.name.isascii() and header.name.isascii()):
+        return None
+    text = _guard_script_text(port.name, header.name)
+    try:
+        if not script.is_file() or script.read_bytes() != text.encode("ascii"):
+            script.write_bytes(text.encode("ascii"))
+    except OSError as err:
+        log.warning("could not write the guard hook script %s: %s", script, err)
+        return None
+    return script
+
+
+def _known_claude_version() -> tuple[int, ...] | None:
+    from .onboarding_deps import _get_db
+
+    try:
+        stored = _get_db().kv_get(_CLAUDE_VERSION_KV_KEY)
+    except Exception:  # noqa: BLE001 - unknown is the safe answer
+        return None
+    version = stored.get("version") if isinstance(stored, dict) else None
+    if isinstance(version, list) and version and all(isinstance(p, int) for p in version):
+        return tuple(version)
+    return None
+
+
+def _probe_claude_version() -> tuple[int, ...] | None:
+    """`claude --version` as numbers, or None when it cannot be told."""
+    program = osplat.paths.resolve_program("claude")
+    if not program:
+        return None
+    try:
+        proc = subprocess.run(
+            osplat.paths.launch_argv(program, ["--version"]),
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", proc.stdout or "")
+    return tuple(int(p) for p in match.groups()) if match else None
+
+
+def _refresh_claude_version(port_file: str) -> None:
+    """Probe in the background and reinstall when the answer changed.
+
+    Off the startup path on purpose: `claude --version` is a Node cold start,
+    seconds on a loaded Windows machine. Until it answers, the hooks are
+    whatever the last probe allowed — PowerShell on a first run.
+    """
+    version = _probe_claude_version()
+    if version == _known_claude_version():
+        return
+    from .onboarding_deps import _get_db
+
+    try:
+        _get_db().kv_set(
+            _CLAUDE_VERSION_KV_KEY, {"version": list(version) if version else None}, now=int(time.time())
+        )
+    except Exception as err:  # noqa: BLE001
+        log.warning("could not record the Claude Code version: %s", err)
+        return
+    log.info("Claude Code version %s: reinstalling hooks", version)
+    install_hooks(port_file)
 
 
 def _build_rewake_command(port_file: str) -> str:
@@ -218,6 +358,25 @@ def _rewake_wanted() -> bool:
 
 def _is_ours(command: str) -> bool:
     return _AGENT_TEAM_MARKER in command
+
+
+def _hook_is_ours(hook: Any) -> bool:
+    """Ours by the marker in the command, or, for the exec-form guard hook
+    (whose command is a bare `cmd.exe`), by the script it runs. An older
+    Navide only knows the marker and leaves that entry in place."""
+    if not isinstance(hook, dict):
+        return False
+    if _is_ours(str(hook.get("command", ""))):
+        return True
+    args = hook.get("args")
+    return (
+        isinstance(args, list) and bool(args)
+        and str(args[-1]).replace("/", "\\").endswith("\\" + _GUARD_SCRIPT_NAME)
+    )
+
+
+def _hook_text(hook: dict) -> str:
+    return " ".join([str(hook.get("command", "")), *map(str, hook.get("args") or [])])
 
 
 def _read_settings(path: Path) -> dict[str, Any]:
@@ -282,8 +441,8 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
         isinstance(e, dict)
         and any(
             isinstance(h, dict)
-            and _is_ours(str(h.get("command", "")))
-            and "-dev" not in str(h.get("command", ""))
+            and _hook_is_ours(h)
+            and "-dev" not in _hook_text(h)
             for h in e.get("hooks", [])
             if isinstance(h, dict)
         )
@@ -311,7 +470,7 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
             if isinstance(inner_hooks, list):
                 inner_hooks = [
                     h for h in inner_hooks
-                    if not (isinstance(h, dict) and _is_ours(str(h.get("command", ""))))
+                    if not _hook_is_ours(h)
                 ]
                 if inner_hooks:
                     entry = {**entry, "hooks": inner_hooks}
@@ -354,6 +513,14 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
 
     log.info("installed Claude hooks → %s (events=%d, port_file=%s)",
              path, added, port_file)
+    # Only for the real settings file: the probe serves what Claude Code will
+    # read, and runs once per backend.
+    global _version_refresh_started
+    if settings_file is None and osplat.platform_id == "win32" and not _version_refresh_started:
+        _version_refresh_started = True
+        threading.Thread(
+            target=_refresh_claude_version, args=(port_file,), name="claude-version-probe", daemon=True
+        ).start()
     return {"installed": True, "path": str(path), "events": added, "port_file": port_file}
 
 
@@ -380,7 +547,7 @@ def uninstall_hooks(settings_file: Path | None = None) -> dict[str, Any]:
             if isinstance(inner_hooks, list):
                 filtered = [
                     h for h in inner_hooks
-                    if not (isinstance(h, dict) and _is_ours(str(h.get("command", ""))))
+                    if not _hook_is_ours(h)
                 ]
                 if filtered:
                     cleaned.append({**entry, "hooks": filtered})
