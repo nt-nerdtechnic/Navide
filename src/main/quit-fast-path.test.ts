@@ -14,6 +14,8 @@ const appListeners: Array<[string, Listener]> = []
 const ipcListeners = new Map<string, Listener>()
 const windowSends: Array<[string, unknown]> = []
 
+// index.ts runs the Linux keyring preflight at import; never spawn dbus-send here.
+vi.mock('./linuxKeyring', () => ({ applyLinuxKeyringPreflight: () => false }))
 vi.mock('electron', () => {
   const app = {
     isPackaged: false,

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { probeSecretService, type DbusCallResult } from './linuxKeyring'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { platformId, setPlatformId, type PlatformId } from '../shared/osplat'
+import { applyLinuxKeyringPreflight, probeSecretService, type DbusCallResult, type KeyringProbe } from './linuxKeyring'
 
 // Replies captured in the shape `dbus-send --print-reply` prints them.
 const aliasReply = (path: string): DbusCallResult => ({
@@ -68,5 +69,60 @@ describe('probeSecretService', () => {
   it('treats an unparseable reply as unusable', () => {
     const { call } = scripted({ ok: true, stdout: 'garbage' })
     expect(probeSecretService(call)).toMatchObject({ usable: false, reason: 'unrecognized-reply' })
+  })
+})
+
+describe('applyLinuxKeyringPreflight', () => {
+  const BASELINE = platformId()
+  afterEach(() => {
+    setPlatformId(BASELINE)
+    vi.restoreAllMocks()
+  })
+
+  function run(platform: PlatformId, probe: KeyringProbe, explicitStore = false) {
+    setPlatformId(platform)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const appended: Array<[string, string | undefined]> = []
+    const probeFn = vi.fn(() => probe)
+    const downgraded = applyLinuxKeyringPreflight(
+      {
+        hasSwitch: (name) => explicitStore && name === 'password-store',
+        appendSwitch: (name, value) => appended.push([name, value])
+      },
+      probeFn
+    )
+    return { downgraded, appended, probed: probeFn.mock.calls.length }
+  }
+
+  it.each<PlatformId>(['darwin', 'win32'])('touches nothing on %s', (platform) => {
+    expect(run(platform, { usable: false, reason: 'no-secret-service' })).toEqual({
+      downgraded: false,
+      appended: [],
+      probed: 0
+    })
+  })
+
+  it('switches Linux to the basic store when the keyring is not usable', () => {
+    expect(run('linux', { usable: false, reason: 'locked' })).toEqual({
+      downgraded: true,
+      appended: [['password-store', 'basic']],
+      probed: 1
+    })
+  })
+
+  it('keeps the system keyring on Linux when it is usable', () => {
+    expect(run('linux', { usable: true, reason: 'available' })).toEqual({
+      downgraded: false,
+      appended: [],
+      probed: 1
+    })
+  })
+
+  it('leaves an explicit --password-store alone without probing', () => {
+    expect(run('linux', { usable: false, reason: 'locked' }, true)).toEqual({
+      downgraded: false,
+      appended: [],
+      probed: 0
+    })
   })
 })

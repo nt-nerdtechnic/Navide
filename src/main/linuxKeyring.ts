@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { isLinux } from '../shared/osplat'
 
 // Linux keyring preflight. On a fresh or autologin GNOME session the login
 // keyring either does not exist or is still locked, and Chromium's OSCrypt
@@ -7,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 // it — the whole app freezes until the user answers. Before the app is ready
 // we ask the Secret Service over D-Bus, without triggering any prompt, whether
 // a default collection exists and is unlocked; when it is not, index.ts falls
-// back to `--password-store=basic`.
+// back to `--password-store=basic` (applyLinuxKeyringPreflight).
 //
 // The probe takes the D-Bus call as a dependency so every outcome can be unit
 // tested without a session bus.
@@ -87,4 +88,30 @@ export function runDbusSend(args: string[], timeoutMs = 1000): DbusCallResult {
     if (err.code === 'ETIMEDOUT') return { ok: false, reason: 'timeout', detail: 'dbus-send timed out' }
     return { ok: false, reason: 'error', detail: String(err.stderr || err.message || e).trim() }
   }
+}
+
+/** The slice of Electron's `app.commandLine` the preflight needs. */
+export interface PreflightCommandLine {
+  hasSwitch(name: string): boolean
+  appendSwitch(name: string, value?: string): void
+}
+
+/**
+ * On Linux, when the user did not pick a --password-store, switch Chromium to
+ * the basic store if the Secret Service keyring is not usable without a
+ * prompt. Returns whether it switched. Off Linux it touches nothing.
+ */
+export function applyLinuxKeyringPreflight(
+  commandLine: PreflightCommandLine,
+  probe: () => KeyringProbe = () => probeSecretService(runDbusSend)
+): boolean {
+  if (!isLinux() || commandLine.hasSwitch('password-store')) return false
+  const keyring = probe()
+  if (keyring.usable) return false
+  commandLine.appendSwitch('password-store', 'basic')
+  console.warn(
+    `[main] Secret Service keyring not usable (${keyring.reason}${keyring.detail ? `: ${keyring.detail}` : ''}) — ` +
+      'using --password-store=basic; stored Git account tokens may need to be re-entered.'
+  )
+  return true
 }

@@ -12,6 +12,8 @@ const lifecyclePath = join(userDataRoot, 'plugin-storage-v2', 'plans-lifecycle.j
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const gateCalls: string[] = []
 
+// index.ts runs the Linux keyring preflight at import; never spawn dbus-send here.
+vi.mock('./linuxKeyring', () => ({ applyLinuxKeyringPreflight: () => false }))
 vi.mock('electron', () => {
   const app = {
     isPackaged: false,
