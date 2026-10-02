@@ -38,8 +38,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
 
+from .fs_observer import Observer
 from .gitignore import GitIgnore
 
 log = logging.getLogger("agent_team_backend.git_watcher")
@@ -275,16 +275,24 @@ class GitWatcher:
         *,
         on_plans_change: ChangeSink | None = None,
         debounce_s: float = 0.4,
+        max_wait_s: float = 2.0,
     ) -> None:
         self._on_change = on_change
         self._on_plans_change = on_plans_change
         self._debounce_s = debounce_s
+        # Ceiling on how long one window may stay open. Every event re-arms the
+        # debounce, so a writer that never pauses for a whole debounce (a test
+        # run generating output) would otherwise hold the window open forever
+        # and pile every path it writes into _dirty_paths.
+        self._max_wait_s = max_wait_s
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observer: Observer | None = None
         self._roots: dict[str, Path] = {}  # ws_path -> resolved root
         self._pending: dict[str, asyncio.TimerHandle] = {}
         # ws_path -> the (rel_path, event_type) pairs seen in the open window
         self._dirty_paths: dict[str, set[tuple[str, str]]] = {}
+        # ws_path -> loop time the open window started
+        self._window_started: dict[str, float] = {}
         self._pending_plans: dict[str, asyncio.TimerHandle] = {}
         self._started = False
 
@@ -305,6 +313,7 @@ class GitWatcher:
             th.cancel()
         self._pending.clear()
         self._dirty_paths.clear()
+        self._window_started.clear()
         for th in self._pending_plans.values():
             th.cancel()
         self._pending_plans.clear()
@@ -367,12 +376,14 @@ class GitWatcher:
         existing = self._pending.get(ws_path)
         if existing is not None:
             existing.cancel()
-        self._pending[ws_path] = loop.call_later(
-            self._debounce_s, self._fire, ws_path
-        )
+        now = loop.time()
+        started = self._window_started.setdefault(ws_path, now)
+        delay = min(self._debounce_s, max(0.0, started + self._max_wait_s - now))
+        self._pending[ws_path] = loop.call_later(delay, self._fire, ws_path)
 
     def _fire(self, ws_path: str) -> None:
         self._pending.pop(ws_path, None)
+        self._window_started.pop(ws_path, None)
         paths = sorted(self._dirty_paths.pop(ws_path, set()))
         asyncio.create_task(self._on_change(ws_path, paths))
 

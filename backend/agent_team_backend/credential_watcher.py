@@ -39,8 +39,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
 
+from .fs_observer import Observer
 from .cli_vendors.registry import VENDORS
 from .credential_vault import DEFAULT_SLOT_ID, vault_to_thread
 from .profiles_store import SUPPORTED_AGENT_KEYS
