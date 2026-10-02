@@ -26,7 +26,8 @@ All notable released changes to Navide will be documented in this file. The form
 - Windows: saving to the local database no longer stalls when an antivirus scans its journal file, and a burst of file changes is recorded in one write instead of one per file.
 - **Windows hooks with a non-ASCII user folder**: Guard and the Claude Code and Codex hooks call the system curl by full path. A Git or MSYS2 curl earlier on PATH read a folder name such as `C:\Users\使用者` as `???` and never sent the request, so Guard got no decision.
 - A pane answering a chat with an MSG block addressed to the sender now reaches the chat with just that text; it is no longer reported to the pane as an unknown target.
-- Huge untracked trees no longer stall Git status (#144).
+- Huge untracked trees no longer stall Git status, and status reads and change notifications stay bounded on very large repositories (#144).
+- macOS: the backend no longer grows its memory with every file change on disk. The file watchers stopped retaining each filesystem event, and account detection now checks the CLI credential files themselves instead of watching your whole home folder (#144).
 - Keychain secrets that look like hex, or contain non-ASCII characters, are read back exactly.
 - The pane overview counts panes on offline devices as not opened.
 - Onboarding no longer offers to install tools it already found.
