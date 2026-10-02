@@ -646,17 +646,18 @@ def _record_watcher_changes(
     """
     root = _preview_workspace(ws_path)
     rows: list[dict[str, Any]] = []
-    for entry in entries:
-        row = preview_log.append(
-            root,
-            change=entry["change"],
-            kind="file",
-            rel_path=entry["rel_path"],
-            title=os.path.basename(entry["rel_path"]),
-            source="watcher",
-        )
-        if row is not None:
-            rows.append(row)
+    with preview_log.batch(root):
+        for entry in entries:
+            row = preview_log.append(
+                root,
+                change=entry["change"],
+                kind="file",
+                rel_path=entry["rel_path"],
+                title=os.path.basename(entry["rel_path"]),
+                source="watcher",
+            )
+            if row is not None:
+                rows.append(row)
     return root, rows[-PREVIEW_MAX_ROWS:]
 
 
