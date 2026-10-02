@@ -217,20 +217,19 @@ def test_failure_cleanup_reaps_a_tracked_orphan(tmp_path):
 def test_a_child_that_outlives_the_reap_window_is_still_reported(tmp_path):
     """The reap waits its window, then reports whatever is left.
 
-    The Windows ConPTY host sits on this boundary: waiting for the owned set is
-    not draining it. A child still alive when the window closes is a survivor
-    and is killed, however soon it would have exited on its own -- so the
-    window has to be long enough for the host, not merely for the shell.
+    A child that would have exited on its own is still a survivor if it is
+    alive when the window closes, so the window has to fit the slowest real
+    child, not merely the shell.
     """
     backend = BackendProcess(tmp_path)
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"])
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2)"])
     try:
         backend.track_child(child.pid)
         assert backend.process is None
         started = time.monotonic()
-        survivors = backend._reap_surviving_children()
+        survivors = backend._reap_surviving_children(window_s=0.5)
         # A window, not an immediate sweep: it held before judging the child.
-        assert time.monotonic() - started >= 1.5
+        assert time.monotonic() - started >= 0.5
         assert [entry["pid"] for entry in survivors] == [child.pid]
         child.wait(timeout=5)
         assert child.poll() is not None

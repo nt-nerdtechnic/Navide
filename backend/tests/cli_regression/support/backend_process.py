@@ -21,6 +21,14 @@ from .cli_shim import base_python_executable
 from .isolation import isolated_environment
 
 
+#: How long a shutting-down backend's owned children get to exit on their own
+#: before the harness judges them survivors. The Windows winpty ConPTY host
+#: (`OpenConsole.exe`) is outside the pane's kill-on-close Job Object, so winpty
+#: is what releases it, and it was measured ~2.7s behind the backend on a loaded
+#: runner: the shell's tree is long gone by then and only the host is left.
+_REAP_WINDOW_S = 10.0
+
+
 class BackendProcess:
     def __init__(self, root: Path):
         self.root = root
@@ -197,11 +205,11 @@ class BackendProcess:
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return {"pid": process.pid, "name": "", "cmdline": []}
 
-    def _reap_surviving_children(self) -> list[dict]:
+    def _reap_surviving_children(self, window_s: float = _REAP_WINDOW_S) -> list[dict]:
         owned = list(self._owned_children.values())
         # A console host (ConPTY) can outlive the backend it served by a beat.
         # Wait for the whole owned set before judging any of it a survivor.
-        _gone, survivors = psutil.wait_procs(owned, timeout=2)
+        _gone, survivors = psutil.wait_procs(owned, timeout=window_s)
         # Describe survivors before killing them, while name()/cmdline() resolve.
         descriptions = [self._describe_process(process) for process in survivors
                         if process.is_running()]
