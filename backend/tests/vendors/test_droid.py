@@ -20,27 +20,94 @@ from agent_team_backend.cli_vendors.droid import (
 
 
 # ---- cwd encoding ---------------------------------------------------------
+#
+# Droid's own encoder is platform-specific: the macOS/Linux build spells the
+# session directory one way and the Windows build another. Every case passes
+# the platform explicitly so both spellings are pinned on any runner, Windows
+# CI included, and none of them is skipped away outside Windows.
 
 def test_encode_replaces_only_separators() -> None:
     """The whole point of not reusing encode_claude_cwd: droid keeps hyphens
     and dots, Claude's encoder would flatten them."""
-    assert encode_droid_cwd("/Users/me/Desktop/Agent-Team") == (
+    assert encode_droid_cwd("/Users/me/Desktop/Agent-Team", platform="linux") == (
         "-Users-me-Desktop-Agent-Team"
     )
-    assert encode_droid_cwd("/Users/me/my.proj") == "-Users-me-my.proj"
-    assert encode_droid_cwd("/Users/me/a_b") == "-Users-me-a_b"
+    assert encode_droid_cwd("/Users/me/my.proj", platform="linux") == (
+        "-Users-me-my.proj"
+    )
+    assert encode_droid_cwd("/Users/me/a_b", platform="linux") == "-Users-me-a_b"
 
 
 def test_encode_strips_trailing_and_collapses_runs() -> None:
-    assert encode_droid_cwd("/Users/me/proj/") == "-Users-me-proj"
-    assert encode_droid_cwd("/Users//me///proj") == "-Users-me-proj"
+    assert encode_droid_cwd("/Users/me/proj/", platform="linux") == "-Users-me-proj"
+    assert encode_droid_cwd("/Users//me///proj", platform="linux") == "-Users-me-proj"
 
 
 def test_encode_matches_the_real_directory_on_disk() -> None:
     """Regression anchor: this exact pair was read off a real droid install."""
-    assert encode_droid_cwd("/Users/neillu/Desktop/Agent-Team") == (
+    assert encode_droid_cwd("/Users/neillu/Desktop/Agent-Team", platform="darwin") == (
         "-Users-neillu-Desktop-Agent-Team"
     )
+
+
+def test_encode_darwin_and_linux_share_the_posix_spelling() -> None:
+    cwd = "/Users/me/Agent-Team"
+    assert (
+        encode_droid_cwd(cwd, platform="darwin")
+        == encode_droid_cwd(cwd, platform="linux")
+        == "-Users-me-Agent-Team"
+    )
+
+
+def test_encode_windows_drops_the_drive_colon() -> None:
+    """The Windows build keeps the drive letter but drops the ``:`` and
+    rewrites backslashes as separators — the spelling the old encoder could
+    never produce, because it only knew ``/``."""
+    assert encode_droid_cwd(r"C:\Users\me\proj", platform="win32") == (
+        "-C-Users-me-proj"
+    )
+    assert encode_droid_cwd(r"C:\Users\me\Agent-Team", platform="win32") == (
+        "-C-Users-me-Agent-Team"
+    )
+    # A lower-case drive and a path typed with forward slashes are normalised
+    # the way droid's own ``path.resolve`` would spell them.
+    assert encode_droid_cwd(r"c:\Users\Me\proj", platform="win32") == (
+        "-c-Users-Me-proj"
+    )
+    assert encode_droid_cwd("C:/Users/me/proj", platform="win32") == (
+        "-C-Users-me-proj"
+    )
+
+
+def test_encode_windows_collapses_separator_runs_and_trailing() -> None:
+    assert encode_droid_cwd(r"C:\\Users\\\me\proj", platform="win32") == (
+        "-C-Users-me-proj"
+    )
+    assert encode_droid_cwd("C:\\Users\\me\\proj\\", platform="win32") == (
+        "-C-Users-me-proj"
+    )
+
+
+def test_encode_windows_keeps_the_unc_leading_run() -> None:
+    """A UNC cwd has no drive letter to absorb the leading separators, so the
+    run survives as a ``-`` and the prepended ``-`` makes two."""
+    assert encode_droid_cwd(r"\\server\share\proj", platform="win32") == (
+        "--server-share-proj"
+    )
+
+
+def test_default_encoder_follows_the_platform_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default is ``osplat.platform_id``, so a native Windows runner
+    encodes a Windows cwd with no test-side override."""
+    from agent_team_backend import osplat
+
+    assert droid._platform_id == osplat.platform_id
+    monkeypatch.setattr(droid, "_platform_id", "win32")
+    assert encode_droid_cwd(r"C:\Users\me\proj") == "-C-Users-me-proj"
+    monkeypatch.setattr(droid, "_platform_id", "linux")
+    assert encode_droid_cwd("/Users/me/proj") == "-Users-me-proj"
 
 
 # ---- fixtures -------------------------------------------------------------
@@ -163,6 +230,30 @@ def test_cwd_is_empty_for_a_malformed_first_line(sessions_root: Path) -> None:
     path = d / "a.jsonl"
     path.write_text("not json\n", encoding="utf-8")
     assert DroidLogReader().cwd_from_file(path) == ""
+
+
+# ---- Windows path format (reader) -----------------------------------------
+
+def test_windows_workspace_session_is_discovered(
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader must look where droid actually writes on Windows: the drive
+    letter, no colon, and backslashes flattened to ``-``."""
+    monkeypatch.setattr(droid, "_platform_id", "win32")
+    cwd = r"C:\Users\me\Agent-Team"
+    path = _write_session(sessions_root, cwd, "abc", [_session_start("abc", cwd)])
+    assert path.parent.name == "-C-Users-me-Agent-Team"
+    got = DroidLogReader().session_files_for_workspace(cwd)
+    assert [p.name for p in got] == ["abc.jsonl"]
+
+
+def test_windows_cwd_is_read_back_verbatim(
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(droid, "_platform_id", "win32")
+    cwd = r"C:\Users\me\proj"
+    path = _write_session(sessions_root, cwd, "abc", [_session_start("abc", cwd)])
+    assert DroidLogReader().cwd_from_file(path) == cwd
 
 
 # ---- activity -------------------------------------------------------------
@@ -442,11 +533,40 @@ def test_resume_id_from_a_wrapped_command() -> None:
     assert droid.SPEC.resume_id_from_command(wrapped) == "abc-123"
 
 
+def test_resume_id_from_a_windows_wrapped_command() -> None:
+    """On Windows a non-agent pane arrives as [cmd.exe, '/d', '/s', '/c',
+    '<cmd>']; ``command_text`` unwraps to the last element, so the id is still
+    found there."""
+    wrapped = ["cmd.exe", "/d", "/s", "/c", "droid --resume abc-123"]
+    assert droid.SPEC.resume_id_from_command(wrapped) == "abc-123"
+
+
 def test_session_path_points_at_the_workspace_directory(
-    sessions_root: Path,
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Pin the POSIX spelling so this assertion is the same on a Windows runner.
+    monkeypatch.setattr(droid, "_platform_id", "darwin")
     got = droid.SPEC.session_path("/w/proj", "abc")
     assert got == sessions_root / "-w-proj" / "abc.jsonl"
+
+
+def test_windows_session_path_points_at_the_windows_directory(
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(droid, "_platform_id", "win32")
+    got = droid.SPEC.session_path(r"C:\Users\me\proj", "abc")
+    assert got == sessions_root / "-C-Users-me-proj" / "abc.jsonl"
+
+
+def test_windows_session_exists_finds_the_workspace_file(
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(droid, "_platform_id", "win32")
+    cwd = r"C:\Users\me\proj"
+    assert droid.SPEC.session_exists(cwd, "abc") is False
+    _write_session(sessions_root, cwd, "abc", [_session_start("abc", cwd)])
+    assert droid.SPEC.session_exists(cwd, "abc") is True
+    assert droid.SPEC.session_exists(cwd, "nope") is False
 
 
 def test_session_exists_finds_the_workspace_file(sessions_root: Path) -> None:

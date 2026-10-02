@@ -292,4 +292,6 @@ def test_windows_hooks_are_powershell_on_the_real_platform_id(monkeypatch):
     # latter is dead code and ships the sh script to PowerShell.
     monkeypatch.setattr(hooks.osplat, 'platform_id', 'win32')
     assert hooks.hook_command().startswith('powershell.exe ')
-    assert hooks.guard_hook_command().startswith('powershell.exe ')
+    # The guard hook is cmd text: Codex already runs it under %COMSPEC% /C.
+    assert 'powershell' not in hooks.guard_hook_command().lower()
+    assert hooks.guard_hook_command().endswith('& exit 0')

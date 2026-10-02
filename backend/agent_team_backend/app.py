@@ -646,17 +646,18 @@ def _record_watcher_changes(
     """
     root = _preview_workspace(ws_path)
     rows: list[dict[str, Any]] = []
-    for entry in entries:
-        row = preview_log.append(
-            root,
-            change=entry["change"],
-            kind="file",
-            rel_path=entry["rel_path"],
-            title=os.path.basename(entry["rel_path"]),
-            source="watcher",
-        )
-        if row is not None:
-            rows.append(row)
+    with preview_log.batch(root):
+        for entry in entries:
+            row = preview_log.append(
+                root,
+                change=entry["change"],
+                kind="file",
+                rel_path=entry["rel_path"],
+                title=os.path.basename(entry["rel_path"]),
+                source="watcher",
+            )
+            if row is not None:
+                rows.append(row)
     return root, rows[-PREVIEW_MAX_ROWS:]
 
 
@@ -3292,17 +3293,143 @@ def _agent_signed_out(agent_key: str) -> bool:
 # Aligned with onboarding_deps' detection probe (was 3s here — too tight, so a
 # momentarily overloaded machine timed out and made EVERY CLI unlaunchable).
 _SPAWN_PROBE_TIMEOUT_S = 8
+#: Ceiling on the reap that follows a kill. A process wedged in an
+#: uninterruptible state (or an ignored signal) must not pin a probe worker.
+_SPAWN_PROBE_CLEANUP_TIMEOUT_S = 1.0
+#: How much of each stream the probe keeps. A `--version` banner is tiny; the
+#: cap is here so a flooding child cannot grow the worker's memory unbounded.
+_SPAWN_PROBE_MAX_OUTPUT_CHARS = 1 << 20
+_SPAWN_PROBE_READ_CHUNK = 4096
+
+
+def _drain_probe_pipe(stream: Any, sink: list[str]) -> None:
+    """Read one probe pipe to EOF on a daemon thread, keeping at most the cap.
+
+    Reading off the probe's own thread is what makes the read bounded: the
+    probe joins the reader under a deadline instead of blocking on an EOF a
+    surviving descendant may never deliver (see `_run_spawn_probe`).
+    """
+    kept = 0
+    try:
+        while True:
+            chunk = stream.read(_SPAWN_PROBE_READ_CHUNK)
+            if not chunk:
+                break
+            if kept < _SPAWN_PROBE_MAX_OUTPUT_CHARS:
+                sink.append(chunk[: _SPAWN_PROBE_MAX_OUTPUT_CHARS - kept])
+                kept += len(chunk)
+    except (OSError, ValueError):
+        # The probe is closing this pipe out from under the reader after a
+        # timeout; stop quietly rather than letting a daemon thread traceback.
+        pass
+
+
+def _kill_probe_process(proc: subprocess.Popen[str]) -> None:
+    """Kill the probe and its descendants, then reap it — every step bounded.
+
+    The child leads its own POSIX session (`start_new_session=True`), so
+    `kill_group` can never reach the backend's own group, and the group id
+    stays signalable after the direct child exits while a same-group
+    descendant still holds the output pipes. If that seam fails (already gone,
+    or a Windows subtree whose root exited) the direct child is killed
+    directly. The wait is capped so an unkillable process cannot hang the
+    probe worker forever.
+    """
+    try:
+        osplat.process_tree.kill_group(proc.pid, force=True)
+    except OSError as err:
+        log.warning(
+            "startup probe process-tree cleanup failed for pid %s: %s",
+            proc.pid,
+            err,
+        )
+        try:
+            proc.kill()
+        except OSError as kill_err:
+            log.warning(
+                "startup probe direct-child cleanup failed for pid %s: %s",
+                proc.pid,
+                kill_err,
+            )
+    try:
+        proc.wait(timeout=_SPAWN_PROBE_CLEANUP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        log.error("startup probe process %s did not exit after kill", proc.pid)
 
 
 def _run_spawn_probe(command: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run the CLI version probe without inheriting the backend's stdin."""
-    return subprocess.run(
+    """Run the CLI version probe under hard bounds on its pipes and its wait.
+
+    `subprocess.run(capture_output=True, timeout=...)` is not enough. Its
+    timeout branch kills the process it started and then, on Windows, drains
+    the pipes with `communicate()` and NO timeout: a CLI whose descendant
+    inherited those pipes keeps the write end open, so the probe never returns
+    and its executor worker is wedged for the life of the backend. Here the
+    pipes are drained by daemon readers, the child is awaited under the probe
+    budget, and the process tree is killed (closing the pipes) before the
+    bounded reap, on timeout and on any other failure alike.
+    """
+    proc = subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=_SPAWN_PROBE_TIMEOUT_S,
         env=os.environ.copy(),
+        # POSIX: own session/group, so kill_group targets the probe and never
+        # the backend whose executor runs it. Ignored on Windows, where
+        # kill_group walks the subtree instead.
+        start_new_session=True,
+    )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    assert proc.stdout is not None and proc.stderr is not None
+    readers = [
+        threading.Thread(
+            target=_drain_probe_pipe,
+            args=(proc.stdout, stdout_chunks),
+            name="spawn-probe-stdout",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_drain_probe_pipe,
+            args=(proc.stderr, stderr_chunks),
+            name="spawn-probe-stderr",
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + _SPAWN_PROBE_TIMEOUT_S
+    try:
+        proc.wait(timeout=_SPAWN_PROBE_TIMEOUT_S)
+        # The CLI can exit while a descendant it left behind still holds the
+        # pipes. Wait for the readers only until the budget expires, then kill
+        # the tree: read to an EOF that may never arrive would be the hang.
+        for reader in readers:
+            reader.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(reader.is_alive() for reader in readers):
+            raise subprocess.TimeoutExpired(command, _SPAWN_PROBE_TIMEOUT_S)
+    except BaseException:
+        _kill_probe_process(proc)
+        for reader in readers:
+            reader.join(timeout=_SPAWN_PROBE_CLEANUP_TIMEOUT_S)
+        raise
+    finally:
+        # Only close a stream whose reader has finished. Closing one a daemon
+        # reader is still blocked in would free the fd under it — the reader
+        # could then read from a reused descriptor. The reader that never
+        # finishes (a descendant survived a failed tree kill) leaks its fd
+        # instead, which is the lesser evil and still bounded to one probe.
+        for reader, stream in zip(readers, (proc.stdout, proc.stderr)):
+            if reader.is_alive():
+                continue
+            try:
+                stream.close()
+            except OSError:
+                pass
+    return subprocess.CompletedProcess(
+        command, proc.returncode, "".join(stdout_chunks), "".join(stderr_chunks)
     )
 
 

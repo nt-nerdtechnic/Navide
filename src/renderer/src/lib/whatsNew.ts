@@ -111,6 +111,36 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.14',
+    title: {
+      'zh-TW': '擴充套件自帶後端（沙盒）、更安全的 Windows Guard、綁定前先確認',
+      'en-US': 'Sandboxed Extension Backends, a Safer Guard on Windows, and Binding That Asks First',
+      'ja-JP': 'サンドボックス化された拡張機能バックエンド、Windows の Guard 強化、バインド前の確認',
+    },
+    highlights: [
+      {
+        'zh-TW': '擴充套件可以自帶後端程式，預設關閉。要在「設定 → 擴充套件」開啟並同意該版本後才會執行，且在沒有網路、只能寫自己資料夾的沙盒中運作；檔案一變動就會重新詢問。',
+        'en-US': 'Extensions can ship their own backend, off by default. It runs only after you enable it in Settings → Extensions and approve that version, inside a sandbox with no network that can write only its own folder; any changed file asks again.',
+        'ja-JP': '拡張機能が独自のバックエンドを同梱できるようになりました（既定ではオフ）。「設定 → 拡張機能」で有効にし、そのバージョンを承認した場合のみ、ネットワークなし・自分のフォルダーにのみ書き込めるサンドボックス内で実行されます。ファイルが変わると再度確認します。',
+      },
+      {
+        'zh-TW': 'Windows 上的 Navide Guard 不再經過 PowerShell 啟動，被拒絕的指令不會因為逾時而被放行。',
+        'en-US': 'Navide Guard on Windows no longer starts PowerShell, so a denied command can no longer slip through on a slow start.',
+        'ja-JP': 'Windows の Navide Guard は PowerShell を起動しなくなり、起動が遅くても拒否したコマンドが実行されることはなくなりました。',
+      },
+      {
+        'zh-TW': '綁定聊天室時先選聊天室，再確認要送出的內容並按「連線」；目前的選擇會清楚標示。',
+        'en-US': 'Binding a chat now asks first: pick the chat, confirm what it receives, then Connect. The current choice is clearly marked.',
+        'ja-JP': 'チャットのバインド時は、チャットを選んでから送信内容を確認し「接続」を押します。現在の選択がはっきり表示されます。',
+      },
+      {
+        'zh-TW': '其他：Marketplace 評分與檢舉、Windows 存檔與大量檔案變動不再卡住、超大專案的 Git 狀態不再卡住、Keychain 讀取更正確。',
+        'en-US': 'Also: Marketplace ratings and reports, no more stalls on Windows saves or file bursts, Git status no longer stalls in huge projects, and Keychain reads are exact.',
+        'ja-JP': 'そのほか：マーケットプレイスの評価と報告、Windows の保存や大量のファイル変更で止まらなくなりました。巨大なプロジェクトでも Git の状態表示が止まらず、キーチェーンの読み取りも正確になりました。',
+      },
+    ],
+  },
+  {
     version: '0.2.13',
     title: {
       'zh-TW': '擴充套件市集、Channels 雙向同步與連線監控、大型 Plan',

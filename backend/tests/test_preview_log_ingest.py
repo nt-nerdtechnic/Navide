@@ -498,6 +498,39 @@ async def test_a_burst_past_the_store_ceiling_carries_only_what_survived_it(
     assert {e["rel_path"] for e in entries} == kept
 
 
+def test_a_burst_is_recorded_in_one_commit(tmp_path: Path, monkeypatch) -> None:
+    """A commit is a disk flush. One per path made the burst above take 90 s
+    and more on a Windows runner — long enough to read as a hang — and a real
+    checkout is thousands of paths, all of it under the log's lock."""
+    from agent_team_backend import db as db_module
+
+    commits: list[str] = []
+    connect = db_module.Database._connect
+
+    def traced(self):
+        conn = connect(self)
+        conn.set_trace_callback(
+            lambda sql: commits.append(sql) if sql.strip().upper() == "COMMIT" else None
+        )
+        return conn
+
+    monkeypatch.setattr(db_module.Database, "_connect", traced)
+    ws_path = tmp_path / "repo"
+    ws_path.mkdir()
+    # Creating the database and its schema commits on its own; that is not the
+    # burst, so it happens first.
+    app_module._record_watcher_changes(str(ws_path), [{"rel_path": "a.ts", "change": "created"}])
+    commits.clear()
+
+    total = app_module.PREVIEW_MAX_ROWS + 20
+    _, rows = app_module._record_watcher_changes(
+        str(ws_path), [{"rel_path": f"f{i}.ts", "change": "created"} for i in range(total)]
+    )
+
+    assert len(rows) == app_module.PREVIEW_MAX_ROWS
+    assert len(commits) == 1
+
+
 @pytest.mark.asyncio
 async def test_a_watcher_burst_that_merges_away_broadcasts_nothing(
     client: TestClient, events: list[dict], ws: Path
