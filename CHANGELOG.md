@@ -4,9 +4,33 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.14] — 2026-10-02 — signed release
+
+### Added
+
+- **Third-party native backends, off by default**: an extension may ship its own backend program. It runs only after you turn on Settings → Extensions → native backends and approve that exact package version, inside a sandbox (Seatbelt on macOS, bubblewrap on Linux) with no network and write access limited to its own data folder. Any changed file asks again; Windows reports it as not supported yet.
+- **Marketplace ratings and reports**: signed-in members can rate an extension and report one for review; the registry website gets a shared look and admin status bars.
+- **`navide-plugin` publishing workflow**: the SDK CLI covers the whole path from a new project to a published, signed release, and a backend can declare the methods and events it serves.
+- **Channel binding asks first**: picking a chat opens a confirmation step that shows what the chat will receive, with the current choice clearly marked; Connect binds with that level.
+
+### Changed
+
+- The sidebar's workspace headings show live panes over total panes.
+- Linux falls back to a basic password store when no unlocked keyring is available, and waits up to 120 s for the backend on first start.
+
 ### Fixed
 
+- **Navide Guard on Windows**: the Claude Code (2.1.139 and later) and Codex guard hooks no longer start PowerShell, whose cold start could pass the 10 s hook timeout and let a denied command run; older Claude Code builds keep the previous hook.
+- Guard closes several ways a heredoc, a here-string or a `#` could hide a later command, decides without waiting on the database lock, and keeps its rules current while they change.
+- Windows: saving to the local database no longer stalls when an antivirus scans its journal file, and a burst of file changes is recorded in one write instead of one per file.
+- Huge untracked trees no longer stall Git status (#144).
+- Keychain secrets that look like hex, or contain non-ASCII characters, are read back exactly.
+- The pane overview counts panes on offline devices as not opened.
+- Onboarding no longer offers to install tools it already found.
+- A Channels confirmation prompt that fails to reach the chat is retried; turning third-party backends off always stops them, even if the setting cannot be saved.
+- Tokens from a resumed session are attributed to the pane that ran them.
 - The macOS installer window no longer shows `.background.tiff` and `.VolumeIcon.icns` above the Navide → Applications layout when Finder is set to show hidden files.
+- Security updates: pyjwt.
 
 ## [0.2.13] — 2026-09-30 — signed release
 
