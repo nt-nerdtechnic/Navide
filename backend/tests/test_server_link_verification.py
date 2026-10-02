@@ -329,6 +329,10 @@ def _running_link(server: ScriptedServer) -> ServerLink:
     return link
 
 
+#: Generous on purpose: only a link that is stuck should take this long.
+PRECONDITION_S = 30.0
+
+
 async def _run_briefly(link: ServerLink, seconds: float, until=None) -> None:
     """Run the link for `seconds`; when `until` is given, wait for it to hold
     first and only then start that window.
@@ -338,14 +342,23 @@ async def _run_briefly(link: ServerLink, seconds: float, until=None) -> None:
     when it closed. Waiting for the thing under test to happen and then
     watching for `seconds` is both steadier and stricter — the quiet the
     caller asserts is quiet *after* the event, not instead of it.
+
+    Reaching the event is a precondition, not the thing measured, so it is not
+    held to a short deadline. Before its first hello the link reads the trust
+    store and writes device keys — each a disk flush — and a Windows runner has
+    taken over 0.8 s per flush, which a 2 s deadline turned into `assert 0 == 1`
+    as if the link had been silent. A link that never gets there fails here,
+    under its own name.
     """
     task = asyncio.create_task(link._run())
     try:
         if until is not None:
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + max(seconds, 2.0)
-            while not until() and loop.time() < deadline:
-                await asyncio.sleep(0.01)
+            try:
+                async with asyncio.timeout(PRECONDITION_S):
+                    while not until():
+                        await asyncio.sleep(0.01)
+            except TimeoutError:
+                pytest.fail(f"the link never got there in {PRECONDITION_S:.0f}s")
         await asyncio.sleep(seconds)
     finally:
         link._stopped = True
