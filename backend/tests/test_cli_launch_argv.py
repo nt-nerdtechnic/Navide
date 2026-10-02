@@ -27,6 +27,7 @@ import pytest
 
 from agent_team_backend import app, osplat
 from agent_team_backend.cli_vendors.registry import VENDORS
+from agent_team_backend.mcp_server import pane_home
 from agent_team_backend.mcp_server import wiring as mcp_wiring
 from agent_team_backend.terminals import TerminalService
 
@@ -131,6 +132,10 @@ def _isolated_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     )
     # A live MCP port so codex's `-c mcp_servers…` override is part of the argv.
     monkeypatch.setattr(mcp_wiring, "backend_port", lambda: MCP_PORT)
+    # antigravity, grok and kimi build a per-pane shim home under the real home
+    # (and on Windows harden it with icacls, whose `.navide-panes\<vendor>`
+    # argument the real-CLI guard rightly refuses). Keep it under tmp_path.
+    monkeypatch.setattr(pane_home, "real_home", lambda: tmp_path / "home")
 
 
 def _session() -> app.Session:
@@ -215,10 +220,20 @@ async def test_codex_flags_and_config_overrides_stay_separate() -> None:
     assert not any(token != flag and token.startswith(flag) for token in argv), argv
 
 
+async def _drop_event(*_args: Any) -> None:
+    """The live test reads the fake CLI's file, not the terminal's events."""
+
+
 @pytest.mark.asyncio
 async def test_codex_launch_really_starts_a_cli_that_sees_separate_arguments(tmp_path: Any) -> None:
     """End-to-end: a live PTY spawn through the production wiring, with a
-    deterministic fake CLI that records the argv its process received."""
+    deterministic fake CLI that records the argv its process received.
+
+    POSIX wraps the line in `/bin/sh -c`, not the Host's `zsh -ilc`: an
+    interactive login zsh sources the developer's rc files (seconds on a busy
+    machine) and is not installed on the Linux runner. The wiring only rewrites
+    the LAST element, so the shell and its flags do not change what is tested.
+    """
     destination = tmp_path / "codex-argv.json"
     quote = osplat.paths.quote_arg
     interpreter = getattr(sys, "_base_executable", None) or sys.executable
@@ -226,28 +241,33 @@ async def test_codex_launch_really_starts_a_cli_that_sees_separate_arguments(tmp
         f"{quote(interpreter)} -c {quote(FAKE_CLI_SOURCE)} "
         f"{quote(str(destination))} codex {MARKER}"
     )
-    service = TerminalService(lambda *_args: None)
+    line = f"{fake_cli} --dangerously-bypass-approvals-and-sandbox"
+    command: str | list[str] = line if osplat.platform_id == "win32" else ["/bin/sh", "-c", line]
+    service = TerminalService(_drop_event)
     session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
     session.terminals = service  # type: ignore[assignment]
 
-    await app.handle_message(session, {
-        "id": "m1",
-        "type": "terminal.create",
-        "payload": {
-            "pane_id": "codex-live-pane",
-            "agent_key": "codex",
-            "command": _frontend_command(f"{fake_cli} --dangerously-bypass-approvals-and-sandbox"),
-            "cwd": str(tmp_path),
-            "metadata": {"workspace_path": str(tmp_path)},
-        },
-    })
+    try:
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "terminal.create",
+            "payload": {
+                "pane_id": "codex-live-pane",
+                "agent_key": "codex",
+                "command": command,
+                "cwd": str(tmp_path),
+                "metadata": {"workspace_path": str(tmp_path)},
+            },
+        })
 
-    for _ in range(300):
-        if destination.exists():
-            break
-        await asyncio.sleep(0.02)
-    assert destination.exists(), "the fake CLI never started"
-    argv = json.loads(destination.read_text(encoding="utf-8"))
+        # Generous for a cold interpreter on a loaded CI runner, but bounded.
+        deadline = asyncio.get_running_loop().time() + 30
+        while not destination.exists() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+        assert destination.exists(), "the fake CLI never started"
+        argv = json.loads(destination.read_text(encoding="utf-8"))
+    finally:
+        await service.kill_all(grace=0)
 
     assert "codex" in argv, argv
     assert MARKER in argv, argv
