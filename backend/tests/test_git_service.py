@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -115,6 +116,79 @@ class TestGetStatus:
         (tmp_path / "new_file.txt").write_text("hello")
         result = await git_service.get_status(str(tmp_path))
         assert result["truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_does_not_rewrite_the_index(self, tmp_path):
+        # A plain `git status` refreshes stale stat info into .git/index; the
+        # watcher sees that write as a change and asks for status again.
+        init_repo(tmp_path)
+        index = tmp_path / ".git" / "index"
+        before = index.read_bytes()
+        os.utime(tmp_path / "README.md", (946684800, 946684800))
+        await git_service.get_status(str(tmp_path))
+        assert index.read_bytes() == before
+
+    @pytest.mark.asyncio
+    async def test_failed_status_is_an_error_not_a_clean_repo(self, tmp_path, monkeypatch):
+        init_repo(tmp_path)
+        (tmp_path / "new_file.txt").write_text("hello")
+
+        async def timed_out(args, cwd, max_stdout_bytes):
+            return 128, "", "git timed out", False
+
+        monkeypatch.setattr(git_service, "_run_capped", timed_out)
+        result = await git_service.get_status(str(tmp_path))
+        # No is_git_repo: the UI keeps its last status and shows the error.
+        assert result == {"ok": False, "error": "git timed out"}
+
+    @pytest.mark.asyncio
+    async def test_concurrent_reads_share_a_run(self, tmp_path, monkeypatch):
+        init_repo(tmp_path)
+        real = git_service._run_capped
+        gate = asyncio.Event()
+        runs = 0
+
+        async def gated(args, cwd, max_stdout_bytes):
+            nonlocal runs
+            runs += 1
+            await gate.wait()
+            return await real(args, cwd, max_stdout_bytes)
+
+        monkeypatch.setattr(git_service, "_run_capped", gated)
+        reads = [asyncio.ensure_future(git_service.get_status(str(tmp_path))) for _ in range(6)]
+        await asyncio.sleep(0.2)
+        gate.set()
+        results = await asyncio.gather(*reads)
+        # The first read runs; the five that arrived meanwhile share one
+        # queued run instead of each taking a process slot.
+        assert runs == 2
+        assert all(r["is_git_repo"] is True for r in results)
+
+    @pytest.mark.asyncio
+    async def test_read_during_a_run_sees_changes_made_after_it_started(
+        self, tmp_path, monkeypatch
+    ):
+        init_repo(tmp_path)
+        real = git_service._run_capped
+        started = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def gated(args, cwd, max_stdout_bytes):
+            started.set()
+            await gate.wait()
+            return await real(args, cwd, max_stdout_bytes)
+
+        monkeypatch.setattr(git_service, "_run_capped", gated)
+        first = asyncio.ensure_future(git_service.get_status(str(tmp_path)))
+        await started.wait()
+        (tmp_path / "late.txt").write_text("x")
+        second = asyncio.ensure_future(git_service.get_status(str(tmp_path)))
+        await asyncio.sleep(0)
+        gate.set()
+        await first
+        result = await second
+        assert any(f["path"] == "late.txt" for f in result["untracked"])
+        assert not git_service._status_running and not git_service._status_queued
 
 
 # ── get_log ────────────────────────────────────────────────────────────────────

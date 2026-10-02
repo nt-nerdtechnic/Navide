@@ -87,6 +87,26 @@ class TestPaneGitSnapshot:
         assert snap["dirty"] == 2
 
     @pytest.mark.asyncio
+    async def test_dirty_saturates_on_a_huge_tree(self, tmp_path: Path, monkeypatch) -> None:
+        # #144's shape: the whole porcelain output was read and split on the loop.
+        monkeypatch.setattr(git_service, "_SNAPSHOT_DIRTY_LIMIT", 20, raising=False)
+        _init_repo(tmp_path)
+        for i in range(30):
+            (tmp_path / f"f{i:02d}").write_text("")
+        snap = await git_service.pane_git_snapshot(str(tmp_path))
+        assert snap["dirty"] == 20
+
+    @pytest.mark.asyncio
+    async def test_dirty_byte_cap_stops_the_read(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(git_service, "_SNAPSHOT_STATUS_MAX_BYTES", 100, raising=False)
+        monkeypatch.setattr(git_service, "_SNAPSHOT_DIRTY_LIMIT", 10_000, raising=False)
+        _init_repo(tmp_path)
+        for i in range(100):
+            (tmp_path / f"untracked_file_{i:03d}.txt").write_text("")
+        snap = await git_service.pane_git_snapshot(str(tmp_path))
+        assert snap["dirty"] == 10_000  # "at least this many", not a partial count
+
+    @pytest.mark.asyncio
     async def test_subdirectory_reports_the_worktree_root(self, tmp_path: Path) -> None:
         _init_repo(tmp_path)
         sub = tmp_path / "pkg" / "deep"
