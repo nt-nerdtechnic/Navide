@@ -295,3 +295,41 @@ def test_windows_hooks_are_powershell_on_the_real_platform_id(monkeypatch):
     # The guard hook is cmd text: Codex already runs it under %COMSPEC% /C.
     assert 'powershell' not in hooks.guard_hook_command().lower()
     assert hooks.guard_hook_command().endswith('& exit 0')
+
+
+def test_windows_hook_overrides_are_toml_literal_strings(tmp_path, monkeypatch):
+    """The `-c` text runs under `cmd.exe /d /s /c`, where a backslash is not
+    an escape. The old override was a TOML basic string (`matcher="…"`,
+    `type="command"`, `json.dumps(command)`), so `list2cmdline` rendered every
+    `"` as `\"`, the quote closed early and the `|` in the SessionStart
+    matcher reached cmd as a pipe. TOML literal strings carry the value with
+    no `"` at all, so nothing needs escaping."""
+    import re
+    import tomllib
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(hooks.osplat, 'platform_id', 'win32')
+    monkeypatch.setattr(hooks.osplat, 'paths', _windows.paths)
+
+    wired = hooks.wire('codex', {}, {}, tmp_path, tmp_path / 'port', tmp_path / 'auth')
+
+    # SessionStart is the override whose matcher carries the `|`; its raw `-c`
+    # argument must contain no backslash-escaped quote. The structural TOML
+    # quotes must be gone from the whole command line.
+    session_raw = wired[:wired.index('hooks.PreToolUse')]
+    assert '\\"' not in session_raw
+    assert 'matcher="' not in wired
+    assert 'type="command"' not in wired
+
+    # Codex reads each `-c` value as TOML, so both overrides must parse back to
+    # the exact hook commands the vendor would otherwise run.
+    found: dict[str, list] = {}
+    for match in re.finditer(r'-c\s+"((?:[^"\\]|\\.)*)"', wired):
+        arg = re.sub(r'\\(.)', r'\1', match.group(1))
+        key, _, value = arg.partition('=')
+        found[key] = tomllib.loads(f'{key} = {value}')['hooks'][key.rsplit('.', 1)[1]]
+    assert sorted(found) == ['hooks.PreToolUse', 'hooks.SessionStart']
+    session = found['hooks.SessionStart'][0]['hooks'][0]
+    assert session['type'] == 'command' and session['command'] == hooks.hook_command()
+    guard = found['hooks.PreToolUse'][0]['hooks'][0]
+    assert guard['type'] == 'command' and guard['command'] == hooks.guard_hook_command()
