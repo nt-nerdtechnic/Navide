@@ -1037,7 +1037,7 @@ class ChannelManager:
         return bool(acct)
 
     async def _handle_relay_answer(self, msg: InboundMessage, answer: relay.RelayAnswer) -> None:
-        request = self.relay.take(answer.request_id)
+        request = self.relay.get(answer.request_id)
         # The very chat (bot, chat and topic) the prompt went to: another bot in the
         # same group, or another topic, is not the one the pane asked.
         if request is None or request.loc.key() != msg.location_key():
@@ -1061,6 +1061,9 @@ class ChannelManager:
         except Exception:  # noqa: BLE001
             info = {}
         if not relay.same_prompt(str(info.get("prompt") or ""), request.prompt):
+            # The screen moved on: this id is stale, and the next probe relays what is there now.
+            self.relay.take(request.id)
+            self._awaiting_unmark(request.pane_id)
             await self._reply(msg, MSG_RELAY_EXPIRED)
             return
         try:
@@ -1068,6 +1071,7 @@ class ChannelManager:
         except Exception as exc:  # noqa: BLE001
             result = {"ok": False, "error": str(exc)}
         if result.get("ok"):
+            self.relay.take(request.id)  # used up only once the keys went in
             await self._reply(msg, f"✅ 已送出：{relay.describe_answer(payload)}")
         else:
             await self._reply(msg, f"⚠️ 送出失敗：{result.get('error') or 'not sent'}")
@@ -1353,6 +1357,10 @@ class ChannelManager:
         if failures >= AWAITING_RETRY_MAX:
             log.warning("channels: giving up relaying %s's awaiting prompt: %s", pane_id, why)
             return
+        self._awaiting_unmark(pane_id)
+
+    def _awaiting_unmark(self, pane_id: str) -> None:
+        """Let the next probe or status change relay the pane's prompt again."""
         self._awaiting_posted.discard(pane_id)
         pending = self._pending.get(pane_id)
         if pending is not None:

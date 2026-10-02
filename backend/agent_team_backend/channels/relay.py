@@ -178,6 +178,12 @@ class RelayTable:
         self.prune()
         return self._by_id.pop(request_id, None)
 
+    def get(self, request_id: str) -> RelayRequest | None:
+        """The live request, left answerable: an answer that is refused or not sent
+        must not use it up."""
+        self.prune()
+        return self._by_id.get(request_id)
+
     def expire_pane(self, pane_id: str) -> None:
         for rid, req in list(self._by_id.items()):
             if req.pane_id == pane_id:
