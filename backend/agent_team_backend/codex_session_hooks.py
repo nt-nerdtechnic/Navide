@@ -64,15 +64,26 @@ def guard_hook_command() -> str:
     decision (guard_hooks.render). Every failure leaves stdout empty and the
     exit 0, which Codex reads as no decision."""
     if osplat.platform_id == 'win32':
-        script = '''[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
-$OutputEncoding = [Text.UTF8Encoding]::new($false)
-[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-if (-not $env:NAVIDE_CODEX_LAUNCH) { exit 0 }; try {
-$navidePort = Get-Content -ErrorAction Stop $env:NAVIDE_CODEX_PORT_FILE
-$body = [Console]::In.ReadToEnd()
-$body | curl.exe -fsS -m 9 -X POST -H 'Content-Type: application/json' -H ("@" + $env:NAVIDE_CODEX_AUTH_FILE) -H ("X-Navide-Codex-Launch: " + $env:NAVIDE_CODEX_LAUNCH) --data-binary '@-' ("http://127.0.0.1:" + $navidePort + "/hooks/codex/pretooluse")
-} catch {}; exit 0'''
-        return 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + base64.b64encode(script.encode('utf-16-le')).decode()
+        # cmd, not PowerShell: Codex hands the text to `%COMSPEC% /C "<text>"`
+        # verbatim (codex-rs hooks command_runner.rs), and a PowerShell cold
+        # start alone can outlast the 10s hook timeout on a loaded arm64 box,
+        # where Codex lets the call through undecided. curl reads the hook's
+        # stdin itself, so the payload bytes reach the backend untouched. The
+        # variables are expanded when the line is parsed, which is safe: Codex
+        # sets all three together. `for /f` reads the port at run time; a
+        # missing file runs nothing, and the outer `exit 0` covers every path.
+        # The `@` matters: cmd echoes a `for` body, prompt included, to stdout,
+        # which is where Codex reads the decision.
+        return (
+            '(if not defined NAVIDE_CODEX_LAUNCH (exit 0) else '
+            'for /f "usebackq delims=" %p in ("%NAVIDE_CODEX_PORT_FILE%") do '
+            '@curl.exe -fsS -m 9 -X POST '
+            '-H "Content-Type: application/json" '
+            '-H "@%NAVIDE_CODEX_AUTH_FILE%" '
+            '-H "X-Navide-Codex-Launch: %NAVIDE_CODEX_LAUNCH%" '
+            '--data-binary @- "http://127.0.0.1:%p/hooks/codex/pretooluse") '
+            '2>nul & exit 0'
+        )
     return (
         '[ -n "$NAVIDE_CODEX_LAUNCH" ] || exit 0; '
         'navide_port=$(cat "$NAVIDE_CODEX_PORT_FILE" 2>/dev/null); '

@@ -30,6 +30,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from threading import RLock
 from typing import Any
 
@@ -148,6 +150,24 @@ class PreviewLog:
         return db
 
     # ───────────────────────── Writing ──────────────────────────────
+    @contextmanager
+    def batch(self, workspace_path: str) -> Iterator[None]:
+        """Run the appends made inside as one transaction.
+
+        Each ``append`` commits on its own, and a commit is a disk flush. A
+        watcher burst — a ``git checkout`` debounced into thousands of paths —
+        paid one flush per path: seconds on a fast disk and minutes on a slow
+        one, all of it holding this log's lock. The appends inside join the
+        transaction opened here, so the burst is one flush.
+        """
+        with self._lock:
+            db = self._db(workspace_path, create=True)
+            if db is None:
+                yield  # each append reports the unusable workspace itself
+                return
+            with db.transaction():
+                yield
+
     def append(
         self,
         workspace_path: str,
