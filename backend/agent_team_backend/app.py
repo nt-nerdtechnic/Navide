@@ -17,7 +17,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from tempfile import TemporaryFile
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
@@ -3293,53 +3292,18 @@ def _agent_signed_out(agent_key: str) -> bool:
 # Aligned with onboarding_deps' detection probe (was 3s here — too tight, so a
 # momentarily overloaded machine timed out and made EVERY CLI unlaunchable).
 _SPAWN_PROBE_TIMEOUT_S = 8
-_SPAWN_PROBE_CLEANUP_TIMEOUT_S = 1.0
 
 
 def _run_spawn_probe(command: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run the CLI version probe without pipe readers that descendants can hold open."""
-    with TemporaryFile(mode="w+t") as stdout, TemporaryFile(mode="w+t") as stderr:
-        proc = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            text=True,
-            env=os.environ.copy(),
-            # POSIX kill_tree uses the process group; isolate the probe from
-            # the backend's group before invoking that seam.
-            start_new_session=True,
-        )
-        try:
-            proc.wait(timeout=_SPAWN_PROBE_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            try:
-                osplat.process_tree.kill_tree(proc.pid, force=True)
-            except OSError as err:
-                log.warning(
-                    "startup probe process-tree cleanup failed for pid %s: %s",
-                    proc.pid,
-                    err,
-                )
-                try:
-                    proc.kill()
-                except OSError as kill_err:
-                    log.warning(
-                        "startup probe direct-child cleanup failed for pid %s: %s",
-                        proc.pid,
-                        kill_err,
-                    )
-            try:
-                proc.wait(timeout=_SPAWN_PROBE_CLEANUP_TIMEOUT_S)
-            except subprocess.TimeoutExpired:
-                log.error("startup probe process %s did not exit after kill", proc.pid)
-            raise
-
-        stdout.seek(0)
-        stderr.seek(0)
-        return subprocess.CompletedProcess(
-            command, proc.returncode, stdout.read(), stderr.read()
-        )
+    """Run the CLI version probe without inheriting the backend's stdin."""
+    return subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=_SPAWN_PROBE_TIMEOUT_S,
+        env=os.environ.copy(),
+    )
 
 
 def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) -> dict[str, Any] | None:
