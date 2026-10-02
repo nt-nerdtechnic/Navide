@@ -74,6 +74,7 @@ class GitStatus:
     untracked: list[GitFileEntry] = field(default_factory=list)
     ignored: list[GitFileEntry] = field(default_factory=list)
     operation_in_progress: str = ""  # "", "merge", "rebase", "cherry-pick"
+    truncated: bool = False  # entries stop at _STATUS_ENTRY_LIMIT / _STATUS_MAX_BYTES
 
 
 @dataclass
@@ -260,6 +261,14 @@ async def _run_bytes(args: list[str], cwd: str) -> tuple[int, bytes, str]:
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
+# A repo with hundreds of thousands of untracked files (generated output) made
+# `git status -uall` print tens of MB, and building one entry per line on the
+# event loop stalled it for minutes (#144). Like VS Code's git.statusLimit, stop
+# at a fixed count; the byte cap also stops the read and git process early.
+_STATUS_ENTRY_LIMIT = 10_000
+_STATUS_MAX_BYTES = 4 * 1024 * 1024
+
+
 async def get_status(workspace_path: str, include_ignored: bool = False) -> dict[str, Any]:
     """Return serialisable GitStatus dict for the given workspace.
 
@@ -281,8 +290,14 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
     args = ["git", "-c", "core.quotePath=false", "status", "--porcelain=v1", "--branch", "-u"]
     if include_ignored:
         args.append("--ignored")
-    rc, out, _ = await _run(args, workspace_path)
+    _, out, _, byte_capped = await _run_capped(args, workspace_path, _STATUS_MAX_BYTES)
     lines = out.splitlines()
+    if byte_capped and len(lines) > 1:
+        lines.pop()  # the read stopped mid-line
+    if len(lines) - 1 > _STATUS_ENTRY_LIMIT:
+        del lines[_STATUS_ENTRY_LIMIT + 1 :]
+        byte_capped = True
+    status.truncated = byte_capped
     if lines:
         header = lines[0]  # ## main...origin/main [ahead 2, behind 1]
         branch_match = re.match(r"^## (.+?)(?:\.\.\.(.+?))?(?:\s+\[(.+)\])?$", header)

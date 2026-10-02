@@ -80,6 +80,42 @@ class TestGetStatus:
         result = await git_service.get_status(str(tmp_path))
         assert any(f["path"] == "README.md" for f in result["unstaged"])
 
+    @pytest.mark.asyncio
+    async def test_caps_entries_on_huge_untracked_tree(self, tmp_path, monkeypatch):
+        # Issue #144: a repo with ~454k untracked files built one entry per
+        # path on the event loop and stalled it for minutes.
+        monkeypatch.setattr(git_service, "_STATUS_ENTRY_LIMIT", 20)
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("changed")
+        big = tmp_path / "big"
+        big.mkdir()
+        for i in range(100):
+            (big / f"f{i}").write_text("")
+        result = await git_service.get_status(str(tmp_path))
+        entries = result["staged"] + result["unstaged"] + result["untracked"]
+        assert len(entries) == 20
+        assert result["truncated"] is True
+        assert result["branch"] != ""
+
+    @pytest.mark.asyncio
+    async def test_byte_cap_drops_the_cut_line(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(git_service, "_STATUS_MAX_BYTES", 300)
+        init_repo(tmp_path)
+        for i in range(100):
+            (tmp_path / f"untracked_file_{i:03d}.txt").write_text("")
+        result = await git_service.get_status(str(tmp_path))
+        assert result["truncated"] is True
+        assert result["untracked"]
+        for entry in result["untracked"]:
+            assert len(entry["path"]) == len("untracked_file_000.txt")
+
+    @pytest.mark.asyncio
+    async def test_not_truncated_below_cap(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "new_file.txt").write_text("hello")
+        result = await git_service.get_status(str(tmp_path))
+        assert result["truncated"] is False
+
 
 # ── get_log ────────────────────────────────────────────────────────────────────
 
