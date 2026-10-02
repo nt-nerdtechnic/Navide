@@ -137,29 +137,36 @@ def test_empty_install_can_bind_without_old_identity(store_case):
     assert not vault.slot_dir(vendor, "__default__").exists()
 
 
-async def test_watcher_filters_events_by_bound_destination(store_case):
-    from types import SimpleNamespace
-    from watchdog.events import FileModifiedEvent
+async def test_watcher_polls_the_bound_destination_only(store_case):
+    import asyncio
     from agent_team_backend.credential_watcher import CredentialWatcher
 
     vendor, _, vault, _, _, _, path, _ = store_case
     bind(store_case)
-    scheduled, touched = [], []
+    touched = []
 
     async def sink(_key):
         pass
 
     watcher = CredentialWatcher(sink, agent_keys=(vendor,), real_home=vault._real_home,
-                                fingerprint=lambda _: "FAKE-IDENTITY", resolver=vault._live_file)
-    watcher._observer = SimpleNamespace(schedule=lambda handler, directory, **kwargs: scheduled.append((handler, directory)))
-    watcher._mark_touched_threadsafe = touched.append
-    await watcher.watch_bound_store(vendor, path)
-    assert len(scheduled) == 1 and scheduled[0][1] == str(path.parent)
-    handler = scheduled[0][0]
-    handler.on_any_event(FileModifiedEvent(str(vault._real_home / ".local/share" / vendor / "auth.json")))
-    assert touched == []
-    handler.on_any_event(FileModifiedEvent(str(path)))
-    assert touched == [vendor]
+                                fingerprint=lambda _: "FAKE-IDENTITY", resolver=vault._live_file,
+                                poll_s=0.05)
+    watcher._schedule_fire = touched.append
+    watcher.start()
+    try:
+        await watcher.watch_bound_store(vendor, path)
+        assert path in watcher._watched
+        decoy = vault._real_home / ".local/share" / vendor / "auth.json"
+        decoy.parent.mkdir(parents=True, exist_ok=True)
+        decoy.write_text("{}")
+        await asyncio.sleep(0.3)
+        assert touched == []
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"changed": true}')
+        await asyncio.sleep(0.3)
+        assert touched == [vendor]
+    finally:
+        watcher.stop()
 
 
 async def test_usage_poll_consumes_bound_context_not_backend_environment(store_case, monkeypatch, tmp_path):
