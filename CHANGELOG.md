@@ -12,6 +12,7 @@ All notable released changes to Navide will be documented in this file. The form
 - **Marketplace ratings and reports**: signed-in members can rate an extension and report one for review; the registry website gets a shared look and admin status bars.
 - **`navide-plugin` publishing workflow**: the SDK CLI covers the whole path from a new project to a published, signed release, and a backend can declare the methods and events it serves.
 - **Channel binding asks first**: picking a chat opens a confirmation step that shows what the chat will receive, with the current choice clearly marked; Connect binds with that level.
+- **Several bots per platform**: Settings → Channels can add, rename and remove more than one bot for the same platform. Each bot keeps its own allowlist, pairing requests and link codes, and the bind menu groups chats by bot. Existing bots carry over as the main bot without signing in again.
 
 ### Changed
 
@@ -23,12 +24,16 @@ All notable released changes to Navide will be documented in this file. The form
 - **Navide Guard on Windows**: the Claude Code (2.1.139 and later) and Codex guard hooks no longer start PowerShell, whose cold start could pass the 10 s hook timeout and let a denied command run; older Claude Code builds keep the previous hook.
 - Guard closes several ways a heredoc, a here-string or a `#` could hide a later command, decides without waiting on the database lock, and keeps its rules current while they change.
 - Windows: saving to the local database no longer stalls when an antivirus scans its journal file, and a burst of file changes is recorded in one write instead of one per file.
+- **Windows hooks with a non-ASCII user folder**: Guard and the Claude Code and Codex hooks call the system curl by full path. A Git or MSYS2 curl earlier on PATH read a folder name such as `C:\Users\使用者` as `???` and never sent the request, so Guard got no decision.
+- A pane answering a chat with an MSG block addressed to the sender now reaches the chat with just that text; it is no longer reported to the pane as an unknown target.
 - Huge untracked trees no longer stall Git status (#144).
 - Keychain secrets that look like hex, or contain non-ASCII characters, are read back exactly.
 - The pane overview counts panes on offline devices as not opened.
 - Onboarding no longer offers to install tools it already found.
 - A Channels confirmation prompt that fails to reach the chat is retried; turning third-party backends off always stops them, even if the setting cannot be saved.
 - Tokens from a resumed session are attributed to the pane that ran them.
+- A CLI that leaves a child process holding its output no longer hangs the check Navide runs before opening a pane, and the leftover process is cleaned up (#143).
+- Droid sessions on Windows are found in the folder Droid actually uses (#142).
 - The macOS installer window no longer shows `.background.tiff` and `.VolumeIcon.icns` above the Navide → Applications layout when Finder is set to show hidden files.
 - Security updates: pyjwt.
 
