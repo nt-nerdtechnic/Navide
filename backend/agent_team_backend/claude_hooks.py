@@ -210,7 +210,10 @@ def _guard_script_text(port_name: str, header_name: str) -> str:
     cmd expands as Unicode at run time. Same request, headers and output
     contract as the PowerShell hook: the body is the decision, and every path
     exits 0, which is "no decision". An unset pane token expands to nothing
-    in a batch file, as it does in PowerShell.
+    in a batch file, as it does in PowerShell. curl is the system one by full
+    path, never `curl.exe` off PATH: a Git or MSYS2 bin directory ahead of
+    System32 supplies a curl that reads its arguments in the ANSI code page,
+    so a non-ASCII `%~dp0` reaches it as `???` and nothing is ever sent.
     """
     from . import guard_hooks
 
@@ -220,7 +223,7 @@ def _guard_script_text(port_name: str, header_name: str) -> str:
         'set "NAVIDE_PORT="',
         f'for /f "usebackq delims=" %%p in ("%~dp0{port_name}") do set "NAVIDE_PORT=%%p"',
         "if not defined NAVIDE_PORT exit /b 0",
-        f"curl.exe -fsS -m {_GUARD_CURL_TIMEOUT_S} -X POST "
+        f"%SystemRoot%\\System32\\curl.exe -fsS -m {_GUARD_CURL_TIMEOUT_S} -X POST "
         '-H "Content-Type: application/json" '
         '-H "X-Agent-Team-Event: pre_tool_use" '
         f'-H "@%~dp0{header_name}" '

@@ -157,7 +157,7 @@ def test_windows_hook_script_keeps_unicode_stdin(monkeypatch):
     script=base64.b64decode(command.rsplit(' ',1)[1]).decode('utf-16-le')
     assert '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)' in script
     assert '$OutputEncoding = [Text.UTF8Encoding]::new($false)' in script
-    assert script.index('$OutputEncoding') < script.index('$body | curl.exe')
+    assert script.index('$OutputEncoding') < script.index('$body | & ($env:SystemRoot')
 
 
 def test_native_hook_posts_unicode_payload_and_launch_header(tmp_path, monkeypatch):
