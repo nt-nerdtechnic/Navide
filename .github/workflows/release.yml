@@ -426,7 +426,7 @@ jobs:
           sparse-checkout: scripts
 
       - name: Download the installers
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: navide-linux-x64
           path: dist-release
@@ -916,7 +916,7 @@ jobs:
             "${plans_backend}"
 
       - name: Fetch the x64 update manifest
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: navide-windows-x64
           path: dist-x64
