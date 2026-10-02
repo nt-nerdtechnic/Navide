@@ -93,3 +93,25 @@ def test_telegram_html_code_blocks() -> None:
 def test_parse_error_detection() -> None:
     assert is_telegram_parse_error("Bad Request: can't parse entities: Unexpected end tag at byte offset 5")
     assert not is_telegram_parse_error("Bad Request: chat not found")
+
+
+def test_msg_blocks_follow_the_renderer_parser() -> None:
+    from agent_team_backend.channels.text import msg_blocks
+    text = (
+        "intro\n"
+        "---MSG-START--- to: telegram:alice re: k1\nhello\n---MSG-END---\n"
+        "```\n---MSG-START--- to: telegram:bob\nnot a block\n```\n"
+        "---MSG-START---\nto: reviewer\nbare form\n"
+        "---MSG-START--- to: empty\n---MSG-END---\n"
+        "---MSG-START--- to: telegram:carol\nunterminated"
+    )
+    assert msg_blocks(text) == [("telegram:alice", "hello"), ("reviewer", "bare form"),
+                                ("telegram:carol", "unterminated")]
+
+
+def test_strip_msg_markers_keeps_bodies_and_fenced_markers() -> None:
+    from agent_team_backend.channels.text import strip_msg_markers
+    text = ("Done.\n---MSG-START--- to: telegram:alice re: k1\nthe answer\n---MSG-END---\n"
+            "---MSG-START---\nto: reviewer\nplease check\n---MSG-END---\n"
+            "```\n---MSG-END---\n```")
+    assert strip_msg_markers(text) == "Done.\nthe answer\nplease check\n```\n---MSG-END---\n```"

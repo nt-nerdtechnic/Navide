@@ -134,9 +134,14 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': 'チャットのバインド時は、チャットを選んでから送信内容を確認し「接続」を押します。現在の選択がはっきり表示されます。',
       },
       {
-        'zh-TW': '其他：Marketplace 評分與檢舉、Windows 存檔與大量檔案變動不再卡住、超大專案的 Git 狀態不再卡住、Keychain 讀取更正確。',
-        'en-US': 'Also: Marketplace ratings and reports, no more stalls on Windows saves or file bursts, Git status no longer stalls in huge projects, and Keychain reads are exact.',
-        'ja-JP': 'そのほか：マーケットプレイスの評価と報告、Windows の保存や大量のファイル変更で止まらなくなりました。巨大なプロジェクトでも Git の状態表示が止まらず、キーチェーンの読み取りも正確になりました。',
+        'zh-TW': '同一個平台可以設定多個 bot：每個 bot 有自己的白名單與配對，綁定時依 bot 分組選擇聊天室；原本的 bot 自動成為主要 bot，不用重新登入。',
+        'en-US': 'Run several bots on one platform: each bot has its own allowlist and pairing, and the bind menu groups chats by bot. Your existing bot becomes the main bot without signing in again.',
+        'ja-JP': '1 つのプラットフォームで複数のボットを使えるようになりました。ボットごとに許可リストとペアリングを持ち、バインド時はボットごとにチャットを選べます。既存のボットはメインボットとして引き継がれ、再ログインは不要です。',
+      },
+      {
+        'zh-TW': '其他：Marketplace 評分與檢舉、Windows 存檔與大量檔案變動不再卡住、超大專案的 Git 狀態不再卡住、Keychain 讀取更正確、中文使用者資料夾的 Windows hook 恢復正常。',
+        'en-US': 'Also: Marketplace ratings and reports, no more stalls on Windows saves or file bursts, Git status no longer stalls in huge projects, Keychain reads are exact, and Windows hooks work under a non-ASCII user folder.',
+        'ja-JP': 'そのほか：マーケットプレイスの評価と報告、Windows の保存や大量のファイル変更で止まらなくなりました。巨大なプロジェクトでも Git の状態表示が止まらず、キーチェーンの読み取りも正確になり、ASCII 以外の文字を含むユーザーフォルダーでも Windows のフックが動作します。',
       },
     ],
   },

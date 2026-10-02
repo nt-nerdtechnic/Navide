@@ -199,6 +199,13 @@ describe('ChannelsPane', () => {
     expect(mock.sent.find((s) => s.type === 'channels.allow.remove')?.payload).toEqual({ platform: 'telegram', sender_id: '7' })
   })
 
+  it('a single bot names no bot on pairing requests or allowed senders', async () => {
+    const w = await render()
+    expect(w.find('[data-testid="pairing-bot"]').exists()).toBe(false)
+    expect(w.find('[data-testid="allow-bot"]').exists()).toBe(false)
+    expect(w.get('[data-testid="allow-row"]').text()).toContain('Telegram · 7')
+  })
+
   it('the kill switch turns every channel off', async () => {
     const w = await render()
     await w.get('[data-testid="channels-global-toggle"]').trigger('click')
@@ -211,6 +218,128 @@ describe('ChannelsPane', () => {
     const tg = w.get('[data-platform="telegram"]')
     await tg.get('[data-testid="channel-manage"]').trigger('click')
     expect(tg.find('[data-testid="channel-relay"]').exists()).toBe(false)
+  })
+
+  describe('several bots on one platform', () => {
+    const ready = { lifecycle: 'ready', connected: true, identity: '' }
+
+    function seedTwoBots(): void {
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'telegram', configured: true, enabled: true, status: { ...ready, identity: '@main_bot' }, config: {}, capabilities: null,
+          accounts: [
+            { account: 'default', name: '', configured: true, enabled: true, status: { ...ready, identity: '@main_bot' }, config: {}, capabilities: null },
+            { account: 'bot-b1', name: 'Ops', configured: true, enabled: false, status: { ...ready, lifecycle: 'stopped', connected: false }, config: { name: 'Ops' }, capabilities: null },
+          ],
+        }],
+      })
+      mock.setResponse('channels.bindings', {
+        ok: true,
+        bindings: [
+          { pane_id: 'p1', platform: 'telegram', account: 'bot-b1', chat_id: '-1', thread_id: '', title: 'a' },
+          { pane_id: 'p2', platform: 'telegram', account: 'bot-b1', chat_id: '-2', thread_id: '', title: 'b' },
+          { pane_id: 'p3', platform: 'telegram', account: 'default', chat_id: '-3', thread_id: '', title: 'c' },
+        ],
+      })
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+    }
+
+    const bot = (w: VueWrapper, account: string) => w.get(`[data-platform="telegram"] [data-account="${account}"]`)
+
+    it('lists every bot under its platform with its own status and switch', async () => {
+      seedTwoBots()
+      const w = await render()
+      expect(w.findAll('[data-platform="telegram"] [data-testid="channel-bot"]').map((b) => b.attributes('data-account')))
+        .toEqual(['default', 'bot-b1'])
+      expect(bot(w, 'default').get('[data-testid="channel-bot-name"]').text()).toBe('Main bot')
+      expect(bot(w, 'default').get('[data-testid="channel-status"]').text()).toBe('Connected @main_bot')
+      expect(bot(w, 'bot-b1').get('[data-testid="channel-bot-name"]').text()).toBe('Ops')
+      expect(bot(w, 'bot-b1').get('[data-testid="channel-status"]').text()).toBe('Off')
+      await bot(w, 'bot-b1').get('button[role="switch"]').trigger('click')
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.set_enabled')?.payload).toEqual({
+        platform: 'telegram', account: 'bot-b1', enabled: true,
+      })
+    })
+
+    it('adds a bot with its own id, name and token', async () => {
+      seedTwoBots()
+      const w = await render()
+      await w.get('[data-platform="telegram"] [data-testid="channel-add-bot"]').trigger('click')
+      const added = w.findAll('[data-platform="telegram"] [data-testid="channel-bot"]')[2]
+      expect(added.attributes('data-account')).toMatch(/^bot-[0-9a-f]{6}$/)
+      await added.get('form').trigger('submit')
+      expect(mock.sent.some((s) => s.type === 'channels.configure')).toBe(false)
+      expect(added.text()).toContain('Fill in')
+      await added.get('input[name="name"]').setValue('  Night shift ')
+      await added.get('input[name="token"]').setValue('123:abc')
+      await added.get('form').trigger('submit')
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.configure')?.payload).toEqual({
+        platform: 'telegram', account: added.attributes('data-account'),
+        config: { name: 'Night shift' }, secret: { token: '123:abc' },
+      })
+    })
+
+    it('renames a bot without touching its credential', async () => {
+      seedTwoBots()
+      const w = await render()
+      await bot(w, 'bot-b1').get('[data-testid="channel-rename"]').trigger('click')
+      await bot(w, 'bot-b1').get('input[name="bot-name"]').setValue('Night shift')
+      await bot(w, 'bot-b1').get('.ch-rename').trigger('submit')
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.rename_account')?.payload).toEqual({
+        platform: 'telegram', account: 'bot-b1', name: 'Night shift',
+      })
+      expect(mock.sent.some((s) => s.type === 'channels.configure')).toBe(false)
+    })
+
+    it('removes one bot only after confirming, naming how many panes it disconnects', async () => {
+      seedTwoBots()
+      const w = await render()
+      await bot(w, 'bot-b1').get('[data-testid="channel-manage"]').trigger('click')
+      await bot(w, 'bot-b1').get('[data-testid="channel-remove"]').trigger('click')
+      expect(mock.sent.some((s) => s.type === 'channels.remove')).toBe(false)
+      expect(bot(w, 'bot-b1').get('[data-testid="channel-remove-ask"]').text()).toContain('2 pane(s)')
+      await bot(w, 'bot-b1').get('[data-testid="channel-remove-confirm"]').trigger('click')
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.remove')?.payload).toEqual({ platform: 'telegram', account: 'bot-b1' })
+    })
+
+    it('names the bot of each pairing request and allowed sender, and removes per bot', async () => {
+      seedTwoBots()
+      mock.setResponse('channels.pairing.list', {
+        ok: true,
+        requests: [{ platform: 'telegram', account: 'bot-b1', code: 'K7Q2M9XA', sender_id: '42', sender_name: 'neil', created_at: 1 }],
+      })
+      mock.setResponse('channels.allow.list', {
+        ok: true,
+        entries: [
+          { platform: 'telegram', account: 'default', sender_id: '7', sender_name: 'amy', added_at: 1 },
+          { platform: 'telegram', account: 'bot-b1', sender_id: '8', sender_name: 'bob', added_at: 2 },
+        ],
+      })
+      const w = await render()
+      expect(w.get('[data-testid="pairing-bot"]').text()).toBe('Ops')
+      expect(w.findAll('[data-testid="allow-bot"]').map((e) => e.text())).toEqual(['Main bot', 'Ops'])
+      await w.findAll('[data-testid="allow-remove"]')[1].trigger('click')
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.allow.remove')?.payload).toEqual({
+        platform: 'telegram', sender_id: '8', account: 'bot-b1',
+      })
+    })
+
+    it('removing the only bot removes the platform, as before', async () => {
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      await tg.get('[data-testid="channel-remove"]').trigger('click')
+      await tg.get('[data-testid="channel-remove-confirm"]').trigger('click')
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.remove')?.payload).toEqual({ platform: 'telegram' })
+    })
   })
 
   describe('linking guide on a connected card', () => {

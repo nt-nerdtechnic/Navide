@@ -169,7 +169,7 @@ async def test_a_failed_allowlist_write_tells_the_sender_and_the_ui(env: Env, mo
 async def test_a_link_whose_platform_went_away_is_reported_failed(env: Env) -> None:
     code = env.m.link_create("telegram", "direct")["code"]
     env.m.invites.consume("telegram", code)
-    del env.m._adapters["telegram"]
+    del env.m._adapters[("telegram", "default")]
     msg = InboundMessage(platform="telegram", account="default", chat_id="99", thread_id="",
                          sender_id="99", sender_name="alice", text=f"/start {code}", message_id="x",
                          is_direct=True, ts=0.0)

@@ -9196,6 +9196,14 @@
       "missing": "請填寫：{fields}"
     },
     "enable-platform": "啟用 {platform}",
+    "bot": {
+      "default": "主要 bot",
+      "add": "新增 bot",
+      "new": "新的 bot",
+      "name": "Bot 名稱",
+      "rename": "重新命名",
+      "remove-ask": "要移除這個 bot 嗎？透過它連接的 {n} 個 pane 會中斷連接。"
+    },
     "manage": "管理",
     "connect": "連接",
     "needs": "需要：{fields}",

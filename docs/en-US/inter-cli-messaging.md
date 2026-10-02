@@ -242,6 +242,22 @@ received external content is marked tainted and its high-risk actions need
 local confirmation. A boundary line written inside the body is broken with a
 zero-width space, so the sender cannot close the block early.
 
+### Answering a chat sender
+
+A chat sender is not a pane, but the pane answers it the same way: an MSG
+block addressed to `telegram:alice` (any `<platform>:` handle). The window does
+not route it. The block is logged as handed to the channel (`delivered`, never
+a failure and never a notice to the pane). When the turn ends, the backend
+(`channels/manager.py` `_send_reply`) posts the chat-addressed block bodies to
+the pane's bound chat, without the marker, `to:` or `re:` lines, and nothing
+else from that turn. If that post fails, the whole turn text goes instead,
+with every marker line stripped. Chat-addressed blocks are posted at any mirror
+level, including "replies only". A turn with no such block is posted as before,
+with its marker lines stripped. The model never picks the destination: the
+address only says the text is for the chat, and replies always go to the pane's
+bound chat. With the platform offline, the reply is dropped with a backend log
+warning.
+
 ### Delivery failure notices
 
 When a message cannot be delivered, the **sending** pane is told:

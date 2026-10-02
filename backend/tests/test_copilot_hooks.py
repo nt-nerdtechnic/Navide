@@ -63,7 +63,7 @@ def test_both_shells_are_written_on_every_platform(tmp_path) -> None:
     assert handler["powershell"].startswith(
         "$PORT = Get-Content -ErrorAction SilentlyContinue '/tmp/port-file'; "
     )
-    assert "curl.exe -fsS -m 2 -o NUL -X POST" in handler["powershell"]
+    assert "& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 2 -o NUL -X POST" in handler["powershell"]
     assert "--data-binary '@-'" in handler["powershell"]
     assert "/hooks/copilot" in handler["powershell"]
 

@@ -1529,8 +1529,11 @@ class WindowsScripts:
         exit_zero: bool = False,
         env_header: tuple[str, str] | None = None,
     ) -> str:
-        # `curl.exe`, never `curl`: the bare name is a PowerShell alias for
-        # Invoke-WebRequest, which takes none of these arguments. `'@-'` and
+        # System32's curl.exe by full path, never `curl` (a PowerShell alias
+        # for Invoke-WebRequest, which takes none of these arguments) and never
+        # `curl.exe` off PATH: a Git or MSYS2 bin directory ahead of System32
+        # supplies a curl that reads its arguments in the ANSI code page, so a
+        # non-ASCII header file path arrives as `???`. `'@-'` and
         # `'@file'` are quoted because `@` starts a splat or an array here.
         # `exit_zero` costs nothing to honour -- the line already ends that
         # way, because a PowerShell failure otherwise surfaces as a hook error.
@@ -1538,7 +1541,7 @@ class WindowsScripts:
         extra = f"-H ('{env_header[0]}: ' + $env:{env_header[1]}) " if env_header else ""
         return (
             f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
-            f"if ($PORT) {{ curl.exe -fsS -m {timeout_s} {sink}-X POST "
+            f"if ($PORT) {{ & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} {sink}-X POST "
             f"-H 'Content-Type: application/json' "
             f"-H 'X-Agent-Team-Event: {event}' "
             f"-H {_ps_quote('@' + header_file)} {extra}"
@@ -1552,7 +1555,7 @@ class WindowsScripts:
         return (
             f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
             f"if (-not $PORT) {{ exit 0 }}; "
-            f"$BODY = curl.exe -fsS -m {timeout_s} -X POST "
+            f"$BODY = & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} -X POST "
             f"-H 'Content-Type: application/json' "
             f"-H 'X-Agent-Team-Event: rewake' "
             f"-H {_ps_quote('@' + header_file)} "

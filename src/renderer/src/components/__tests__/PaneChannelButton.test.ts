@@ -43,7 +43,7 @@ function seed(opts: {
   mock.setResponse('channels.bindings', {
     ok: true,
     bindings: opts.bindings ?? (opts.bound
-      ? [{ pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor' }]
+      ? [{ pane_id: 'p1', platform: 'telegram', account: 'default', chat_id: '-100', thread_id: '7', title: 'api-refactor' }]
       : []),
   })
   mock.setResponse('channels.pairing.list', { ok: true, requests: [] })
@@ -412,6 +412,84 @@ describe('PaneChannelButton', () => {
     expect(q('[data-testid="channel-popover"]')).toBeNull()
   })
 
+  describe('several bots on one platform', () => {
+    const ready = { lifecycle: 'ready', connected: true, identity: '' }
+    const caps = { threads: true, create_location: true, edit: true, typing: true, buttons: true, text_limit: 4000 }
+
+    function seedTwoBots(bindings: Record<string, unknown>[] = []): void {
+      seed({ configured: true, bindings })
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'telegram', configured: true, enabled: true, status: ready, config: {}, capabilities: caps,
+          accounts: [
+            { account: 'default', name: '', configured: true, enabled: true, status: { ...ready, identity: '@main_bot' }, config: {}, capabilities: caps },
+            { account: 'bot-b1', name: 'Ops', configured: true, enabled: true, status: { ...ready, identity: '@ops_bot' }, config: {}, capabilities: caps },
+          ],
+        }],
+      })
+    }
+
+    it('groups the chats by bot and binds through the bot picked', async () => {
+      seedTwoBots()
+      const w = await render()
+      await openPopover(w)
+      const groups = qa('[data-testid="channel-group"]')
+      expect(groups.map((g) => g.getAttribute('data-account'))).toEqual(['default', 'bot-b1'])
+      expect(qa('[data-testid="channel-group-bot"]').map((e) => e.textContent)).toEqual(['Main bot', 'Ops'])
+      expect(mock.sent.filter((s) => s.type === 'channels.locations').map((s) => s.payload)).toEqual([
+        { platform: 'telegram' }, { platform: 'telegram', account: 'bot-b1' },
+      ])
+      groups[1].querySelector<HTMLElement>('[data-testid="channel-bind-existing"]')!.click()
+      await flushPromises()
+      expect(q('[data-testid="channel-bind-chosen"]')!.textContent).toContain('Telegram · Ops')
+      q('[data-testid="channel-bind-confirm"]')!.click()
+      await flushPromises()
+      expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
+        pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'existing', chat_id: '-100',
+        verbosity: 'replies', account: 'bot-b1',
+      })
+    })
+
+    it('a chat taken through one bot is still free through the other', async () => {
+      seedTwoBots([{ pane_id: 'p2', platform: 'telegram', account: 'default', chat_id: '-100', thread_id: '', title: 'Navide' }])
+      const messaging = useAgentMessaging()
+      messaging.registerPane('p2', 'claude', 'other-pane')
+      try {
+        const w = await render()
+        await openPopover(w)
+        const [main, ops] = qa('[data-testid="channel-group"]')
+        expect(main.querySelector('[data-testid="channel-bind-existing"]')!.hasAttribute('disabled')).toBe(true)
+        expect(ops.querySelector('[data-testid="channel-bind-existing"]')!.hasAttribute('disabled')).toBe(false)
+      } finally {
+        messaging.unregisterPane('p2')
+      }
+    })
+
+    it("shows a pairing request only under the bot it came to", async () => {
+      seedTwoBots()
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+      mock.setResponse('channels.pairing.list', {
+        ok: true,
+        requests: [{ platform: 'telegram', account: 'bot-b1', code: 'K7Q2M9XA', sender_id: '42', sender_name: 'neil', created_at: 1 }],
+      })
+      const w = await render()
+      await openPopover(w)
+      const [main, ops] = qa('[data-testid="channel-group"]')
+      expect(main.querySelector('[data-testid="channel-link-pairing"]')).toBeNull()
+      expect(ops.querySelector('[data-testid="channel-link-pairing"]')?.textContent).toContain('neil asks to pair')
+    })
+
+    it('one bot: no bot label and no account in the request', async () => {
+      seed({ configured: true })
+      const w = await render()
+      await openPopover(w)
+      expect(q('[data-testid="channel-group-bot"]')).toBeNull()
+      expect(mock.sent.find((s) => s.type === 'channels.locations')?.payload).toEqual({ platform: 'telegram' })
+    })
+  })
+
   it('preselects replies-only, marks exactly the selected level, and sends Full after clicking it', async () => {
     seed({ configured: true })
     const w = await render()
@@ -499,14 +577,14 @@ describe('PaneChannelButton', () => {
       ],
       // Chat B serves another pane at Full; this pane last used Chat A at Standard.
       bindings: [
-        { pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: 'B', thread_id: '', title: 'Chat B', verbosity: 'full' },
+        { pane_id: 'p2', platform: 'telegram', account: 'default', chat_id: 'B', thread_id: '', title: 'Chat B', verbosity: 'full' },
       ],
     })
     const w = await render()
     await openPopover(w)
     lastStore!.bindings.value = [
       ...lastStore!.bindings.value,
-      { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: 'A', thread_id: '', title: 'Chat A', verbosity: 'standard' },
+      { pane_id: 'p1', platform: 'telegram', account: 'default', chat_id: 'A', thread_id: '', title: 'Chat A', verbosity: 'standard' },
     ]
     await flushPromises()
     q('[data-chat-id="A"]')!.click()
@@ -526,8 +604,8 @@ describe('PaneChannelButton', () => {
     seed({
       configured: true,
       bindings: [
-        { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: 'A', thread_id: '', title: 'Chat A', verbosity: 'minimal' },
-        { pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: 'B', thread_id: '', title: 'Chat B', verbosity: 'full' },
+        { pane_id: 'p1', platform: 'telegram', account: 'default', chat_id: 'A', thread_id: '', title: 'Chat A', verbosity: 'minimal' },
+        { pane_id: 'p2', platform: 'telegram', account: 'default', chat_id: 'B', thread_id: '', title: 'Chat B', verbosity: 'full' },
       ],
     })
     mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
@@ -608,7 +686,7 @@ describe('PaneChannelButton', () => {
     seed({
       configured: true,
       locations: [{ chat_id: '555', title: 'neillu123', kind: 'direct', supports_topics: false }],
-      bindings: [{ pane_id: 'p2', platform: 'telegram', account: 'a', chat_id: '555', thread_id: '', title: 'other-pane' }],
+      bindings: [{ pane_id: 'p2', platform: 'telegram', account: 'default', chat_id: '555', thread_id: '', title: 'other-pane' }],
     })
     const messaging = useAgentMessaging()
     messaging.registerPane('p2', 'claude', 'other-pane')
@@ -632,7 +710,7 @@ describe('PaneChannelButton', () => {
     seed({
       configured: true,
       locations: [{ chat_id: '555', title: 'neillu123', kind: 'direct', supports_topics: false }],
-      bindings: [{ pane_id: 'ghost', platform: 'telegram', account: 'a', chat_id: '555', thread_id: '', title: 'closed-pane' }],
+      bindings: [{ pane_id: 'ghost', platform: 'telegram', account: 'default', chat_id: '555', thread_id: '', title: 'closed-pane' }],
     })
     const w = await render()
     await openPopover(w)
@@ -672,7 +750,7 @@ describe('PaneChannelButton', () => {
   it('offers the replies-only level and says redaction covers channel credentials only', async () => {
     seed({
       configured: true,
-      bindings: [{ pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'replies' }],
+      bindings: [{ pane_id: 'p1', platform: 'telegram', account: 'default', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'replies' }],
     })
     mock.setResponse('channels.set_binding_options', { ok: true, binding: {} })
     const w = await render()
@@ -699,8 +777,8 @@ describe('PaneChannelButton', () => {
     seed({
       configured: true,
       bindings: [
-        { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'standard' },
-        { pane_id: 'c1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '9', title: '↳ worker', verbosity: 'full', parent_pane_id: 'p1' },
+        { pane_id: 'p1', platform: 'telegram', account: 'default', chat_id: '-100', thread_id: '7', title: 'api-refactor', verbosity: 'standard' },
+        { pane_id: 'c1', platform: 'telegram', account: 'default', chat_id: '-100', thread_id: '9', title: '↳ worker', verbosity: 'full', parent_pane_id: 'p1' },
       ],
     })
     const w = await render()

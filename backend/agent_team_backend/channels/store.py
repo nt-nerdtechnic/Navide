@@ -1,7 +1,7 @@
 """Channel persistence in the shared global ``navide.db`` (component ``channels``).
 
 Only non-secret data lives here. Bot tokens and app secrets go to
-``credential_vault.write_app_secret(f"channel-{platform}", ...)``.
+``credential_vault.write_app_secret(f"channel-{platform}-{account}", ...)``.
 """
 
 from __future__ import annotations
@@ -87,6 +87,39 @@ def _v4(cur: sqlite3.Cursor) -> None:
     cur.execute("ALTER TABLE channel_bindings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
 
 
+def _v5(cur: sqlite3.Cursor) -> None:
+    # Several bots per platform: an account is (platform, account), and who may
+    # talk to a bot is that bot's own list. Rows from v4 become account 'default',
+    # which bindings, offsets and seen chats already use.
+    cur.execute(
+        "CREATE TABLE channel_accounts_v5 ("
+        " platform TEXT NOT NULL, account TEXT NOT NULL DEFAULT 'default',"
+        " enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT NOT NULL DEFAULT '{}',"
+        " updated_at INTEGER NOT NULL, PRIMARY KEY (platform, account))"
+    )
+    cur.execute(
+        "INSERT INTO channel_accounts_v5 (platform, account, enabled, config_json, updated_at)"
+        " SELECT platform, 'default', enabled, config_json, updated_at FROM channel_accounts"
+    )
+    cur.execute("DROP TABLE channel_accounts")
+    cur.execute("ALTER TABLE channel_accounts_v5 RENAME TO channel_accounts")
+    cur.execute(
+        "CREATE TABLE channel_allow_v5 ("
+        " platform TEXT NOT NULL, account TEXT NOT NULL DEFAULT 'default', sender_id TEXT NOT NULL,"
+        " sender_name TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY (platform, account, sender_id))"
+    )
+    cur.execute(
+        "INSERT INTO channel_allow_v5 (platform, account, sender_id, sender_name, added_at)"
+        " SELECT platform, 'default', sender_id, sender_name, added_at FROM channel_allow"
+    )
+    cur.execute("DROP TABLE channel_allow")
+    cur.execute("ALTER TABLE channel_allow_v5 RENAME TO channel_allow")
+    # The bot a pairing request reached: its approval notice goes back through it.
+    cur.execute("ALTER TABLE channel_pairing_requests ADD COLUMN account TEXT NOT NULL DEFAULT 'default'")
+
+
+DEFAULT_ACCOUNT = "default"
+
 # "replies": only answers to turns the chat started (the pre-mirror behaviour).
 VERBOSITIES = ("replies", "minimal", "standard", "full")
 # A bind that names no level mirrors nothing the chat did not ask for; the user
@@ -102,10 +135,11 @@ class PairingRequest:
     sender_name: str
     chat_id: str
     created_at: int
+    account: str = DEFAULT_ACCOUNT  # the bot the sender wrote to
 
     def public(self) -> dict[str, Any]:
-        return {"platform": self.platform, "code": self.code, "sender_id": self.sender_id,
-                "sender_name": self.sender_name, "created_at": self.created_at}
+        return {"platform": self.platform, "account": self.account, "code": self.code,
+                "sender_id": self.sender_id, "sender_name": self.sender_name, "created_at": self.created_at}
 
 
 @dataclass
@@ -137,6 +171,7 @@ class ChannelStore:
         db.migrate(COMPONENT, 2, _v2)
         db.migrate(COMPONENT, 3, _v3)
         db.migrate(COMPONENT, 4, _v4)
+        db.migrate(COMPONENT, 5, _v5)
 
     def _rows(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._db.transaction() as cur:
@@ -157,33 +192,44 @@ class ChannelStore:
 
     # --- accounts -------------------------------------------------------------
 
-    def accounts(self) -> dict[str, dict[str, Any]]:
-        out: dict[str, dict[str, Any]] = {}
-        for r in self._rows("SELECT platform, enabled, config_json FROM channel_accounts"):
+    def accounts(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """Every configured bot, keyed by (platform, account)."""
+        out: dict[tuple[str, str], dict[str, Any]] = {}
+        for r in self._rows("SELECT platform, account, enabled, config_json FROM channel_accounts"
+                            " ORDER BY platform, account != 'default', updated_at"):
             try:
                 config = json.loads(r["config_json"] or "{}")
             except json.JSONDecodeError:
                 config = {}
-            out[r["platform"]] = {"enabled": bool(r["enabled"]), "config": config}
+            out[(r["platform"], r["account"])] = {"enabled": bool(r["enabled"]), "config": config}
         return out
 
-    def upsert_account(self, platform: str, config: dict[str, Any], enabled: bool | None = None) -> None:
+    def upsert_account(self, platform: str, config: dict[str, Any], enabled: bool | None = None,
+                       account: str = DEFAULT_ACCOUNT) -> None:
         payload = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
         now = int(time.time())
         with self._db.transaction() as cur:
             cur.execute(
-                "INSERT INTO channel_accounts (platform, enabled, config_json, updated_at)"
-                " VALUES (?, ?, ?, ?) ON CONFLICT(platform) DO UPDATE SET"
+                "INSERT INTO channel_accounts (platform, account, enabled, config_json, updated_at)"
+                " VALUES (?, ?, ?, ?, ?) ON CONFLICT(platform, account) DO UPDATE SET"
                 " config_json = excluded.config_json, updated_at = excluded.updated_at",
-                (platform, 1 if enabled is None else int(bool(enabled)), payload, now),
+                (platform, account, 1 if enabled is None else int(bool(enabled)), payload, now),
             )
             if enabled is not None:
-                cur.execute("UPDATE channel_accounts SET enabled = ? WHERE platform = ?",
-                            (int(bool(enabled)), platform))
+                cur.execute("UPDATE channel_accounts SET enabled = ? WHERE platform = ? AND account = ?",
+                            (int(bool(enabled)), platform, account))
 
-    def set_account_enabled(self, platform: str, enabled: bool) -> bool:
-        return self._exec("UPDATE channel_accounts SET enabled = ?, updated_at = ? WHERE platform = ?",
-                          (int(bool(enabled)), int(time.time()), platform)) > 0
+    def set_account_enabled(self, platform: str, enabled: bool, account: str = DEFAULT_ACCOUNT) -> bool:
+        return self._exec("UPDATE channel_accounts SET enabled = ?, updated_at = ?"
+                          " WHERE platform = ? AND account = ?",
+                          (int(bool(enabled)), int(time.time()), platform, account)) > 0
+
+    def remove_account(self, platform: str, account: str) -> None:
+        """One bot goes: its row, bindings, polling offset, allowlist and pairing requests."""
+        with self._db.transaction() as cur:
+            for table in ("channel_accounts", "channel_bindings", "channel_offsets", "channel_allow",
+                          "channel_pairing_requests"):
+                cur.execute(f"DELETE FROM {table} WHERE platform = ? AND account = ?", (platform, account))
 
     def remove_platform(self, platform: str) -> None:
         with self._db.transaction() as cur:
@@ -224,18 +270,27 @@ class ChannelStore:
 
     # --- pairing --------------------------------------------------------------
 
-    def list_pairing(self, platform: str | None) -> list[PairingRequest]:
-        if platform:
+    @staticmethod
+    def _pairing(r: sqlite3.Row) -> PairingRequest:
+        return PairingRequest(r["platform"], r["code"], r["sender_id"], r["sender_name"],
+                              r["chat_id"], int(r["created_at"]), r["account"])
+
+    def list_pairing(self, platform: str | None, account: str | None = None) -> list[PairingRequest]:
+        if platform and account is not None:
+            rows = self._rows("SELECT * FROM channel_pairing_requests WHERE platform = ? AND account = ?"
+                              " ORDER BY created_at", (platform, account))
+        elif platform:
             rows = self._rows("SELECT * FROM channel_pairing_requests WHERE platform = ?"
                               " ORDER BY created_at", (platform,))
         else:
             rows = self._rows("SELECT * FROM channel_pairing_requests ORDER BY created_at")
-        return [PairingRequest(r["platform"], r["code"], r["sender_id"], r["sender_name"],
-                               r["chat_id"], int(r["created_at"])) for r in rows]
+        return [self._pairing(r) for r in rows]
 
     def add_pairing(self, req: PairingRequest) -> None:
-        self._exec("INSERT INTO channel_pairing_requests VALUES (?, ?, ?, ?, ?, ?)",
-                   (req.platform, req.code, req.sender_id, req.sender_name, req.chat_id, req.created_at))
+        self._exec("INSERT INTO channel_pairing_requests (platform, code, sender_id, sender_name, chat_id,"
+                   " created_at, account) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (req.platform, req.code, req.sender_id, req.sender_name, req.chat_id, req.created_at,
+                    req.account))
 
     def pop_pairing(self, platform: str, code: str) -> PairingRequest | None:
         with self._db.transaction() as cur:
@@ -245,22 +300,23 @@ class ChannelStore:
                 return None
             cur.execute("DELETE FROM channel_pairing_requests WHERE platform = ? AND code = ?",
                         (platform, code))
-            return PairingRequest(r["platform"], r["code"], r["sender_id"], r["sender_name"],
-                                  r["chat_id"], int(r["created_at"]))
+            return self._pairing(r)
 
     def delete_pairing_older_than(self, cutoff: float) -> int:
         return self._exec("DELETE FROM channel_pairing_requests WHERE created_at < ?", (int(cutoff),))
 
-    # --- allowlist ------------------------------------------------------------
+    # --- allowlist (per bot) ----------------------------------------------------
 
-    def is_allowed(self, platform: str, sender_id: str) -> bool:
-        return bool(self._rows("SELECT 1 FROM channel_allow WHERE platform = ? AND sender_id = ?",
-                               (platform, sender_id)))
+    def is_allowed(self, platform: str, sender_id: str, account: str = DEFAULT_ACCOUNT) -> bool:
+        return bool(self._rows("SELECT 1 FROM channel_allow WHERE platform = ? AND account = ? AND sender_id = ?",
+                               (platform, account, sender_id)))
 
-    def add_allow(self, platform: str, sender_id: str, sender_name: str, added_at: int) -> None:
-        self._exec("INSERT INTO channel_allow VALUES (?, ?, ?, ?) ON CONFLICT(platform, sender_id)"
+    def add_allow(self, platform: str, sender_id: str, sender_name: str, added_at: int,
+                  account: str = DEFAULT_ACCOUNT) -> None:
+        self._exec("INSERT INTO channel_allow (platform, account, sender_id, sender_name, added_at)"
+                   " VALUES (?, ?, ?, ?, ?) ON CONFLICT(platform, account, sender_id)"
                    " DO UPDATE SET sender_name = excluded.sender_name",
-                   (platform, sender_id, sender_name, added_at))
+                   (platform, account, sender_id, sender_name, added_at))
 
     def list_allow(self, platform: str | None) -> list[dict[str, Any]]:
         if platform:
@@ -269,9 +325,9 @@ class ChannelStore:
             rows = self._rows("SELECT * FROM channel_allow ORDER BY added_at")
         return [dict(r) for r in rows]
 
-    def remove_allow(self, platform: str, sender_id: str) -> bool:
-        return self._exec("DELETE FROM channel_allow WHERE platform = ? AND sender_id = ?",
-                          (platform, sender_id)) > 0
+    def remove_allow(self, platform: str, sender_id: str, account: str = DEFAULT_ACCOUNT) -> bool:
+        return self._exec("DELETE FROM channel_allow WHERE platform = ? AND account = ? AND sender_id = ?",
+                          (platform, account, sender_id)) > 0
 
     # --- bindings -------------------------------------------------------------
 

@@ -42,7 +42,7 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 if (-not $env:NAVIDE_CODEX_LAUNCH) { exit 0 }; try {
 $navidePort = Get-Content -ErrorAction Stop $env:NAVIDE_CODEX_PORT_FILE
 $body = [Console]::In.ReadToEnd()
-$body | curl.exe -fsS -m 2 -o NUL -X POST -H 'Content-Type: application/json' -H ("@" + $env:NAVIDE_CODEX_AUTH_FILE) -H ("X-Navide-Codex-Launch: " + $env:NAVIDE_CODEX_LAUNCH) --data-binary '@-' ("http://127.0.0.1:" + $navidePort + "/hooks/codex/session-start")
+$body | & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 2 -o NUL -X POST -H 'Content-Type: application/json' -H ("@" + $env:NAVIDE_CODEX_AUTH_FILE) -H ("X-Navide-Codex-Launch: " + $env:NAVIDE_CODEX_LAUNCH) --data-binary '@-' ("http://127.0.0.1:" + $navidePort + "/hooks/codex/session-start")
 } catch {}; exit 0'''
         return 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + base64.b64encode(script.encode('utf-16-le')).decode()
     return (
@@ -73,11 +73,15 @@ def guard_hook_command() -> str:
         # sets all three together. `for /f` reads the port at run time; a
         # missing file runs nothing, and the outer `exit 0` covers every path.
         # The `@` matters: cmd echoes a `for` body, prompt included, to stdout,
-        # which is where Codex reads the decision.
+        # which is where Codex reads the decision. curl is System32's by full
+        # path: one from a Git or MSYS2 bin directory ahead of it on PATH reads
+        # its arguments in the ANSI code page, so a non-ASCII auth file path
+        # arrives as `???` and the request is never sent. Forward slashes, which
+        # cmd accepts, because this text crosses TOML and argv quoting.
         return (
             '(if not defined NAVIDE_CODEX_LAUNCH (exit 0) else '
             'for /f "usebackq delims=" %p in ("%NAVIDE_CODEX_PORT_FILE%") do '
-            '@curl.exe -fsS -m 9 -X POST '
+            '@%SystemRoot%/System32/curl.exe -fsS -m 9 -X POST '
             '-H "Content-Type: application/json" '
             '-H "@%NAVIDE_CODEX_AUTH_FILE%" '
             '-H "X-Navide-Codex-Launch: %NAVIDE_CODEX_LAUNCH%" '

@@ -330,6 +330,13 @@ const EXTERNAL_BOUNDARY_RE = /\[外部訊息(開始|結束)/g
 /** Chat platforms whose deliveries arrive as `<platform>:<sender name>`. */
 const CHANNEL_SENDER_RE = new RegExp(`^(${CHANNEL_PLATFORM_IDS.join('|')}):`)
 
+/** Whether an MSG `to:` names a chat sender (`telegram:alice`) rather than a
+ *  pane. Such a block is the pane's answer to its chat, and the backend posts it
+ *  to the pane's bound chat when the turn ends — the window sends nothing. */
+export function isChannelTarget(to: string): boolean {
+  return CHANNEL_SENDER_RE.test(to.trim())
+}
+
 /**
  * Whether an `agent_msg.deliver` event carries content from outside this
  * machine's user: a chat channel or a remote device. An explicit `origin` from

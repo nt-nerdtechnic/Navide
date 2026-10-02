@@ -973,8 +973,9 @@ class TestScripts:
         )
         assert "\n" not in command
         # `curl` alone is a PowerShell alias for Invoke-WebRequest, which takes
-        # none of these arguments.
-        assert "curl.exe -fsS -m 2 -o NUL -X POST" in command
+        # none of these arguments; `curl.exe` off PATH can be a Git or MSYS2
+        # build that reads a non-ASCII header file path as `???`.
+        assert "& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 2 -o NUL -X POST" in command
         assert command.startswith(
             "$PORT = Get-Content -ErrorAction SilentlyContinue 'C:\\Users\\a b\\navide.port'; "
         )
@@ -1004,7 +1005,7 @@ class TestScripts:
         )
         assert "\n" not in command
         assert "if (-not $PORT) { exit 0 }" in command
-        assert "$BODY = curl.exe -fsS -m 1860 -X POST" in command
+        assert "$BODY = & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 1860 -X POST" in command
         assert command.endswith(
             "if ($BODY) { [Console]::Error.WriteLine($BODY); exit 2 }; exit 0"
         )

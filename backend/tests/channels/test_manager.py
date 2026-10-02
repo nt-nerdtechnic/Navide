@@ -168,7 +168,8 @@ class Env:
         def factory_for(platform: str):
             def build(config, secret, store):
                 ad = FakeAdapter(platform, secret["token"])
-                self.adapters[platform] = ad
+                ad.account = config.get("account", "default")
+                self.adapters[platform if ad.account == "default" else f"{platform}:{ad.account}"] = ad
                 return ad
             return build
 
@@ -180,11 +181,12 @@ class Env:
 
     async def inbound(self, text: str, *, sender: str = "7", chat: str = "-100", thread: str = "50",
                       direct: bool = False, mid: str | None = None, platform: str = "telegram",
-                      wait: bool = True) -> None:
+                      wait: bool = True, account: str = "default", callback: str = "") -> None:
         mid = mid or f"m{next(_MIDS)}"
         await self.m.handle_inbound(InboundMessage(
-            platform=platform, account="default", chat_id=chat, thread_id=thread, sender_id=sender,
-            sender_name="alice", text=text, message_id=mid, is_direct=direct, ts=time.time()))
+            platform=platform, account=account, chat_id=chat, thread_id=thread, sender_id=sender,
+            sender_name="alice", text=text, message_id=mid, is_direct=direct, ts=time.time(),
+            callback_data=callback))
         if wait:
             await self.m.wait_idle()
 
@@ -232,7 +234,7 @@ async def clocked(tmp_path):
 
 
 async def test_configure_stores_single_line_secret_and_masks(env: Env) -> None:
-    assert env.fake.secrets["channel-telegram"] == '{"token":"tok-A"}'
+    assert env.fake.secrets["channel-telegram-default"] == '{"token":"tok-A"}'
     listed = env.m.list()
     tg = next(p for p in listed["platforms"] if p["platform"] == "telegram")
     assert tg["configured"] and tg["enabled"] and tg["status"]["lifecycle"] == "ready"
@@ -245,7 +247,8 @@ async def test_stranger_dm_gets_pairing_code_group_stranger_dropped(env: Env) ->
     assert "配對" in env.tg.texts()[-1]
     code = env.store.list_pairing("telegram")[0].code
     assert f"{code[:4]}-{code[4:]}" in env.tg.texts()[-1]
-    assert ("channels.pairing_request", {"platform": "telegram", "code": code, "sender_name": "alice"}) in env.fake.events
+    assert ("channels.pairing_request", {"platform": "telegram", "account": "default", "code": code,
+                                         "sender_name": "alice"}) in env.fake.events
     sent_before = len(env.tg.sent)
     await env.inbound("hi from group", sender="98")
     assert len(env.tg.sent) == sent_before and env.fake.delivered == []
@@ -391,7 +394,7 @@ async def test_bind_new_creates_topic_and_status_broadcast(env: Env) -> None:
 
 async def test_remove_platform_clears_secret_and_bindings(env: Env) -> None:
     await env.m.remove("telegram")
-    assert env.fake.secrets["channel-telegram"] is None
+    assert env.fake.secrets["channel-telegram-default"] is None
     assert env.store.bindings() == [] and env.store.list_allow(None) == []
     assert env.tg.status.lifecycle == "stopped"
 
@@ -963,3 +966,262 @@ async def test_yes_refused_when_option_one_is_permanent_allow(env: Env) -> None:
     await env.inbound(f"yes {rid}")
     assert env.fake.answers == []
     assert env.tg.texts()[-1] == mgr_mod.MSG_RELAY_PERMANENT
+
+
+# --- MSG blocks addressed to the chat sender ------------------------------------
+
+async def _armed(env: Env) -> None:
+    await env.inbound("question")
+    env.fake.verdicts["k1"] = {"status": "delivered"}
+    await _until(lambda: MSG_WORKING in env.tg.texts())
+
+
+async def test_msg_reply_to_the_chat_posts_only_its_body(env: Env) -> None:
+    await _armed(env)
+    env.turn_complete("pane-1", "Thinking it over.\n"
+                      "---MSG-START--- to: telegram:alice re: k1\nthe answer\n---MSG-END---")
+    await _until(lambda: _said(env, "the answer"))
+    reply = next(t for t in env.tg.texts() if "the answer" in t)
+    assert "MSG-START" not in reply and "MSG-END" not in reply and "to:" not in reply
+    assert not _said(env, "Thinking it over.")
+
+
+async def test_failed_msg_reply_falls_back_to_the_whole_turn(env: Env, caplog) -> None:
+    await _armed(env)
+    real = env.tg.send_text
+
+    async def flaky(loc, text, **kw):
+        if text.endswith("the answer") and "Intro line" not in text:  # only the MSG body's post fails
+            raise RuntimeError("chat is gone")
+        return await real(loc, text, **kw)
+
+    env.tg.send_text = flaky
+    env.turn_complete("pane-1", "Intro line\n---MSG-START--- to: telegram:alice\nthe answer\n---MSG-END---")
+    await _until(lambda: _said(env, "Intro line\nthe answer"))
+    assert "MSG reply to telegram:default:-100:50 failed" in caplog.text
+    assert not any("MSG-" in t for t in env.tg.texts())
+
+
+async def test_turn_without_a_chat_msg_posts_its_text_without_markers(env: Env) -> None:
+    await _armed(env)
+    env.turn_complete("pane-1", "Report\n---MSG-START--- to: reviewer\nplease review\n---MSG-END---")
+    await _until(lambda: _said(env, "Report\nplease review"))
+    assert not any("MSG-" in t for t in env.tg.texts())
+
+
+async def test_msg_to_the_chat_is_posted_even_at_replies_level(env: Env) -> None:
+    env.store.set_verbosity("pane-1", "replies")
+    env.turn_complete("pane-1", "local turn, not mirrored")
+    env.turn_complete("pane-1", "---MSG-START--- to: telegram:alice\nheads up\n---MSG-END---")
+    await _until(lambda: _said(env, "heads up"))
+    assert not _said(env, "local turn, not mirrored")
+
+
+async def test_msg_reply_with_the_platform_offline_is_only_logged(env: Env, caplog) -> None:
+    await _armed(env)
+    sent = len(env.tg.sent)
+    await env.m.set_enabled("telegram", False)
+    env.turn_complete("pane-1", "---MSG-START--- to: telegram:alice\nlost\n---MSG-END---")
+    await _until(lambda: "MSG reply for telegram:default:-100:50 dropped" in caplog.text)
+    assert len(env.tg.sent) == sent and env.fake.delivered == [("pane-1", "question", "telegram:alice")]
+
+
+# --- several bots per platform ----------------------------------------------------
+
+async def _second_bot(env: Env, account: str = "bot-b1", token: str = "tok-B") -> FakeAdapter:
+    res = await env.m.configure("telegram", {"name": "Ops bot"}, {"token": token}, account)
+    assert res["ok"], res
+    return env.adapters[f"telegram:{account}"]
+
+
+async def test_second_bot_runs_beside_the_first_with_its_own_secret(env: Env) -> None:
+    b = await _second_bot(env)
+    assert env.fake.secrets["channel-telegram-bot-b1"] == '{"token":"tok-B"}'
+    assert env.fake.secrets["channel-telegram-default"] == '{"token":"tok-A"}'
+    assert env.tg.status.lifecycle == "ready" and b.status.lifecycle == "ready"
+    tg = next(p for p in env.m.list()["platforms"] if p["platform"] == "telegram")
+    assert [(a["account"], a["name"], a["enabled"]) for a in tg["accounts"]] == [
+        ("default", "", True), ("bot-b1", "Ops bot", True)]
+    assert tg["status"]["lifecycle"] == "ready" and "tok-B" not in str(tg)
+
+
+async def test_one_token_cannot_serve_two_bots(env: Env) -> None:
+    res = await env.m.configure("telegram", {}, {"token": "tok-A"}, "bot-b1")
+    assert not res["ok"] and "telegram" in res["error"]
+    assert "channel-telegram-bot-b1" not in env.fake.secrets
+
+
+async def test_inbound_on_bot_b_never_reaches_a_pane_bound_through_bot_a(env: Env) -> None:
+    b = await _second_bot(env)
+    env.store.add_allow("telegram", "7", "alice", 1, "bot-b1")
+    # Same chat and topic as pane-1's binding, but through the other bot: not bound
+    # through it, and with two bots it stays silent.
+    await env.inbound("for bot B", account="bot-b1")
+    assert env.fake.delivered == [] and b.texts() == [] and MSG_NOT_BOUND not in env.tg.texts()
+    env.store.bind("pane-2", Location("telegram", "bot-b1", "-100", "50", "ops"), verbosity="full")
+    await env.inbound("for bot B again", account="bot-b1")
+    await env.inbound("for bot A")
+    assert [(d[0], d[1]) for d in env.fake.delivered] == [("pane-2", "for bot B again"), ("pane-1", "for bot A")]
+    # Each pane's reply goes back through the bot its chat came in on.
+    env.fake.verdicts["k1"] = {"status": "delivered"}
+    await _until(lambda: MSG_WORKING in b.texts())
+    env.turn_complete("pane-2", "answer from pane 2")
+    await _until(lambda: any(t.endswith("answer from pane 2") for t in b.texts()))
+    assert not any("answer from pane 2" in t for t in env.tg.texts())
+
+
+async def test_relay_answer_through_another_bot_is_refused(env: Env) -> None:
+    b = await _second_bot(env)
+    env.store.add_allow("telegram", "7", "alice", 1, "bot-b1")
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    rid = _relay_id(env)
+    await env.inbound(f"yes {rid}", account="bot-b1")  # same chat and topic, wrong bot
+    assert env.fake.answers == [] and b.texts()[-1] == mgr_mod.MSG_RELAY_EXPIRED
+
+
+async def test_relay_answer_from_another_topic_is_refused(env: Env) -> None:
+    env.store.bind("pane-2", Location("telegram", "default", "-100", "51", "web"))
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    await env.inbound(f"yes {_relay_id(env)}", thread="51")
+    assert env.fake.answers == [] and env.tg.texts()[-1] == mgr_mod.MSG_RELAY_EXPIRED
+
+
+async def test_bind_through_a_chosen_bot_and_the_chat_key_includes_it(env: Env) -> None:
+    b = await _second_bot(env)
+    # pane-1 holds this chat through bot A; through bot B it is a different location.
+    res = await env.m.bind("pane-2", "ops", "telegram", "existing", "-100", "50", account="bot-b1")
+    assert res["ok"] and res["binding"]["account"] == "bot-b1"
+    await _until(lambda: any("已連接 pane「ops」" in t for t in b.texts()))
+    taken = await env.m.bind("pane-3", "x", "telegram", "existing", "-100", "50", account="bot-b1")
+    assert not taken["ok"] and taken["holder_pane_id"] == "pane-2"
+    missing = await env.m.bind("pane-3", "x", "telegram", "existing", "-100", "", account="bot-zz")
+    assert not missing["ok"] and missing["error"] == "telegram/bot-zz is not connected"
+
+
+async def test_removing_one_bot_keeps_the_other_and_its_allowlist(env: Env) -> None:
+    b = await _second_bot(env)
+    env.store.add_allow("telegram", "8", "bob", 1, "bot-b1")
+    env.store.bind("pane-2", Location("telegram", "bot-b1", "-100", "50", "ops"))
+    assert (await env.m.remove("telegram", "bot-b1"))["ok"]
+    assert b.status.lifecycle == "stopped" and env.tg.status.lifecycle == "ready"
+    assert env.fake.secrets["channel-telegram-bot-b1"] is None
+    assert env.fake.secrets["channel-telegram-default"] == '{"token":"tok-A"}'
+    assert [x.pane_id for x in env.store.bindings()] == ["pane-1"]
+    assert list(env.store.accounts()) == [("telegram", "default")]
+    assert env.store.is_allowed("telegram", "7") and not env.store.is_allowed("telegram", "8", "bot-b1")
+
+
+async def test_rename_keeps_the_bot_running(env: Env) -> None:
+    b = await _second_bot(env)
+    assert (await env.m.rename_account("telegram", "bot-b1", "  Night shift "))["ok"]
+    assert env.store.accounts()[("telegram", "bot-b1")]["config"] == {"name": "Night shift"}
+    assert env.adapters["telegram:bot-b1"] is b and b.status.lifecycle == "ready"
+
+
+async def test_invalid_account_ids_are_refused(env: Env) -> None:
+    for bad in ("", "Bot", "a/b", "x" * 40):
+        with pytest.raises(ValueError):
+            await env.m.configure("telegram", {}, {"token": "tok-Z"}, bad)
+
+
+async def test_default_bot_still_starts_from_the_legacy_secret_slot(tmp_path) -> None:
+    e = Env(tmp_path)
+    e.fake.secrets["channel-telegram"] = '{"token":"tok-old"}'  # stored before several bots
+    e.store.upsert_account("telegram", {})
+    await e.m.start()
+    try:
+        assert e.tg.token == "tok-old" and e.tg.status.lifecycle == "ready"
+        # A new token goes to the new slot; the legacy one is left alone.
+        assert (await e.m.configure("telegram", {}, {"token": "tok-new"}))["ok"]
+        assert e.fake.secrets["channel-telegram-default"] == '{"token":"tok-new"}'
+        assert e.fake.secrets["channel-telegram"] == '{"token":"tok-old"}'
+        assert e.tg.token == "tok-new"
+    finally:
+        await e.m.stop()
+        e.db.close()
+
+
+async def test_approving_a_sender_on_one_bot_does_not_admit_them_on_another(env: Env) -> None:
+    b = await _second_bot(env)
+    await env.inbound("hi", sender="99", chat="99", thread="", direct=True, account="bot-b1")
+    [req] = env.store.list_pairing("telegram")
+    assert req.account == "bot-b1" and "配對" in b.texts()[-1] and env.tg.texts() == []
+    assert (await env.m.pairing_approve("telegram", req.code))["ok"]
+    assert b.texts()[-1].startswith("✅") and env.tg.texts() == []
+    assert env.store.is_allowed("telegram", "99", "bot-b1") and not env.store.is_allowed("telegram", "99")
+    # On the default bot the same sender is still a stranger: a fresh pairing code there.
+    await env.inbound("hi", sender="99", chat="99", thread="", direct=True)
+    assert "配對" in env.tg.texts()[-1] and env.fake.delivered == []
+    # And a group message from them through the default bot is dropped.
+    await env.inbound("in the group", sender="99")
+    assert env.fake.delivered == []
+
+
+async def test_a_link_code_only_works_on_the_bot_that_issued_it(env: Env) -> None:
+    b = await _second_bot(env)
+    code = env.m.link_create("telegram", "direct", "bot-b1")["code"]
+    await env.inbound(f"/start {code}", sender="99", chat="99", thread="", direct=True)
+    assert not env.store.is_allowed("telegram", "99")  # the default bot does not know it
+    await env.inbound(f"/start {code}", sender="99", chat="99", thread="", direct=True, account="bot-b1")
+    assert env.store.is_allowed("telegram", "99", "bot-b1") and not env.store.is_allowed("telegram", "99")
+    assert any("已連結" in t for t in b.texts())
+
+
+@pytest.mark.parametrize("chat,thread", [("-100", "52"), ("-100", ""), ("-555", "")],
+                         ids=["unbound topic", "General topic", "unbound chat"])
+async def test_a_sole_bot_still_says_the_topic_is_not_bound(env: Env, chat: str, thread: str) -> None:
+    await env.inbound("anyone?", chat=chat, thread=thread)
+    assert env.tg.texts()[-1] == MSG_NOT_BOUND and env.fake.delivered == []
+    loc = env.tg.sent[-1][0]
+    assert (loc.chat_id, loc.thread_id) == (chat, thread)
+
+
+@pytest.mark.parametrize("chat,thread", [("-100", "52"), ("-100", ""), ("-555", "")],
+                         ids=["unbound topic", "General topic", "unbound chat"])
+async def test_with_two_bots_an_unbound_location_gets_no_notice(env: Env, chat: str, thread: str, caplog) -> None:
+    import logging
+    caplog.set_level(logging.INFO, logger="agent_team_backend.channels.manager")
+    b = await _second_bot(env)
+    env.store.add_allow("telegram", "7", "alice", 1, "bot-b1")
+    await env.inbound("anyone?", chat=chat, thread=thread)
+    await env.inbound("anyone?", chat=chat, thread=thread, account="bot-b1")
+    assert env.tg.texts() == [] and b.texts() == [] and env.fake.delivered == []
+    assert "staying silent" in caplog.text
+    # A disabled second bot is not a second voice: the sole running bot answers again.
+    await env.m.set_enabled("telegram", False, "bot-b1")
+    await env.inbound("anyone?", chat=chat, thread=thread)
+    assert env.tg.texts()[-1] == MSG_NOT_BOUND
+
+
+async def test_pairing_approval_after_a_restart_goes_through_the_bot_that_got_the_request(tmp_path) -> None:
+    e = await _make_env(tmp_path)
+    try:
+        await _second_bot(e)
+        await e.inbound("hi", sender="99", chat="99", thread="", direct=True, account="bot-b1")
+        code = e.store.list_pairing("telegram")[0].code
+    finally:
+        await e.m.stop()
+    # A new manager on the same database and vault: nothing about the request is in memory.
+    e2 = Env.__new__(Env)
+    e2.clock, e2.db, e2.store, e2.fake, e2.adapters = e.clock, e.db, ChannelStore(e.db), e.fake, {}
+
+    def factory_for(platform: str):
+        def build(config, secret, store):
+            ad = FakeAdapter(platform, secret["token"])
+            ad.account = config.get("account", "default")
+            e2.adapters[platform if ad.account == "default" else f"{platform}:{ad.account}"] = ad
+            return ad
+        return build
+
+    e2.m = ChannelManager(e2.store, e2.fake.seams(), factory_for=factory_for)
+    await e2.m.start()
+    try:
+        assert (await e2.m.pairing_approve("telegram", code))["ok"]
+        b2 = e2.adapters["telegram:bot-b1"]
+        assert b2.texts() == ["✅ 已核准，可以開始對話"] and e2.adapters["telegram"].texts() == []
+        assert e2.store.is_allowed("telegram", "99", "bot-b1")
+    finally:
+        await e2.m.stop()
+        e.db.close()
