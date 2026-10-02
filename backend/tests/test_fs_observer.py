@@ -74,7 +74,63 @@ def test_callback_empties_the_lists_the_extension_leaks(tmp_path: Path) -> None:
     assert any(isinstance(e, FileCreatedEvent) and e.src_path == str(target) for e in queued)
 
 
+def test_callback_releases_the_reference_the_extension_leaks(tmp_path: Path) -> None:
+    import ctypes
+    from watchdog.observers.api import ObservedWatch
+
+    from agent_team_backend.fs_observer import _Emitter
+
+    emitter = _Emitter(queue.Queue(), ObservedWatch(str(tmp_path), recursive=True))
+    lists = [[str(tmp_path / "x")], [1], [0x100 | 0x10000], [1]]
+    baseline = [sys.getrefcount(lst) for lst in lists]
+    # What `watchdog_FSEventStreamCallback` does: it owns one reference to
+    # each list and never drops it, so every callback left four lists behind.
+    for lst in lists:
+        ctypes.pythonapi.Py_IncRef(ctypes.py_object(lst))
+    del lst
+
+    emitter._extension_callback(*lists)
+
+    assert [sys.getrefcount(lst) for lst in lists] == baseline
+
+
+def _churn(watched: Path, seen: list[str], ops: int, tag: str) -> None:
+    deleted = seen.count("deleted")
+    for i in range(ops):
+        p = watched / f"{tag}{i}.json"
+        p.write_text("{}")
+        os.remove(p)
+        if i % 20 == 0:
+            time.sleep(0.02)
+    # Settled means nothing new for a whole second — events still queued for
+    # dispatch at snapshot time would read as retained memory.
+    deadline = time.monotonic() + 60
+    last = -1
+    while time.monotonic() < deadline and len(seen) != last:
+        last = len(seen)
+        time.sleep(1.0)
+    assert seen.count("deleted") - deleted >= ops // 2, "the observer stopped delivering events"
+
+
+def _watchdog_bytes(snapshot: tracemalloc.Snapshot) -> int:
+    """Bytes allocated by watchdog or fs_observer code — exact paths, since a
+    loose pattern also takes in this file, whose own lists grow meanwhile."""
+    import watchdog
+
+    from agent_team_backend import fs_observer
+
+    only = [
+        tracemalloc.Filter(True, os.path.join(os.path.dirname(watchdog.__file__), "*")),
+        tracemalloc.Filter(True, fs_observer.__file__),
+    ]
+    return sum(stat.size for stat in snapshot.filter_traces(only).statistics("filename"))
+
+
 def test_observed_events_do_not_accumulate(tmp_path: Path) -> None:
+    """Retention is measured between two windows after a warm-up, so a fixed
+    residue (first batches, allocator caches) cancels out whatever the batch
+    sizes, which shrink on a loaded machine — while anything retained per
+    event or per callback still shows up in full."""
     from watchdog.events import FileSystemEventHandler
 
     from agent_team_backend.fs_observer import Observer
@@ -91,38 +147,21 @@ def test_observed_events_do_not_accumulate(tmp_path: Path) -> None:
     observer.schedule(_Handler(), str(watched), recursive=True)
     observer.start()
     tracemalloc.start(1)
+    ops = 2000
     try:
         time.sleep(1.0)
+        _churn(watched, seen, 1000, "warm")
+        _churn(watched, seen, ops, "a")
         gc.collect()
-        before = tracemalloc.take_snapshot()
-        ops = 3000
-        for i in range(ops):
-            p = watched / f"t{i}.json"
-            p.write_text("{}")
-            os.remove(p)
-            if i % 20 == 0:
-                time.sleep(0.02)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and seen.count("deleted") < ops // 2:
-            time.sleep(0.2)
-        time.sleep(1.0)
+        start = _watchdog_bytes(tracemalloc.take_snapshot())
+        _churn(watched, seen, ops, "b")
         gc.collect()
-        after = tracemalloc.take_snapshot()
+        end = _watchdog_bytes(tracemalloc.take_snapshot())
     finally:
         tracemalloc.stop()
         observer.stop()
         observer.join()
 
-    assert seen.count("deleted") >= ops // 2, "the observer stopped delivering events"
-    watchdog_only = [tracemalloc.Filter(True, "*watchdog*"), tracemalloc.Filter(True, "*fs_observer*")]
-    retained = sum(
-        stat.size_diff
-        for stat in after.filter_traces(watchdog_only).compare_to(
-            before.filter_traces(watchdog_only), "filename"
-        )
-    )
-    # Unpatched: ~390 bytes retained per create+delete. What is left is the
-    # four emptied list shells per callback the extension never frees. That
-    # residue is per callback, not per event, and a loaded machine delivers
-    # smaller batches (104 B/op at load average 86), so the bound sits midway.
-    assert retained / ops < 200,f"{retained / ops:.0f} bytes retained per operation"
+    # Unpatched: ~390 bytes per create+delete; leaking only the four list
+    # shells per callback: tens of bytes, more the smaller the batches.
+    assert (end - start) / ops < 10, f"{(end - start) / ops:.0f} bytes retained per operation"

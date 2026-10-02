@@ -11,19 +11,26 @@ the backend's heap grew with all filesystem activity in the home directory
 (#144).
 
 The emitter below builds a pure-Python stand-in for ``NativeEvent`` and empties
-the lists once it is done with them, which frees what they hold; only the four
-empty list shells per callback remain. Upstream master (checked 2026-10-02)
-added just ``Py_XDECREF(callback_result)`` — drop this module once a watchdog
-release frees the lists and the event objects.
+the lists once it is done with them, which frees what they hold. On the audited
+extension it also drops the one reference to each list the C side never does:
+the call's own argument references still hold them, so they are freed as the
+call returns rather than kept forever (four per callback). That release is gated on
+the exact watchdog version audited — a release that fixes the leak would turn
+it into a double free. Upstream master (checked 2026-10-02) added just
+``Py_XDECREF(callback_result)`` — drop this module once a watchdog release
+frees the lists and the event objects.
 
 Wherever watchdog picks another observer, this is that default ``Observer``.
 """
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import time
 
 from watchdog.observers import Observer
+from watchdog.version import VERSION_STRING
 
 __all__ = ["Observer"]
 
@@ -32,6 +39,7 @@ log = logging.getLogger("agent_team_backend.fs_observer")
 # Keyed on the observer watchdog chose, not the platform: only the FSEvents
 # one goes through the leaking extension.
 if Observer.__module__ == "watchdog.observers.fsevents":
+    import _watchdog_fsevents as _fsevents
     from watchdog.observers.api import DEFAULT_OBSERVER_TIMEOUT, BaseObserver
     from watchdog.observers.fsevents import FSEventsEmitter, FSEventsObserver
 
@@ -60,6 +68,13 @@ if Observer.__module__ == "watchdog.observers.fsevents":
     _IS_HARDLINK = 0x100000
     _IS_LAST_HARDLINK = 0x200000
     _CLONED = 0x400000
+
+    # `watchdog_FSEventStreamCallback` in this release never releases its four
+    # lists (src/watchdog_fsevents.c, read at the 6.0.0 tag and on master).
+    _LEAKS_CALLBACK_LISTS = VERSION_STRING == "6.0.0"
+    _py_decref = ctypes.pythonapi.Py_DecRef
+    _py_decref.argtypes = [ctypes.py_object]
+    _py_decref.restype = None
 
     _COALESCED_MASKS = (
         _CREATED | _REMOVED,
@@ -135,6 +150,29 @@ if Observer.__module__ == "watchdog.observers.fsevents":
                 inodes.clear()
                 flags.clear()
                 ids.clear()
+
+        def _extension_callback(
+            self, paths: list, inodes: list, flags: list, ids: list
+        ) -> None:
+            """The callback handed to the extension, and only to it: dropping
+            the extension's reference is right for its lists alone — done on a
+            list any Python caller owns, it frees that list under the caller."""
+            try:
+                self.events_callback(paths, inodes, flags, ids)
+            finally:
+                if _LEAKS_CALLBACK_LISTS:
+                    for leaked in (paths, inodes, flags, ids):
+                        _py_decref(leaked)
+
+        def run(self) -> None:
+            # FSEventsEmitter.run, handing the extension _extension_callback.
+            self.pathnames = [self.watch.path]
+            self._start_time = time.monotonic()
+            try:
+                _fsevents.add_watch(self, self.watch, self._extension_callback, self.pathnames)
+                _fsevents.read_events(self)
+            except Exception:
+                log.exception("Unhandled exception in FSEventsEmitter")
 
     class Observer(FSEventsObserver):  # type: ignore[no-redef]
         def __init__(self, *, timeout: float = DEFAULT_OBSERVER_TIMEOUT) -> None:
