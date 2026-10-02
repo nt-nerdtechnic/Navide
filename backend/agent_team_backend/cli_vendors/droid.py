@@ -8,12 +8,18 @@ disk):
   ~/.factory/sessions/                                          flat fallback
   ~/.factory/sessions/btw/                                      forked sessions
 
-The encoding is NOT ``encode_claude_cwd``. Droid replaces only path separators
-(``realpath`` → strip trailing separators → strip leading ``/`` → every ``/``
-run → ``-``, then one leading ``-``), so a directory named ``Agent-Team`` keeps
-its hyphen and a dotted path keeps its dots, where Claude would flatten both.
-Reusing Claude's encoder would silently miss the directory on any path holding
-a non-alphanumeric character other than ``/``.
+The encoding is NOT ``encode_claude_cwd``. Droid replaces only path separators,
+so a directory named ``Agent-Team`` keeps its hyphen and a dotted path keeps its
+dots, where Claude would flatten both. Reusing Claude's encoder would silently
+miss the directory on any path holding a non-alphanumeric character other than
+a separator.
+
+Droid's encoder is also not the same on every OS: the macOS/Linux build strips
+the leading slash run and rewrites only ``/``, while the Windows build drops
+the drive-letter colon and rewrites both backslashes and ``/`` (see
+``encode_droid_cwd``). The workspace path has to be encoded with the spelling
+the running droid writes, or session discovery and resume look in the wrong
+directory.
 
 Record types, from droid's own reader loops (everything else is skipped):
   session_start        first line, carries ``cwd`` / ``lastCwd``
@@ -42,6 +48,7 @@ import re
 from pathlib import Path
 
 from .base import AccountSwitchSpec, Dep, PlatformInstall, VendorSpec, command_text
+from ..osplat import platform_id as _platform_id
 from ..log_readers.base import (
     ActivityEvent,
     LogReader,
@@ -55,16 +62,39 @@ from ..log_readers.base import (
 log = logging.getLogger("agent_team_backend.log_readers.droid")
 
 
-def encode_droid_cwd(cwd: str) -> str:
-    """Droid's session-directory name for a cwd.
-
-    Mirrors droid's own encoder verbatim: strip trailing separators, strip
-    leading slashes, collapse each ``/`` run to a single ``-``, prepend ``-``.
-    Only separators are touched — every other character survives.
-    """
+def _encode_posix_droid_cwd(cwd: str) -> str:
+    """The macOS/Linux spelling, read from droid's own encoder: strip trailing
+    separators, strip the leading ``/`` run, collapse each remaining ``/`` run
+    to a single ``-``, prepend ``-``. Only separators are touched."""
     text = re.sub(r"[\\/]+$", "", cwd)
     text = re.sub(r"^/+", "", text)
     return "-" + re.sub(r"/+", "-", text)
+
+
+def _encode_windows_droid_cwd(cwd: str) -> str:
+    """The Windows spelling, read from droid's own encoder: strip trailing
+    separators, drop the drive letter's colon (``C:`` -> ``C``), collapse each
+    run of ``\\`` or ``/`` to a single ``-``, prepend ``-``. A UNC path keeps
+    its leading separator run, so ``\\\\server\\share`` names the directory
+    ``--server-share``."""
+    text = re.sub(r"[\\/]+$", "", cwd)
+    text = re.sub(r"^([A-Za-z]):", r"\1", text)
+    return "-" + re.sub(r"[\\/]+", "-", text)
+
+
+def encode_droid_cwd(cwd: str, platform: str | None = None) -> str:
+    """Droid's session-directory name for a cwd on ``platform``.
+
+    Droid ships a different encoder per OS, so the spelling is not shared:
+    macOS/Linux strips the leading slash and rewrites only ``/``, while Windows
+    drops the drive-letter colon and rewrites both separators. ``platform``
+    defaults to this process's platform (``osplat.platform_id``) and is
+    overridable so both spellings can be exercised on any host, including on a
+    native Windows runner.
+    """
+    if (platform or _platform_id) == "win32":
+        return _encode_windows_droid_cwd(cwd)
+    return _encode_posix_droid_cwd(cwd)
 
 
 # Credential store (droid 0.206.0 bundle, class XlH): the login is an
