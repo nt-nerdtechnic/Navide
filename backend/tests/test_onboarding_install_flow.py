@@ -151,8 +151,8 @@ def test_spawn_command_untouched_when_nothing_is_installed(
 def test_spawn_probe_accepts_the_legacy_binary(monkeypatch: pytest.MonkeyPatch) -> None:
     _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     monkeypatch.setattr(
-        app_mod.subprocess, "run",
-        lambda cmd, *_a, **_k: subprocess.CompletedProcess(cmd, 0, "2026.1.5", ""),
+        app_mod, "_run_spawn_probe",
+        lambda cmd: subprocess.CompletedProcess(cmd, 0, "2026.1.5", ""),
     )
     probe = app_mod._probe_agent_cli_for_spawn("cursor", "cursor-agent")
     assert probe is not None and probe["binary_path"] == "/opt/bin/cursor-agent"
