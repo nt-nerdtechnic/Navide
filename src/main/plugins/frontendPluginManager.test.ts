@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpath
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { isWindows, platformId, setPlatformId } from '../../shared/osplat'
+import { AI_CLI_PROFILES } from '../../shared/aiCliProfiles'
 import { backendEntryOnDisk } from './installedPlugins'
 
 // Many real fsyncs per test that no assertion can observe; see tests/support/noFsync.ts.
@@ -12989,7 +12990,14 @@ describe('first-party Git private bridge', () => {
       await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
       const create = JSON.parse(socket.sent[0]!)
       expect(create.type).toBe('terminal.create')
-      expect(create.payload.command).toContain('--dangerously-skip-permissions')
+      // The Host must hand the backend the documented command shape: a POSIX
+      // `[shell, flags, line]` wrapper, or a single string off Windows. The
+      // YOLO flag belongs inside that line, never as a top-level argv element
+      // (the Git sidebar regression that joined `--flag -c 'hooks…'`).
+      const command = create.payload.command
+      const commandLine = Array.isArray(command) ? command.at(-1) : command
+      expect(commandLine).toBe('claude --dangerously-skip-permissions')
+      if (Array.isArray(command)) expect(command).toHaveLength(3)
 
       socket.receive({
         id: 'early-output',
@@ -13061,6 +13069,61 @@ describe('first-party Git private bridge', () => {
         'terminal.create',
         'terminal.reattach',
       ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('wraps every Git sidebar CLI profile in the backend command contract', async () => {
+    vi.useFakeTimers()
+    try {
+      for (const [index, profileId] of Object.keys(AI_CLI_PROFILES).entries()) {
+        const view = await openGitView('/workspace', 'git-window')
+        view.mgr.setBackendWsUrl(`ws://git-sidebar-shape-${index}`)
+        const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+        socket.open()
+        const runtime = (
+          view.mgr as unknown as {
+            running: Map<string, { capabilityContext: HostCapabilityContext }>
+          }
+        ).running.get(view.instanceId)!.capabilityContext.runtimeBinding!
+        const requestId = `shape-${index}`
+        const start = view.mgr.executePublicCapability({
+          kind: 'public',
+          address: 'aiCli.startSession',
+          scope: 'workspace',
+          runtime,
+          args: { profileId, requestId, cols: 80, rows: 24, yolo: true },
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+        const create = JSON.parse(socket.sent[0]!)
+        expect(create.type, profileId).toBe('terminal.create')
+
+        const profile = AI_CLI_PROFILES[profileId as keyof typeof AI_CLI_PROFILES]
+        const flag = 'yoloFlag' in profile ? profile.yoloFlag : undefined
+        const command = create.payload.command as string | string[]
+        // Never the raw executable argv `[binary, flag]` whose last element the
+        // backend joined `-c 'hooks.SessionStart=…'` onto (the bug).
+        const words = (Array.isArray(command) ? command.at(-1)! : command).split(' ')
+        if (isWindows()) expect(typeof command, profileId).toBe('string')
+        else expect(command, profileId).toHaveLength(3)
+        expect(words[0], profileId).toBe(profile.command)
+        if (flag) expect(words, profileId).toContain(flag)
+
+        socket.receive({
+          id: create.id,
+          type: create.type,
+          ok: true,
+          payload: {
+            terminal_session_id: `session-${profileId}`,
+            pane_id: create.payload.pane_id,
+            create_generation: requestId,
+          },
+          error: null,
+          timestamp: '',
+        })
+        await start
+      }
     } finally {
       vi.useRealTimers()
     }
