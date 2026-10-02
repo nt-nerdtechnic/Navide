@@ -82,7 +82,7 @@ registries.
 | Codex | Rollout format, explicit turn completion, delayed discovery, launch-scoped SessionStart, pane homes, subagent exclusion and ESC interrupt |
 | Copilot | SQLite and legacy JSONL precedence, cumulative usage, completed turns, markers, hooks and resume |
 | Cursor | Executable aliases, SQLite WAL, JSON/protobuf discrimination, workspace markers, event ordering and reply tails |
-| Droid | Its own cwd encoding, session layouts, cumulative sidecars, split reply/outcome and inherited parent environment; reader/resume fixtures are POSIX-only until native Windows folder naming is handled |
+| Droid | Its own cwd encoding (POSIX and native Windows spellings), session layouts, cumulative sidecars, split reply/outcome and inherited parent environment |
 | Grok | Official grok-build updates, cwd layouts, UUID resume claims, explicit completion and streamed text |
 | Kilo | Its own database/root/vendor identity plus the shared OpenCode schema and authenticated TUI push |
 | Kimi | Session-directory identity, wire records, cancellation, inferred idle completion and ESC timeout environment |
@@ -266,12 +266,11 @@ that platform; path swapping on macOS does not exercise ConPTY or Linux PTYs.
 
 ## Platform-scoped vendor fixtures
 
-Droid's synthetic reader and resume fixtures use POSIX session paths. Until
-native Windows folder naming is handled, the coverage inventory requires these
-two cases on POSIX hosts and excludes them from Windows required outcomes. The
-Windows tests visibly skip those fixtures; Droid launch and all other vendor
-contracts remain required. This is a test-fixture limitation, not validation
-that Droid session paths work on Windows.
+Claude's graceful-shutdown fixture needs a POSIX PTY, so the coverage
+inventory requires it on POSIX hosts and excludes it from Windows required
+outcomes. Every other vendor contract, Droid's reader and resume fixtures
+included, is required on every supported platform; Droid's session directory
+is encoded with the host's spelling (POSIX or native Windows).
 
 ## Implementation validation (2026-09-30)
 
@@ -348,5 +347,5 @@ Local validation after these corrections:
 
 Native Linux/Windows execution, live provider smoke and manual Electron checks
 remain separate from these local results. The two Droid reader/resume fixtures
-remain required on POSIX hosts and are explicitly excluded from Windows
-required outcomes until native Windows session folder naming is handled.
+were then required on POSIX hosts and excluded from Windows required outcomes;
+the Droid Windows session-path fix later removed that exclusion.

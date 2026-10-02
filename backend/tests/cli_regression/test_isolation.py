@@ -201,7 +201,9 @@ def test_failure_cleanup_reaps_a_tracked_orphan(tmp_path):
         # It is no longer reachable through the backend's process tree.
         assert backend.process is None
         assert backend._owned_children[child.pid].is_running()
-        assert backend._reap_surviving_children() == [child.pid]
+        survivors = backend._reap_surviving_children()
+        assert [entry["pid"] for entry in survivors] == [child.pid]
+        assert survivors[0]["name"] and survivors[0]["cmdline"]
         child.wait(timeout=5)
         assert child.poll() is not None
     finally:

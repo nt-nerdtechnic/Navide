@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -42,21 +41,7 @@ def data(request, tmp_path, monkeypatch, set_home):
         fixture.close()
 
 
-def session_vendors_with(capability):
-    return [
-        pytest.param(
-            key,
-            id=key,
-            marks=pytest.mark.skipif(
-                sys.platform == "win32" and key == "droid",
-                reason="Droid Windows session path format is tracked separately",
-            ),
-        )
-        for key in vendors_with(capability)
-    ]
-
-
-@pytest.mark.parametrize("data", session_vendors_with("reader"), indirect=True)
+@pytest.mark.parametrize("data", vendors_with("reader"), indirect=True)
 async def test_vendor_reader(data, tmp_path, monkeypatch):
     key = data.fixture["vendor"]
     reader = VENDORS[key].make_log_reader()
@@ -151,7 +136,7 @@ async def test_vendor_reader(data, tmp_path, monkeypatch):
     store.flush()
 
 
-@pytest.mark.parametrize("data", session_vendors_with("resume"), indirect=True)
+@pytest.mark.parametrize("data", vendors_with("resume"), indirect=True)
 def test_vendor_resume(data):
     key = data.fixture["vendor"]
     data.apply("initial")

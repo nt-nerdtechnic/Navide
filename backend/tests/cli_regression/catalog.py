@@ -17,8 +17,6 @@ FIXTURES = ROOT / "tests" / "fixtures" / "cli-regression"
 RUNNER_CAPABILITIES = ({"posix_pty", "darwin_helper"}, {"posix_pty"}, {"windows_conpty"})
 PLATFORM_REQUIREMENTS = {
     ("claude", "shutdown"): {"posix_pty"},
-    ("droid", "reader"): {"posix_pty"},
-    ("droid", "resume"): {"posix_pty"},
 }
 
 

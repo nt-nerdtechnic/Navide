@@ -185,20 +185,38 @@ class BackendProcess:
             except psutil.NoSuchProcess:
                 pass
 
-    def _reap_surviving_children(self) -> list[int]:
-        survivors: list[psutil.Process] = []
-        for process in self._owned_children.values():
+    @staticmethod
+    def _describe_process(process: psutil.Process) -> dict:
+        """Identify a survivor for the assertion message and scenario.json.
+
+        Call this while the process is still running: after the kill it can be
+        a zombie whose name()/cmdline() no longer resolve.
+        """
+        try:
+            return {"pid": process.pid, "name": process.name(), "cmdline": process.cmdline()}
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return {"pid": process.pid, "name": "", "cmdline": []}
+
+    def _reap_surviving_children(self) -> list[dict]:
+        owned = list(self._owned_children.values())
+        # A console host (ConPTY) can outlive the backend it served by a beat.
+        # Wait for the whole owned set before judging any of it a survivor.
+        _gone, survivors = psutil.wait_procs(owned, timeout=2)
+        # Describe survivors before killing them, while name()/cmdline() resolve.
+        descriptions = [self._describe_process(process) for process in survivors
+                        if process.is_running()]
+        for process in survivors:
             # psutil.is_running compares cached (pid, creation time). The
             # public kill method repeats that identity check before signalling.
-            if process.is_running():
-                survivors.append(process)
-                try:
-                    process.kill()
-                except psutil.NoSuchProcess:
-                    pass
+            if not process.is_running():
+                continue
+            try:
+                process.kill()
+            except psutil.NoSuchProcess:
+                pass
         psutil.wait_procs(survivors, timeout=5)
         # Report what the harness had to rescue, even when the rescue worked.
-        return [process.pid for process in survivors]
+        return descriptions
 
     async def receive(self, ws) -> dict | None:
         frame = await ws.recv()

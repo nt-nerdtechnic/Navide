@@ -16,6 +16,26 @@ import sys
 import time
 
 
+def _raw_console_input() -> None:
+    """Clear the console's processed/line/echo input flags for the REPL loop.
+
+    ConPTY translates a raw `\x03` into CTRL_C_EVENT while the console is in
+    processed-input mode, and the CI job starts pytest with
+    CREATE_NEW_PROCESS_GROUP, which disables Ctrl+C for every descendant. The
+    fake would then neither get a signal nor see the byte in `getwch()`. Real
+    Node CLIs put the console in raw mode; clearing these flags makes
+    `msvcrt.getwch()` return the raw `\x03`.
+    """
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        # ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT
+        kernel32.SetConsoleMode(handle, mode.value & ~0x0007)
+
+
 def main() -> None:
     vendor, root_text, *args = sys.argv[1:]
     if "--version" in args:
@@ -89,7 +109,9 @@ def main() -> None:
             print("INTERRUPT_3", flush=True)
 
         signal.signal(signal.SIGINT, interrupted)
-        if os.name != "nt":
+        if os.name == "nt":
+            _raw_console_input()
+        else:
             import tty
             tty.setraw(sys.stdin.fileno())
         print("TRANSPORT_READY", flush=True)
