@@ -6,6 +6,7 @@ import {
   reasonToEnglish,
   holdToEnglish,
   defaultMessagingName,
+  isChannelTarget,
   isQualifiedTarget,
   normalizeMessagingName,
   uniqueMessagingName,
@@ -122,8 +123,9 @@ export interface AgentMessage {
    *
    *  'ack' is the odd one out: it records that the message deliberately never
    *  went out at all. The row is settled and correct — an 'ack' kind is only
-   *  ever logged — so this says how it was settled, not how it was typed in. */
-  route?: 'hook' | 'read' | 'ack' | `push:${string}`
+   *  ever logged — so this says how it was settled, not how it was typed in.
+   *  'channel' is a reply to a chat sender, left for the backend to post. */
+  route?: 'hook' | 'read' | 'ack' | 'channel' | `push:${string}`
   /** `uid` of the message this one answers, set when the sender echoed back the
    *  correlation id carried in that message's envelope. Persisted (`reply_to`):
    *  a recipient reading its own mail over MCP has to be able to see what a
@@ -858,6 +860,13 @@ function sendMessage(from: string, to: string, content: string, opts: SendOption
     // workspace window; anything else keeps failing straight away as before.
     if (deps.routeRemote && isQualifiedTarget(to)) {
       dispatchRemote(msg, from, to, content, now, opts.replyTo)
+      return msg
+    }
+    // A reply to a chat sender: the backend posts this turn's chat-addressed
+    // blocks to the pane's bound chat itself (channels/manager.py _send_reply),
+    // so there is nothing to send here and nothing to fail.
+    if (isChannelTarget(to)) {
+      markHandedToChannel(msg)
       return msg
     }
     failMessage(msg.id, { key: 'unknown-target', params: { to } })
@@ -1806,6 +1815,16 @@ function markLoggedOnly(m: AgentMessage): void {
   m.status = 'delivered'
   m.deliveredAt = deps ? deps.now() : m.createdAt
   m.route = 'ack'
+  delete m.hold
+  deps?.persistUpdate?.([{ uid: m.uid, status: 'delivered', delivered_at: m.deliveredAt }])
+}
+
+/** Settle a reply to a chat sender: handed to the channel, which posts it at the
+ *  turn's end (or the whole turn text if that fails). Not persisted, like 'ack'. */
+function markHandedToChannel(m: AgentMessage): void {
+  m.status = 'delivered'
+  m.deliveredAt = deps ? deps.now() : m.createdAt
+  m.route = 'channel'
   delete m.hold
   deps?.persistUpdate?.([{ uid: m.uid, status: 'delivered', delivered_at: m.deliveredAt }])
 }

@@ -9196,6 +9196,14 @@
       "missing": "Fill in: {fields}"
     },
     "enable-platform": "Enable {platform}",
+    "bot": {
+      "default": "Main bot",
+      "add": "Add bot",
+      "new": "New bot",
+      "name": "Bot name",
+      "rename": "Rename",
+      "remove-ask": "Remove this bot? {n} pane(s) connected through it will be disconnected."
+    },
     "manage": "Manage",
     "connect": "Connect",
     "needs": "Needs: {fields}",

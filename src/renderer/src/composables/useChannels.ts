@@ -34,8 +34,12 @@ export interface ChannelCapabilities {
   text_limit: number
 }
 
-export interface ChannelPlatformState {
-  platform: ChannelPlatform
+/** One bot on a platform. A platform may run several; `default` is the one every
+ *  platform had before that, and added bots get a generated id (see newAccountId). */
+export interface ChannelAccountState {
+  account: string
+  /** Display name the user gave the bot; '' when unnamed. */
+  name: string
   configured: boolean
   enabled: boolean
   status: ChannelStatus
@@ -44,8 +48,39 @@ export interface ChannelPlatformState {
   capabilities: ChannelCapabilities | null
 }
 
+export interface ChannelPlatformState {
+  platform: ChannelPlatform
+  /** True when any bot is configured. */
+  configured: boolean
+  /** True when any bot is enabled. */
+  enabled: boolean
+  /** The first bot's status, config and capabilities, as before several bots. */
+  status: ChannelStatus
+  /** Non-secret config only; the backend never sends a secret back. */
+  config: Record<string, unknown>
+  capabilities: ChannelCapabilities | null
+  /** Every configured bot, `default` first. */
+  accounts: ChannelAccountState[]
+}
+
+export const DEFAULT_ACCOUNT = 'default'
+
+/** A fresh id for a bot being added: stable for its life, whatever it is renamed to. */
+export function newAccountId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(3))
+  return `bot-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`
+}
+
+/** `account` for a request payload: left out for the default bot, so requests for
+ *  it stay exactly what they were before several bots per platform. */
+function acct(account: string | undefined): { account?: string } {
+  return account && account !== DEFAULT_ACCOUNT ? { account } : {}
+}
+
 export interface ChannelPairingRequest {
   platform: ChannelPlatform
+  /** The bot the sender wrote to; absent from older backends (= default). */
+  account?: string
   code: string
   sender_id: string
   sender_name: string
@@ -54,6 +89,8 @@ export interface ChannelPairingRequest {
 
 export interface ChannelAllowEntry {
   platform: ChannelPlatform
+  /** The bot this sender may talk to; absent from older backends (= default). */
+  account?: string
   sender_id: string
   sender_name: string
   added_at: number
@@ -127,6 +164,8 @@ export interface BindRequest {
   title?: string
   /** Mirror level the user chose; the backend uses replies when it is missing. */
   verbosity?: ChannelVerbosity
+  /** The bot the chat is reached through; the default bot when missing. */
+  account?: string
 }
 
 type Backend = Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>
@@ -181,12 +220,28 @@ function createChannelsStore(backend: Backend) {
     ])
     if (list.ok && list.data) {
       enabled.value = list.data.enabled !== false
-      platforms.value = (list.data.platforms ?? []).map((p) => ({
-        ...p,
-        status: { ...emptyStatus(), ...(p.status ?? {}) },
-        config: p.config ?? {},
-        capabilities: p.capabilities ?? null,
-      }))
+      platforms.value = (list.data.platforms ?? []).map((p) => {
+        const status = { ...emptyStatus(), ...(p.status ?? {}) }
+        const config = p.config ?? {}
+        const capabilities = p.capabilities ?? null
+        // An older backend lists no bots: its one configured bot is the default.
+        const accounts = p.accounts ?? (p.configured
+          ? [{ account: DEFAULT_ACCOUNT, name: '', configured: true, enabled: p.enabled, status, config, capabilities }]
+          : [])
+        return {
+          ...p,
+          status,
+          config,
+          capabilities,
+          accounts: accounts.map((a) => ({
+            ...a,
+            name: a.name ?? '',
+            status: { ...emptyStatus(), ...(a.status ?? {}) },
+            config: a.config ?? {},
+            capabilities: a.capabilities ?? null,
+          })),
+        }
+      })
     }
     if (binds.ok && binds.data) bindings.value = binds.data.bindings ?? []
     if (reqs.ok && reqs.data) pairing.value = reqs.data.requests ?? []
@@ -218,11 +273,19 @@ function createChannelsStore(backend: Backend) {
     if (msg?.platform) lastLinkFailed.value = msg
   })
   backend.on('channels.status', (raw) => {
-    const msg = raw as { platform?: string; status?: Partial<ChannelStatus> } | null
+    const msg = raw as { platform?: string; account?: string; status?: Partial<ChannelStatus> } | null
     if (!msg?.platform) return
     const entry = platforms.value.find((p) => p.platform === msg.platform)
-    if (entry) entry.status = { ...emptyStatus(), ...(msg.status ?? {}) }
-    else void refresh()
+    if (!entry) {
+      void refresh()
+      return
+    }
+    const status = { ...emptyStatus(), ...(msg.status ?? {}) }
+    const account = msg.account ?? DEFAULT_ACCOUNT
+    const bot = entry.accounts.find((a) => a.account === account)
+    if (bot) bot.status = status
+    // The platform shows its first bot (or the default slot while none is set up).
+    if ((entry.accounts[0]?.account ?? DEFAULT_ACCOUNT) === account) entry.status = status
   })
   watch(
     () => backend.status.value,
@@ -250,21 +313,30 @@ function createChannelsStore(backend: Backend) {
     configuredPlatforms,
     refresh,
     platformState: (platform: ChannelPlatform) => platforms.value.find((p) => p.platform === platform) ?? null,
+    accountState: (platform: ChannelPlatform, account: string = DEFAULT_ACCOUNT): ChannelAccountState | null =>
+      platforms.value.find((p) => p.platform === platform)?.accounts.find((a) => a.account === account) ?? null,
     bindingFor: (paneId: string): ChannelBinding | null => bindingByPane.value.get(paneId) ?? null,
-    configure: (platform: ChannelPlatform, config: Record<string, unknown>, secret?: Record<string, string>) =>
-      mutate('channels.configure', secret ? { platform, config, secret } : { platform, config }),
-    setEnabled: (platform: ChannelPlatform, on: boolean) => mutate('channels.set_enabled', { platform, enabled: on }),
+    configure: (platform: ChannelPlatform, config: Record<string, unknown>, secret?: Record<string, string>,
+      account?: string) =>
+      mutate('channels.configure', secret ? { platform, ...acct(account), config, secret } : { platform, ...acct(account), config }),
+    setEnabled: (platform: ChannelPlatform, on: boolean, account?: string) =>
+      mutate('channels.set_enabled', { platform, ...acct(account), enabled: on }),
+    renameAccount: (platform: ChannelPlatform, account: string, name: string) =>
+      mutate('channels.rename_account', { platform, account, name }),
     setGlobalEnabled: (on: boolean) => mutate('channels.set_global_enabled', { enabled: on }),
-    remove: (platform: ChannelPlatform) => mutate('channels.remove', { platform }),
+    /** One bot when `account` is given (always sent, even "default"); without it
+     *  the whole platform: every bot, its allowlist and pairing requests. */
+    remove: (platform: ChannelPlatform, account?: string) =>
+      mutate('channels.remove', account ? { platform, account } : { platform }),
     approvePairing: (platform: ChannelPlatform, code: string) => mutate('channels.pairing.approve', { platform, code }),
     rejectPairing: (platform: ChannelPlatform, code: string) => mutate('channels.pairing.reject', { platform, code }),
-    removeAllow: (platform: ChannelPlatform, senderId: string) =>
-      mutate('channels.allow.remove', { platform, sender_id: senderId }),
-    createLink: (platform: ChannelPlatform, target: 'direct' | 'group') =>
-      call<ChannelLinkInvite>('channels.link.create', { platform, target }),
-    locations: async (platform: ChannelPlatform): Promise<ChannelResult<{ locations: ChannelLocation[] }>> =>
-      call<{ locations: ChannelLocation[] }>('channels.locations', { platform }),
-    bind: (req: BindRequest) => mutate('channels.bind', { ...req }),
+    removeAllow: (platform: ChannelPlatform, senderId: string, account?: string) =>
+      mutate('channels.allow.remove', { platform, sender_id: senderId, ...acct(account) }),
+    createLink: (platform: ChannelPlatform, target: 'direct' | 'group', account?: string) =>
+      call<ChannelLinkInvite>('channels.link.create', { platform, target, ...acct(account) }),
+    locations: async (platform: ChannelPlatform, account?: string): Promise<ChannelResult<{ locations: ChannelLocation[] }>> =>
+      call<{ locations: ChannelLocation[] }>('channels.locations', { platform, ...acct(account) }),
+    bind: ({ account, ...req }: BindRequest) => mutate('channels.bind', { ...req, ...acct(account) }),
     /** Child topics the backend auto-bound under a parent pane's binding. */
     childrenOf: (paneId: string): ChannelBinding[] => bindings.value.filter((b) => b.parent_pane_id === paneId),
     setBindingOptions: (paneId: string, verbosity: ChannelVerbosity) =>

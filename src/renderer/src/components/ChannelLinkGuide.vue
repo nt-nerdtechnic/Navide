@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
-import type { ChannelLinkInvite, ChannelPlatform, ChannelsStore } from '../composables/useChannels'
+import { DEFAULT_ACCOUNT, type ChannelLinkInvite, type ChannelPlatform, type ChannelsStore } from '../composables/useChannels'
 import { channelPlatform, type ChannelLinkTarget } from '../platform/channels'
 
 /**
@@ -15,6 +15,8 @@ import { channelPlatform, type ChannelLinkTarget } from '../platform/channels'
 const props = defineProps<{
   store: ChannelsStore
   platform: ChannelPlatform
+  /** The bot to link with; the platform's default bot when missing. */
+  account?: string
 }>()
 const emit = defineEmits<{ linked: [title: string] }>()
 
@@ -53,7 +55,11 @@ const platformName = computed(() => t(`channels.platform.${props.platform}`))
 const command = computed(() => (invite.value ? `${spec.value?.link.codeCommand ?? 'link'} ${invite.value.code}` : ''))
 const sendHint = computed(() => t(spec.value?.link.sendCodeKey(invite.value?.target ?? 'direct') ?? 'channels.link.send-code'))
 const waitingText = computed(() => t(spec.value?.link.waitingKey ?? 'channels.link.waiting', { platform: platformName.value }))
-const pending = computed(() => props.store.pairing.value.filter((r) => r.platform === props.platform))
+const pending = computed(() =>
+  props.store.pairing.value.filter(
+    (r) => r.platform === props.platform && (r.account ?? DEFAULT_ACCOUNT) === (props.account ?? DEFAULT_ACCOUNT)
+  )
+)
 
 async function start(action: ChannelLinkTarget): Promise<void> {
   busy.value = true
@@ -63,7 +69,7 @@ async function start(action: ChannelLinkTarget): Promise<void> {
   noDeepLink.value = false
   clearExpiry()
   try {
-    const res = await props.store.createLink(props.platform, action.target)
+    const res = await props.store.createLink(props.platform, action.target, props.account)
     if (!res.ok || !res.data) {
       error.value = res.error ?? t('channels.error.generic')
       return

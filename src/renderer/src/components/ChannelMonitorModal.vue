@@ -35,7 +35,7 @@ interface Group extends Row {
 }
 
 function toRow(binding: ChannelBinding): Row {
-  const state = props.store.platformState(binding.platform)
+  const state = props.store.accountState(binding.platform, binding.account)
   const lifecycle = state?.status.lifecycle ?? 'stopped'
   let status: string
   let tone: Row['tone']

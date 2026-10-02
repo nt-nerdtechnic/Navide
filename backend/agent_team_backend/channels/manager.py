@@ -9,7 +9,8 @@ Inbound:  dedup -> sender gate (allowlist by sender id; DM strangers get a
           cli_send uses (``_dispatch_delivery``).
 Outbound: after a message is injected into pane P, the first ``turn_complete``
           activity for P goes back to P's bound location. Replies never pick
-          their own destination.
+          their own destination: an MSG block addressed to a chat sender
+          ("telegram:alice") only narrows what is posted to the blocks' bodies.
 
 Everything that touches the rest of the backend goes through ``Seams`` so the
 pipeline is testable with fakes; ``default_seams()`` wires the real ones.
@@ -21,6 +22,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -31,8 +33,8 @@ from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summa
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
-from .store import DEFAULT_VERBOSITY, VERBOSITIES, Binding, ChannelStore
-from .text import chunk_for
+from .store import DEFAULT_ACCOUNT, DEFAULT_VERBOSITY, VERBOSITIES, Binding, ChannelStore
+from .text import chunk_for, msg_blocks, strip_msg_markers
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +78,18 @@ MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
 
 
-def _secret_name(platform: str) -> str:
+# A bot is (platform, account). "default" is every bot from before several bots
+# per platform; added bots get a generated slug that never changes on rename.
+BotKey = tuple[str, str]
+_ACCOUNT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+def _secret_name(platform: str, account: str = DEFAULT_ACCOUNT) -> str:
+    return f"channel-{platform}-{account}"
+
+
+def _legacy_secret_name(platform: str) -> str:
+    """Where the one bot per platform kept its secret before accounts; still read for "default"."""
     return f"channel-{platform}"
 
 
@@ -193,14 +206,14 @@ class ChannelManager:
         self._seams = seams
         self._factory_for = factory_for
         self._clock = clock
-        self._adapters: dict[str, ChannelAdapter] = {}
-        self._lease: dict[str, str] = {}  # token fingerprint -> platform
-        self._errors: dict[str, str] = {}  # platform -> config error shown in status
-        self._secret_hints: dict[str, str] = {}
+        self._adapters: dict[BotKey, ChannelAdapter] = {}
+        self._lease: dict[str, BotKey] = {}  # token fingerprint -> bot
+        self._errors: dict[BotKey, str] = {}  # bot -> config error shown in status
+        self._secret_hints: dict[BotKey, str] = {}
         self._dedup: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._pending: dict[str, _Pending] = {}
         self._queued: dict[str, set[str]] = {}  # pane_id -> msg_keys still queued
-        self._last_status: dict[str, dict[str, Any]] = {}
+        self._last_status: dict[BotKey, dict[str, Any]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._status_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -222,17 +235,17 @@ class ChannelManager:
         if self._status_task is None:
             self._status_task = asyncio.create_task(self._status_watch(), name="channels-status")
         if self.store.global_enabled():
-            for platform, acct in self.store.accounts().items():
+            for (platform, account), acct in self.store.accounts().items():
                 if acct["enabled"]:
-                    await self._start_platform(platform)
+                    await self._start_bot(platform, account)
         self.mirror.schedule_sync()
 
     async def stop(self) -> None:
         if self._status_task:
             self._status_task.cancel()
             self._status_task = None
-        for platform in list(self._adapters):
-            await self._stop_platform(platform)
+        for platform, account in list(self._adapters):
+            await self._stop_bot(platform, account)
         self._workers.clear()
         self._debounce.clear()
         self.mirror.stop()
@@ -293,8 +306,14 @@ class ChannelManager:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    async def _load_secret(self, platform: str) -> dict[str, Any] | None:
-        raw = await self._seams.read_secret(_secret_name(platform))
+    def adapter_for(self, platform: str, account: str = DEFAULT_ACCOUNT) -> ChannelAdapter | None:
+        """The running bot ``account`` on ``platform``; None when it is not connected."""
+        return self._adapters.get((platform, account))
+
+    async def _load_secret(self, platform: str, account: str) -> dict[str, Any] | None:
+        raw = await self._seams.read_secret(_secret_name(platform, account))
+        if not raw and account == DEFAULT_ACCOUNT:
+            raw = await self._seams.read_secret(_legacy_secret_name(platform))
         if not raw:
             return None
         try:
@@ -303,44 +322,50 @@ class ChannelManager:
             return None
         return secret if isinstance(secret, dict) else None
 
-    def _build(self, platform: str, config: dict[str, Any], secret: dict[str, Any]) -> ChannelAdapter:
+    def _build(self, platform: str, account: str, config: dict[str, Any], secret: dict[str, Any]) -> ChannelAdapter:
         factory = self._factory_for(platform)
         if factory is None:
             raise ValueError(f"{platform} adapter is not available in this build")
-        return factory(config, secret, self.store)
+        adapter = factory({**config, "account": account}, secret, self.store)
+        # Every location, inbound message and offset carries the adapter's account:
+        # a bot that ignored it would route into another bot's bindings.
+        if str(getattr(adapter, "account", DEFAULT_ACCOUNT)) != account:
+            raise ValueError(f"{platform} adapter did not take account {account!r}")
+        return adapter
 
-    def _lease_holder(self, fingerprint: str, platform: str) -> str | None:
+    def _lease_holder(self, fingerprint: str, bot: BotKey) -> str | None:
         holder = self._lease.get(fingerprint)
-        return holder if holder and holder != platform else None
+        return _bot_label(holder) if holder and holder != bot else None
 
-    async def _start_platform(self, platform: str, secret: dict[str, Any] | None = None) -> str | None:
-        """Start (or restart) one platform. Returns an error string or None."""
-        await self._stop_platform(platform)
-        acct = self.store.accounts().get(platform)
+    async def _start_bot(self, platform: str, account: str, secret: dict[str, Any] | None = None) -> str | None:
+        """Start (or restart) one bot. Returns an error string or None."""
+        bot = (platform, account)
+        await self._stop_bot(platform, account)
+        acct = self.store.accounts().get(bot)
         if acct is None:
             return "not configured"
         try:
             if secret is None:
-                secret = await self._load_secret(platform)
+                secret = await self._load_secret(platform, account)
             if not secret:
                 raise ValueError("尚未設定憑證 (no credential stored)")
-            self._secret_hints[platform] = _mask_secret(secret)
+            self._secret_hints[bot] = _mask_secret(secret)
             for value in secret.values():
                 if isinstance(value, str):
                     redact.add_secret(value)
-            adapter = self._build(platform, acct["config"], secret)
-        except Exception as exc:  # noqa: BLE001 — surfaced as the platform's status
-            self._errors[platform] = str(exc)
+            adapter = self._build(platform, account, acct["config"], secret)
+        except Exception as exc:  # noqa: BLE001 — surfaced as the bot's status
+            self._errors[bot] = str(exc)
             return str(exc)
         fp = adapter.token_fingerprint()
-        holder = self._lease_holder(fp, platform)
+        holder = self._lease_holder(fp, bot)
         if holder:
             err = f"同一個 token 已被 {holder} 使用 (token already leased by {holder})"
-            self._errors[platform] = err
+            self._errors[bot] = err
             return err
-        self._lease[fp] = platform
-        self._errors.pop(platform, None)
-        self._adapters[platform] = adapter
+        self._lease[fp] = bot
+        self._errors.pop(bot, None)
+        self._adapters[bot] = adapter
         try:
             self.store.adopt_chats(platform, _bot_key(adapter))
         except Exception as exc:  # noqa: BLE001 — only the picker's list depends on it
@@ -352,31 +377,33 @@ class ChannelManager:
         await adapter.start(emit)
         return None
 
-    async def _stop_platform(self, platform: str) -> None:
-        adapter = self._adapters.pop(platform, None)
+    async def _stop_bot(self, platform: str, account: str) -> None:
+        bot = (platform, account)
+        adapter = self._adapters.pop(bot, None)
         if adapter is None:
             return
         for fp, holder in list(self._lease.items()):
-            if holder == platform:
+            if holder == bot:
                 del self._lease[fp]
         try:
             await adapter.stop()
         except Exception:  # noqa: BLE001
-            log.exception("channels: stopping %s failed", platform)
+            log.exception("channels: stopping %s failed", _bot_label(bot))
 
     # --- status -----------------------------------------------------------------
 
-    def _status_of(self, platform: str) -> dict[str, Any]:
-        adapter = self._adapters.get(platform)
+    def _status_of(self, platform: str, account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
+        bot = (platform, account)
+        adapter = self._adapters.get(bot)
         if adapter is not None:
             return dataclasses.asdict(adapter.status)
         status: dict[str, Any] = {
             "lifecycle": "stopped", "connected": False, "reconnect_attempts": 0,
             "last_error": "", "last_connected_at": None, "last_inbound_at": None, "identity": "",
         }
-        if platform in self._errors:
+        if bot in self._errors:
             status["lifecycle"] = "blocked"
-            status["last_error"] = self._errors[platform]
+            status["last_error"] = self._errors[bot]
         return status
 
     async def _status_watch(self) -> None:
@@ -388,11 +415,13 @@ class ChannelManager:
                 log.exception("channels: status broadcast failed")
 
     async def broadcast_status_changes(self) -> None:
-        for platform in PLATFORMS:
-            status = self._status_of(platform)
-            if self._last_status.get(platform) != status:
-                self._last_status[platform] = status
-                await self._seams.broadcast("channels.status", {"platform": platform, "status": status})
+        bots = {(p, DEFAULT_ACCOUNT) for p in PLATFORMS} | set(self._adapters) | set(self._errors) | set(self._last_status)
+        for platform, account in sorted(bots):
+            status = self._status_of(platform, account)
+            if self._last_status.get((platform, account)) != status:
+                self._last_status[(platform, account)] = status
+                await self._seams.broadcast("channels.status",
+                                            {"platform": platform, "account": account, "status": status})
 
     async def _changed(self) -> None:
         await self._seams.broadcast("channels.changed", {})
@@ -417,61 +446,94 @@ class ChannelManager:
             self._spawn(self._changed())
         return changed
 
+    def _bot_state(self, platform: str, account: str, acct: dict[str, Any] | None) -> dict[str, Any]:
+        adapter = self._adapters.get((platform, account))
+        config = acct["config"] if acct else {}
+        return {
+            "account": account,
+            "name": str(config.get("name") or ""),
+            "configured": acct is not None,
+            "enabled": bool(acct and acct["enabled"]),
+            "status": self._status_of(platform, account),
+            "config": {**config, "secret_hint": self._secret_hints.get((platform, account), "")},
+            "capabilities": dataclasses.asdict(adapter.capabilities) if adapter is not None else None,
+        }
+
     def list(self) -> dict[str, Any]:
+        """Per platform: its bots under ``accounts`` ("default" first), and the first
+        bot's state flattened onto the platform as before several bots existed."""
         self._sync_bindings()
         accounts = self.store.accounts()
         platforms = []
         for platform in PLATFORMS:
-            acct = accounts.get(platform)
-            adapter = self._adapters.get(platform)
-            caps = dataclasses.asdict(adapter.capabilities) if adapter is not None else None
+            bots = [self._bot_state(platform, a, acct) for (p, a), acct in accounts.items() if p == platform]
+            first = bots[0] if bots else self._bot_state(platform, DEFAULT_ACCOUNT, None)
             platforms.append({
                 "platform": platform,
-                "configured": acct is not None,
-                "enabled": bool(acct and acct["enabled"]),
-                "status": self._status_of(platform),
-                "config": {**(acct["config"] if acct else {}),
-                           "secret_hint": self._secret_hints.get(platform, "")},
-                "capabilities": caps,
+                "configured": bool(bots),
+                "enabled": any(b["enabled"] for b in bots),
+                "status": first["status"],
+                "config": first["config"],
+                "capabilities": first["capabilities"],
+                "accounts": bots,
             })
         return {"enabled": self.store.global_enabled(), "platforms": platforms}
 
-    async def configure(self, platform: str, config: dict[str, Any], secret: dict[str, Any] | None) -> dict[str, Any]:
+    async def configure(self, platform: str, config: dict[str, Any], secret: dict[str, Any] | None,
+                        account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
         _check_platform(platform)
-        config = {k: v for k, v in (config or {}).items() if k != "secret_hint"}
+        _check_account(account)
+        bot = (platform, account)
+        config = {k: v for k, v in (config or {}).items() if k not in ("secret_hint", "account")}
         async with self._lock:
             if secret is not None:
-                # Refuse a token another platform already polls with before storing anything.
+                # Refuse a token another bot already polls with before storing anything.
                 try:
-                    probe = self._build(platform, config, secret)
+                    probe = self._build(platform, account, config, secret)
                 except Exception as exc:  # noqa: BLE001
                     return {"ok": False, "error": str(exc)}
-                holder = self._lease_holder(probe.token_fingerprint(), platform)
+                holder = self._lease_holder(probe.token_fingerprint(), bot)
                 if holder:
                     return {"ok": False, "error": f"同一個 token 已被 {holder} 使用 (token already in use by {holder})"}
                 await self._seams.write_secret(
-                    _secret_name(platform), json.dumps(secret, separators=(",", ":"), ensure_ascii=True)
+                    _secret_name(platform, account), json.dumps(secret, separators=(",", ":"), ensure_ascii=True)
                 )
-            self.store.upsert_account(platform, config)
+            self.store.upsert_account(platform, config, account=account)
             err = None
-            acct = self.store.accounts()[platform]
+            acct = self.store.accounts()[bot]
             if self.store.global_enabled() and acct["enabled"]:
-                err = await self._start_platform(platform, secret)
+                err = await self._start_bot(platform, account, secret)
         await self._changed()
         await self.broadcast_status_changes()
-        return {"ok": err is None, "platform": platform, **({"error": err} if err else {})}
+        return {"ok": err is None, "platform": platform, "account": account, **({"error": err} if err else {})}
 
-    async def set_enabled(self, platform: str, enabled: bool) -> dict[str, Any]:
+    async def rename_account(self, platform: str, account: str, name: str) -> dict[str, Any]:
+        """A bot's display name only: its id, credential and connection stay as they are."""
         _check_platform(platform)
+        _check_account(account)
         async with self._lock:
-            if not self.store.set_account_enabled(platform, enabled):
+            acct = self.store.accounts().get((platform, account))
+            if acct is None:
+                return {"ok": False, "error": "not configured"}
+            config = {**acct["config"], "name": name.strip()}
+            if not config["name"]:
+                del config["name"]
+            self.store.upsert_account(platform, config, account=account)
+        await self._changed()
+        return {"ok": True}
+
+    async def set_enabled(self, platform: str, enabled: bool, account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
+        _check_platform(platform)
+        _check_account(account)
+        async with self._lock:
+            if not self.store.set_account_enabled(platform, enabled, account):
                 return {"ok": False, "error": "not configured"}
             err = None
             if not enabled:
-                await self._stop_platform(platform)
-                self._errors.pop(platform, None)
+                await self._stop_bot(platform, account)
+                self._errors.pop((platform, account), None)
             elif self.store.global_enabled():
-                err = await self._start_platform(platform)
+                err = await self._start_bot(platform, account)
         await self._changed()
         await self.broadcast_status_changes()
         return {"ok": err is None, **({"error": err} if err else {})}
@@ -481,30 +543,43 @@ class ChannelManager:
             self.store.set_global_enabled(enabled)
             if not enabled:
                 self._cancel_workers()
-                for platform in list(self._adapters):
-                    await self._stop_platform(platform)
+                for platform, account in list(self._adapters):
+                    await self._stop_bot(platform, account)
                 for pending in self._pending.values():
                     if pending.task:
                         pending.task.cancel()
                 self._pending.clear()
             else:
-                for platform, acct in self.store.accounts().items():
+                for (platform, account), acct in self.store.accounts().items():
                     if acct["enabled"]:
-                        await self._start_platform(platform)
+                        await self._start_bot(platform, account)
         await self._changed()
         await self.broadcast_status_changes()
         return {"ok": True}
 
-    async def remove(self, platform: str) -> dict[str, Any]:
+    async def remove(self, platform: str, account: str | None = None) -> dict[str, Any]:
+        """Remove one bot (``account``), or with none the whole platform: every bot,
+        its allowlist, pairing requests and seen chats."""
         _check_platform(platform)
+        if account is not None:
+            _check_account(account)
         async with self._lock:
-            await self._stop_platform(platform)
-            self.store.remove_platform(platform)
-            await self._seams.write_secret(_secret_name(platform), None)
-            self._errors.pop(platform, None)
-            self._secret_hints.pop(platform, None)
+            known = {a for (p, a) in self.store.accounts() if p == platform}
+            known |= {a for (p, a) in self._adapters if p == platform}
+            accounts = [account] if account is not None else sorted(known | {DEFAULT_ACCOUNT})
+            for acc in accounts:
+                await self._stop_bot(platform, acc)
+                await self._seams.write_secret(_secret_name(platform, acc), None)
+                if acc == DEFAULT_ACCOUNT:
+                    await self._seams.write_secret(_legacy_secret_name(platform), None)
+                self._errors.pop((platform, acc), None)
+                self._secret_hints.pop((platform, acc), None)
+            if account is None:
+                self.store.remove_platform(platform)
+            else:
+                self.store.remove_account(platform, account)
             for pane_id, p in list(self._pending.items()):
-                if p.loc.platform == platform:
+                if p.loc.platform == platform and (account is None or p.loc.account == account):
                     self._drop_pending(pane_id)
         await self._changed()
         await self.broadcast_status_changes()
@@ -518,10 +593,14 @@ class ChannelManager:
         req = self.gate.approve(platform, code)
         if req is None:
             return {"ok": False, "error": "配對碼不存在或已過期 (unknown or expired code)"}
-        adapter = self._adapters.get(platform)
+        # Only the bot the sender wrote to can DM them back (it is stored with the request).
+        adapter = self._adapters.get((platform, req.account))
         # The approved sender's DM is a chat the pane picker can offer right away.
         # The approval above already stands, so a failed write must not undo it.
-        if adapter is not None:
+        if adapter is None:
+            log.warning("channels: approval notice for %s not sent: %s is not connected",
+                        req.sender_id, _bot_label((platform, req.account)))
+        else:
             try:
                 self.store.remember_chat(platform, _bot_key(adapter), req.chat_id, req.sender_name,
                                          "direct", False, int(time.time()))
@@ -529,8 +608,7 @@ class ChannelManager:
                 log.warning("channels: remembering approved DM on %s failed: %s", platform, exc)
         if adapter is not None:
             try:
-                await adapter.send_text(Location(platform, getattr(adapter, "account", "default"), req.chat_id),
-                                        "✅ 已核准，可以開始對話")
+                await adapter.send_text(Location(platform, req.account, req.chat_id), "✅ 已核准，可以開始對話")
             except Exception:  # noqa: BLE001
                 log.warning("channels: approval notice to %s failed", platform)
         await self._changed()
@@ -541,16 +619,17 @@ class ChannelManager:
         await self._changed()
         return {"ok": req is not None, **({} if req else {"error": "unknown code"})}
 
-    def link_create(self, platform: str, target: str) -> dict[str, Any]:
+    def link_create(self, platform: str, target: str, account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
         """A one-time code that links whoever sends it to the bot (see ``_link_chat``)."""
         _check_platform(platform)
+        _check_account(account)
         target = target or "direct"
         if target not in LINK_TARGETS:
             return {"ok": False, "error": f"unknown target {target!r}"}
-        adapter = self._adapters.get(platform)
+        adapter = self._adapters.get((platform, account))
         if adapter is None:
-            return {"ok": False, "error": f"{platform} is not connected"}
-        invite = self.invites.create(platform, target)
+            return {"ok": False, "error": f"{_bot_label((platform, account))} is not connected"}
+        invite = self.invites.create(platform, target, account)
         link_url = getattr(adapter, "link_url", None)
         url = link_url(invite.code, target) if callable(link_url) else ""
         return {"ok": True, "platform": platform, "code": invite.code, "target": target,
@@ -559,13 +638,15 @@ class ChannelManager:
     def allow_list(self, platform: str | None) -> dict[str, Any]:
         return {"ok": True, "entries": self.store.list_allow(platform or None)}
 
-    async def allow_remove(self, platform: str, sender_id: str) -> dict[str, Any]:
-        removed = self.store.remove_allow(platform, sender_id)
+    async def allow_remove(self, platform: str, sender_id: str, account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
+        _check_account(account)
+        removed = self.store.remove_allow(platform, sender_id, account)
         await self._changed()
         return {"ok": removed, **({} if removed else {"error": "not found"})}
 
-    def locations(self, platform: str) -> dict[str, Any]:
-        adapter = self._adapters.get(platform)
+    def locations(self, platform: str, account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
+        _check_account(account)
+        adapter = self._adapters.get((platform, account))
         # Only the running bot's chats: another token's bot may not be in them.
         chats = self.store.chats(platform, _bot_key(adapter)) if adapter is not None else []
         merged: dict[str, dict[str, Any]] = {c["chat_id"]: c for c in chats}
@@ -576,10 +657,13 @@ class ChannelManager:
         return {"ok": True, "locations": list(merged.values())}
 
     async def bind(self, pane_id: str, pane_name: str, platform: str, mode: str,
-                   chat_id: str, thread_id: str = "", title: str = "", *, verbosity: str = "") -> dict[str, Any]:
+                   chat_id: str, thread_id: str = "", title: str = "", *, verbosity: str = "",
+                   account: str = DEFAULT_ACCOUNT) -> dict[str, Any]:
         """``verbosity`` is the level the user chose; without one a re-bind keeps the
-        pane's level and a new binding gets DEFAULT_VERBOSITY (replies only)."""
+        pane's level and a new binding gets DEFAULT_VERBOSITY (replies only).
+        ``account`` is the bot the chat is reached through."""
         _check_platform(platform)
+        _check_account(account)
         if not pane_id or not chat_id:
             return {"ok": False, "error": "pane_id and chat_id are required"}
         level = normalize_verbosity(verbosity) if verbosity else None
@@ -590,10 +674,9 @@ class ChannelManager:
         if not current:
             return {"ok": False, "error": "pane not found"}
         pane_id = current
-        adapter = self._adapters.get(platform)
+        adapter = self._adapters.get((platform, account))
         if adapter is None:
-            return {"ok": False, "error": f"{platform} is not connected"}
-        account = str(getattr(adapter, "account", "default"))
+            return {"ok": False, "error": f"{_bot_label((platform, account))} is not connected"}
         if mode == "new":
             if not adapter.capabilities.create_location:
                 return {"ok": False, "error": f"{platform} cannot create topics"}
@@ -636,7 +719,7 @@ class ChannelManager:
             await self._changed()
             # Tell the chat it is no longer connected; off the request path so the
             # window's unbind returns without waiting on the platform.
-            adapter = self._adapters.get(removed.platform)
+            adapter = self._adapters.get((removed.platform, removed.account))
             if adapter is not None:
                 name = pane_name or removed.title or pane_id
                 text = (MSG_UNBOUND_CLOSED if reason == "closed" else MSG_UNBOUND).format(name=name)
@@ -742,10 +825,12 @@ class ChannelManager:
             return
         route = self.mirror.route(pane_id)
         if route is None:
+            if _chat_msg_bodies(text):
+                log.warning("channels: %s addressed a chat in an MSG block but is not connected to one", pane_id)
             return
         pending = self._pending_for(pane_id, route, self._turn_source.pop(pane_id, "") or "🖥 本機")
-        if pending.silent:
-            return
+        if pending.silent and not _chat_msg_bodies(text):
+            return  # an MSG block addressed to the chat is posted at any level
         self._spawn(self._send_reply(pending, text))
 
     def _pending_for(self, pane_id: str, route: Any, source: str) -> _Pending:
@@ -773,15 +858,30 @@ class ChannelManager:
         self._turn_source[pane_id] = source
 
     async def _send_reply(self, pending: _Pending, text: str) -> None:
-        adapter = self._adapters.get(pending.loc.platform)
+        """Post a finished turn to the chat. A pane answering a chat writes MSG blocks
+        addressed to the sender ("telegram:alice"): only those bodies are posted, and
+        if they cannot be, the whole turn text goes instead. Never anything back to the pane."""
+        adapter = self._adapters.get((pending.loc.platform, pending.loc.account))
         if adapter is None:
+            if _chat_msg_bodies(text):
+                log.warning("channels: MSG reply for %s dropped: %s is not connected",
+                            pending.loc.key(), pending.loc.platform)
             return
         if pending.status_id:
             elapsed = int(self._clock() - pending.started)
             await self._edit_status(adapter, pending, f"✅ 完成（{elapsed}s）", force=True)
-        if pending.silent:
+        bodies = _chat_msg_bodies(text)
+        if bodies:
+            if await self._post_reply(pending, "\n\n".join(bodies)):
+                return
+            log.warning("channels: MSG reply to %s failed; posting the turn text instead", pending.loc.key())
+        elif pending.silent:
             return
-        body = summarize(text) if pending.summary else text
+        body = strip_msg_markers(text)
+        await self._post_reply(pending, summarize(body) if pending.summary and not bodies else body)
+
+    async def _post_reply(self, pending: _Pending, body: str) -> bool:
+        """Chunk and send one reply; False when a chunk could not be sent."""
         body = result_text(pending.source, body or MSG_EMPTY_REPLY, pending.child) if pending.source else body
         chunks = chunk_for(pending.loc.platform, redact.redact_text(body)) or [MSG_EMPTY_REPLY]
         for chunk in chunks:
@@ -789,14 +889,15 @@ class ChannelManager:
                 ids = await self.mirror.send(pending.loc, chunk)
             except Exception as exc:  # noqa: BLE001
                 log.warning("channels: reply to %s failed: %s", pending.loc.key(), exc)
-                return
+                return False
             if pending.owner:
                 self.mirror.owners.remember(pending.loc.key(), ids, pending.owner)
+        return True
 
     # --- inbound ------------------------------------------------------------------
 
     def _is_duplicate(self, msg: InboundMessage) -> bool:
-        key = (msg.platform, msg.message_id)
+        key = (f"{msg.platform}:{msg.account}", msg.message_id)  # two bots in one group see the same id
         if key in self._dedup:
             self._dedup.move_to_end(key)
             return True
@@ -808,7 +909,7 @@ class ChannelManager:
     def _remember_chat(self, msg: InboundMessage) -> bool:
         # Persisted: the pane picker must still list the chat after a restart.
         # Only a picker convenience: a failed write must not drop the message.
-        adapter = self._adapters.get(msg.platform)
+        adapter = self._adapters.get((msg.platform, msg.account))
         if adapter is None:
             return False
         try:
@@ -828,7 +929,7 @@ class ChannelManager:
         return None
 
     async def _reply(self, msg: InboundMessage, text: str) -> str:
-        adapter = self._adapters.get(msg.platform)
+        adapter = self._adapters.get((msg.platform, msg.account))
         if adapter is None:
             return ""
         loc = Location(msg.platform, msg.account, msg.chat_id, msg.thread_id)
@@ -846,30 +947,30 @@ class ChannelManager:
         interrupt, relay answers) runs on the location's worker, so one slow
         chat never stalls receiving for every platform.
         """
-        if not self.store.global_enabled() or msg.platform not in self._adapters:
+        if not self.store.global_enabled() or (msg.platform, msg.account) not in self._adapters:
             return
         if self._is_duplicate(msg):
             return
         # A live invite code links its sender before the gate: that is its whole point.
         code = parse_link_code(msg.text) if msg.text and not msg.callback_data else ""
-        invite = self.invites.consume(msg.platform, code) if code else None
+        invite = self.invites.consume(msg.platform, code, msg.account) if code else None
         if invite is not None:
             self._enqueue(msg.location_key(), lambda: self._link_chat(msg, invite.code))
             return
-        if not msg.is_direct and not self.gate.is_allowed(msg.platform, msg.sender_id):
+        if not msg.is_direct and not self.gate.is_allowed(msg.platform, msg.sender_id, msg.account):
             return  # group strangers are dropped silently
         self._enqueue(msg.location_key(), lambda: self._process_inbound(msg))
 
     async def _process_inbound(self, msg: InboundMessage) -> None:
-        if not self.store.global_enabled() or msg.platform not in self._adapters:
+        if not self.store.global_enabled() or (msg.platform, msg.account) not in self._adapters:
             return
-        if not self.gate.is_allowed(msg.platform, msg.sender_id):
+        if not self.gate.is_allowed(msg.platform, msg.sender_id, msg.account):
             await self._pairing_reply(msg)  # only DMs get this far
             return
         if self._remember_chat(msg):
             await self._changed()  # an open pane picker lists the new chat right away
         # Relay answers go before any queueing: the pane is blocked on exactly this.
-        if self._relay_enabled(msg.platform):
+        if self._relay_enabled(msg.platform, msg.account):
             answer = relay.parse_answer(msg.text, msg.callback_data)
             if answer is not None:
                 await self._handle_relay_answer(msg, answer)
@@ -878,7 +979,13 @@ class ChannelManager:
             return  # a button press with the relay off, or not ours
         binding = self._binding_for(msg)
         if binding is None:
-            await self._reply(msg, MSG_NOT_BOUND)
+            # One bot answers for its unbound chats and topics, as it always has; with
+            # several, a bot in a group the user drives through another stays quiet.
+            if self._sole_bot(msg.platform):
+                await self._reply(msg, MSG_NOT_BOUND)
+            else:
+                log.info("channels: %s is not bound through %s; staying silent",
+                         msg.location_key(), _bot_label((msg.platform, msg.account)))
             return
         pane_id = self._seams.resolve_pane(binding.pane_id)
         if not pane_id:
@@ -919,15 +1026,21 @@ class ChannelManager:
         # Back onto the location's worker so it stays ordered with that chat's other jobs.
         self._enqueue(joined.location_key(), lambda: self._deliver(joined, buf.binding, buf.pane_id))
 
-    def _relay_enabled(self, platform: str) -> bool:
-        acct = self.store.accounts().get(platform)
+    def _sole_bot(self, platform: str) -> bool:
+        """At most one enabled bot on ``platform`` (the only case before several bots)."""
+        return sum(1 for (p, _a), acct in self.store.accounts().items() if p == platform and acct["enabled"]) <= 1
+
+    def _relay_enabled(self, platform: str, account: str) -> bool:
+        acct = self.store.accounts().get((platform, account))
         # Always on: every chat approval is screened by Navide Guard (Phase C), so there
         # is no per-platform switch; a stale ``permission_relay: false`` is ignored.
         return bool(acct)
 
     async def _handle_relay_answer(self, msg: InboundMessage, answer: relay.RelayAnswer) -> None:
         request = self.relay.take(answer.request_id)
-        if request is None or request.loc.platform != msg.platform or request.loc.chat_id != msg.chat_id:
+        # The very chat (bot, chat and topic) the prompt went to: another bot in the
+        # same group, or another topic, is not the one the pane asked.
+        if request is None or request.loc.key() != msg.location_key():
             await self._reply(msg, MSG_RELAY_EXPIRED)
             return
         if relay.refuses_permanent(request, answer.choice):
@@ -978,13 +1091,13 @@ class ChannelManager:
 
     async def _link_chat(self, msg: InboundMessage, code: str) -> None:
         # The invite is already spent, so every way out must reach the waiting UI.
-        adapter = self._adapters.get(msg.platform)
+        adapter = self._adapters.get((msg.platform, msg.account))
         if adapter is None:
             await self._link_failed(msg.platform, code, f"{msg.platform} is not connected")
             return
         try:
-            if not self.gate.is_allowed(msg.platform, msg.sender_id):
-                self.store.add_allow(msg.platform, msg.sender_id, msg.sender_name, int(time.time()))
+            if not self.gate.is_allowed(msg.platform, msg.sender_id, msg.account):
+                self.store.add_allow(msg.platform, msg.sender_id, msg.sender_name, int(time.time()), msg.account)
         except Exception as exc:  # noqa: BLE001 — reported to the sender and the UI below
             log.warning("channels: allowlisting linked sender on %s failed: %s", msg.platform, exc)
             await self._reply(msg, MSG_LINK_FAILED)
@@ -1018,14 +1131,14 @@ class ChannelManager:
         await self._seams.broadcast("channels.link_failed", {"platform": platform, "code": code, "error": error})
 
     async def _pairing_reply(self, msg: InboundMessage) -> None:
-        outcome = self.gate.request_pairing(msg.platform, msg.sender_id, msg.sender_name, msg.chat_id)
+        outcome = self.gate.request_pairing(msg.platform, msg.sender_id, msg.sender_name, msg.chat_id, msg.account)
         if outcome.full or outcome.request is None:
             return
         code = outcome.request.code
         await self._reply(msg, f"這個 bot 需要配對。請在 Navide 的 Settings → Channels 核准配對碼：{code[:4]}-{code[4:]}")
         if outcome.created:
             await self._seams.broadcast("channels.pairing_request", {
-                "platform": msg.platform, "code": code, "sender_name": msg.sender_name,
+                "platform": msg.platform, "account": msg.account, "code": code, "sender_name": msg.sender_name,
             })
             await self._changed()
 
@@ -1072,7 +1185,7 @@ class ChannelManager:
         self._spawn(self._watch_delivery(pane_id, msg_key, pending))
 
     async def _watch_delivery(self, pane_id: str, msg_key: str, pending: _Pending) -> None:
-        adapter = self._adapters.get(pending.loc.platform)
+        adapter = self._adapters.get((pending.loc.platform, pending.loc.account))
         started = self._clock()
         held_notice = False
         try:
@@ -1133,7 +1246,7 @@ class ChannelManager:
 
     async def _while_running(self, pane_id: str, pending: _Pending) -> None:
         """Typing every 4s, one status message edited in place, awaiting notices."""
-        adapter = self._adapters.get(pending.loc.platform)
+        adapter = self._adapters.get((pending.loc.platform, pending.loc.account))
         if adapter is None:
             return
         caps = adapter.capabilities
@@ -1198,7 +1311,7 @@ class ChannelManager:
 
     async def _post_awaiting(self, pane_id: str, loc: Location, child: str = "") -> None:
         """Relay a pane's permission/question to ``loc`` (always pushed, whoever started the turn)."""
-        adapter = self._adapters.get(loc.platform)
+        adapter = self._adapters.get((loc.platform, loc.account))
         if adapter is None:
             self._awaiting_failed(pane_id, "not connected")
             return
@@ -1215,7 +1328,7 @@ class ChannelManager:
         if options:
             kind = "permission" if options[0].strip().lower().startswith("yes") else "question"
         who = f"↳ {child} " if child else ""
-        if not self._relay_enabled(loc.platform):
+        if not self._relay_enabled(loc.platform, loc.account):
             await self._notice(adapter, loc, f"{who}⏸ pane 等待確認（{kind}）")
             return
         self.relay.expire_pane(pane_id)  # one live request per pane
@@ -1256,6 +1369,23 @@ class ChannelManager:
 def _check_platform(platform: str) -> None:
     if platform not in PLATFORMS:
         raise ValueError(f"unknown platform {platform!r}")
+
+
+def _check_account(account: str) -> None:
+    if not _ACCOUNT_RE.match(account or ""):
+        raise ValueError(f"invalid account id {account!r}")
+
+
+def _bot_label(bot: BotKey) -> str:
+    """How errors name a bot: the bare platform for "default", as they always have."""
+    platform, account = bot
+    return platform if account == DEFAULT_ACCOUNT else f"{platform}/{account}"
+
+
+def _chat_msg_bodies(text: str) -> list[str]:
+    """Bodies of the MSG blocks in a turn that are addressed to a chat sender."""
+    return [content for target, content in msg_blocks(text)
+            if target.split(":", 1)[0] in PLATFORMS and ":" in target]
 
 
 def _is_stop_word(text: str) -> bool:

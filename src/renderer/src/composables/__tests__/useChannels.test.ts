@@ -75,6 +75,36 @@ describe('useChannels', () => {
     expect(mock.sent).toHaveLength(0)
   })
 
+  it('treats an older backend\'s configured platform as its default bot, and patches each bot\'s status', async () => {
+    const mock = createMockBackend('connected')
+    seed(mock)
+    const store = useChannels(mock.backend)
+    await flush()
+    expect(store.platformState('telegram')?.accounts.map((a) => a.account)).toEqual(['default'])
+    expect(store.accountState('telegram')?.status.identity).toBe('@navide_bot')
+
+    const ready = { lifecycle: 'ready', connected: true, identity: '' }
+    mock.setResponse('channels.list', {
+      ok: true,
+      enabled: true,
+      platforms: [{
+        platform: 'telegram', configured: true, enabled: true, status: ready, config: {}, capabilities: null,
+        accounts: [
+          { account: 'default', name: '', configured: true, enabled: true, status: ready, config: {}, capabilities: null },
+          { account: 'bot-b1', name: 'Ops', configured: true, enabled: true, status: ready, config: {}, capabilities: null },
+        ],
+      }],
+    })
+    await store.refresh()
+    mock.emit('channels.status', { platform: 'telegram', account: 'bot-b1', status: { lifecycle: 'blocked' } })
+    expect(store.accountState('telegram', 'bot-b1')?.status.lifecycle).toBe('blocked')
+    // Not the platform's first bot: the platform-level status stays the default bot's.
+    expect(store.platformState('telegram')?.status.lifecycle).toBe('ready')
+    mock.emit('channels.status', { platform: 'telegram', status: { lifecycle: 'recovering' } })
+    expect(store.accountState('telegram')?.status.lifecycle).toBe('recovering')
+    expect(store.platformState('telegram')?.status.lifecycle).toBe('recovering')
+  })
+
   it('sends mutations with the contract payloads and reports backend errors', async () => {
     const mock = createMockBackend('connected')
     seed(mock)

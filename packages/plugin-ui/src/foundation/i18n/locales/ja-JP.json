@@ -9196,6 +9196,14 @@
       "missing": "入力してください：{fields}"
     },
     "enable-platform": "{platform} を有効化",
+    "bot": {
+      "default": "メイン bot",
+      "add": "bot を追加",
+      "new": "新しい bot",
+      "name": "bot 名",
+      "rename": "名前を変更",
+      "remove-ask": "この bot を削除しますか？この bot 経由で接続している {n} 個の pane は切断されます。"
+    },
     "manage": "管理",
     "connect": "接続",
     "needs": "必要なもの：{fields}",

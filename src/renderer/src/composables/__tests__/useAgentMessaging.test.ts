@@ -141,6 +141,27 @@ describe('useAgentMessaging', () => {
       expect(msg.reason?.key).toBe('unknown-target')
     })
 
+    it('hands a reply to a chat sender to the channel: no failure, no notice, nothing typed', async () => {
+      const updates: PersistedMessageUpdate[][] = []
+      m.configureMessaging({ ...deps, persistUpdate: (u) => { updates.push(u) } })
+      const msg = m.sendMessage('claude-1', 'telegram:neillu123', 'the answer', { replyTo: 'k1' })
+      expect(msg.status).toBe('delivered')
+      expect(msg.route).toBe('channel')
+      expect(msg.reason).toBeUndefined()
+      expect(updates.flat()).toContainEqual(expect.objectContaining({ uid: msg.uid, status: 'delivered' }))
+
+      m.pump()
+      await flush()
+      expect(m.messages.value.filter((entry) => entry.from === NOTICE_SENDER)).toEqual([])
+      expect(delivered).toEqual([])
+    })
+
+    it('still fails a target that merely looks like a chat sender', () => {
+      const msg = m.sendMessage('claude-1', 'nochat:alice', 'hi')
+      expect(msg.status).toBe('failed')
+      expect(msg.reason?.key).toBe('unknown-target')
+    })
+
     it('fails on self-send', () => {
       const msg = m.sendMessage('claude-1', 'claude-1', 'hi')
       expect(msg.status).toBe('failed')

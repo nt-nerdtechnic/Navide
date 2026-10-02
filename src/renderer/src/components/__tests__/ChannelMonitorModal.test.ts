@@ -28,7 +28,7 @@ function seed(bindings: Record<string, unknown>[], lifecycle = 'ready'): void {
   mock.setResponse('channels.unbind', { ok: true })
 }
 
-const binding = { pane_id: 'p1', platform: 'telegram', account: 'a', chat_id: '-100', thread_id: '7', title: 'api-refactor' }
+const binding = { pane_id: 'p1', platform: 'telegram', account: 'default', chat_id: '-100', thread_id: '7', title: 'api-refactor' }
 
 async function render(open = true) {
   const store = useChannels(mock.backend)

@@ -202,3 +202,77 @@ def is_telegram_parse_error(description: str) -> bool:
     """True when Telegram rejected the markup itself (resend as plain text)."""
     d = (description or "").lower()
     return "can't parse entities" in d or "can't find end of" in d or "unsupported start tag" in d
+
+
+# Inter-pane MSG blocks (src/renderer/src/lib/agentMessaging.ts parseMessages):
+# markers on bare lines, `to:` on the marker's line or the line below it, nothing
+# inside a ``` / ~~~ fence counts, and a missing MSG-END closes at the next block.
+_MSG_START_RE = re.compile(r"^---MSG-START---\s*to\s*:\s*(.*?)(?:\s+re\s*:\s*(\S+))?\s*$")
+_MSG_START_BARE_RE = re.compile(r"^---MSG-START---\s*$")
+_MSG_TO_LINE_RE = re.compile(r"^\s*to\s*:\s*(.*?)(?:\s+re\s*:\s*(\S+))?\s*$")
+_MSG_END_RE = re.compile(r"^---MSG-END---\s*$")
+_CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+
+
+def _msg_lines(text: str) -> list[tuple[str, str | None]]:
+    """Each line of ``text`` tagged: ("body", line) for prose and block content,
+    ("open", target) for a block's opening (its `to:` line included), ("end", None)."""
+    out: list[tuple[str, str | None]] = []
+    in_fence = awaiting_to = False
+    for line in text.split("\n"):
+        if awaiting_to:
+            awaiting_to = False
+            to = _MSG_TO_LINE_RE.match(line)
+            if to:
+                out[-1] = ("open", to.group(1).strip())
+                continue
+        if _CODE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            out.append(("body", line))
+            continue
+        if not in_fence:
+            start = _MSG_START_RE.match(line)
+            if start:
+                out.append(("open", start.group(1).strip()))
+                continue
+            if _MSG_START_BARE_RE.match(line):
+                out.append(("open", ""))
+                awaiting_to = True
+                continue
+            if _MSG_END_RE.match(line):
+                out.append(("end", None))
+                continue
+        out.append(("body", line))
+    return out
+
+
+def msg_blocks(text: str) -> list[tuple[str, str]]:
+    """(target, content) of every MSG block in a turn's text; empty ones dropped."""
+    blocks: list[tuple[str, str]] = []
+    target: str | None = None
+    lines: list[str] = []
+
+    def close() -> None:
+        content = "\n".join(lines).strip()
+        if target and content:
+            blocks.append((target, content))
+
+    for kind, value in _msg_lines(text or ""):
+        if kind == "open":
+            if target is not None:
+                close()
+            target, lines = value or "", []
+        elif kind == "end":
+            if target is not None:
+                close()
+            target, lines = None, []
+        elif target is not None:
+            lines.append(value or "")
+    if target is not None:
+        close()
+    return blocks
+
+
+def strip_msg_markers(text: str) -> str:
+    """``text`` without MSG-START / `to:` / MSG-END lines; block bodies stay."""
+    return "\n".join(v or "" for k, v in _msg_lines(text or "") if k == "body").strip()

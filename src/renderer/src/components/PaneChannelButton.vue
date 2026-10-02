@@ -3,10 +3,11 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { executeCommand } from '@navide/plugin-ui/shared'
 import {
+  DEFAULT_ACCOUNT,
   channelsKey,
+  type ChannelAccountState,
   type ChannelLocation,
   type ChannelPlatform,
-  type ChannelPlatformState,
   type ChannelVerbosity,
   type ChannelsStore,
 } from '../composables/useChannels'
@@ -17,8 +18,8 @@ import ChannelLinkGuide from './ChannelLinkGuide.vue'
 
 /**
  * Pane-header entry to chat channels. Unbound: a small button that opens a
- * popover listing every chat the configured, connected platforms know, grouped
- * by platform; picking one opens a confirmation step that asks what the chat
+ * popover listing every chat the configured, connected bots know, grouped by
+ * bot (one group per platform unless it runs several bots); picking one opens a confirmation step that asks what the chat
  * receives, and only Connect binds (or Settings → Channels opens when no
  * platform is configured). Bound: a chip naming the platform and chat, with ✕
  * to unbind.
@@ -45,6 +46,8 @@ const busy = ref(false)
 // Step 2 of the popover: the chat picked in step 1, awaiting its level and Connect.
 interface PendingBind {
   platform: ChannelPlatform
+  /** The bot the chat is reached through. */
+  account: string
   loc: ChannelLocation
   mode: 'new' | 'existing'
 }
@@ -54,6 +57,9 @@ const bindLevel = ref<ChannelVerbosity>('replies')
 const error = ref('')
 interface PlatformGroup {
   platform: ChannelPlatform
+  account: string
+  /** The bot's name, shown only when its platform runs several bots. */
+  bot: string
   identity: string
   /** Status text when the platform cannot be bound to right now; empty when connected. */
   unavailable: string
@@ -77,8 +83,15 @@ function platformName(platform: string): string {
   return t(`channels.platform.${platform}`)
 }
 
-function canCreate(platform: ChannelPlatform): boolean {
-  return store?.platformState(platform)?.capabilities?.create_location === true
+function canCreate(platform: ChannelPlatform, account: string): boolean {
+  return store?.accountState(platform, account)?.capabilities?.create_location === true
+}
+
+function botLabel(platform: ChannelPlatform, account: string): string {
+  const bots = store?.platformState(platform)?.accounts ?? []
+  if (bots.length < 2) return ''
+  const bot = bots.find((b) => b.account === account)
+  return bot?.name || (account === DEFAULT_ACCOUNT ? t('channels.bot.default') : account)
 }
 
 // Platforms name one-to-one chats differently: Telegram `private`, Slack `im`,
@@ -88,7 +101,7 @@ function kindLabel(loc: ChannelLocation): string {
   return t(DIRECT_KINDS.has(loc.kind) ? 'channels.pane.kind-direct' : 'channels.pane.kind-group')
 }
 
-function unavailableText(p: ChannelPlatformState): string {
+function unavailableText(p: ChannelAccountState): string {
   if (!p.enabled || !store?.enabled.value) return t('channels.status.disabled')
   if (p.status.connected) return ''
   return t(`channels.lifecycle.${p.status.lifecycle}`)
@@ -109,9 +122,10 @@ watch(
  *  A chat serves one pane at a time; unbinding there frees it here. A holder
  *  this window does not know (closed without its unbind landing, or a pane in
  *  another window) is left to the backend, which refuses a live one. */
-function holderOf(platform: string, chatId: string): string {
+function holderOf(platform: string, account: string, chatId: string): string {
   const held = store?.bindings.value.find(
-    (b) => b.platform === platform && b.chat_id === chatId && !b.thread_id && b.pane_id !== props.paneId
+    (b) => b.platform === platform && (b.account || DEFAULT_ACCOUNT) === account && b.chat_id === chatId &&
+      !b.thread_id && b.pane_id !== props.paneId
   )
   return held ? (messaging.nameOf(held.pane_id) ?? '') : ''
 }
@@ -119,17 +133,22 @@ function holderOf(platform: string, chatId: string): string {
 async function loadGroups(): Promise<void> {
   if (!store) return
   const seq = ++loadSeq
-  groups.value = store.configuredPlatforms.value.map((p) => {
-    const unavailable = unavailableText(p)
-    return { platform: p.platform, identity: p.status.identity, unavailable, loading: !unavailable, error: '', locations: [] }
-  })
+  groups.value = store.configuredPlatforms.value.flatMap((p) =>
+    p.accounts.map((a) => {
+      const unavailable = unavailableText(a)
+      return {
+        platform: p.platform, account: a.account, bot: botLabel(p.platform, a.account),
+        identity: a.status.identity, unavailable, loading: !unavailable, error: '', locations: [],
+      }
+    })
+  )
   await Promise.all(
     groups.value
       .filter((g) => !g.unavailable)
       .map(async (g) => {
-        const res = await store.locations(g.platform)
+        const res = await store.locations(g.platform, g.account)
         if (seq !== loadSeq) return
-        const group = groups.value.find((x) => x.platform === g.platform)
+        const group = groups.value.find((x) => x.platform === g.platform && x.account === g.account)
         if (!group) return
         group.loading = false
         if (res.ok) group.locations = res.data?.locations ?? []
@@ -197,17 +216,18 @@ function onKeydown(event: KeyboardEvent): void {
 
 onBeforeUnmount(close)
 
-/** Level this pane last used for this very chat; a binding to any other chat or
- *  platform never lends its level. A new binding starts at replies-only. */
-function previousLevel(platform: ChannelPlatform, chatId: string): ChannelVerbosity {
-  const prev = store?.bindings.value.find((b) => b.pane_id === props.paneId && b.platform === platform && b.chat_id === chatId)
+/** Level this pane last used for this very chat; a binding to any other chat,
+ *  bot or platform never lends its level. A new binding starts at replies-only. */
+function previousLevel(platform: ChannelPlatform, account: string, chatId: string): ChannelVerbosity {
+  const prev = store?.bindings.value.find((b) => b.pane_id === props.paneId && b.platform === platform &&
+    (b.account || DEFAULT_ACCOUNT) === account && b.chat_id === chatId)
   return prev?.verbosity ?? 'replies'
 }
 
-async function choose(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
+async function choose(platform: ChannelPlatform, account: string, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
   error.value = ''
-  bindLevel.value = previousLevel(platform, loc.chat_id)
-  pending.value = { platform, loc, mode }
+  bindLevel.value = previousLevel(platform, account, loc.chat_id)
+  pending.value = { platform, account, loc, mode }
   await nextTick()
   focusBindLevel()
   position()
@@ -228,11 +248,11 @@ function focusBindLevel(): void {
 
 async function confirmBind(): Promise<void> {
   if (!pending.value || busy.value) return
-  const { platform, loc, mode } = pending.value
-  await bind(platform, loc, mode)
+  const { platform, account, loc, mode } = pending.value
+  await bind(platform, account, loc, mode)
 }
 
-async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
+async function bind(platform: ChannelPlatform, account: string, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
   if (!store) return
   busy.value = true
   error.value = ''
@@ -244,6 +264,7 @@ async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new'
     chat_id: loc.chat_id,
     ...(mode === 'new' ? { title: props.paneName } : {}),
     verbosity: bindLevel.value,
+    account,
   })
   busy.value = false
   if (res.ok) close()
@@ -428,10 +449,11 @@ function openSettings(): void {
         <template v-if="!pending">
           <div class="pch-pop-head">{{ t('channels.pane.where') }}</div>
           <p v-if="unguardedYolo" class="pch-warn" role="note" data-testid="channel-guard-warning">{{ t('guard.pane.no-hook-warning') }}</p>
-          <section v-for="g in groups" :key="g.platform" class="pch-group" data-testid="channel-group">
+          <section v-for="g in groups" :key="`${g.platform}:${g.account}`" class="pch-group" :data-account="g.account" data-testid="channel-group">
             <div class="pch-group-head">
               <span class="pch-mark" aria-hidden="true">{{ platformName(g.platform).charAt(0) }}</span>
               <span class="pch-group-name">{{ platformName(g.platform) }}</span>
+              <span v-if="g.bot" class="pch-group-bot pch-ellipsis" data-testid="channel-group-bot">{{ g.bot }}</span>
               <span v-if="g.identity" class="pch-sub pch-ellipsis">{{ g.identity }}</span>
             </div>
             <div v-if="g.unavailable" class="pch-row pch-row-off" data-testid="channel-platform-off" aria-disabled="true">{{ g.unavailable }}</div>
@@ -439,31 +461,31 @@ function openSettings(): void {
             <p v-else-if="g.error" class="pch-error" role="alert">{{ g.error }}</p>
             <div v-else-if="!g.locations.length" class="pch-empty" data-testid="channel-no-chats">
               <span class="pch-next">{{ t('channels.link.next-step') }}</span>
-              <ChannelLinkGuide :store="store" :platform="g.platform" />
+              <ChannelLinkGuide :store="store" :platform="g.platform" :account="g.account" />
             </div>
             <div v-for="loc in g.locations" :key="loc.chat_id" class="pch-loc" data-testid="channel-location">
               <button
                 type="button"
                 class="pch-row"
-                :class="{ 'pch-row-taken': holderOf(g.platform, loc.chat_id) }"
+                :class="{ 'pch-row-taken': holderOf(g.platform, g.account, loc.chat_id) }"
                 data-testid="channel-bind-existing"
                 :data-chat-id="loc.chat_id"
-                :disabled="busy || !!holderOf(g.platform, loc.chat_id)"
-                :title="holderOf(g.platform, loc.chat_id) ? t('channels.pane.taken-hint') : t('channels.pane.use-existing')"
-                @click="choose(g.platform, loc, 'existing')"
+                :disabled="busy || !!holderOf(g.platform, g.account, loc.chat_id)"
+                :title="holderOf(g.platform, g.account, loc.chat_id) ? t('channels.pane.taken-hint') : t('channels.pane.use-existing')"
+                @click="choose(g.platform, g.account, loc, 'existing')"
               >
                 <span class="pch-loc-title pch-ellipsis">{{ loc.title || loc.chat_id }}</span>
-                <span v-if="holderOf(g.platform, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, loc.chat_id) }) }}</span>
+                <span v-if="holderOf(g.platform, g.account, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, g.account, loc.chat_id) }) }}</span>
                 <span v-else class="pch-kind">{{ kindLabel(loc) }}</span>
               </button>
               <button
-                v-if="loc.supports_topics && canCreate(g.platform)"
+                v-if="loc.supports_topics && canCreate(g.platform, g.account)"
                 type="button"
                 class="pch-new"
                 data-testid="channel-bind-new"
                 :disabled="busy"
                 :title="t('channels.pane.new-topic', { name: paneName })"
-                @click="choose(g.platform, loc, 'new')"
+                @click="choose(g.platform, g.account, loc, 'new')"
               >{{ t('channels.pane.new-topic-short') }}</button>
             </div>
           </section>
@@ -476,7 +498,7 @@ function openSettings(): void {
             <span class="pch-mark" aria-hidden="true">{{ platformName(pending.platform).charAt(0) }}</span>
             <span class="pch-chosen-text">
               <span class="pch-loc-title pch-ellipsis">{{ pending.loc.title || pending.loc.chat_id }}</span>
-              <span class="pch-sub pch-ellipsis">{{ platformName(pending.platform) }} · {{ pending.mode === 'new' ? t('channels.pane.new-topic', { name: paneName }) : kindLabel(pending.loc) }}</span>
+              <span class="pch-sub pch-ellipsis">{{ platformName(pending.platform) }}<template v-if="botLabel(pending.platform, pending.account)"> · {{ botLabel(pending.platform, pending.account) }}</template> · {{ pending.mode === 'new' ? t('channels.pane.new-topic', { name: paneName }) : kindLabel(pending.loc) }}</span>
             </span>
           </div>
           <div class="pch-levels-head">{{ t('channels.pane.bind-level-label') }}</div>
@@ -563,6 +585,7 @@ function openSettings(): void {
 .pch-group + .pch-group { border-top: 1px solid var(--border-muted); }
 .pch-group-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pch-group-name { font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
+.pch-group-bot { color: var(--text-primary); }
 .pch-mark { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; font-size: 9px; font-weight: 700; color: var(--accent-fg); background: var(--accent-subtle); border: 1px solid var(--accent-muted); border-radius: 3px; }
 .pch-loc { display: flex; align-items: stretch; gap: 4px; }
 .pch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 1; min-width: 0; font: inherit; text-align: left; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); padding: 4px 8px; cursor: pointer; }

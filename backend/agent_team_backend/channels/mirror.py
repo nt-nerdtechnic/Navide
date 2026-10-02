@@ -412,7 +412,7 @@ class Mirror:
     # --- outbound ----------------------------------------------------------------
 
     def _outbox(self, loc: Location) -> Outbox | None:
-        adapter = self.m._adapters.get(loc.platform)
+        adapter = self.m._adapters.get((loc.platform, loc.account))
         if adapter is None:
             return None
         box = self._outboxes.get(loc.key())
@@ -420,7 +420,7 @@ class Mirror:
             key = loc.key()
 
             async def send(text: str, buttons: list[tuple[str, str]] | None) -> list[str]:
-                live = self.m._adapters.get(loc.platform)
+                live = self.m._adapters.get((loc.platform, loc.account))
                 if live is None:
                     raise RuntimeError(f"{loc.platform} is not connected")
                 return await live.send_text(loc, text, buttons=buttons or None)
@@ -613,7 +613,7 @@ class Mirror:
 
     async def _adopt_child(self, root: Binding, parent: dict[str, Any], child: dict[str, Any]) -> None:
         cid, cname = str(child["pane_id"]), str(child["name"])
-        adapter = self.m._adapters.get(root.platform)
+        adapter = self.m._adapters.get((root.platform, root.account))
         if adapter is None:
             return
         opened = MSG_CHILD_OPENED.format(parent=parent["name"], child=cname)
