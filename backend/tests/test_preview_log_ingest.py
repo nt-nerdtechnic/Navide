@@ -260,6 +260,21 @@ async def test_git_changed_with_no_paths_broadcasts_the_old_shape_plus_empty(
 
 
 @pytest.mark.asyncio
+async def test_git_changed_caps_the_paths_it_carries(
+    events: list[dict], tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_module, "_GIT_CHANGED_MAX_PATHS", 3, raising=False)
+    monkeypatch.setattr(app_module, "_record_watcher_changes", lambda ws, entries: (ws, []))
+    await app_module._broadcast_git_changed(
+        str(tmp_path), [(f"f{i}.ts", "created") for i in range(10)]
+    )
+    (payload,) = [e["payload"] for e in events if e["type"] == "git.changed"]
+    assert payload["workspace_path"] == str(tmp_path)  # what every reader refreshes on
+    assert [p["rel_path"] for p in payload["paths"]] == ["f0.ts", "f1.ts", "f2.ts"]
+    assert payload["paths_truncated"] is True
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_event_type_is_dropped_rather_than_guessed_at(
     events: list[dict], tmp_path: Path
 ) -> None:

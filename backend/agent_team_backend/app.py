@@ -632,6 +632,7 @@ _GIT_EVENT_CHANGES = {
     "modified": "modified",
     "deleted": "deleted",
 }
+_GIT_CHANGED_MAX_PATHS = 1_000
 
 
 def _record_watcher_changes(
@@ -689,10 +690,16 @@ async def _broadcast_git_changed(
                 )
         except Exception as err:  # noqa: BLE001
             log.warning("preview record from watcher failed for %s: %s", ws_path, err)
-    await broadcast(make_event("git.changed", {
+    # Every reader refreshes the whole workspace on the event, so the paths are
+    # only a hint; a burst of hundreds of thousands must not become one frame
+    # serialised per session on the loop. `paths_truncated` says the list stops.
+    event: dict[str, Any] = {
         "workspace_path": ws_path,
-        "paths": entries,
-    }))
+        "paths": entries[:_GIT_CHANGED_MAX_PATHS],
+    }
+    if len(entries) > _GIT_CHANGED_MAX_PATHS:
+        event["paths_truncated"] = True
+    await broadcast(make_event("git.changed", event))
 
 
 async def _broadcast_plans_changed(ws_path: str) -> None:

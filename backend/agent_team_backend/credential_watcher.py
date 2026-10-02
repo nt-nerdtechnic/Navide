@@ -7,21 +7,25 @@ Running ``claude /login`` (or ``codex login``, …) in a plain terminal rewrites
 the live credentials behind the ledger's back, and every account row keeps
 naming the old profile until the user notices.
 
-Design (mirrors GitWatcher):
+Design:
 
     CredentialWatcher.start()
-        └─ observer (watchdog Observer)
-            └─ one non-recursive handler per directory holding a live secret
+        └─ one poll task: stat every exact credential file each ``poll_s``
 
-The PARENT directory is watched, never the credential file itself: these files
-are written with a tmp-file + ``os.replace``, so the inode a file watch is
-bound to is thrown away on the first login. ``~/.claude.json`` is watched the
-same way (from the home directory) because on macOS claude's secret lives in
-the Keychain — that config file's ``oauthAccount`` block is the only on-disk
-signal that the account changed.
+Each file is polled by path, not watched through its directory: an FSEvents
+stream covers its root's whole subtree however ``recursive`` is set, and
+``~/.claude.json`` lives directly in the home directory, so its stream took in
+every file change on the machine — each one costing memory in watchdog's
+FSEvents extension (#144). The ``~/.claude`` and ``~/.codex`` streams likewise
+carried every transcript write. A stat signature (inode, mtime, size) also
+survives what a file watch would not: these files are written with a tmp-file
++ ``os.replace``, which swaps the inode, and a CLI that was never signed in has
+no file (or directory) yet. ``~/.claude.json`` is polled because on macOS
+claude's secret lives in the Keychain — that config file's ``oauthAccount``
+block is the only on-disk signal that the account changed.
 
-That makes the event stream extremely noisy: ``~/.claude.json`` is Claude
-Code's entire config, rewritten on every prompt. So a file event never
+That signal is extremely noisy: ``~/.claude.json`` is Claude Code's entire
+config, rewritten on every prompt. So a file change never
 reconciles anything by itself — it only triggers an identity fingerprint read,
 and the work below runs solely when the fingerprint differs from the last one
 seen. Reconciliation never WRITES the live credentials: the live state already
@@ -38,9 +42,6 @@ import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
-
 from .cli_vendors.registry import VENDORS
 from .credential_vault import DEFAULT_SLOT_ID, vault_to_thread
 from .profiles_store import SUPPORTED_AGENT_KEYS
@@ -54,6 +55,10 @@ IdentitySink = Callable[[str], Awaitable[None]]
 # ``CredentialVault.live_account``).
 CLAUDE_CONFIG_FILENAME = ".claude.json"
 
+# How often the credential files are stat'ed. Comparable to the old event path:
+# the change still waits out the debounce before the fingerprint is read.
+POLL_INTERVAL_S = 1.0
+
 # Sentinel for "no fingerprint recorded yet" — a signed-out agent is a
 # legitimate reading, so no ordinary value can stand in for "never read".
 _UNSEEN = object()
@@ -62,10 +67,8 @@ _UNSEEN = object()
 def _watch_targets(
     real_home: Path, agent_keys: tuple[str, ...], resolver=None
 ) -> dict[Path, dict[str, str]]:
-    """``{directory: {filename: agentKey}}`` — every directory to watch and the
-    exact file names inside it that carry an account identity. Filtering on the
-    name matters: the home directory and ``~/.claude`` churn constantly, and an
-    unfiltered handler would read the Keychain on every unrelated write."""
+    """``{directory: {filename: agentKey}}`` — every directory holding a file
+    that carries an account identity, and those exact file names."""
     targets: dict[Path, dict[str, str]] = {}
     for agent_key in agent_keys:
         spec = VENDORS.get(agent_key)
@@ -260,34 +263,19 @@ async def reconcile_live_account(agent_key: str) -> None:
     service.request_refresh()
 
 
-class _CredentialDirHandler(FileSystemEventHandler):
-    """watchdog handler bound to one directory. Reacts only to the exact file
-    names that hold an account identity, and reports which agent they belong
-    to."""
-
-    def __init__(self, files: dict[str, str], on_touched: Callable[[str], None]) -> None:
-        super().__init__()
-        self._files = files
-        self._on_touched = on_touched
-
-    def on_any_event(self, event: FileSystemEvent) -> None:
-        # `closed`/`opened` carry no state change. A `moved` event is the
-        # interesting one: these files are replaced from a tmp file, so the
-        # destination path is what names the credential.
-        if event.event_type in ("opened", "closed"):
-            return
-        for raw in (event.src_path, getattr(event, "dest_path", "")):
-            if not raw:
-                continue
-            agent_key = self._files.get(str(Path(str(raw)).absolute())) or self._files.get(os.path.basename(str(raw)))
-            if agent_key is not None:
-                self._on_touched(agent_key)
+def _stamp(path: Path) -> tuple[int, int, int] | None:
+    """What changes when a file is rewritten or replaced; None while absent."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
 
 
 class CredentialWatcher:
-    """One Observer over the live credential locations of every profile-capable
-    agent. Debounced file events read the account fingerprint; only a genuine
-    change calls ``on_identity_change(agent_key)``."""
+    """Polls the live credential files of every profile-capable agent.
+    Debounced file changes read the account fingerprint; only a genuine change
+    calls ``on_identity_change(agent_key)``."""
 
     def __init__(
         self,
@@ -297,6 +285,7 @@ class CredentialWatcher:
         agent_keys: tuple[str, ...] = SUPPORTED_AGENT_KEYS,
         fingerprint: Callable[[str], object] = live_identity_fingerprint,
         debounce_s: float = 0.8,
+        poll_s: float = POLL_INTERVAL_S,
         resolver=None,
     ) -> None:
         self._on_identity_change = on_identity_change
@@ -304,54 +293,40 @@ class CredentialWatcher:
         self._agent_keys = agent_keys
         self._fingerprint = fingerprint
         self._debounce_s = debounce_s
+        self._poll_s = poll_s
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._observer: Observer | None = None
+        self._poll_task: asyncio.Task | None = None
         self._fingerprints: dict[str, object] = {}
         self._pending: dict[str, asyncio.TimerHandle] = {}
         self._seed_task: asyncio.Task | None = None
         self._started = False
         self._resolver = resolver
-        self._watched_paths: set[Path] = set()
+        # path -> (agent_key, last stamp)
+        self._watched: dict[Path, tuple[str, tuple[int, int, int] | None]] = {}
 
     def start(self) -> None:
         if self._started:
             return
         self._started = True
         self._loop = asyncio.get_event_loop()
-        self._observer = Observer()
-        self._observer.start()
-        watched = 0
         for directory, files in _watch_targets(self._real_home, self._agent_keys, self._resolver).items():
             for filename, agent_key in files.items():
-                watched += self._watch_file(directory / filename, agent_key)
+                self._watch_file(directory / filename, agent_key)
         self._seed_task = asyncio.ensure_future(self._seed())
+        self._poll_task = asyncio.ensure_future(self._poll())
         log.info(
-            "CredentialWatcher started (%d dirs, debounce %.0fms)",
-            watched, self._debounce_s * 1000,
+            "CredentialWatcher started (%d files, poll %.0fms, debounce %.0fms)",
+            len(self._watched), self._poll_s * 1000, self._debounce_s * 1000,
         )
 
-    def _watch_file(self, path: Path, agent_key: str) -> int:
-        if self._observer is None or path in self._watched_paths:
-            return 0
-        directory = path.parent
-        spec = VENDORS.get(agent_key)
-        if not directory.is_dir() and not (spec and spec.live_file_from_context):
-            return 0
-        while not directory.is_dir() and directory != directory.parent:
-            directory = directory.parent
-        handler = _CredentialDirHandler({str(path.absolute()): agent_key}, self._mark_touched_threadsafe)
-        try:
-            self._observer.schedule(handler, str(directory), recursive=directory != path.parent)
-        except Exception as err:  # noqa: BLE001
-            log.warning("CredentialWatcher schedule for %s failed: %s", agent_key, err)
-            return 0
-        self._watched_paths.add(path)
-        return 1
+    def _watch_file(self, path: Path, agent_key: str) -> None:
+        if path not in self._watched:
+            self._watched[path] = (agent_key, _stamp(path))
 
     async def watch_bound_store(self, agent_key: str, path: Path) -> None:
         # Bindings cannot be replaced. An unbound vendor had no previous
-        # watch, so old-directory events can never reconcile its new store.
-        if path not in self._watched_paths:
+        # watch, so changes at the old path can never reconcile its new store.
+        if path not in self._watched:
             self._fingerprints[agent_key] = await vault_to_thread(self._fingerprint, agent_key)
             self._watch_file(path, agent_key)
 
@@ -362,15 +337,12 @@ class CredentialWatcher:
         if self._seed_task is not None:
             self._seed_task.cancel()
             self._seed_task = None
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
         for th in self._pending.values():
             th.cancel()
         self._pending.clear()
-        if self._observer:
-            self._observer.stop()
-            try:
-                self._observer.join(timeout=2.0)
-            except Exception:  # noqa: BLE001
-                pass
         log.info("CredentialWatcher stopped")
 
     async def _seed(self) -> None:
@@ -391,17 +363,19 @@ class CredentialWatcher:
                 continue
             self._fingerprints.setdefault(agent_key, fp)
 
-    # ───────────────────────── debounce (loop thread) ─────────────────────
+    # ───────────────────────── poll + debounce (loop thread) ──────────────
 
-    def _mark_touched_threadsafe(self, agent_key: str) -> None:
-        """Called from the watchdog observer thread → hop to the loop thread."""
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        try:
-            loop.call_soon_threadsafe(self._schedule_fire, agent_key)
-        except RuntimeError:
-            pass  # loop closed mid-flight
+    async def _poll(self) -> None:
+        while True:
+            await asyncio.sleep(self._poll_s)
+            paths = list(self._watched)
+            # Off the loop: a home directory on a network mount stats slowly.
+            stamps = await asyncio.to_thread(lambda: [_stamp(p) for p in paths])
+            for path, stamp in zip(paths, stamps):
+                agent_key, last = self._watched[path]
+                if stamp != last:
+                    self._watched[path] = (agent_key, stamp)
+                    self._schedule_fire(agent_key)
 
     def _schedule_fire(self, agent_key: str) -> None:
         loop = self._loop

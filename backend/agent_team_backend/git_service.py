@@ -269,13 +269,66 @@ _STATUS_ENTRY_LIMIT = 10_000
 _STATUS_MAX_BYTES = 4 * 1024 * 1024
 
 
+# One git.changed fans out into several status reads per window (Git pane,
+# repo badges, status bar); each used to take its own slot of the 4-process
+# semaphore and run the same tree walk. Concurrent reads of one
+# (workspace, include_ignored) share a run instead. A read that arrives while a
+# run is already going waits for one queued run that starts after it, so it
+# never gets a result from before the change that prompted it -- a burst costs
+# at most two runs.
+_StatusKey = tuple[asyncio.AbstractEventLoop, str, bool]
+_status_running: dict[_StatusKey, asyncio.Future[dict[str, Any]]] = {}
+_status_queued: dict[_StatusKey, asyncio.Future[dict[str, Any]]] = {}
+
+
 async def get_status(workspace_path: str, include_ignored: bool = False) -> dict[str, Any]:
     """Return serialisable GitStatus dict for the given workspace.
 
     When *include_ignored* is True, also surface git-ignored paths (``!!`` in
     porcelain) so the UI can optionally show them — mirrors VS Code's
     "show ignored files" toggle.
+
+    When ``git status`` itself fails or times out, returns
+    ``{"ok": False, "error": ...}`` with no ``is_git_repo``: the UI keeps the
+    last good status and shows the error instead of a fake clean repo.
     """
+    key = (asyncio.get_running_loop(), workspace_path, include_ignored)
+    task = _status_queued.get(key)
+    if task is None:
+        running = _status_running.get(key)
+        if running is None:
+            task = asyncio.ensure_future(_read_status(workspace_path, include_ignored))
+            _status_running[key] = task
+        else:
+            task = asyncio.ensure_future(
+                _read_status_after(running, key, workspace_path, include_ignored)
+            )
+            _status_queued[key] = task
+        task.add_done_callback(lambda done: _forget_status_run(key, done))
+    return dict(await asyncio.shield(task))
+
+
+def _forget_status_run(key: _StatusKey, done: asyncio.Future[dict[str, Any]]) -> None:
+    for table in (_status_running, _status_queued):
+        if table.get(key) is done:
+            del table[key]
+
+
+async def _read_status_after(
+    previous: asyncio.Future[dict[str, Any]],
+    key: _StatusKey,
+    workspace_path: str,
+    include_ignored: bool,
+) -> dict[str, Any]:
+    await asyncio.wait([previous])
+    this = asyncio.current_task()
+    assert this is not None
+    _status_queued.pop(key, None)
+    _status_running[key] = this
+    return await _read_status(workspace_path, include_ignored)
+
+
+async def _read_status(workspace_path: str, include_ignored: bool) -> dict[str, Any]:
     if not workspace_path or not Path(workspace_path).is_dir():
         return asdict(GitStatus(is_git_repo=False))
 
@@ -287,10 +340,18 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
     status = GitStatus(is_git_repo=True)
 
     # Branch + ahead/behind
-    args = ["git", "-c", "core.quotePath=false", "status", "--porcelain=v1", "--branch", "-u"]
+    # --no-optional-locks: a read must not refresh and rewrite .git/index --
+    # the watcher would report that write as a change and trigger more reads.
+    args = [
+        "git", "--no-optional-locks", "-c", "core.quotePath=false",
+        "status", "--porcelain=v1", "--branch", "-u",
+    ]
     if include_ignored:
         args.append("--ignored")
-    _, out, _, byte_capped = await _run_capped(args, workspace_path, _STATUS_MAX_BYTES)
+    rc, out, err, byte_capped = await _run_capped(args, workspace_path, _STATUS_MAX_BYTES)
+    # A byte-cap kill also exits nonzero; that is truncation, not failure.
+    if rc != 0 and not byte_capped:
+        return {"ok": False, "error": err.strip() or f"git status exited with {rc}"}
     lines = out.splitlines()
     if byte_capped and len(lines) > 1:
         lines.pop()  # the read stopped mid-line
@@ -360,6 +421,9 @@ _SNAPSHOT_GIT_TIMEOUT_S = 5.0
 #: Its own small budget rather than `_git_proc_semaphore`: a roster read over
 #: many worktrees must never hold the slots the Git pane's own commands wait on.
 _SNAPSHOT_PROC_LIMIT = 2
+#: ``dirty`` saturates here: past it the roster shows "at least this many".
+_SNAPSHOT_DIRTY_LIMIT = 10_000
+_SNAPSHOT_STATUS_MAX_BYTES = 1024 * 1024
 _snapshot_proc_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 
 
@@ -395,7 +459,8 @@ async def pane_git_snapshot(path: str) -> dict[str, Any]:
 
     Returns ``{branch, worktreeRoot, isLinkedWorktree, dirty, ahead, behind,
     fetchedAt}``. ``branch`` is the short sha when HEAD is detached; ``dirty``
-    counts ``git status --porcelain`` lines; ``ahead`` / ``behind`` are against
+    counts ``git status --porcelain`` lines, saturating at
+    ``_SNAPSHOT_DIRTY_LIMIT``; ``ahead`` / ``behind`` are against
     ``origin/main`` specifically, not the branch's upstream (``get_status``
     reports that one); ``fetchedAt`` is when FETCH_HEAD was last written, as
     ISO-8601 UTC — this never fetches, so the drift is only as fresh as that.
@@ -448,12 +513,20 @@ async def _checkout_snapshot(toplevel: str, git_dir: str, common_dir: str) -> di
     snapshot["branch"] = branch or None
 
     # --no-optional-locks: a read-only status must not take index.lock and make
-    # a concurrent commit in that worktree fail.
-    rc, out = await _run_snapshot_git(
-        ["git", "--no-optional-locks", "status", "--porcelain"], toplevel
-    )
-    if rc == 0:
-        snapshot["dirty"] = sum(1 for line in out.splitlines() if line.strip())
+    # a concurrent commit in that worktree fail. Capped like get_status (#144):
+    # only the count is wanted, so a huge untracked tree saturates it instead of
+    # being read whole and split on the event loop.
+    async with _snapshot_proc_semaphore():
+        rc, raw, _, capped = await run_allowlisted_capped(
+            ["git", "--no-optional-locks", "status", "--porcelain"],
+            toplevel,
+            timeout=_SNAPSHOT_GIT_TIMEOUT_S,
+            max_stdout_bytes=_SNAPSHOT_STATUS_MAX_BYTES,
+        )
+    if capped:
+        snapshot["dirty"] = _SNAPSHOT_DIRTY_LIMIT
+    elif rc == 0:
+        snapshot["dirty"] = min(raw.count(b"\n"), _SNAPSHOT_DIRTY_LIMIT)
 
     rc, out = await _run_snapshot_git(
         ["git", "rev-list", "--left-right", "--count", "origin/main...HEAD"], toplevel

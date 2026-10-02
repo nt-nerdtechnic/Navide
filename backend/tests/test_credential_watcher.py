@@ -134,6 +134,7 @@ async def test_identical_fingerprint_is_not_reported(tmp_path: Path) -> None:
         agent_keys=("codex",),
         fingerprint=lambda key: identity[key],
         debounce_s=0.1,
+        poll_s=0.05,
     )
     watcher.start()
     try:
@@ -167,6 +168,7 @@ async def test_unrelated_file_in_a_watched_dir_is_ignored(tmp_path: Path) -> Non
         agent_keys=("codex",),
         fingerprint=lambda key: ("changed-every-time", object()),
         debounce_s=0.1,
+        poll_s=0.05,
     )
     watcher.start()
     try:
@@ -192,6 +194,83 @@ async def test_missing_credential_dirs_do_not_break_start(tmp_path: Path) -> Non
     watcher.start()
     await asyncio.sleep(0.1)
     watcher.stop()
+
+
+def _claude_home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    (home / ".claude" / "projects").mkdir(parents=True)
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+    return home
+
+
+async def _wait_for(fired: list[str], timeout: float = 4.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not fired and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.05)
+
+
+async def test_no_filesystem_watch_is_rooted_at_home_or_claude_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An FSEvents stream covers its whole subtree whatever `recursive` says,
+    and the extension behind it leaks per event (#144) — a stream on $HOME
+    for ~/.claude.json took in every file change on the machine, and one on
+    ~/.claude every transcript write."""
+    from watchdog.observers.api import BaseObserver
+
+    roots: list[str] = []
+    real_schedule = BaseObserver.schedule
+
+    def spy(self, handler, path, *args, **kwargs):  # noqa: ANN001
+        roots.append(str(Path(path).resolve()))
+        return real_schedule(self, handler, path, *args, **kwargs)
+
+    monkeypatch.setattr(BaseObserver, "schedule", spy)
+    home = _claude_home(tmp_path)
+
+    async def sink(_agent_key: str) -> None:  # pragma: no cover - never called
+        pass
+
+    watcher = CredentialWatcher(sink, real_home=home, debounce_s=0.1)
+    watcher.start()
+    try:
+        await asyncio.sleep(0.1)
+    finally:
+        watcher.stop()
+    broad = {str(home.resolve()), str((home / ".claude").resolve())}
+    assert broad.isdisjoint(roots), roots
+
+
+@pytest.mark.parametrize("atomic", [False, True], ids=["rewrite", "atomic-rename"])
+async def test_claude_json_change_still_reaches_the_identity_sink(
+    tmp_path: Path, atomic: bool
+) -> None:
+    home = _claude_home(tmp_path)
+    identity = {"claude": "a@example.com"}
+    fired: list[str] = []
+
+    async def sink(agent_key: str) -> None:
+        fired.append(agent_key)
+
+    watcher = CredentialWatcher(
+        sink, real_home=home, agent_keys=("claude",),
+        fingerprint=lambda key: identity[key], debounce_s=0.1,
+    )
+    watcher.start()
+    try:
+        await asyncio.sleep(0.3)  # let the startup seeding land
+        identity["claude"] = "b@example.com"
+        config = home / ".claude.json"
+        if atomic:
+            tmp = home / ".claude.json.tmp"
+            tmp.write_text('{"oauthAccount": {"emailAddress": "b@example.com"}}', encoding="utf-8")
+            tmp.replace(config)
+        else:
+            config.write_text('{"oauthAccount": {"emailAddress": "b@example.com"}}', encoding="utf-8")
+        await _wait_for(fired)
+        assert fired == ["claude"]
+    finally:
+        watcher.stop()
 
 
 # ---- reconcile -------------------------------------------------------------

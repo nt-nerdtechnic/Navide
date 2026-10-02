@@ -26,7 +26,8 @@ All notable released changes to Navide will be documented in this file. The form
 - Windows: saving to the local database no longer stalls when an antivirus scans its journal file, and a burst of file changes is recorded in one write instead of one per file.
 - **Windows hooks with a non-ASCII user folder**: Guard and the Claude Code and Codex hooks call the system curl by full path. A Git or MSYS2 curl earlier on PATH read a folder name such as `C:\Users\使用者` as `???` and never sent the request, so Guard got no decision.
 - A pane answering a chat with an MSG block addressed to the sender now reaches the chat with just that text; it is no longer reported to the pane as an unknown target.
-- Huge untracked trees no longer stall Git status (#144).
+- Huge untracked trees no longer stall Git status, and status reads and change notifications stay bounded on very large repositories (#144).
+- macOS: the backend no longer grows its memory with every file change on disk. The file watchers stopped retaining each filesystem event, and account detection now checks the CLI credential files themselves instead of watching your whole home folder (#144).
 - Keychain secrets that look like hex, or contain non-ASCII characters, are read back exactly.
 - The pane overview counts panes on offline devices as not opened.
 - Onboarding no longer offers to install tools it already found.
@@ -35,6 +36,7 @@ All notable released changes to Navide will be documented in this file. The form
 - A CLI that leaves a child process holding its output no longer hangs the check Navide runs before opening a pane, and the leftover process is cleaned up (#143).
 - Droid sessions on Windows are found in the folder Droid actually uses (#142).
 - A Codex pane on Windows that has to start through a `.cmd` shim (one Navide cannot run through node directly) no longer exits with "The system cannot find the path specified." before Codex runs (#145).
+- The AI CLI panel in the Git and Plans sidebars starts its CLI again: Codex (since 0.2.4) and other CLIs that Navide adds launch options to failed to start there, and on Windows the mini-IDE AI panel could not start any CLI (#146).
 - The macOS installer window no longer shows `.background.tiff` and `.VolumeIcon.icns` above the Navide → Applications layout when Finder is set to show hidden files.
 - Security updates: pyjwt.
 

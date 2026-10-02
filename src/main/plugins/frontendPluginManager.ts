@@ -144,6 +144,7 @@ import { aiTerminalStorageIdentity, type AiTerminalStorageIdentity } from './aiT
 import type { TerminalOwnerOrigin } from '../terminalStorageOwner'
 import type { TerminalStorageOwnerRequest, TerminalStorageOwnerState } from '../../shared/terminalStorageOwner'
 import { aiTerminalCommand } from './aiTerminalCommand'
+import { buildAgentPaneCommand, quoteCommandWord } from './agentPaneCommand'
 import { executeAiTerminalResource } from './aiTerminalResources'
 import { AiTerminalOutputDecoder } from './aiTerminalOutput'
 import { MINI_IDE_STORAGE_KEYS } from '../../shared/miniIdePreferences'
@@ -7038,7 +7039,7 @@ export class FrontendPluginManager {
       })
       let committed = false
       try {
-        let command: string[] | null
+        let command: string | string[] | null
         let persistedYolo = false
         if (persistView && storageIdentity) {
         // Persisted views inherit the Host's current shell and the same
@@ -7226,31 +7227,27 @@ export class FrontendPluginManager {
     return {}
   }
 
-  /** Resolve the small semantic AI CLI contract into an argv owned by the
-   * Host. The package can select a registered profile and pane identity only;
-   * it cannot provide an executable, shell fragment, cwd, or environment. */
+  /** Resolve the small semantic AI CLI contract into a Host-owned command.
+   * The package can select a registered profile and pane identity only; it
+   * cannot provide an executable, shell fragment, cwd, or environment. */
   private aiCliCommand(
     profileId: string,
     args: Record<string, unknown>,
     workspacePath: string
-  ): string[] | null {
+  ): string | string[] | null {
     const profile = AI_CLI_PROFILES[profileId as keyof typeof AI_CLI_PROFILES]
     if (!profile || !workspacePath) return null
-    const executable = profile.command
-    const command: string[] = [executable]
+    const parts: string[] = [profile.command]
     if (profileId === 'aider') {
       const paneId = typeof args.paneId === 'string' ? args.paneId : ''
       const token = paneId.slice(0, 8).toLowerCase()
       const historyName = /^[0-9a-f]{8}$/.test(token)
         ? `.aider.chat.history.${token}.md`
         : '.aider.chat.history.md'
-      command.push('--chat-history-file', join(workspacePath, historyName))
+      parts.push('--chat-history-file', quoteCommandWord(join(workspacePath, historyName)))
     }
-    if (args.yolo === true) {
-      const flag = 'yoloFlag' in profile ? profile.yoloFlag : undefined
-      if (flag) command.push(flag)
-    }
-    return command
+    if (args.yolo === true && 'yoloFlag' in profile && profile.yoloFlag) parts.push(profile.yoloFlag)
+    return buildAgentPaneCommand(this.terminalShell, parts)
   }
 
   /** Install the Host-owned durable storage adapter for an already-authorized

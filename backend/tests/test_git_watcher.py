@@ -135,6 +135,36 @@ async def test_noise_write_does_not_fire(tmp_path: Path) -> None:
         watcher.stop()
 
 
+@pytest.mark.asyncio
+async def test_sustained_churn_still_fires_and_keeps_the_window_bounded() -> None:
+    # A writer that never pauses for a whole debounce window (a test run
+    # generating output, a log appended every few ms) used to push the timer
+    # back forever: nothing fired, and every new path piled into the open
+    # window for as long as the writer kept going — unbounded memory, and a
+    # Git panel that never refreshed.
+    fired: list[list[tuple[str, str]]] = []
+
+    async def sink(ws: str, paths: list[tuple[str, str]]) -> None:
+        fired.append(paths)
+
+    watcher = GitWatcher(sink, debounce_s=0.1, max_wait_s=0.3)
+    watcher._loop = asyncio.get_running_loop()
+    largest_window = 0
+    sent: set[tuple[str, str]] = set()
+    for i in range(40):
+        pair = (f"out/f{i}.json", "created")
+        sent.add(pair)
+        watcher._schedule_fire("/ws", [pair])
+        largest_window = max(largest_window, len(watcher._dirty_paths.get("/ws", ())))
+        await asyncio.sleep(0.03)
+    await asyncio.sleep(0.2)
+
+    assert len(fired) >= 3
+    assert largest_window <= 15
+    assert {pair for paths in fired for pair in paths} == sent
+    assert watcher._dirty_paths == {}
+
+
 # ── .gitignore layer ──────────────────────────────────────────────────────────
 #
 # The fixed segment list compares whole names, so `dist-release` never matched
