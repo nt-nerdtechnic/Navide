@@ -24,9 +24,9 @@ def test_agent_cli_probe_reports_resolved_binary_and_version(
     binary.write_text("#!/bin/sh\n")
     _resolves_to(monkeypatch, str(binary))
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(
             returncode=0,
             stdout="2.1.210 (Claude Code)\n",
             stderr="",
@@ -57,9 +57,9 @@ def test_agent_cli_probe_accepts_a_nonzero_exit_that_still_named_a_version(
     binary.write_text("#!/bin/sh\n")
     _resolves_to(monkeypatch, str(binary))
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(
             returncode=1,
             stdout="2.1.210 (Claude Code)\n",
             stderr="",
@@ -82,9 +82,9 @@ def test_agent_cli_probe_still_refuses_a_nonzero_exit_that_said_nothing(
     binary.write_text("#!/bin/sh\n")
     _resolves_to(monkeypatch, str(binary))
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(
             returncode=1, stdout="", stderr="command not found\n"
         ),
     )
@@ -101,9 +101,9 @@ def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
 ) -> None:
     _resolves_to(monkeypatch, "/opt/bin/claude")
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=-9, stdout="", stderr=""),
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(returncode=-9, stdout="", stderr=""),
     )
 
     with pytest.raises(app.AgentCliProbeError) as caught:
@@ -123,9 +123,9 @@ def test_agent_cli_probe_non_sigkill_signal_has_no_hint(
 ) -> None:
     _resolves_to(monkeypatch, "/opt/bin/claude")
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=-15, stdout="", stderr=""),
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(returncode=-15, stdout="", stderr=""),
     )
 
     with pytest.raises(app.AgentCliProbeError) as caught:
@@ -146,9 +146,9 @@ def test_agent_cli_probe_error_shows_symlink_target(
     resolved = str(real.resolve())
     _resolves_to(monkeypatch, str(link))
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr=""),
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(returncode=1, stdout="", stderr=""),
     )
 
     with pytest.raises(app.AgentCliProbeError) as caught:
@@ -168,9 +168,9 @@ def test_agent_cli_probe_success_payload_carries_resolved_symlink_target(
     link.symlink_to(real)
     _resolves_to(monkeypatch, str(link))
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
+        app,
+        "_run_spawn_probe",
+        lambda _command: SimpleNamespace(
             returncode=0,
             stdout="2.1.210 (Claude Code)\n",
             stderr="",
@@ -195,9 +195,9 @@ def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
 
     monkeypatch.setattr(app.osplat.paths, "resolve_program", resolve)
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda command, **_kwargs: SimpleNamespace(
+        app,
+        "_run_spawn_probe",
+        lambda command: SimpleNamespace(
             returncode=0,
             stdout="2.1.168 (Claude Code)\n",
             stderr="",
@@ -231,9 +231,9 @@ def test_agent_cli_probe_runs_a_windows_shim_through_cmd(
         lambda _name, *, path=None: r"C:\Users\a\AppData\Roaming\npm\claude.cmd",
     )
     monkeypatch.setattr(
-        app.subprocess,
-        "run",
-        lambda command, **_kwargs: SimpleNamespace(
+        app,
+        "_run_spawn_probe",
+        lambda command: SimpleNamespace(
             returncode=0, stdout="2.1.210 (Claude Code)\n", stderr=""
         ),
     )
