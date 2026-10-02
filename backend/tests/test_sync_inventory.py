@@ -15,9 +15,18 @@ from __future__ import annotations
 
 import pytest
 
-from agent_team_backend import sync_engine, sync_keyring
+from agent_team_backend import remote_roster, sync_engine, sync_keyring
 
 from .test_sync_engine import Device, FakeServer, account_key  # noqa: F401 - a fixture
+
+
+@pytest.fixture(autouse=True)
+def _clean_roster() -> None:
+    # Device names fall back to the process-wide roster, which other tests
+    # (e.g. test_server_link_trust) leave populated.
+    remote_roster._reset_for_test()
+    yield
+    remote_roster._reset_for_test()
 
 
 def _tables(store: sync_engine.SyncStore) -> dict[str, list[tuple]]:
