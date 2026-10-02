@@ -149,6 +149,23 @@ def set_trust_gate_blocked(blocked: bool) -> bool:
     return True
 
 
+def _toml_literal(value: str) -> str:
+    """`value` as a TOML literal string, so the TOML spelling adds no `"`.
+
+    Codex runs the `-c` text under `cmd.exe /d /s /c` on Windows, where a
+    backslash is not an escape: `subprocess.list2cmdline` renders a `"` as
+    `\\"`, which closes the quote early. The old basic-string spelling added
+    `"` of its own around every value, and for the SessionStart matcher that
+    exposed the `|` inside it to cmd as a pipe. A literal string adds none, so
+    an override whose content has no `"` needs no escaping at all.
+    Single-quoted, or triple-quoted when the value itself contains a `'`
+    (neither hook command does today).
+    """
+    if "'" not in value:
+        return "'" + value + "'"
+    return "'''" + value + "'''"
+
+
 def wire(command: Any, env: dict, metadata: dict, home: Path, port_file: Path, auth_file: Path) -> Any:
     """Append a session-layer hook; Codex appends lower-layer user hooks too."""
     # A Codex that gates this hook behind its trust screen would stop the pane
@@ -166,11 +183,20 @@ def wire(command: Any, env: dict, metadata: dict, home: Path, port_file: Path, a
     if metadata.get('explicit_session_id'):
         metadata['codex_current_session_id'] = metadata['explicit_session_id']
     env.update({LAUNCH_ENV: nonce, 'NAVIDE_CODEX_PORT_FILE': str(port_file), 'NAVIDE_CODEX_AUTH_FILE': str(auth_file)})
-    definition = 'hooks.SessionStart=[{matcher="^(startup|resume)$",hooks=[{type="command",command=' + json.dumps(hook_command()) + ',timeout=3}]}]'
+    definition = (
+        'hooks.SessionStart=[{matcher=' + _toml_literal('^(startup|resume)$')
+        + ',hooks=[{type=' + _toml_literal('command')
+        + ',command=' + _toml_literal(hook_command())
+        + ',timeout=3}]}]'
+    )
     text += ' -c ' + osplat.paths.quote_arg(definition)
     # Navide Guard. Behind the same trust gate and user-override check as
     # SessionStart: it is one more hook Codex may ask the user to trust.
-    guard = 'hooks.PreToolUse=[{hooks=[{type="command",command=' + json.dumps(guard_hook_command()) + ',timeout=10}]}]'
+    guard = (
+        'hooks.PreToolUse=[{hooks=[{type=' + _toml_literal('command')
+        + ',command=' + _toml_literal(guard_hook_command())
+        + ',timeout=10}]}]'
+    )
     text += ' -c ' + osplat.paths.quote_arg(guard)
     return [*command[:-1], text] if isinstance(command, list) else text
 
