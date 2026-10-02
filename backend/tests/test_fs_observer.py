@@ -122,5 +122,7 @@ def test_observed_events_do_not_accumulate(tmp_path: Path) -> None:
         )
     )
     # Unpatched: ~390 bytes retained per create+delete. What is left is the
-    # four emptied list shells per callback the extension never frees.
-    assert retained / ops < 100, f"{retained / ops:.0f} bytes retained per operation"
+    # four emptied list shells per callback the extension never frees. That
+    # residue is per callback, not per event, and a loaded machine delivers
+    # smaller batches (104 B/op at load average 86), so the bound sits midway.
+    assert retained / ops < 200,f"{retained / ops:.0f} bytes retained per operation"
