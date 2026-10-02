@@ -537,6 +537,9 @@ class Mirror:
                 self.m._spawn(self.m._post_awaiting(pane_id, route.binding.location(), route.child))
         else:
             self.m._awaiting_failures.pop(pane_id, None)
+            pending = self.m._pending.get(pane_id)
+            if pending is not None:
+                pending.awaiting_posted = False  # else the next prompt looks already relayed
             if pane_id in self.m._awaiting_posted:
                 self.m._awaiting_posted.discard(pane_id)
                 self.m.relay.expire_pane(pane_id)
