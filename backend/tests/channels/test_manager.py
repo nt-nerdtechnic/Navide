@@ -356,6 +356,7 @@ async def test_awaiting_posts_relay_prompt_once(env: Env) -> None:
     await _until(lambda: MSG_WORKING in env.tg.texts())
     env.fake.states["pane-1"] = {"exists": True, "busy": True, "display_status": "awaiting"}
     env.fake.kind = "question"
+    env.fake.options = ["Keep", "Discard"]
     await _until(lambda: any(t.startswith("⏸ pane 需要確認（question）") for t in env.tg.texts()))
     await asyncio.sleep(0.1)
     assert sum(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()) == 1

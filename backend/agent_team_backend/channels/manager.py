@@ -1328,6 +1328,11 @@ class ChannelManager:
             info = {}  # last attempt: a generic prompt beats none
         kind = str(info.get("kind") or "") or "permission"
         options = [str(o) for o in (info.get("options") or [])]
+        if kind == "question" and not options:
+            # A plain-text question at turn end: the turn's text already reached the
+            # chat, and a typed reply goes in like any message.
+            self._awaiting_failures.pop(pane_id, None)
+            return
         # Claude's AskUserQuestion reports "permission"; the options tell them apart.
         if options:
             kind = "permission" if options[0].strip().lower().startswith("yes") else "question"

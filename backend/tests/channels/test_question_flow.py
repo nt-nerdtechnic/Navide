@@ -75,3 +75,30 @@ async def test_an_answer_to_a_stale_screen_brings_the_current_prompt(env: Env) -
     assert new_rid != rid and len(env.m.relay._by_id) == 1
     await env.inbound(f"1 {new_rid}")
     assert env.fake.answers == [("pane-1", {"kind": "question", "option": 1})]
+
+
+def _capture_buttons(env: Env) -> list:
+    sent: list = []
+    orig = env.tg.send_text
+
+    async def capture(loc, text, *, buttons=None):
+        sent.append((text, buttons))
+        return await orig(loc, text, buttons=buttons)
+
+    env.tg.send_text = capture
+    return sent
+
+
+# --- F7: a plain-text question is answered by typing, not through the relay -------------
+
+
+async def test_a_plain_text_question_gets_no_relay_prompt(env: Env) -> None:
+    env.fake.kind = "question"
+    env.fake.prompt = "Should I also update the docs?"
+    env.fake.options = []
+    await _awaiting(env)
+    await asyncio.sleep(0.2)
+    assert _prompts(env) == [] and env.m.relay._by_id == {}
+    await env.inbound("yes please")
+    assert env.fake.delivered[-1][1] == "yes please"
+
