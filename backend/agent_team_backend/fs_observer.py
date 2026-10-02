@@ -72,9 +72,15 @@ if Observer.__module__ == "watchdog.observers.fsevents":
     # `watchdog_FSEventStreamCallback` in this release never releases its four
     # lists (src/watchdog_fsevents.c, read at the 6.0.0 tag and on master).
     _LEAKS_CALLBACK_LISTS = VERSION_STRING == "6.0.0"
-    _py_decref = ctypes.pythonapi.Py_DecRef
-    _py_decref.argtypes = [ctypes.py_object]
-    _py_decref.restype = None
+    try:
+        _py_decref = ctypes.pythonapi.Py_DecRef
+        _py_decref.argtypes = [ctypes.py_object]
+        _py_decref.restype = None
+    except Exception as err:  # noqa: BLE001 - a frozen build may not export it
+        # Losing the release only leaves the four list shells per callback;
+        # failing here would keep the whole backend from starting.
+        _LEAKS_CALLBACK_LISTS = False
+        log.warning("FSEvents callback lists will not be released: %s", err)
 
     _COALESCED_MASKS = (
         _CREATED | _REMOVED,

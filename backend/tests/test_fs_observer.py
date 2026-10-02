@@ -165,3 +165,51 @@ def test_observed_events_do_not_accumulate(tmp_path: Path) -> None:
     # Unpatched: ~390 bytes per create+delete; leaking only the four list
     # shells per callback: tens of bytes, more the smaller the batches.
     assert (end - start) / ops < 10, f"{(end - start) / ops:.0f} bytes retained per operation"
+
+
+def test_a_missing_py_decref_degrades_instead_of_breaking_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The frozen backend's interpreter may not expose Py_DecRef through
+    ctypes.pythonapi; the backend must still start and still watch files."""
+    import ctypes
+    import importlib.util
+
+    from watchdog.events import FileSystemEventHandler
+
+    from agent_team_backend import fs_observer
+
+    class _NoSymbols:
+        def __getattr__(self, name: str) -> object:
+            raise AttributeError(f"dlsym(RTLD_DEFAULT, {name}): symbol not found")
+
+    monkeypatch.setattr(ctypes, "pythonapi", _NoSymbols())
+    # A separate copy, so the module every watcher already imported is left alone.
+    spec = importlib.util.spec_from_file_location("fs_observer_without_pythonapi", fs_observer.__file__)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    with caplog.at_level("WARNING", logger="agent_team_backend.fs_observer"):
+        spec.loader.exec_module(module)
+
+    assert module._LEAKS_CALLBACK_LISTS is False
+    assert "will not be released" in caplog.text
+
+    seen: list[str] = []
+
+    class _Handler(FileSystemEventHandler):
+        def on_any_event(self, event) -> None:  # noqa: ANN001
+            seen.append(event.src_path)
+
+    observer = module.Observer()
+    observer.schedule(_Handler(), str(tmp_path), recursive=True)
+    observer.start()
+    try:
+        time.sleep(0.5)
+        (tmp_path / "after.txt").write_text("x")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not any(p.endswith("after.txt") for p in seen):
+            time.sleep(0.05)
+    finally:
+        observer.stop()
+        observer.join()
+    assert any(p.endswith("after.txt") for p in seen)
