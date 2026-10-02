@@ -34,6 +34,7 @@ All notable released changes to Navide will be documented in this file. The form
 - Tokens from a resumed session are attributed to the pane that ran them.
 - A CLI that leaves a child process holding its output no longer hangs the check Navide runs before opening a pane, and the leftover process is cleaned up (#143).
 - Droid sessions on Windows are found in the folder Droid actually uses (#142).
+- A Codex pane on Windows that has to start through a `.cmd` shim (one Navide cannot run through node directly) no longer exits with "The system cannot find the path specified." before Codex runs (#145).
 - The macOS installer window no longer shows `.background.tiff` and `.VolumeIcon.icns` above the Navide → Applications layout when Finder is set to show hidden files.
 - Security updates: pyjwt.
 
