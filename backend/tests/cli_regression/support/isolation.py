@@ -78,8 +78,91 @@ def command_words(args) -> list[str]:
     return [word.strip("\"';|&()") for word in words]
 
 
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+_POWERSHELLS = frozenset({"powershell", "pwsh"})
+_INTERPRETERS = frozenset({"node", "python", "python3", "pythonw", "py", "bun", "deno"})
+# Run the rest of their argv as a command: `env FOO=1 codex`, `nohup codex`.
+_PREFIXES = frozenset({"env", "exec", "command", "nohup", "nice", "time", "timeout"})
+_SEPARATORS = frozenset({";", "&", "|", "&&", "||", "(", ")"})
+
+
+def _program(word: str) -> str:
+    # Windows paths split on either slash, whatever the host's own separator.
+    name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+def _shell_line_words(line: str) -> list[str]:
+    """The executed word of every command in a shell line, never its data."""
+    lexer = shlex.shlex(line, posix=os.name != "nt", punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        tokens = line.split()
+    words: list[str] = []
+    segment: list[str] = []
+    for token in [*tokens, ";"]:
+        if token in _SEPARATORS:
+            words.extend(_argv_words(segment))
+            segment = []
+        else:
+            segment.append(token.strip("\"'"))
+    return words
+
+
+def _argv_words(argv: list[str]) -> list[str]:
+    """The word(s) an argv actually executes: argv[0], plus what a known
+    wrapper hands control to. Arguments are data and are never classified --
+    `security -s gemini` or `python x.py codex` start no CLI."""
+    rest = list(argv)
+    while rest and "=" in rest[0] and not rest[0].startswith(("-", "/")):
+        rest.pop(0)  # VAR=value assignments before the command
+    if not rest:
+        return []
+    head, args = rest[0], rest[1:]
+    program = _program(head)
+    if program in _PREFIXES:
+        while args and (args[0].startswith("-") or "=" in args[0]):
+            args.pop(0)
+        if program == "timeout" and args:
+            args.pop(0)  # the duration
+        return [head, *_argv_words(args)]
+    if program in _SHELLS:
+        for index, arg in enumerate(args[:-1]):
+            if arg.startswith("-") and not arg.startswith("--") and "c" in arg:
+                return [head, *_shell_line_words(args[index + 1])]
+        return [head]
+    if program == "cmd":
+        lowered = [arg.lower() for arg in args]
+        for switch in ("/c", "/k"):
+            if switch in lowered:
+                return [head, *_shell_line_words(" ".join(args[lowered.index(switch) + 1:]))]
+        return [head]
+    if program in _POWERSHELLS:
+        lowered = [arg.lower() for arg in args]
+        for switch in ("-c", "-command"):
+            if switch in lowered:
+                return [head, *_shell_line_words(" ".join(args[lowered.index(switch) + 1:]))]
+        return [head]
+    if program in _INTERPRETERS:
+        for arg in args:
+            if arg in {"-c", "-e", "-m", "--eval", "-p", "--print"}:
+                break  # inline code or a module: no script path to classify
+            if not arg.startswith("-"):
+                return [head, arg]
+        return [head]
+    return [head]
+
+
+def executed_words(args) -> list[str]:
+    if isinstance(args, (str, bytes, os.PathLike)):
+        return _shell_line_words(os.fsdecode(args))
+    return _argv_words([os.fsdecode(value) for value in args])
+
+
 def real_cli_in(args, env, allowed_roots: tuple[Path, ...]) -> str | None:
-    for word in command_words(args):
+    for word in executed_words(args):
         if "://" in word:
             continue  # HTTP hook URLs are data, never executable paths.
         stem = Path(word).stem.lower()

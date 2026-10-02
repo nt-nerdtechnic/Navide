@@ -59,7 +59,7 @@ assert 'navide-test-home-' in str(Path.home())
 @pytest.mark.parametrize("argv", [
     ["sh", "-c", "VAR=value echo safe; claude --version"],
     ["cmd.exe", "/d", "/s", "/c", '"claude" --version'],
-    ["wrapper", "one", "two", "three", "claude"],
+    ["env", "FOO=1", "claude", "--version"],
     ["sh", "-c", "echo safe;claude --version"],
 ])
 def test_guard_recognizes_cli_after_shell_wrappers(tmp_path, monkeypatch, argv):
@@ -69,6 +69,46 @@ def test_guard_recognizes_cli_after_shell_wrappers(tmp_path, monkeypatch, argv):
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: str(executable))
     assert real_cli_in(argv, {}, (tmp_path / "allowed",)) == str(executable)
     assert real_cli_in(argv, {}, (tmp_path,)) is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["codex", "exec", "hi"],
+    ["cmd", "/c", "codex.cmd", "--flag"],
+    ["cmd.exe", "/d", "/c", "codex.cmd --flag"],
+    ["sh", "-lc", "codex --flag"],
+    ["zsh", "-ilc", "cd /tmp && codex --flag"],
+    "codex --flag",
+])
+def test_guard_still_refuses_a_real_cli_launch(tmp_path, monkeypatch, argv):
+    executable = tmp_path / "installed" / "codex"
+    executable.parent.mkdir()
+    executable.write_text("unused")
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: str(executable))
+    assert real_cli_in(argv, {}, (tmp_path / "allowed",)) == str(executable)
+
+
+def test_guard_refuses_a_cli_script_run_by_node(tmp_path):
+    script = tmp_path / "installed" / "codex.js"
+    script.parent.mkdir()
+    script.write_text("unused")
+    argv = ["node", str(script), "--flag"]
+    assert real_cli_in(argv, {}, (tmp_path / "allowed",)) == str(script)
+
+
+@pytest.mark.parametrize("argv", [
+    # A Keychain service named after a CLI is data, not a launch.
+    ["/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"],
+    # A fake CLI handed the vendor name as an argument.
+    ["python", "x.py", "codex", "--flag"],
+    ["sh", "-c", "python x.py codex --flag"],
+    ["git", "log", "--author", "claude"],
+])
+def test_guard_ignores_a_cli_name_passed_as_data(tmp_path, monkeypatch, argv):
+    executable = tmp_path / "installed" / "codex"
+    executable.parent.mkdir()
+    executable.write_text("unused")
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: str(executable))
+    assert real_cli_in(argv, {}, (tmp_path / "allowed",)) is None
 
 
 def test_hook_url_is_not_mistaken_for_a_cli_executable(tmp_path):

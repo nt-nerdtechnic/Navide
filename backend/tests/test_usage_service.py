@@ -2831,12 +2831,7 @@ async def test_poll_never_mints_tokens_and_reads_slots_as_stored(
                             windows=[us._window("session", "Session", 10, None)])
 
     monkeypatch.setattr(us, "fetch_claude", fake_claude)
-    for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
-                 "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(
-            us, f"fetch_{name}",
-            lambda *a, _p=name, **k: _no_creds(_p),
-        )
+    _stub_non_claude_fetchers(monkeypatch)
 
     svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
     payload = await svc.poll_once(tmp_path)
@@ -2875,12 +2870,7 @@ async def test_a_parked_account_keeps_its_last_reading_marked_stale(
                             windows=[us._window("session", "Session", 40, None)])
 
     monkeypatch.setattr(us, "fetch_claude", fake_claude)
-    for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
-                 "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(
-            us, f"fetch_{name}",
-            lambda *a, _p=name, **k: _no_creds(_p),
-        )
+    _stub_non_claude_fetchers(monkeypatch)
 
     svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
     first = await svc.poll_once(tmp_path)  # `one` measured while active
@@ -2934,12 +2924,7 @@ async def test_poll_delegates_refresh_when_the_active_token_expired(
                             windows=[us._window("session", "Session", 10, None)])
 
     monkeypatch.setattr(us, "fetch_claude", fake_claude)
-    for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
-                 "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(
-            us, f"fetch_{name}",
-            lambda *a, _p=name, **k: _no_creds(_p),
-        )
+    _stub_non_claude_fetchers(monkeypatch)
 
     svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
     await svc.poll_once(tmp_path)
@@ -2984,12 +2969,7 @@ async def test_poll_leaves_an_expired_parked_slot_to_the_switch(
                             windows=[us._window("session", "Session", 10, None)])
 
     monkeypatch.setattr(us, "fetch_claude", fake_claude)
-    for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
-                 "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(
-            us, f"fetch_{name}",
-            lambda *a, _p=name, **k: _no_creds(_p),
-        )
+    _stub_non_claude_fetchers(monkeypatch)
 
     svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
     await svc.poll_once(tmp_path)
@@ -3074,10 +3054,12 @@ async def _no_creds(provider: str) -> dict:
 def _stub_non_claude_fetchers(monkeypatch) -> None:
     for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
                  "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(
-            us, f"fetch_{name}",
-            lambda *a, _p=name, **k: _no_creds(_p),
-        )
+        stub = lambda *a, _p=name, **k: _no_creds(_p)  # noqa: E731
+        monkeypatch.setattr(us, f"fetch_{name}", stub)
+        # The poll calls each vendor's `fetch_usage`, which late-binds the
+        # fetcher in its own module: patching only the re-export above left
+        # antigravity reading the real macOS Keychain.
+        monkeypatch.setattr(f"agent_team_backend.cli_vendors.{name}.fetch_{name}", stub)
 
 
 async def test_a_costly_failed_read_waits_the_full_read_interval(tmp_path, monkeypatch):
@@ -3279,9 +3261,7 @@ async def test_a_switch_during_a_poll_does_not_get_undone_by_that_poll(
                             windows=[us._window("session", "Session", 40, None)])
 
     monkeypatch.setattr(us, "fetch_claude", fake_claude)
-    for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
-                 "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(us, f"fetch_{name}", lambda *a, _p=name, **k: _no_creds(_p))
+    _stub_non_claude_fetchers(monkeypatch)
 
     payload = await svc.poll_once(tmp_path)
 
@@ -3313,9 +3293,7 @@ async def test_an_unresolvable_ledger_clears_a_mark_it_can_never_answer(
                             windows=[us._window("session", "Session", 40, None)])
 
     monkeypatch.setattr(us, "fetch_claude", fake_claude)
-    for name in ("codex", "kimi", "grok", "antigravity", "opencode", "qwen",
-                 "kilo", "pi", "copilot", "cursor"):
-        monkeypatch.setattr(us, f"fetch_{name}", lambda *a, _p=name, **k: _no_creds(_p))
+    _stub_non_claude_fetchers(monkeypatch)
 
     svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
     svc.enabled = True
