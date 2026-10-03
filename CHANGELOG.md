@@ -32,6 +32,7 @@ All notable released changes to Navide will be documented in this file. The form
 - The pane overview counts panes on offline devices as not opened.
 - Onboarding no longer offers to install tools it already found.
 - A Channels confirmation prompt that fails to reach the chat is retried; turning third-party backends off always stops them, even if the setting cannot be saved.
+- **Answering CLI questions from a chat no longer gets stuck**: a wrong option number or a stale screen keeps the question answerable; each new question or permission prompt is posted in turn, including after the previous answer or an expired one; a bare `1`, `yes` or `no` answers the only open prompt, and other text gets an immediate hint instead of waiting in a queue; multi-select and free-text choices, and CLIs Navide cannot answer for, ask you to answer at the computer instead of showing buttons that do nothing; a plain question at the end of a turn no longer adds a misleading "needs confirmation" message.
 - Tokens from a resumed session are attributed to the pane that ran them.
 - A CLI that leaves a child process holding its output no longer hangs the check Navide runs before opening a pane, and the leftover process is cleaned up (#143).
 - Droid sessions on Windows are found in the folder Droid actually uses (#142).

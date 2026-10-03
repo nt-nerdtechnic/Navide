@@ -134,9 +134,9 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': 'チャットのバインド時は、チャットを選んでから送信内容を確認し「接続」を押します。現在の選択がはっきり表示されます。',
       },
       {
-        'zh-TW': '同一個平台可以設定多個 bot：每個 bot 有自己的白名單與配對，綁定時依 bot 分組選擇聊天室；原本的 bot 自動成為主要 bot，不用重新登入。',
-        'en-US': 'Run several bots on one platform: each bot has its own allowlist and pairing, and the bind menu groups chats by bot. Your existing bot becomes the main bot without signing in again.',
-        'ja-JP': '1 つのプラットフォームで複数のボットを使えるようになりました。ボットごとに許可リストとペアリングを持ち、バインド時はボットごとにチャットを選べます。既存のボットはメインボットとして引き継がれ、再ログインは不要です。',
+        'zh-TW': '同一個平台可以設定多個 bot：每個 bot 有自己的白名單與配對，綁定時依 bot 分組選擇聊天室；原本的 bot 自動成為主要 bot，不用重新登入。在聊天室回答 CLI 的提問也不再卡住：答錯可以再答、下一題會接著推，直接回「1」或「yes」也算數。',
+        'en-US': 'Run several bots on one platform: each bot has its own allowlist and pairing, and the bind menu groups chats by bot. Your existing bot becomes the main bot without signing in again. Answering CLI questions from a chat no longer gets stuck: a wrong answer can be retried, the next question follows, and a bare "1" or "yes" counts.',
+        'ja-JP': '1 つのプラットフォームで複数のボットを使えるようになりました。ボットごとに許可リストとペアリングを持ち、バインド時はボットごとにチャットを選べます。既存のボットはメインボットとして引き継がれ、再ログインは不要です。チャットから CLI の質問に答えても止まらなくなりました。間違えても答え直せ、次の質問も続けて届き、「1」や「yes」だけでも回答になります。',
       },
       {
         'zh-TW': '其他：Marketplace 評分與檢舉、Windows 存檔與大量檔案變動不再卡住、超大專案的 Git 狀態不再卡住、Keychain 讀取更正確、中文使用者資料夾的 Windows hook 恢復正常。',
