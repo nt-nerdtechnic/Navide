@@ -351,6 +351,33 @@ class TestStageUnstage:
         assert status["staged"] == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status",
+        [
+            {"ok": False, "error": "git timed out"},
+            {"is_git_repo": True, "staged": [], "truncated": True},
+        ],
+        ids=["failed", "truncated"],
+    )
+    async def test_unstage_stale_retry_needs_a_complete_status(
+        self, tmp_path, monkeypatch, status
+    ):
+        # The stale-path retry trusts the re-read status to say what is still
+        # staged; a failed or truncated read must not turn the failure into
+        # success while staged.txt stays staged (#144).
+        init_repo(tmp_path)
+        (tmp_path / "staged.txt").write_text("new")
+        subprocess.run(["git", "add", "staged.txt"], cwd=tmp_path, check=True, capture_output=True)
+
+        async def fake_status(*_args, **_kwargs):
+            return status
+
+        monkeypatch.setattr(git_service, "get_status", fake_status)
+        result = await git_service.unstage_files(str(tmp_path), ["gone.txt", "staged.txt"])
+        assert result["ok"] is False, result
+        assert "did not match any file" in result["error"]
+
+    @pytest.mark.asyncio
     async def test_unstage_still_reports_other_errors(self, tmp_path):
         # Only the stale-pathspec case is absorbed; anything else must surface.
         result = await git_service.unstage_files(str(tmp_path), ["a.txt"])  # not a repo

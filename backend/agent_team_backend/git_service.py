@@ -2645,6 +2645,9 @@ async def unstage_files(workspace_path: str, files: list[str]) -> dict[str, Any]
     if "did not match any file" not in stderr:
         return {"ok": False, "error": stderr}
     status = await get_status(workspace_path)
+    # A failed or truncated read cannot say which paths are still staged.
+    if not isinstance(status.get("is_git_repo"), bool) or status.get("truncated"):
+        return {"ok": False, "error": stderr}
     staged_paths = {f["path"] for f in status.get("staged", [])}
     remaining = [f for f in files if f in staged_paths]
     if not remaining:
