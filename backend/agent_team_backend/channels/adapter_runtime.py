@@ -37,6 +37,12 @@ WS_PING_TIMEOUT_S = 20.0
 # Max number of 429 / connect-failure retries for one request.
 SEND_MAX_RETRIES = 3
 
+# How long a connection must stay ready before its drop restarts the backoff
+# series. Shorter-lived sessions (connect, then dropped at once) keep backing
+# off, or a server that accepts and closes would be retried at the first step
+# forever.
+READY_STABLE_S = 60.0
+
 # How long a stop waits for a cancelled receive task before cancelling it again.
 CANCEL_RETRY_S = 0.5
 
@@ -81,6 +87,7 @@ class ReceiveLoop:
         *,
         stall_s: float = STALL_WATCHDOG_S,
         delay: Callable[[int], float] | None = None,
+        stable_s: float = READY_STABLE_S,
     ) -> None:
         self.name = name
         self.status = status
@@ -89,14 +96,16 @@ class ReceiveLoop:
         self._delay = delay or (lambda attempt: backoff_delay(attempt, random.random()))
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
-        self._was_ready = False
+        self.stable_s = stable_s
+        self._ready_at: float | None = None
         self._last_activity = time.monotonic()
 
     def touch(self) -> None:
         self._last_activity = time.monotonic()
 
     def mark_ready(self, identity: str = "") -> None:
-        self._was_ready = True
+        if self._ready_at is None:
+            self._ready_at = time.monotonic()
         self.status.lifecycle = "ready"
         self.status.connected = True
         self.status.reconnect_attempts = 0
@@ -144,7 +153,7 @@ class ReceiveLoop:
     async def _run(self) -> None:
         attempt = 0
         while not self._stopping:
-            self._was_ready = False
+            self._ready_at = None
             try:
                 await self._run_watched()
                 if self._stopping:
@@ -166,8 +175,9 @@ class ReceiveLoop:
             except Exception as exc:  # noqa: BLE001 - every drop reconnects
                 if self._stopping:
                     break
-                # A connection that reached ready starts a fresh backoff series.
-                attempt = 1 if self._was_ready else attempt + 1
+                # Only a connection that stayed ready starts a fresh backoff series.
+                stable = self._ready_at is not None and time.monotonic() - self._ready_at >= self.stable_s
+                attempt = 1 if stable else attempt + 1
                 self.status.connected = False
                 self.status.lifecycle = "recovering"
                 self.status.reconnect_attempts = attempt

@@ -33,3 +33,48 @@ async def test_stop_ends_the_loop_even_if_a_cancel_is_swallowed() -> None:
     assert done, "stop() did not return"
     assert time.monotonic() - started < 2
     assert swallowed and loop.status.lifecycle == "stopped"
+
+async def test_a_connection_that_drops_right_after_ready_keeps_backing_off() -> None:
+    # Matrix, Feishu, DingTalk and iMessage mark ready as soon as they connect.
+    # A server that accepts and then drops at once must not pin the loop to the
+    # first-step delay forever.
+    attempts: list[int] = []
+
+    async def connect_once() -> None:
+        loop.mark_ready()
+        raise ConnectionError("dropped")
+
+    def delay(attempt: int) -> float:
+        attempts.append(attempt)
+        if len(attempts) >= 4:
+            loop._stopping = True
+        return 0.0
+
+    loop = ReceiveLoop("test", AdapterStatus(), connect_once, delay=delay, stable_s=10.0)
+    loop.start()
+    await asyncio.wait_for(loop._task, timeout=3)
+    assert attempts == [1, 2, 3, 4]
+
+
+async def test_a_connection_that_stayed_up_starts_a_fresh_backoff_series() -> None:
+    attempts: list[int] = []
+    runs: list[int] = []
+
+    async def connect_once() -> None:
+        runs.append(1)
+        loop.mark_ready()
+        if len(runs) == 3:
+            await asyncio.sleep(0.05)  # longer than stable_s: a healthy session
+        raise ConnectionError("dropped")
+
+    def delay(attempt: int) -> float:
+        attempts.append(attempt)
+        if len(attempts) >= 4:
+            loop._stopping = True
+        return 0.0
+
+    loop = ReceiveLoop("test", AdapterStatus(), connect_once, delay=delay, stable_s=0.02)
+    loop.start()
+    await asyncio.wait_for(loop._task, timeout=3)
+    assert attempts == [1, 2, 1, 2]
+
