@@ -202,3 +202,13 @@ async def test_a_second_quick_add_of_the_same_bot_does_not_break_the_first(env: 
     assert not second["ok"] and second["reason"] == "invalid"
     assert ("telegram", ACCOUNT) in env.store.accounts()
     assert env.m.adapter_for("telegram", ACCOUNT).status.lifecycle == "ready"
+
+
+async def test_a_bot_that_did_not_start_is_not_reported_added(env: Env, monkeypatch) -> None:
+    # Channels turned off between the check and the configure: nothing ran, nothing verified.
+    _login_as(env, "ready")
+    answers = iter([True])
+    monkeypatch.setattr(env.store, "global_enabled", lambda: next(answers, False))
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT)
+    assert not res["ok"] and res["reason"] == "invalid"
+    _no_trace(env)

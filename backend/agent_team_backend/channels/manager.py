@@ -544,7 +544,10 @@ class ChannelManager:
                     await self._discard_bot(platform, account)
                 return {"ok": False, "reason": "invalid", "error": result.get("error") or "configure failed"}
             adapter = self._adapters.get(bot)
-            failure = await self._await_first_login(bot, adapter) if adapter is not None else None
+            if adapter is None:  # stored but never started (channels turned off meanwhile): unverified
+                await self._discard_bot(platform, account)
+                return {"ok": False, "reason": "invalid", "error": "the bot did not start"}
+            failure = await self._await_first_login(bot, adapter)
             if failure is not None:
                 await self._discard_bot(platform, account)
                 return {"ok": False, **failure}
@@ -556,7 +559,7 @@ class ChannelManager:
             raise
         finally:
             self._quick_adding.discard(bot)
-        identity = adapter.status.identity if adapter is not None else ""
+        identity = adapter.status.identity
         async with self._lock:
             acct = self.store.accounts().get(bot)
             if acct is not None and not acct["config"].get("name") and identity:
