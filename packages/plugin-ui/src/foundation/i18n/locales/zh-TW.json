@@ -9205,6 +9205,23 @@
       "remove-ask": "要移除這個 bot 嗎？透過它連接的 {n} 個 pane 會中斷連接。"
     },
     "manage": "管理",
+    "quick": {
+      "add": "快速新增",
+      "verifying": "驗證中…",
+      "advanced": "進階",
+      "rejected": "{platform} 拒絕了這組憑證：{error}",
+      "timeout": "{platform} 沒有及時回應，請檢查網路後再試一次。（{error}）",
+      "step": {
+        "verifying": "驗證中",
+        "opening": "開啟 {platform} 中",
+        "waiting-start": "等待你在 App 按「開始」",
+        "waiting-paste": "等待你在 App 貼上連結碼",
+        "done": "完成"
+      },
+      "copied-code": "已複製連結碼：在 {platform} 貼給 bot 並送出。",
+      "slack-manifest": "用範本建立 Slack App",
+      "slack-manifest-hint": "接著在 Basic Information 建立具 connections:write 的 App-level token，把 App 安裝到工作區，再把兩個 token 貼到這裡。"
+    },
     "connect": "連接",
     "needs": "需要：{fields}",
     "imessage-note": "不需要 token，僅限 macOS。",

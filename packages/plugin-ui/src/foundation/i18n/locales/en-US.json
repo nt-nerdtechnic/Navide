@@ -9205,6 +9205,23 @@
       "remove-ask": "Remove this bot? {n} pane(s) connected through it will be disconnected."
     },
     "manage": "Manage",
+    "quick": {
+      "add": "Quick add",
+      "verifying": "Verifying…",
+      "advanced": "Advanced",
+      "rejected": "{platform} rejected the credential: {error}",
+      "timeout": "{platform} did not answer in time. Check the network and try again. ({error})",
+      "step": {
+        "verifying": "Verifying",
+        "opening": "Opening {platform}",
+        "waiting-start": "Waiting for you to tap Start in the app",
+        "waiting-paste": "Waiting for you to paste the link code in the app",
+        "done": "Done"
+      },
+      "copied-code": "The link code is copied: paste it to the bot in {platform} and send it.",
+      "slack-manifest": "Create the Slack app from a template",
+      "slack-manifest-hint": "Then, under Basic Information, create an app-level token with connections:write, install the app to your workspace, and paste both tokens here."
+    },
     "connect": "Connect",
     "needs": "Needs: {fields}",
     "imessage-note": "No token needed. macOS only.",

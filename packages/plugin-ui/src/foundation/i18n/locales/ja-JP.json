@@ -9205,6 +9205,23 @@
       "remove-ask": "この bot を削除しますか？この bot 経由で接続している {n} 個の pane は切断されます。"
     },
     "manage": "管理",
+    "quick": {
+      "add": "クイック追加",
+      "verifying": "確認中…",
+      "advanced": "詳細設定",
+      "rejected": "{platform} が認証情報を拒否しました：{error}",
+      "timeout": "{platform} から時間内に応答がありませんでした。ネットワークを確認して再試行してください。（{error}）",
+      "step": {
+        "verifying": "確認中",
+        "opening": "{platform} を開いています",
+        "waiting-start": "アプリで「開始」を押すのを待っています",
+        "waiting-paste": "アプリでリンクコードを貼り付けるのを待っています",
+        "done": "完了"
+      },
+      "copied-code": "リンクコードをコピーしました。{platform} で bot に貼り付けて送信してください。",
+      "slack-manifest": "テンプレートから Slack アプリを作成",
+      "slack-manifest-hint": "次に Basic Information で connections:write を持つ App-level token を作成し、アプリをワークスペースにインストールして、両方のトークンをここに貼り付けてください。"
+    },
     "connect": "接続",
     "needs": "必要なもの：{fields}",
     "imessage-note": "トークン不要。macOS のみ。",
