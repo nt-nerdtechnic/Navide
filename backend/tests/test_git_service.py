@@ -591,6 +591,59 @@ class TestDiscardChanges:
         assert not (tmp_path / "junk.txt").exists()
 
     @pytest.mark.asyncio
+    async def test_discard_without_a_status_read_touches_nothing(self, tmp_path, monkeypatch):
+        # Discard splits paths into "restore" and "delete" by the status read;
+        # without one it must refuse rather than guess (#144).
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("modified")
+        (tmp_path / "junk.txt").write_text("junk")
+
+        async def failed(*_args, **_kwargs):
+            return {"ok": False, "error": "git timed out"}
+
+        monkeypatch.setattr(git_service, "get_status", failed)
+        result = await git_service.discard_changes(str(tmp_path), ["README.md", "junk.txt"])
+        assert result == {"ok": False, "error": "git timed out"}
+        assert (tmp_path / "README.md").read_text() == "modified"
+        assert (tmp_path / "junk.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_discard_past_a_truncated_status_touches_nothing(self, tmp_path, monkeypatch):
+        # A truncated status lists only some paths; one it never reached is
+        # neither known tracked nor known untracked, so nothing is discarded.
+        init_repo(tmp_path)
+        (tmp_path / "listed.txt").write_text("listed")
+        (tmp_path / "beyond.txt").write_text("beyond")
+        real = git_service.get_status
+
+        async def truncated(*args, **kwargs):
+            status = await real(*args, **kwargs)
+            status["untracked"] = [e for e in status["untracked"] if e["path"] == "listed.txt"]
+            status["truncated"] = True
+            return status
+
+        monkeypatch.setattr(git_service, "get_status", truncated)
+        result = await git_service.discard_changes(str(tmp_path), ["listed.txt", "beyond.txt"])
+        assert result["ok"] is False
+        assert "beyond.txt" in result["error"]
+        assert (tmp_path / "listed.txt").exists()
+        assert (tmp_path / "beyond.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_discard_within_a_truncated_status_still_works(self, tmp_path, monkeypatch):
+        init_repo(tmp_path)
+        (tmp_path / "junk.txt").write_text("junk")
+        real = git_service.get_status
+
+        async def truncated(*args, **kwargs):
+            return {**(await real(*args, **kwargs)), "truncated": True}
+
+        monkeypatch.setattr(git_service, "get_status", truncated)
+        result = await git_service.discard_changes(str(tmp_path), ["junk.txt"])
+        assert result["ok"] is True, result
+        assert not (tmp_path / "junk.txt").exists()
+
+    @pytest.mark.asyncio
     async def test_discard_empty_list(self, tmp_path):
         init_repo(tmp_path)
         result = await git_service.discard_changes(str(tmp_path), [])
@@ -2521,6 +2574,19 @@ class TestGenerateCommitMessage:
         result = await git_service.generate_commit_message(str(tmp_path), "http://x")
         assert result["ok"] is False
         assert result["error"] == "no changes"
+
+    @pytest.mark.asyncio
+    async def test_failed_status_is_reported_not_read_as_no_changes(self, tmp_path, monkeypatch):
+        # A status read that failed has no change list to describe (#144).
+        init_repo(tmp_path)
+        (tmp_path / "new.txt").write_text("brand new")
+
+        async def failed(*_args, **_kwargs):
+            return {"ok": False, "error": "git timed out"}
+
+        monkeypatch.setattr(git_service, "get_status", failed)
+        result = await git_service.generate_commit_message(str(tmp_path), "http://x")
+        assert result == {"ok": False, "error": "git timed out", "message": ""}
 
     @pytest.mark.asyncio
     async def test_generates_from_staged(self, tmp_path, monkeypatch):

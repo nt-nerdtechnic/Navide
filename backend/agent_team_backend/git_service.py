@@ -1189,7 +1189,22 @@ async def discard_changes(workspace_path: str, files: list[str]) -> dict[str, An
         return {"ok": True}
     # Separate untracked vs tracked: untracked can't use git restore
     status = await get_status(workspace_path)
+    # Untracked paths are deleted, so the split needs a complete status read:
+    # refuse rather than guess when the read failed or stopped short (#144).
+    if not isinstance(status.get("is_git_repo"), bool):
+        return {"ok": False, "error": status.get("error") or "git status failed"}
     untracked_paths = {f["path"] for f in status.get("untracked", [])}
+    if status.get("truncated"):
+        listed = untracked_paths | {
+            f["path"] for f in status.get("staged", []) + status.get("unstaged", [])
+        }
+        unlisted = [f for f in files if f not in listed]
+        if unlisted:
+            return {
+                "ok": False,
+                "error": "git status was truncated; cannot tell how to discard: "
+                + ", ".join(unlisted[:5]),
+            }
     to_restore = [f for f in files if f not in untracked_paths]
     to_delete = [f for f in files if f in untracked_paths]
 
@@ -3198,6 +3213,8 @@ async def get_commit_context(workspace_path: str) -> dict[str, Any]:
     repo with no HEAD yet), and the file's unified ``diff``.
     """
     status = await get_status(workspace_path)
+    if not isinstance(status.get("is_git_repo"), bool):
+        return {"ok": False, "error": status.get("error") or "git status failed", "changes": []}
     staged = status.get("staged") or []
     if staged:
         entries = [(e["path"], e["status"], True) for e in staged]
@@ -3306,6 +3323,8 @@ async def generate_commit_message(
     """
     start = time.monotonic()
     context = await get_commit_context(workspace_path)
+    if context.get("ok") is False:
+        return {"ok": False, "error": context["error"], "message": ""}
     if not context["changes"]:
         return {"ok": False, "error": "no changes", "message": ""}
 
