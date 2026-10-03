@@ -23,10 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from .db import DB_FILENAME, WorkspaceDatabases
+from .path_guard import PROJECT_DIR_NAME
 
 log = logging.getLogger("agent_team_backend.projects")
 
-PROJECT_DIR_NAME = ".agent-team"
 PROJECT_FILE = "project.json"  # legacy JSON name, still used for import
 RUNS_SUBDIR = "runs"
 _KV_KEY = "project"
