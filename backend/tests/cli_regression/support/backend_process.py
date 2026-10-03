@@ -7,6 +7,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import uuid
@@ -74,14 +75,28 @@ class BackendProcess:
         return self
 
     def _discovery_url(self) -> str | None:
-        # File creation precedes write completion. Only attempt the real
-        # authenticated handshake after both discovery values are available.
+        # File creation precedes write completion, so the port is validated
+        # before use. The token is read only once that port is listening: the
+        # backend mints it before it serves, so a listening port means the file
+        # is final. Any earlier, the read can land inside the token's
+        # os.replace, which Windows refuses with a sharing violation (EACCES).
+        # The app reads it the same way, after /health answers.
         try:
             port = (self.root / "data" / "backend-port").read_text().strip()
+        except FileNotFoundError:
+            return None
+        if not port.isdecimal() or not 1 <= int(port) <= 65535:
+            return None
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
+                pass
+        except OSError:
+            return None
+        try:
             token = (self.root / "data" / "backend-ws-token").read_text().strip()
         except FileNotFoundError:
             return None
-        if not port.isdecimal() or not 1 <= int(port) <= 65535 or not token:
+        if not token:
             return None
         return f"ws://127.0.0.1:{port}/ws?t={token}"
 

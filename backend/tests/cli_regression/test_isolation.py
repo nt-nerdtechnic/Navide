@@ -1,6 +1,7 @@
 """Isolation policy tests execute guards in disposable interpreters."""
 import asyncio
 import json
+import socket
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -369,14 +370,32 @@ def test_readiness_waits_for_discovery_file_contents(tmp_path):
     backend = BackendProcess(tmp_path)
     port = tmp_path / "data" / "backend-port"
     token = tmp_path / "data" / "backend-ws-token"
-    assert backend._discovery_url() is None
-    port.touch()
-    token.touch()
-    assert backend._discovery_url() is None
-    port.write_text("12345")
-    assert backend._discovery_url() is None
-    token.write_text("fixture-token")
-    assert backend._discovery_url() == "ws://127.0.0.1:12345/ws?t=fixture-token"
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        number = listener.getsockname()[1]
+        assert backend._discovery_url() is None
+        port.touch()
+        token.touch()
+        assert backend._discovery_url() is None
+        port.write_text(str(number))
+        assert backend._discovery_url() is None
+        token.write_text("fixture-token")
+        assert backend._discovery_url() == f"ws://127.0.0.1:{number}/ws?t=fixture-token"
+
+
+def test_readiness_does_not_read_the_token_before_the_port_listens(tmp_path):
+    """The backend mints the token before it serves; until it listens, the
+    token may still be mid-os.replace, which Windows refuses to open."""
+    backend = BackendProcess(tmp_path)
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))  # bound, never listening
+        number = reserved.getsockname()[1]
+        (tmp_path / "data" / "backend-port").write_text(str(number))
+        # A directory in the token's place fails any read, so returning None
+        # here proves the read was never attempted.
+        (tmp_path / "data" / "backend-ws-token").mkdir()
+        assert backend._discovery_url() is None
 
 
 @pytest.mark.parametrize("exit_kind", ["clean", "crash"])
