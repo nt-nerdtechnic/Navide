@@ -14014,3 +14014,189 @@ describe('third-party workspace filesystem (real package bridge, port and grant 
     }
   })
 })
+
+describe('agent capability requests the Host cannot serve', () => {
+  type SentMessage = { id: string; type: string; payload: Record<string, unknown> }
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+  }
+
+  function connectHost(id: string, registered: boolean): {
+    mgr: FrontendPluginManager
+    socket: InstanceType<typeof wsMock.FakeNodeWebSocket>
+  } {
+    const mgr = new FrontendPluginManager()
+    mgr.open(
+      asHost(new FakeBrowserWindow()),
+      { id, requires: ['terminal'], devUrl: '', entryFile: `/plugins/${id}/index.html` },
+      { x: 0, y: 0, width: 10, height: 10 },
+    )
+    mgr.setBackendHostToken('host-token')
+    mgr.setBackendWsUrl(`ws://${id}`)
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    if (registered) {
+      const registration = sentOf(socket).find((message) => message.type === 'host.register')!
+      socket.receive({
+        id: registration.id,
+        type: 'host.register',
+        ok: true,
+        payload: { registered: true },
+        error: null,
+        timestamp: '',
+      })
+    }
+    return { mgr, socket }
+  }
+
+  function sentOf(socket: InstanceType<typeof wsMock.FakeNodeWebSocket>): SentMessage[] {
+    return socket.sent.map((raw) => JSON.parse(raw) as SentMessage)
+  }
+
+  function resultsOf(socket: InstanceType<typeof wsMock.FakeNodeWebSocket>): SentMessage[] {
+    return sentOf(socket).filter((message) => message.type === 'agent.capability.result')
+  }
+
+  function request(socket: InstanceType<typeof wsMock.FakeNodeWebSocket>, payload: unknown): void {
+    socket.receive({ type: 'agent.capability.request', payload })
+  }
+
+  const legacyRequest = (requestId: string): Record<string, unknown> => ({
+    request_id: requestId,
+    instance_id: 'missing-instance',
+    operation: 'capability',
+    payload: { reqId: 'inner', ns: 'fs', method: 'read', args: {} },
+  })
+
+  it('answers a malformed request with BAD_REQUEST instead of staying silent', async () => {
+    const { socket } = connectHost('acme.agent-malformed', true)
+    await flush()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, { request_id: 'req-malformed', operation: 'capability' })
+      await flush()
+
+      const results = resultsOf(socket)
+      expect(results).toHaveLength(1)
+      expect(results[0].payload).toEqual({
+        request_id: 'req-malformed',
+        response: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'BAD_REQUEST' }) }),
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('req-malformed'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('logs a malformed request without a request id and sends nothing', async () => {
+    const { socket } = connectHost('acme.agent-malformed-no-id', true)
+    await flush()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, ['not', 'an', 'object'])
+      await flush()
+
+      expect(resultsOf(socket)).toHaveLength(0)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('[plugin-backend]'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('answers BACKEND_UNAVAILABLE when the Host session is not registered', async () => {
+    const { socket } = connectHost('acme.agent-unregistered', false)
+    await flush()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, legacyRequest('req-unregistered'))
+      await flush()
+
+      const results = resultsOf(socket)
+      expect(results).toHaveLength(1)
+      expect(results[0].payload).toEqual({
+        request_id: 'req-unregistered',
+        response: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'BACKEND_UNAVAILABLE' }) }),
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('req-unregistered'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('logs and answers the requesting client when it is no longer the current one', async () => {
+    const { mgr } = connectHost('acme.agent-stale', true)
+    await flush()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const staleSend = vi.fn(() => Promise.reject(new Error('ws not open')))
+    try {
+      await (mgr as unknown as {
+        handleAgentCapabilityRequest: (client: unknown, payload: unknown) => Promise<void>
+      }).handleAgentCapabilityRequest({ send: staleSend }, legacyRequest('req-stale'))
+
+      expect(staleSend).toHaveBeenCalledOnce()
+      expect(staleSend).toHaveBeenCalledWith(
+        'agent.capability.result',
+        {
+          request_id: 'req-stale',
+          response: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'BACKEND_UNAVAILABLE' }) }),
+        },
+        10_000,
+      )
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('req-stale'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('logs and answers with an error when the session lapses while the request runs', async () => {
+    const { mgr, socket } = connectHost('acme.agent-lapsed', true)
+    await flush()
+    let finish!: (response: unknown) => void
+    const execute = vi.spyOn(mgr, 'executeAgentCapability').mockImplementation(
+      () => new Promise((settle) => { finish = settle as (response: unknown) => void }),
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, legacyRequest('req-lapsed'))
+      await flush()
+      expect(execute).toHaveBeenCalledOnce()
+
+      // A token change drops the registration while the call is in flight.
+      mgr.setBackendHostToken('rotated-token')
+      finish({ reqId: 'inner', ok: true, result: { secret: 'must not leave' } })
+      await flush()
+
+      const results = resultsOf(socket)
+      expect(results).toHaveLength(1)
+      expect(results[0].payload).toEqual({
+        request_id: 'req-lapsed',
+        response: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'BACKEND_UNAVAILABLE' }) }),
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('req-lapsed'))
+    } finally {
+      warn.mockRestore()
+      execute.mockRestore()
+    }
+  })
+
+  it('still answers a well-formed request on the current client exactly once', async () => {
+    const { socket } = connectHost('acme.agent-normal', true)
+    await flush()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, legacyRequest('req-normal'))
+      await flush()
+
+      const results = resultsOf(socket)
+      expect(results).toHaveLength(1)
+      expect(results[0].payload).toEqual({
+        request_id: 'req-normal',
+        response: { reqId: 'inner', ok: false, error: { code: 'BAD_REQUEST', message: 'unknown plugin instance' } },
+      })
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

@@ -34,6 +34,7 @@ import {
   HOST_EVENT_SOURCE_PLUGIN_ID,
   HOST_USER_INITIATOR,
   type CapabilityCall,
+  type CapabilityErrorCode,
   type CapabilityResponse,
   type AuthenticatedRuntimeBinding,
   type AuthenticatedInitiator,
@@ -7676,9 +7677,34 @@ export class FrontendPluginManager {
   }
 
   private async handleAgentCapabilityRequest(client: WsClient, payload: unknown): Promise<void> {
-    if (this.wsClient !== client || !this.hostSessionRegistered) return
-    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return
-    const record = payload as Record<string, unknown>
+    const record: Record<string, unknown> =
+      typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : {}
+    // Every request the Host will not serve is logged and, when it carries a
+    // request id, answered at once — otherwise the MCP waiter sits out its
+    // full timeout with nothing to explain why.
+    const refuse = (code: CapabilityErrorCode, reason: string): Promise<void> => {
+      const requestId = nonEmptyString(record.request_id) ? record.request_id : null
+      console.warn(`[plugin-backend] agent capability request ${requestId ?? '(no request_id)'} not served: ${reason}`)
+      if (requestId === null) return Promise.resolve()
+      const inner = record.payload
+      const reqId =
+        typeof inner === 'object' && inner !== null && !Array.isArray(inner) &&
+        typeof (inner as Record<string, unknown>).reqId === 'string'
+          ? (inner as Record<string, unknown>).reqId as string
+          : ''
+      return client.send(
+        'agent.capability.result',
+        { request_id: requestId, response: buildError(reqId, code, reason) },
+        10_000,
+      ).then(() => undefined, () => {
+        // The requesting client may already be closed; the log above stands.
+      })
+    }
+    if (this.wsClient !== client || !this.hostSessionRegistered) {
+      return refuse('BACKEND_UNAVAILABLE', 'Host backend session is not registered')
+    }
     const legacyRequest =
       Object.keys(record).length === 4 &&
       Object.keys(record).every((key) => ['request_id', 'instance_id', 'operation', 'payload'].includes(key)) &&
@@ -7698,7 +7724,9 @@ export class FrontendPluginManager {
       Object.keys(record.target).length === 2 &&
       nonEmptyString((record.target as Record<string, unknown>).plugin_id) &&
       nonEmptyString((record.target as Record<string, unknown>).workspace_path)
-    if (!legacyRequest && !workspaceRequest) return
+    if (!legacyRequest && !workspaceRequest) {
+      return refuse('BAD_REQUEST', 'agent capability request is malformed')
+    }
 
     const response = legacyRequest
       ? record.operation === 'capability'
@@ -7709,7 +7737,9 @@ export class FrontendPluginManager {
         (record.target as Record<string, unknown>).workspace_path as string,
         record.payload,
       )
-    if (this.wsClient !== client || !this.hostSessionRegistered) return
+    if (this.wsClient !== client || !this.hostSessionRegistered) {
+      return refuse('BACKEND_UNAVAILABLE', 'Host backend session lapsed while the request ran')
+    }
     await client.send(
       'agent.capability.result',
       { request_id: record.request_id, response },
