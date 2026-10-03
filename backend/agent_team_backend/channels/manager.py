@@ -175,6 +175,14 @@ class _Pending:
 
 
 @dataclass
+class _Shown:
+    """The awaiting prompt a pane last showed its chat."""
+
+    prompt: str
+    request_id: str = ""  # its live relay id; "" for a notice, or once answered
+
+
+@dataclass
 class _Worker:
     jobs: deque[Callable[[], Awaitable[None]]] = field(default_factory=deque)
     task: asyncio.Task[None] | None = None
@@ -226,6 +234,8 @@ class ChannelManager:
         self._known_panes: set[str] = set()
         self._awaiting_posted: set[str] = set()
         self._awaiting_failures: dict[str, int] = {}
+        self._awaiting_shown: dict[str, _Shown] = {}
+        self._awaiting_busy: set[str] = set()  # panes whose prompt is being read or relayed
         self._turn_source: dict[str, str] = {}
         self.mirror = Mirror(self)
 
@@ -817,6 +827,7 @@ class ChannelManager:
         self.relay.expire_pane(pane_id)
         self._awaiting_posted.discard(pane_id)
         self._awaiting_failures.pop(pane_id, None)
+        self._awaiting_shown.pop(pane_id, None)
         self._spawn(self._send_reply(pending, str(entry.get("text") or "")))
 
     def _mirror_unclaimed_turn(self, pane_id: str, text: str) -> None:
@@ -1073,6 +1084,11 @@ class ChannelManager:
             result = {"ok": False, "error": str(exc)}
         if result.get("ok"):
             self.relay.take(request.id)  # used up only once the keys went in
+            shown = self._awaiting_shown.get(request.pane_id)
+            if shown is not None and shown.request_id == request.id:
+                shown.request_id = ""  # answered: only a different prompt is relayed next
+            route = self.mirror.route(request.pane_id)
+            self._spawn(self._follow_up(request.pane_id, request.loc, route.child if route else ""))
             await self._reply(msg, f"✅ 已送出：{relay.describe_answer(payload)}")
         else:
             await self._reply(msg, f"⚠️ 送出失敗：{result.get('error') or 'not sent'}")
@@ -1265,20 +1281,22 @@ class ChannelManager:
                 except Exception:  # noqa: BLE001
                     pending.status_id = ""
         next_typing = next_edit = next_probe = self._clock()
+        capped = False
         while self._pending.get(pane_id) is pending:
             now = self._clock()
-            if now - pending.started >= RUN_WATCH_MAX_S:
+            if not capped and now - pending.started >= RUN_WATCH_MAX_S:
                 # No turn end in sight (crashed pane, missed event): stop the
                 # indicators but keep the pending so a late turn_complete still replies.
+                # The awaiting probe goes on: a prompt can outlive its relay id.
+                capped = True
                 await self._edit_status(adapter, pending, MSG_STILL_RUNNING, force=True)
-                return
-            if caps.typing and not pending.quiet and now >= next_typing:
+            if not capped and caps.typing and not pending.quiet and now >= next_typing:
                 next_typing = now + TYPING_EVERY_S
                 try:
                     await adapter.send_typing(pending.loc)
                 except Exception:  # noqa: BLE001
                     pass
-            if caps.edit and not pending.quiet and pending.status_id and now >= next_edit:
+            if not capped and caps.edit and not pending.quiet and pending.status_id and now >= next_edit:
                 next_edit = now + STATUS_EDIT_EVERY_S
                 await self._edit_status(adapter, pending, f"{MSG_WORKING}（{int(now - pending.started)}s）")
             if now >= next_probe:
@@ -1307,32 +1325,68 @@ class ChannelManager:
             pending.awaiting_posted = False
             self._awaiting_posted.discard(pane_id)
             self._awaiting_failures.pop(pane_id, None)
+            self._awaiting_shown.pop(pane_id, None)
             return
         if pending.awaiting_posted or pane_id in self._awaiting_posted:
+            # Still awaiting: a follow-up question or an expired id is relayed again.
+            await self._post_awaiting(pane_id, pending.loc, pending.child, only_if_changed=True)
             return
         pending.awaiting_posted = True
         self._awaiting_posted.add(pane_id)
         await self._post_awaiting(pane_id, pending.loc, pending.child)
 
-    async def _post_awaiting(self, pane_id: str, loc: Location, child: str = "") -> None:
-        """Relay a pane's permission/question to ``loc`` (always pushed, whoever started the turn)."""
+    async def _post_awaiting(self, pane_id: str, loc: Location, child: str = "", *,
+                             only_if_changed: bool = False) -> None:
+        """Relay a pane's permission/question to ``loc`` (always pushed, whoever started the turn).
+
+        ``only_if_changed``: the pane's prompt was relayed already; post again only when
+        the screen shows a different prompt or the posted id ran out unanswered."""
+        if pane_id in self._awaiting_busy:
+            return  # a probe and a status change raced: one relay is enough
+        self._awaiting_busy.add(pane_id)
+        try:
+            await self._relay_awaiting(pane_id, loc, child, only_if_changed)
+        finally:
+            self._awaiting_busy.discard(pane_id)
+
+    async def _follow_up(self, pane_id: str, loc: Location, child: str) -> None:
+        """After an answer, relay the pane's next prompt even with no run probing it."""
+        await asyncio.sleep(AWAITING_PROBE_EVERY_S)
+        if self._seams.pane_state(pane_id).get("display_status") == "awaiting":
+            await self._post_awaiting(pane_id, loc, child, only_if_changed=True)
+
+    async def _relay_awaiting(self, pane_id: str, loc: Location, child: str, only_if_changed: bool) -> None:
         adapter = self._adapters.get((loc.platform, loc.account))
-        if adapter is None:
+        if only_if_changed:
+            shown = self._awaiting_shown.get(pane_id)
+            if adapter is None or shown is None:
+                return  # still being relayed, or given up on
+            try:
+                info = await self._seams.awaiting_info(pane_id)
+            except Exception:  # noqa: BLE001
+                return  # the next probe looks again
+            expired = bool(shown.request_id) and self.relay.get(shown.request_id) is None
+            if relay.same_prompt(str(info.get("prompt") or ""), shown.prompt) and not expired:
+                return
+        elif adapter is None:
             self._awaiting_failed(pane_id, "not connected")
             return
-        try:
-            info = await self._seams.awaiting_info(pane_id)
-        except Exception as exc:  # noqa: BLE001
-            if self._awaiting_failures.get(pane_id, 0) + 1 < AWAITING_RETRY_MAX:
-                self._awaiting_failed(pane_id, f"awaiting_info: {exc}")
-                return
-            info = {}  # last attempt: a generic prompt beats none
+        else:
+            try:
+                info = await self._seams.awaiting_info(pane_id)
+            except Exception as exc:  # noqa: BLE001
+                if self._awaiting_failures.get(pane_id, 0) + 1 < AWAITING_RETRY_MAX:
+                    self._awaiting_failed(pane_id, f"awaiting_info: {exc}")
+                    return
+                info = {}  # last attempt: a generic prompt beats none
+        prompt = str(info.get("prompt") or "")
         kind = str(info.get("kind") or "") or "permission"
         options = [str(o) for o in (info.get("options") or [])]
         if kind == "question" and not options:
             # A plain-text question at turn end: the turn's text already reached the
             # chat, and a typed reply goes in like any message.
             self._awaiting_failures.pop(pane_id, None)
+            self._awaiting_shown[pane_id] = _Shown(prompt)
             return
         # Claude's AskUserQuestion reports "permission"; the options tell them apart.
         if options:
@@ -1340,19 +1394,19 @@ class ChannelManager:
         who = f"↳ {child} " if child else ""
         if not info.get("answerable", True):
             # No keys Navide could press for this vendor: buttons would only fail.
-            await self._send_awaiting(pane_id, loc, who + MSG_AWAITING_LOCAL)
+            await self._send_awaiting(pane_id, loc, prompt, who + MSG_AWAITING_LOCAL)
             return
         if any(relay.is_multi_select(o) for o in options):
             # Toggling a box is one key, submitting is more: nothing to relay safely.
-            prompt = str(info.get("prompt") or "").strip()
-            lines = [f"{who}⏸ pane 需要確認（question）", *([prompt] if prompt else []), relay.COMPUTER_ONLY]
-            await self._send_awaiting(pane_id, loc, "\n".join(lines))
+            lines = [f"{who}⏸ pane 需要確認（question）", *([prompt.strip()] if prompt.strip() else []),
+                     relay.COMPUTER_ONLY]
+            await self._send_awaiting(pane_id, loc, prompt, "\n".join(lines))
             return
         if not self._relay_enabled(loc.platform, loc.account):
             await self._notice(adapter, loc, f"{who}⏸ pane 等待確認（{kind}）")
+            self._awaiting_shown[pane_id] = _Shown(prompt)
             return
         self.relay.expire_pane(pane_id)  # one live request per pane
-        prompt = str(info.get("prompt") or "")
         request = self.relay.create(pane_id, kind, options, loc, prompt=prompt)
         text = who + relay.prompt_text(request, prompt)
         buttons = relay.buttons_for(request) if adapter.capabilities.buttons else None
@@ -1364,9 +1418,11 @@ class ChannelManager:
             self._awaiting_failed(pane_id, str(exc))
             return
         self._awaiting_failures.pop(pane_id, None)
+        self._awaiting_shown[pane_id] = _Shown(prompt, request.id)
 
-    async def _send_awaiting(self, pane_id: str, loc: Location, text: str) -> None:
+    async def _send_awaiting(self, pane_id: str, loc: Location, prompt: str, text: str) -> None:
         """An awaiting notice with nothing to answer, retried like a relay prompt."""
+        self.relay.expire_pane(pane_id)  # an earlier prompt's id no longer applies
         try:
             await self.mirror.send(loc, text, owner=pane_id)
         except Exception as exc:  # noqa: BLE001
@@ -1374,6 +1430,7 @@ class ChannelManager:
             self._awaiting_failed(pane_id, str(exc))
             return
         self._awaiting_failures.pop(pane_id, None)
+        self._awaiting_shown[pane_id] = _Shown(prompt)
 
     def _awaiting_failed(self, pane_id: str, why: str) -> None:
         """An awaiting prompt did not reach the chat: unmark it so the next probe or
@@ -1398,6 +1455,7 @@ class ChannelManager:
             pending.task.cancel()
         self._awaiting_posted.discard(pane_id)
         self._awaiting_failures.pop(pane_id, None)
+        self._awaiting_shown.pop(pane_id, None)
 
 
 def _check_platform(platform: str) -> None:

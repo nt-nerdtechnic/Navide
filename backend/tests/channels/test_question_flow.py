@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 
 from .test_manager import (  # noqa: F401 — fixtures and helpers shared with the manager suite
-    Env, _awaiting, _relay_id, _until, _until_relay_prompt, env, fast_timers,
+    Env, _awaiting, _relay_id, _until, _until_relay_prompt, clocked, env, fast_timers,
 )
 
 
@@ -144,3 +144,48 @@ async def test_a_free_text_row_is_not_offered(env: Env) -> None:
     assert "Type something" not in text and "自由輸入的選項需要在電腦上操作" in text
     await env.inbound(f"3 {rid}")
     assert env.fake.answers == [] and env.tg.texts()[-1] == "⚠️ 請回覆有效的選項編號"
+
+
+# --- F2: the next question, and a prompt whose id ran out, reach the chat ---------------
+
+
+async def test_the_second_question_is_relayed_after_the_first_is_answered(env: Env) -> None:
+    rid = await _question(env, ["Red", "Blue"], prompt="Q1: which color?")
+    await env.inbound(f"1 {rid}")
+    assert env.tg.texts()[-1] == "✅ 已送出：選項 1"
+    env.fake.prompt, env.fake.options = "Q2: which size?", ["Small", "Large"]  # still awaiting
+    await _until(lambda: any("Q2: which size?" in t for t in _prompts(env)))
+    rid2 = _relay_id(env)
+    assert rid2 != rid
+    await env.inbound(f"2 {rid2}")
+    assert env.fake.answers[-1] == ("pane-1", {"kind": "question", "option": 2})
+
+
+async def test_consecutive_permission_prompts_are_each_relayed(env: Env) -> None:
+    env.fake.options = ["Yes", "Yes, and don't ask again", "No"]
+    env.fake.prompt = "Allow Bash(npm test)?"
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    await env.inbound(f"yes {_relay_id(env)}")
+    env.fake.prompt = "Allow Bash(npm run lint)?"
+    await _until(lambda: any("npm run lint" in t for t in _prompts(env)))
+    await env.inbound(f"yes {_relay_id(env)}")
+    assert [a for _, a in env.fake.answers] == [{"kind": "permission", "choice": "allow"}] * 2
+
+
+async def test_an_answered_prompt_still_on_screen_is_not_posted_again(env: Env) -> None:
+    rid = await _question(env, ["Keep", "Discard"])
+    await env.inbound(f"1 {rid}")
+    await asyncio.sleep(0.2)  # the screen has not redrawn yet: same prompt, still awaiting
+    assert len(_prompts(env)) == 1
+
+
+async def test_a_prompt_is_relayed_again_after_its_id_expires(clocked) -> None:
+    env, clock = clocked
+    await _awaiting(env)
+    clock.t += 1
+    await _until_relay_prompt(env)
+    rid = _relay_id(env)
+    clock.t += 1801  # past the relay TTL and the run watch, still awaiting
+    await _until(lambda: len(_prompts(env)) == 2)
+    assert _relay_id(env) != rid and len(env.m.relay._by_id) == 1

@@ -528,15 +528,19 @@ class Mirror:
         """A pane's display status changed (sync): relay a new awaiting prompt, or drop a stale one."""
         state = self.m._seams.pane_state(pane_id)
         if state.get("display_status") == "awaiting":
-            if pane_id in self.m._awaiting_posted:
-                return
             route = self.route(pane_id)
+            if pane_id in self.m._awaiting_posted:
+                if route is not None:  # relayed already: only a different prompt goes again
+                    self.m._spawn(self.m._post_awaiting(pane_id, route.binding.location(), route.child,
+                                                        only_if_changed=True))
+                return
             # At "replies" only a turn the chat started relays its prompt (_check_awaiting).
             if route is not None and shows(route.binding.verbosity, "minimal"):
                 self.m._awaiting_posted.add(pane_id)
                 self.m._spawn(self.m._post_awaiting(pane_id, route.binding.location(), route.child))
         else:
             self.m._awaiting_failures.pop(pane_id, None)
+            self.m._awaiting_shown.pop(pane_id, None)
             pending = self.m._pending.get(pane_id)
             if pending is not None:
                 pending.awaiting_posted = False  # else the next prompt looks already relayed

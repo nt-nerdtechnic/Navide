@@ -575,8 +575,8 @@ async def test_running_watch_is_capped_but_late_reply_still_sent(clocked) -> Non
     await _until(lambda: MSG_WORKING in env.tg.texts())
     pending = env.m._pending["pane-1"]
     clock.t += mgr_mod.RUN_WATCH_MAX_S + 1
-    await _until(lambda: pending.task.done())
-    assert env.tg.edits[-1][1] == mgr_mod.MSG_STILL_RUNNING
+    # The task lives on to probe for an awaiting prompt; only the indicators stop.
+    await _until(lambda: env.tg.edits and env.tg.edits[-1][1] == mgr_mod.MSG_STILL_RUNNING)
     typing, edits = env.tg.typing, len(env.tg.edits)
     clock.t += 60
     await asyncio.sleep(0.1)
