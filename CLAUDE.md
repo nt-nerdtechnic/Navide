@@ -68,6 +68,12 @@ When a plan exists or was explicitly requested:
    later. The user saying "開始" means: set `stage: approved` + `approvedAt`,
    then start.
 4. Legacy `.cursor/plans/*.plan.md` stay readable; never create new ones.
+5. **One topic, one plan document.** When a dispatched pane finishes work that
+   already has a plan, write the delivery report *into that plan* (a "Delivery"
+   section, the todo statuses, a review note) and move its stage to `done`.
+   Do not create a separate "delivery report" plan file. Create a new plan
+   document only for a topic that has none. Proposal-plus-report pairs doubled
+   the library (29 → 305 files in a month).
 
 ## Language
 
