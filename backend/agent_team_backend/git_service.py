@@ -207,10 +207,12 @@ def _git_proc_semaphore() -> asyncio.Semaphore:
     return sem
 
 
-async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
+async def _run(
+    args: list[str], cwd: str, env: dict[str, str] | None = None
+) -> tuple[int, str, str]:
     """Run a git command; return (returncode, stdout, stderr)."""
     async with _git_proc_semaphore():
-        rc, stdout, stderr = await run_allowlisted_text(args, cwd, timeout=15.0)
+        rc, stdout, stderr = await run_allowlisted_text(args, cwd, timeout=15.0, env=env)
     return rc, stdout, stderr
 
 
@@ -332,10 +334,18 @@ async def _read_status(workspace_path: str, include_ignored: bool) -> dict[str, 
     if not workspace_path or not Path(workspace_path).is_dir():
         return asdict(GitStatus(is_git_repo=False))
 
-    # Verify it's a git repo
-    rc, _, _ = await _run(["git", "rev-parse", "--is-inside-work-tree"], workspace_path)
+    # Verify it's a git repo. Only git's own answer means "not a repo": a check
+    # that timed out or could not start is a failure to report (#144). The C
+    # locale keeps that answer in English whatever the user's language.
+    rc, _, err = await _run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        workspace_path,
+        env={**os.environ, "LC_ALL": "C"},
+    )
     if rc != 0:
-        return asdict(GitStatus(is_git_repo=False))
+        if "not a git repository" in err:
+            return asdict(GitStatus(is_git_repo=False))
+        return {"ok": False, "error": err.strip() or f"git rev-parse exited with {rc}"}
 
     status = GitStatus(is_git_repo=True)
 

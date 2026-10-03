@@ -50,6 +50,34 @@ class TestGetStatus:
         assert result["is_git_repo"] is False
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rc, err", [(128, "git timed out"), (127, "git not found")], ids=["timeout", "missing"]
+    )
+    async def test_repo_check_that_cannot_run_is_an_error_not_a_non_repo(
+        self, tmp_path, monkeypatch, rc, err
+    ):
+        # A rev-parse that timed out or never ran says nothing about the repo;
+        # reporting "not a git repo" hides the failure and sends the UI into a
+        # repository discovery walk (#144).
+        init_repo(tmp_path)
+
+        async def failing(args, cwd, env=None):
+            return rc, "", err
+
+        monkeypatch.setattr(git_service, "_run", failing)
+        result = await git_service.get_status(str(tmp_path))
+        assert result == {"ok": False, "error": err}
+
+    @pytest.mark.asyncio
+    async def test_non_git_dir_under_a_translated_locale(self, tmp_path, monkeypatch):
+        # Telling "not a repository" from other failures reads git's message,
+        # which a translated locale would reword.
+        monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+        monkeypatch.setenv("LANGUAGE", "de")
+        result = await git_service.get_status(str(tmp_path))
+        assert result["is_git_repo"] is False
+
+    @pytest.mark.asyncio
     async def test_clean_repo(self, tmp_path):
         init_repo(tmp_path)
         result = await git_service.get_status(str(tmp_path))
