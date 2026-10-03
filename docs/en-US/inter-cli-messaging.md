@@ -921,6 +921,8 @@ credentials, not API keys or other secrets in prompts or results.
 | Mattermost | WebSocket API | a thread (`root_id`) | yes | yes | no |
 | iMessage (macOS) | local `chat.db` + AppleScript | a conversation | no | no | no |
 
+Messages are not fetched on a timer: Telegram and Matrix hold a 30-second long poll that returns as soon as something arrives, the WebSocket platforms keep their connection open, and iMessage reads `chat.db` every second, so a message reaches its pane almost at once while connected. A dropped connection reconnects on its own after about 5 seconds, doubling each time up to 10 minutes (±20% jitter); a connection that stayed up for a minute starts again from 5 seconds, and a Telegram 409 conflict starts at about 40 seconds. Messages sent while Navide is closed are picked up after a restart on Telegram and Matrix, which resume from a saved position; other platforms are not guaranteed to deliver them.
+
 Platforms that need a public webhook (LINE, Teams, WhatsApp Cloud, SMS) are out of scope.
 
 ### Setting up

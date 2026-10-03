@@ -766,6 +766,8 @@ Agent 不必有 Messages 面板可看，也能讀到同一個原因 ——
 | Mattermost | WebSocket API | thread（`root_id`） | 有 | 有 | 無 |
 | iMessage（macOS） | 本機 `chat.db`＋AppleScript | 一個對話 | 無 | 無 | 無 |
 
+收訊不是定時輪詢：Telegram 與 Matrix 掛著 30 秒的長輪詢、訊息一到就回，WebSocket 類平台保持常駐連線，iMessage 每秒讀一次 `chat.db`，所以連線正常時訊息幾乎即時送進 pane。斷線會自動重連，約 5 秒後第一次重試，之後每次加倍、最長 10 分鐘（±20% 抖動）；連線維持過一分鐘的，下次斷線從 5 秒重新算起；Telegram 的 409 衝突從約 40 秒起跳。Navide 關閉期間傳來的訊息，Telegram 與 Matrix 會從保存的位置續接、在重開後補收；其他平台不保證。
+
 需要公網 webhook 的平台（LINE、Teams、WhatsApp Cloud、SMS）不在範圍內。
 
 ### 設定

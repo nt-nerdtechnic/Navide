@@ -472,6 +472,7 @@ const logRows = computed(() => [
     <section class="cmh-section">
       <h2 class="cmh-h2">{{ $t('settings.help.messaging.channels.title', channelLabels) }}</h2>
       <p class="cmh-p" v-html="$t('settings.help.messaging.channels.p1', channelLabels)"></p>
+      <p class="cmh-p">{{ $t('settings.help.messaging.channels.receive') }}</p>
 
       <h3 class="cmh-h3">{{ $t('settings.help.messaging.channels.h1') }}</h3>
       <ul class="cmh-list">

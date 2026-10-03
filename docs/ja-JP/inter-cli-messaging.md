@@ -887,6 +887,8 @@ MCP の `cli_send` から、あるいは別の Machine から中継されたも�
 | Mattermost | WebSocket API | スレッド（`root_id`） | あり | あり | なし |
 | iMessage（macOS） | ローカル `chat.db`＋AppleScript | 1 つの会話 | なし | なし | なし |
 
+受信は定期的なポーリングではありません。Telegram と Matrix は 30 秒のロングポーリングで待ち受けて届いた時点で返り、WebSocket 系のプラットフォームは接続を張り続け、iMessage は `chat.db` を毎秒読み取るため、接続中はメッセージがほぼ即座に pane に届きます。切断されると約 5 秒後に自動で再接続し、その後は待ち時間を倍にしながら最大 10 分まで延ばします（±20% のゆらぎあり）。1 分以上続いた接続が切れた場合は再び 5 秒から数え直し、Telegram の 409 競合は約 40 秒から始まります。Navide を閉じている間に送られたメッセージは、Telegram と Matrix では保存した位置から再開して再起動後に受信されます。その他のプラットフォームでは保証されません。
+
 公開 webhook が必要なプラットフォーム（LINE、Teams、WhatsApp Cloud、SMS）は対象外です。
 
 ### 設定

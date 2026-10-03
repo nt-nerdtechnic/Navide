@@ -4092,6 +4092,7 @@
         "channels": {
           "title": "從聊天軟體跟 agent 對話（{nav}）",
           "p1": "{nav} 把 Telegram、Discord、Slack、飛書、釘釘、Matrix、Mattermost、iMessage 接到 CLI 面板，讓你在手機上也能跟 agent 說話。<strong>一個聊天只綁一個面板</strong>，綁定與解除都會在那個聊天裡公告。",
+          "receive": "收訊不是定時輪詢：Telegram 與 Matrix 用長輪詢，其他平台保持常駐連線，iMessage 每秒讀一次這台 Mac 的訊息資料庫，所以連線正常時訊息幾乎即時送達。斷線會自動重連，第一次約 5 秒後，之後每次等待加倍、最長 10 分鐘。Navide 關閉期間傳來的訊息，Telegram 與 Matrix 會在重開後補收；其他平台不保證。",
           "h1": "設定 bot",
           "setup": {
             "global": "設定 ▸ {nav} 最上面是總開關「{global}」。",

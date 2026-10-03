@@ -4092,6 +4092,7 @@
         "channels": {
           "title": "Talking to agents from a chat app ({nav})",
           "p1": "{nav} bridges Telegram, Discord, Slack, Feishu, DingTalk, Matrix, Mattermost and iMessage to CLI panes, so you can talk to an agent from your phone. <strong>A chat binds to one pane</strong>, and binding and unbinding are announced in that chat.",
+          "receive": "Messages are not fetched on a timer: Telegram and Matrix use long polling, the other platforms keep a connection open, and iMessage reads this Mac's message database every second, so a message arrives almost at once while connected. A dropped connection reconnects by itself, first after about 5 seconds, then waiting twice as long each time, up to 10 minutes. Messages sent while Navide is closed are picked up after a restart on Telegram and Matrix; other platforms are not guaranteed to deliver them.",
           "h1": "Setting up bots",
           "setup": {
             "global": "At the top of Settings ▸ {nav} is the master switch, \"{global}\".",
