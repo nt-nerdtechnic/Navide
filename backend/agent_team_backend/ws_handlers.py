@@ -9913,7 +9913,20 @@ async def agent_msg_register_dock(session: "Session", msg_id: str, msg_type: str
             make_error(msg_id, msg_type, "FORBIDDEN", "that pane id belongs to a window pane, not a panel")
         )
         return
-    await agent_msg_register(session, msg_id, msg_type, payload)
+    # A panel another live window holds is that window's to rename or move;
+    # one whose window disconnected (no owner) may be reclaimed by its reload.
+    holder = agent_messaging.owner_of(pane_id) if pane_id else None
+    if holder is not None and holder is not session:
+        await session.send_json(
+            make_error(msg_id, msg_type, "FORBIDDEN", "that panel is held by another window")
+        )
+        return
+    # Only the fields a panel describes itself with. `former_pane_ids` would
+    # alias other pane ids to this entry — a window pane's CLI would then act
+    # as the panel and its push channel would move here — and `spawned_by`
+    # would claim a parent; neither is something a panel ever has.
+    allowed = ("pane_id", "name", "workspace_path", "agent_key", "realized", "surface", "window_kind")
+    await agent_msg_register(session, msg_id, msg_type, {k: payload[k] for k in allowed if k in payload})
 
 
 @handler("agent_msg.unregister_dock")

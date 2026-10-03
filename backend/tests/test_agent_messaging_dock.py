@@ -196,3 +196,72 @@ async def test_unregister_dock_removes_only_a_panel() -> None:
         "id": "u2", "type": "agent_msg.unregister_dock", "payload": {"pane_id": "d1"},
     })
     assert agent_messaging.get("d1") is None
+
+
+@pytest.mark.asyncio
+async def test_register_dock_cannot_alias_a_window_pane_id() -> None:
+    """former_pane_ids would make a window pane's CLI resolve as the panel."""
+    agent_messaging.register("p1", "reviewer", "/ws/alpha")
+    agent_messaging.unregister("p1")  # even an id no longer live
+    agent_messaging.register("p2", "builder", "/ws/alpha")
+    session = _session()
+    await app.handle_message(session, {
+        "id": "r6",
+        "type": "agent_msg.register_dock",
+        "payload": {
+            "pane_id": "d1",
+            "name": "git-claude",
+            "workspace_path": "/ws/alpha",
+            "surface": "git",
+            "former_pane_ids": ["p1", "p2"],
+            "spawned_by": "p2",
+        },
+    })
+    assert agent_messaging.current("p2").pane_id == "p2"  # type: ignore[union-attr]
+    assert agent_messaging.current("p1") is None
+    entry = agent_messaging.get("d1")
+    assert entry is not None and entry.spawned_by == ""
+
+
+@pytest.mark.asyncio
+async def test_register_dock_cannot_take_over_another_windows_panel() -> None:
+    owner_window, other_window = _session(), _session()
+    await app.handle_message(owner_window, {
+        "id": "r7",
+        "type": "agent_msg.register_dock",
+        "payload": {"pane_id": "d1", "name": "pm-claude", "workspace_path": "/ws/alpha", "surface": "pm"},
+    })
+    await app.handle_message(other_window, {
+        "id": "r8",
+        "type": "agent_msg.register_dock",
+        "payload": {"pane_id": "d1", "name": "evil", "workspace_path": "/ws/beta", "surface": "git"},
+    })
+    assert other_window.websocket.sent[-1]["error"]["code"] == "FORBIDDEN"  # type: ignore[attr-defined]
+    entry = agent_messaging.get("d1")
+    assert entry is not None and entry.name == "pm-claude"
+
+    # The owning window itself may re-register (rename / reconnect).
+    await app.handle_message(owner_window, {
+        "id": "r9",
+        "type": "agent_msg.register_dock",
+        "payload": {"pane_id": "d1", "name": "pm-claude-2", "workspace_path": "/ws/alpha", "surface": "pm"},
+    })
+    assert agent_messaging.get("d1").name == "pm-claude-2"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_a_panel_left_by_a_disconnected_window_can_be_reclaimed() -> None:
+    first, second = _session(), _session()
+    await app.handle_message(first, {
+        "id": "r10",
+        "type": "agent_msg.register_dock",
+        "payload": {"pane_id": "d1", "name": "pm-claude", "workspace_path": "/ws/alpha", "surface": "pm"},
+    })
+    agent_messaging.drop_owner(first)
+    await app.handle_message(second, {
+        "id": "r11",
+        "type": "agent_msg.register_dock",
+        "payload": {"pane_id": "d1", "name": "pm-claude", "workspace_path": "/ws/alpha", "surface": "pm"},
+    })
+    entry = agent_messaging.get("d1")
+    assert entry is not None and not entry.offline

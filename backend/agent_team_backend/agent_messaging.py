@@ -425,6 +425,12 @@ def resolve_alias(pane_id: str) -> str:
     return alias.pane_id if alias is not None else ""
 
 
+def owner_of(pane_id: str) -> Any:
+    """The WS connection currently mirroring ``pane_id``, or None when no live
+    window holds it (never registered, or its window disconnected)."""
+    return _OWNERS.get(pane_id)
+
+
 def current(pane_id: str) -> RegisteredPane | None:
     """The pane a possibly-superseded id names right now.
 
