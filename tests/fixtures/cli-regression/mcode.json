@@ -1,0 +1,29 @@
+{
+  "vendor": "mcode",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_mcode.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": null,
+  "expected": {
+    "tokens": [
+      0,
+      0
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [],
+    "response": [],
+    "complete": []
+  },
+  "binary": "mcode",
+  "resumeCommand": null,
+  "guardedEnvironment": [
+    "MINIMAX_DATA_DIR",
+    "MAVIS_DATA_DIR"
+  ],
+  "loginCommand": "mcode login"
+}

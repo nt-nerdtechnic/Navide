@@ -21,7 +21,7 @@ function body(startMarker: string, endMarker: string): string {
 
 describe('stage slot accounting is the shared tracker, not inline arithmetic', () => {
   it('registers, counts and releases through lib/stageTracker', () => {
-    expect(appSource).toContain("from './lib/stageTracker'")
+    expect(appSource).toMatch(/from '\.\/lib\/stageTracker'/)
     // No hand-rolled tracker literal left behind — that is how the release path
     // gets bypassed again.
     expect(appSource).not.toContain('done: new Set() })')
@@ -154,7 +154,7 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // compares a workspace with itself, because onWorkspaceBrowse has already
     // reassigned it to the one being entered.
     expect(call).not.toContain('pipeline.workspacePath')
-    expect(appSource).toContain("restoreBlockedByRun } from './lib/workspaceCloseRun'")
+    expect(appSource).toMatch(/restoreBlockedByRun } from '\.\/lib\/workspaceCloseRun'/)
   })
 
   it('writes the run identity only where a run becomes running, and clears it', () => {
@@ -248,7 +248,7 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // The identity comparison is the half that was missing, so neither side may
     // be dropped or handed the same expression twice.
     expect(call).not.toContain('runWorkspacePath: normWs(path)')
-    expect(appSource).toContain("from './lib/workspaceCloseRun'")
+    expect(appSource).toMatch(/from '\.\/lib\/workspaceCloseRun'/)
   })
 
   it('does not take the abort path that would re-adopt the closing workspace', () => {
@@ -329,14 +329,16 @@ describe('a slot that cannot spawn is dropped from the count', () => {
     // EACH guard, not "at least one of them somewhere in the function": a
     // whole-function toContain() is satisfied by whichever release happens to
     // come first, so deleting the other two left this green.
-    const guard = /if \(!paneAlive\(pane\.id\)\) \{/g
+    // The shared kickoff coordinator reports a pane lost during its retry
+    // delay as cancelled; it must release the same slot as direct guards.
+    const guard = /if \((?:!paneAlive\(pane\.id\)|kickoffResult\.cancelled)\) \{/g
     const blocks: string[] = []
     for (let m = guard.exec(fn); m !== null; m = guard.exec(fn)) {
       blocks.push(fn.slice(m.index, m.index + 200))
     }
     expect(blocks.length).toBeGreaterThanOrEqual(3)
     blocks.forEach((block, i) => {
-      expect(block, `paneAlive bail-out #${i + 1}`).toContain('releaseStageSlot(index, pane.id')
+      expect(block, `pane liveness bail-out #${i + 1}`).toContain('releaseStageSlot(index, pane.id')
     })
     expect(fn).not.toMatch(/if \(!paneAlive\(pane\.id\)\) return/)
     expect(fn).toContain("✕ role '${pane.roleKey}' not found")

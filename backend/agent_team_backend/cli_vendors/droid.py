@@ -481,6 +481,19 @@ DroidLogReader.binds_by_marker_file = True
 DroidLogReader.binds_new_session_single_candidate = True
 
 
+def _workspace_match(self, usage, ws_path, owner_workspace=None):
+    # Reader emits cwd = the session_start record's cwd (lastCwd preferred).
+    return bool(usage.cwd and usage.cwd == ws_path)
+
+
+def _pane_cwd_match(self, usage, pane_cwd, pane_id):
+    return usage.cwd == pane_cwd
+
+
+DroidLogReader.workspace_match = _workspace_match
+DroidLogReader.pane_cwd_match = _pane_cwd_match
+
+
 # ---- resume / session ------------------------------------------------------
 
 # `-r` and `--resume` are the same option (droid --help, 0.204.0).

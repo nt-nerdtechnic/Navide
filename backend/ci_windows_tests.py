@@ -114,6 +114,8 @@ def _kernel32():
     k.AssignProcessToJobObject.restype = wintypes.BOOL
     k.GetCurrentProcess.argtypes = []
     k.GetCurrentProcess.restype = wintypes.HANDLE
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.CloseHandle.restype = wintypes.BOOL
     return k
 
 
@@ -130,10 +132,14 @@ def _join_job():
     info.JobMemoryLimit = MAX_JOB_MEMORY
     if not k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)):
         print(f"--- job object: SetInformationJobObject failed ({ctypes.get_last_error()})")
+        if not k32.CloseHandle(job):
+            print(f"--- job object: CloseHandle failed ({ctypes.get_last_error()})")
         return None
     if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
         # Nested jobs need Windows 8+; the runner has that, but say so if not.
-        print(f"--- job object: AssignProcessToJobObject failed ({ctypes.get_last_error()}); running unjailed")
+        print(f"--- job object: AssignProcessToJobObject failed ({ctypes.get_last_error()})")
+        if not k32.CloseHandle(job):
+            print(f"--- job object: CloseHandle failed ({ctypes.get_last_error()})")
         return None
     print(f"--- job object: joined, kill-on-close, max {MAX_PROCESSES} processes, {MAX_JOB_MEMORY >> 30} GiB")
     return k32, job
@@ -192,7 +198,7 @@ def _detach() -> int:
             os.remove(stale)
         except OSError:
             pass
-    runner = _spawn_detached("--run", WRAPPER_LOG, *_shard_args())
+    runner = _spawn_detached("--run", WRAPPER_LOG, *_pytest_args())
     print(f"--- detached runner pid {runner.pid}; log in {WRAPPER_LOG}, marker {DONE}")
     return 0
 
@@ -211,11 +217,13 @@ def _spawn_detached(mode: str, log_path: str, *extra: str) -> subprocess.Popen:
 
 
 
-def _shard_args() -> list[str]:
-    """`--shard K/N` from our own argv, passed on as-is."""
-    if "--shard" not in sys.argv:
-        return []
-    return ["--shard", sys.argv[sys.argv.index("--shard") + 1]]
+def _pytest_args() -> list[str]:
+    """Forward suite selection and reports through both detached processes."""
+    args = []
+    for option in ("--shard", "--junitxml", "--collection-report"):
+        if option in sys.argv:
+            args.extend([option, sys.argv[sys.argv.index(option) + 1]])
+    return args
 
 
 def main() -> int:
@@ -224,16 +232,27 @@ def main() -> int:
     # stdout is a file: line-buffer it so the poller sees progress as it
     # happens, and never let one non-cp1252 byte from a test crash the report.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-    job = _join_job()
+    try:
+        job = _join_job()
+    except Exception as exc:  # noqa: BLE001
+        print(f"--- job object setup raised {type(exc).__name__}: {exc}", flush=True)
+        job = None
+    if job is None:
+        # This is a required CI isolation boundary. Emit a verdict now so the
+        # workflow fails promptly instead of waiting for its outer timeout.
+        print("--- pytest not started: required Job Object unavailable", flush=True)
+        with open(DONE, "w", encoding="ascii") as marker:
+            marker.write("1")
+        return 1
     args = [
         sys.executable, "-X", "faulthandler", "-m", "pytest", "backend/tests", "-v",
         "-p", "no:cacheprovider", "--timeout=90", "--timeout-method=thread",
-        "-o", "faulthandler_timeout=120", *_shard_args(),
+        "-o", "faulthandler_timeout=120", "--durations=30", *_pytest_args(),
     ]
     with open(LOG, "wb") as log:
         # close_fds restricts the child's handle list to exactly these three.
         child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True)
-    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s, {' '.join(_shard_args()) or 'no shard'}", flush=True)
+    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s, {' '.join(_pytest_args()) or 'no shard'}", flush=True)
 
     started = time.monotonic()
     rc: int | None = None
@@ -243,11 +262,11 @@ def main() -> int:
             break
         time.sleep(REPORT_EVERY)
         elapsed = int(time.monotonic() - started)
-        peers = _describe(_job_pids(job)) if job else "(no job)"
+        peers = _describe(_job_pids(job))
         vm = psutil.virtual_memory()
         print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}\n    vm: {vm.percent}% of {vm.total >> 20} MiB used, cpu {psutil.cpu_percent()}%, {len(psutil.pids())} processes\n    runner: {_runner_procs()}", flush=True)
 
-    survivors = [pid for pid in (_job_pids(job) if job else []) if pid != os.getpid()]
+    survivors = [pid for pid in _job_pids(job) if pid != os.getpid()]
     print(f"--- pytest exit: {rc if rc is not None else 'still running at cap'}")
     print(f"--- still in job: {_describe(survivors)}")
     for pid in survivors:

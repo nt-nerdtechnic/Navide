@@ -1,0 +1,96 @@
+import { describe, expect, it, vi } from 'vitest'
+import { createPaneSessionPersistence, createTurnTextGate, runPipelineKickoff } from '../../src/renderer/src/lib/cliCoordination'
+
+describe('frontend shared coordination regression', () => {
+  it('settles a successful kickoff immediately without sleeping', async () => {
+    const inject = vi.fn(async () => ({ injected: true, echo: 'tail' as const }))
+    const sleep = vi.fn(async () => {})
+    expect(await runPipelineKickoff({ inject, sleep, paneAlive: () => true })).toEqual({ sent: true, cancelled: false })
+    expect(inject).toHaveBeenCalledOnce()
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it('settles a successful retry without a third injection', async () => {
+    const inject = vi.fn().mockResolvedValueOnce({ injected: false, echo: null }).mockResolvedValue({ injected: true, echo: 'tail' })
+    const sleep = vi.fn(async () => {})
+    expect(await runPipelineKickoff({ inject, sleep, paneAlive: () => true })).toEqual({ sent: true, cancelled: false })
+    expect(inject).toHaveBeenCalledTimes(2)
+    expect(sleep.mock.calls).toEqual([[3000]])
+  })
+  it('does not resend a kickoff that reached the composer but failed to submit', async () => {
+    const inject = vi.fn(async () => ({ injected: false, echo: 'growth' as const }))
+    const sleep = vi.fn(async () => {})
+    expect(await runPipelineKickoff({ inject, sleep, paneAlive: () => true })).toEqual({ sent: false, cancelled: false })
+    expect(inject).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it('retries only empty failed injections and stops after three attempts', async () => {
+    const inject = vi.fn(async () => ({ injected: false, echo: null }))
+    const sleep = vi.fn(async () => {})
+    expect(await runPipelineKickoff({ inject, sleep, paneAlive: () => true })).toEqual({ sent: false, cancelled: false })
+    expect(inject).toHaveBeenCalledTimes(3)
+    expect(sleep.mock.calls).toEqual([[3000], [3000]])
+  })
+
+  it('cancels a retry when the pane disappears during the delay', async () => {
+    let alive = true
+    const inject = vi.fn(async () => ({ injected: false, echo: null }))
+    expect(await runPipelineKickoff({ inject, sleep: async () => { alive = false }, paneAlive: () => alive })).toEqual({ sent: false, cancelled: true })
+    expect(inject).toHaveBeenCalledTimes(1)
+  })
+
+  it('deduplicates epoch timestamps before dispatch and rejects older turns', () => {
+    const gate = createTurnTextGate()
+    expect(gate.accept('pane', 'first', '1757500000000')).toBe(true)
+    expect(gate.accept('pane', 'duplicate from watcher', '1757500000000')).toBe(false)
+    expect(gate.accept('pane', 'late', '1757499999999')).toBe(false)
+    expect(gate.accept('pane', 'next', '1757500000001')).toBe(true)
+  })
+
+  it('deduplicates unreadable timestamps by text independently per pane and clears teardown state', () => {
+    const gate = createTurnTextGate()
+    expect(gate.accept('a', 'same reply', 'unknown')).toBe(true)
+    expect(gate.accept('a', 'same reply', '')).toBe(false)
+    expect(gate.accept('b', 'same reply', '')).toBe(true)
+    expect(gate.accept('a', 'new reply', '')).toBe(true)
+    gate.delete('a')
+    expect(gate.accept('a', 'new reply', '')).toBe(true)
+  })
+
+  it('retries unconfirmed session writes after registration then caches only confirmation', async () => {
+    const persist = createPaneSessionPersistence()
+    const write = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true)
+    await persist('pane:session', write)
+    await persist('pane:session', write)
+    await persist('pane:session', write)
+    expect(write).toHaveBeenCalledTimes(2)
+  })
+
+  it('bounds a permanently missing session record at eight writes without suppressing other sessions', async () => {
+    const persist = createPaneSessionPersistence()
+    const write = vi.fn(async () => false)
+    for (let n = 0; n < 60; n++) await persist('pane:missing', write)
+    expect(write).toHaveBeenCalledTimes(8)
+    await persist('pane:other', write)
+    expect(write).toHaveBeenCalledTimes(9)
+  })
+
+  it('does not consume persistence attempts when the caller cannot locate a pipeline stage', async () => {
+    const persist = createPaneSessionPersistence()
+    const missingStage = vi.fn(async () => undefined)
+    for (let n = 0; n < 9; n++) await persist('pane:session', missingStage)
+    const write = vi.fn(async () => true)
+    await persist('pane:session', write)
+    expect(write).toHaveBeenCalledOnce()
+  })
+
+  it('allows a later activity event to retry a rejected persistence write', async () => {
+    const persist = createPaneSessionPersistence()
+    const write = vi.fn().mockRejectedValueOnce(new Error('disconnected')).mockResolvedValue(true)
+    await expect(persist('pane:session', write)).rejects.toThrow('disconnected')
+    await persist('pane:session', write)
+    await persist('pane:session', write)
+    expect(write).toHaveBeenCalledTimes(2)
+  })
+})

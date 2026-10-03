@@ -25,7 +25,7 @@ describe('llmNameRequested is released with the rest of the pane state', () => {
   it('deletes it alongside the other per-pane maps, not somewhere unrelated', () => {
     const body = functionBody('onKill')
     const guard = body.indexOf('llmNameRequested.delete(paneId)')
-    const msgProcessed = body.indexOf('paneMsgProcessedAt.delete(paneId)')
+    const msgProcessed = body.indexOf('turnTextGate.delete(paneId)')
     const prepStage = body.indexOf('prepStageEnteredAt.delete(paneId)')
     expect(msgProcessed).toBeGreaterThan(-1)
     expect(prepStage).toBeGreaterThan(-1)

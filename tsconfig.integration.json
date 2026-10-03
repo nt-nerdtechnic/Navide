@@ -5,6 +5,9 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true,
     "paths": {
+      "@navide/terminal": ["src/renderer/src/platform/terminal/index.ts"],
+      "@navide/terminal/testing": ["src/renderer/src/platform/terminal/testing.ts"],
+      "@navide/plugin-shell": ["src/renderer/src/platform/plugin-shell/index.ts"],
       "@navide/plugin-ui/file-picker": ["packages/plugin-ui/src/terminalFilePicker.ts"],
       "@navide/plugin-contracts": ["packages/plugin-contracts/src/index.ts"],
       "@navide/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
@@ -16,5 +19,5 @@
       "@navide/plugin-ui/foundation/*": ["packages/plugin-ui/src/foundation/*"]
     }
   },
-  "include": ["tests/integration/**/*.ts", "src/renderer/src/env.d.ts", "src/renderer/src/vue.d.ts"]
+  "include": ["tests/**/*.ts", "src/renderer/src/env.d.ts", "src/renderer/src/vue.d.ts"]
 }

@@ -1,0 +1,104 @@
+{
+  "vendor": "droid",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_droid.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.factory/sessions/${DROID_CWD}/12345678-1234-4234-8234-123456789abc.jsonl",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "session_start",
+            "id": "12345678-1234-4234-8234-123456789abc",
+            "cwd": "${WORKSPACE}"
+          },
+          {
+            "type": "message",
+            "id": "u1",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "${MARKER} work"
+                }
+              ]
+            }
+          }
+        ],
+        "append": false
+      }
+    ],
+    "response": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "message",
+            "id": "a1",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Regression reply: café 完成\n---MSG-END---"
+                }
+              ]
+            }
+          }
+        ],
+        "append": true
+      },
+      {
+        "kind": "json",
+        "path": "${HOME}/.factory/sessions/${DROID_CWD}/12345678-1234-4234-8234-123456789abc.settings.json",
+        "value": {
+          "model": "fixture",
+          "tokenUsage": {
+            "inputTokens": 10,
+            "cacheReadTokens": 1,
+            "cacheCreationTokens": 1,
+            "outputTokens": 3
+          }
+        }
+      }
+    ],
+    "complete": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "agent_turn_outcome",
+            "turnId": "turn1",
+            "reason": "completed",
+            "resultKind": "success",
+            "timestamp": "2026-09-29T10:00:00Z"
+          }
+        ],
+        "append": true
+      }
+    ]
+  },
+  "binary": "droid",
+  "resumeCommand": "droid --resume 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": [
+    "FACTORY_HOME_OVERRIDE",
+    "FACTORY_RUNTIME_SETTINGS_PATH",
+    "DROID_PARENT_SESSION_ID"
+  ]
+}

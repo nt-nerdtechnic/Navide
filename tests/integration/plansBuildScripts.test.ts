@@ -89,12 +89,10 @@ describe.skipIf(isWindows())('Plans backend build cache', () => {
 // The CI step under test is a /bin/sh script.
 describe.skipIf(isWindows())('production Plans CI fixture exclusion', () => {
   const workflow = parse(readFileSync('.github/workflows/ci.yml', 'utf8'))
-  const command = workflow.jobs.plans.steps.find((step: { name?: string }) => step.name === 'Verify production Plans bundle excludes fixture').run as string
+  const command = workflow.jobs['build-artifacts'].steps.find((step: { name?: string }) => step.name === 'Verify production Plans excludes fixtures').run as string
 
   function check(contamination?: 'extra' | 'replacement', fixtures = true): ReturnType<typeof spawnSync> {
     const root = fixture()
-    const pnpm = file(root, 'bin/pnpm', '#!/bin/sh\nexit 0\n')
-    chmodSync(pnpm, 0o755)
     file(root, 'dist-plugins/plans/index.html', '<html>Legacy</html>')
     file(root, 'dist-plugins/navide-plans/frontend/left/index.html', '<html>Plans</html>')
     file(root, 'dist-plugins/navide-plans/frontend/window/index.html', '<html>Plans window</html>')

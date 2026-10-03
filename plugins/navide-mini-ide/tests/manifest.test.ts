@@ -33,7 +33,7 @@ function expectMiniIdeManifest(directory: string, version?: string): void {
   expect(scanned.error).toBeUndefined()
   expect(scanned.descriptor).toMatchObject({
     id: 'navide.mini-ide', packageDir: directory,
-    entryFile: `${directory}/frontend/window/index.html`, devUrl: '',
+    entryFile: join(directory, 'frontend/window/index.html'), devUrl: '',
   })
 }
 

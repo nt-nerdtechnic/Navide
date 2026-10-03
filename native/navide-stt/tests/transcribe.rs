@@ -1,6 +1,6 @@
 //! End-to-end check of the JSON Lines protocol against the real binary.
-//! Needs a whisper model, so it only runs when NAVIDE_STT_TEST_MODEL points
-//! at one (e.g. ggml-base.bin). Optional: NAVIDE_STT_TEST_PCM (raw s16le mono
+//! Manual smoke: run with `--ignored` and NAVIDE_STT_TEST_MODEL pointing
+//! at a whisper model (e.g. ggml-base.bin). Optional: NAVIDE_STT_TEST_PCM (raw s16le mono
 //! 16 kHz; defaults to 1 s of silence) and NAVIDE_STT_TEST_EXPECT (a substring
 //! the transcript must contain).
 
@@ -10,11 +10,10 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 #[test]
+#[ignore = "manual model smoke: requires NAVIDE_STT_TEST_MODEL; run with --ignored"]
 fn transcribes_fixture_over_json_lines() {
-    let Ok(model) = std::env::var("NAVIDE_STT_TEST_MODEL") else {
-        eprintln!("NAVIDE_STT_TEST_MODEL not set; skipping");
-        return;
-    };
+    let model = std::env::var("NAVIDE_STT_TEST_MODEL")
+        .expect("manual transcription smoke requires NAVIDE_STT_TEST_MODEL");
     let pcm_path = match std::env::var("NAVIDE_STT_TEST_PCM") {
         Ok(path) => path,
         Err(_) => {

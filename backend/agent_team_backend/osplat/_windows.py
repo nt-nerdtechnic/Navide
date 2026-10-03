@@ -467,15 +467,24 @@ class WindowsProcessTree:
         try:
             root = psutil.Process(pid)
             children = root.children(recursive=True)
-            # Root first so it cannot fork replacements while the list dies.
-            root.kill()
         except psutil.Error as exc:
             raise _translate(exc) from None
+        # Root first so it cannot fork replacements while the list dies. It
+        # may exit after the snapshot; still signal every child we observed.
+        root_error: psutil.Error | None = None
+        try:
+            root.kill()
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error as exc:
+            root_error = exc
         for child in children:
             try:
                 child.kill()
             except psutil.Error:
                 pass
+        if root_error is not None:
+            raise _translate(root_error) from None
 
 
 def _stale_parent(

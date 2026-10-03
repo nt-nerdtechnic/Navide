@@ -389,16 +389,24 @@ def test_linux_and_windows_have_no_tail(tmp_path):
     assert _windows.paths.login_path_tail_fallbacks(tmp_path) == []
 
 
-# The merge itself, on the macOS lists, with a disk laid out per case. The
-# system dirs the prepend list names are put on the login PATH up front so the
-# merge skips them: otherwise the host's own /opt/homebrew/bin/node would win
-# and these would measure the machine, not the merge. Skipped where there is no
-# login-shell merge (Windows) — also where an extensionless fake would not run.
+# The merge itself, on the macOS lists, with a disk laid out per case. Mirror
+# system directories into the fixture: a real Homebrew CLI must not shadow a
+# fake nvm CLI just because the developer happens to have it installed.
+# Skipped where there is no login-shell merge or extensionless executable.
 
 
 def _merge_as_macos(monkeypatch, home, login_path, *, probe_ok=True):
+    def isolated(path):
+        source = Path(path)
+        if source.is_relative_to(home):
+            return path
+        target = home / "system" / source.relative_to(source.anchor)
+        target.mkdir(parents=True, exist_ok=True)
+        return str(target)
+
+    login_path = os.pathsep.join(isolated(path) for path in login_path.split(os.pathsep))
     monkeypatch.setattr(onboarding_deps, "_fallback_path_dirs",
-                        lambda: _darwin.paths.login_path_fallbacks(home))
+                        lambda: [isolated(path) for path in _darwin.paths.login_path_fallbacks(home)])
     monkeypatch.setattr(onboarding_deps, "_tail_path_dirs",
                         lambda: _darwin.paths.login_path_tail_fallbacks(home))
     monkeypatch.setenv("PATH", login_path)

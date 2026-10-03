@@ -1,0 +1,102 @@
+{
+  "vendor": "qwen",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_qwen.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.qwen/projects/${CLAUDE_CWD}/chats/12345678-1234-4234-8234-123456789abc.jsonl",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "user",
+            "uuid": "u1",
+            "sessionId": "12345678-1234-4234-8234-123456789abc",
+            "cwd": "${WORKSPACE}",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "${MARKER} work"
+                }
+              ]
+            }
+          }
+        ],
+        "append": false
+      }
+    ],
+    "response": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "assistant",
+            "uuid": "a1",
+            "sessionId": "12345678-1234-4234-8234-123456789abc",
+            "cwd": "${WORKSPACE}",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "assistant",
+              "parts": [
+                {
+                  "text": "Regression reply: café 完成\n---MSG-END---"
+                }
+              ]
+            },
+            "model": "fixture",
+            "usageMetadata": {
+              "promptTokenCount": 12,
+              "cachedContentTokenCount": 2,
+              "candidatesTokenCount": 2,
+              "thoughtsTokenCount": 1
+            }
+          }
+        ],
+        "append": true
+      }
+    ],
+    "complete": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "user",
+            "uuid": "u2",
+            "sessionId": "12345678-1234-4234-8234-123456789abc",
+            "cwd": "${WORKSPACE}",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "next"
+                }
+              ]
+            }
+          }
+        ],
+        "append": true
+      }
+    ]
+  },
+  "binary": "qwen",
+  "resumeCommand": "qwen --resume 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": [
+    "QWEN_HOME",
+    "QWEN_RUNTIME_DIR"
+  ]
+}

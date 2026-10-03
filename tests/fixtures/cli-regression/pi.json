@@ -1,0 +1,96 @@
+{
+  "vendor": "pi",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_pi.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.pi/agent/sessions/${PI_CWD}/2026-09-29T10-00-00-000Z_12345678-1234-4234-8234-123456789abc.jsonl",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "session",
+            "version": 3,
+            "id": "12345678-1234-4234-8234-123456789abc",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "cwd": "${WORKSPACE}"
+          },
+          {
+            "type": "message",
+            "id": "u1",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "user",
+              "content": "${MARKER} work"
+            }
+          }
+        ],
+        "append": false
+      }
+    ],
+    "response": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "message",
+            "id": "a1",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "assistant",
+              "model": "fixture",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Regression reply: café 完成\n---MSG-END---"
+                }
+              ],
+              "usage": {
+                "input": 10,
+                "cacheRead": 1,
+                "cacheWrite": 1,
+                "output": 3
+              }
+            }
+          }
+        ],
+        "append": true
+      }
+    ],
+    "complete": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "message",
+            "id": "u2",
+            "timestamp": "2026-09-29T10:00:00Z",
+            "message": {
+              "role": "user",
+              "content": "next"
+            }
+          }
+        ],
+        "append": true
+      }
+    ]
+  },
+  "binary": "pi",
+  "resumeCommand": "pi --session-id 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": [
+    "PI_CODING_AGENT_DIR",
+    "PI_CODING_AGENT_SESSION_DIR"
+  ]
+}

@@ -575,7 +575,9 @@ class CodexLogReader(LogReader):
         """
         out: list[ActivityEvent] = []
         session_id = path.stem
-        cwd = ""
+        # The session_meta header sits below the high-water mark on every poll
+        # after the first, so seed cwd from it rather than from this batch.
+        cwd = self._cwd_from_meta(path)
         # Latest assistant text for this turn. Persisted in seen_keys (per-file,
         # owned by the watcher) so a turn whose assistant message and its
         # token_count boundary land in DIFFERENT poll batches still delivers the

@@ -5,7 +5,8 @@ export default defineConfig({
   ...baseConfig,
   test: {
     ...baseConfig.test,
-    // Build the staged artifact first: `pnpm build:mini-ide:v2`.
-    include: ['plugins/navide-mini-ide/tests/**/*.test.ts']
+    projects: undefined,
+    include: ['plugins/navide-mini-ide/tests/**/*.test.ts'],
+    globalSetup: ['tests/support/publicPackagesSetup.ts'],
   }
 })

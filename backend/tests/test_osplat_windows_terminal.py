@@ -355,6 +355,28 @@ class TestKills:
         _windows.process_tree.kill_tree(1, force=True)
         assert order == [1, 2, 3]
 
+    def test_kill_tree_still_kills_children_if_root_exits_after_snapshot(
+        self, kernel32, monkeypatch
+    ):
+        attempted: list[int] = []
+
+        class Proc:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def children(self, recursive=False):
+                assert recursive
+                return [Proc(2)]
+
+            def kill(self):
+                attempted.append(self.pid)
+                if self.pid == 1:
+                    raise psutil.NoSuchProcess(self.pid)
+
+        monkeypatch.setattr(_windows.psutil, "Process", Proc)
+        _windows.process_tree.kill_tree(1, force=True)
+        assert attempted == [1, 2]
+
     # Both force values are TerminateProcess: Windows has no graceful signal.
     def test_kill_ignores_force_and_translates_psutil_errors(self, monkeypatch):
         killed: list[int] = []
@@ -856,6 +878,27 @@ class TestHandle:
         assert handle.proc.wait(timeout=0.01) == 9
         assert handle.proc.poll() == 9
         assert kernel32.calls.count(("CloseHandle", handle._process_handle)) == 1
+
+    def test_the_job_holds_only_the_panes_child_not_winptys_console_host(
+        self, kernel32, winpty, which_cmd_shim
+    ):
+        """`OpenConsole.exe` is not a descendant of the pane's child.
+
+        `spawn` is handed one pid -- the shell winpty started -- and that is
+        the only process `AssignProcessToJobObject` ever sees: conpty's host is
+        started by winpty itself, before this job exists. `KILL_ON_JOB_CLOSE`
+        therefore ends the pane's tree but never the host; its end is
+        `cancel_io()` and dropping the PTY. A host that outlives both is not
+        this seam's kill.
+        """
+        handle = _windows.terminal_backend.spawn(
+            ["claude"], cwd="C:\\", env={}, rows=1, cols=1
+        )
+        assigns = [call for call in kernel32.calls if call[0] == "AssignProcessToJobObject"]
+        assert len(assigns) == 1
+        assert handle.pid == 4242
+        handle.close()
+        assert _FakePTY.last.cancelled
 
     def test_close_of_an_exited_pane_spares_a_successor_on_the_same_pid(
         self, kernel32, winpty, which_cmd_shim

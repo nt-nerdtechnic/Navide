@@ -142,11 +142,14 @@ bypasses the check when you know what you are doing.
 
 Please fill in the pull request template — include a summary of changes and how you tested them.
 
-CI runs nine jobs in parallel: frontend checks and the application/plugin build
-on macOS, Linux and Windows; backend checks on macOS, Linux and Windows; packaged
-Plans checks; marketplace registry/contract checks; and a dependency audit. The
-`Lint and test` status passes only when all nine succeed. CI does not run Electron UI automation;
-test UI changes manually. To reproduce the build check locally, run `pnpm build`.
+CI retains complete frontend and backend suites on macOS, Linux and Windows.
+Static checks run once, while application builds and artifact integration tests
+run separately from ordinary frontend tests. The `Lint and test` status requires
+the test/build matrices, packaged Plans, marketplace contracts, deterministic
+speech sidecar tests and dependency audit to succeed. CI does not run Electron
+UI automation; test UI changes manually. To reproduce the build check locally,
+run `pnpm build`. See [CI and CLI regression infrastructure](docs/en-US/ci-and-cli-regression.md)
+for suite ownership, provider isolation, contract coverage and diagnostics.
 
 > Fork 後建立 feature branch，跑測試與型別檢查無誤後，依照下方 commit 格式提交，並開 PR 至 `main`。
 
@@ -217,10 +220,13 @@ OSPLAT_SWAP=paths uv --project backend run pytest backend/tests/test_host_shell.
 OSPLAT_SWAP=paths,platform_id uv --project backend run pytest backend/tests -p tests.osplat_win_swap
 ```
 
-Expected result: green apart from the suite's known-flaky tests, with about
-300 extra skips — the tests that drive a real `git`/`gh` through the seam,
+The swapped run has about 300 extra skips — the tests that drive a real
+`git`/`gh` through the seam,
 which the Windows resolver (`PATHEXT`: `git.exe`, never `git`) cannot find
-on a POSIX host. A new red here is a test that answered a platform question
+on a POSIX host. The CLI coverage gate also rejects skipped required cases;
+a swapped full run can therefore fail that gate and does not qualify as a
+native-platform result. Prefer focused files for this diagnostic. A new
+assertion failure here can indicate a test that answered a platform question
 by a different route than the code under test — fix the test the way the
 rule above says, not by gating it on `sys.platform`. A test that needs a
 real program says so through the seam too:
@@ -236,9 +242,8 @@ run.
 
 What it verifies: path and environment arithmetic (`APPDATA`, `USERPROFILE`,
 `PATHEXT` candidate lists, `cmd.exe` argv shapes), seam-keyed skips, and the
-feature code that branches on `platform_id`. What it cannot verify — nothing
-below has a stub-free test on any platform, and only a real Windows host
-(CI, or a VM) exercises it: a real DPAPI round-trip (`CryptProtectData`),
+feature code that branches on `platform_id`. What it cannot verify requires a
+real Windows host (CI, or a VM): a real DPAPI round-trip (`CryptProtectData`),
 real `icacls` ACLs, the `ctypes.WinDLL` prototype bindings and `_win_error`,
 real `CommandLineToArgvW` parsing, Job Object kill-on-close semantics,
 ConPTY I/O / EOF / resize, the `WinError 1314` symlink branch, psutil's
@@ -249,6 +254,12 @@ hook scripts actually run, and the win-only `sys.platform` arms inside the
 implementations reach `WinDLL`, `winpty` and `icacls` at call time, so on a
 POSIX host every caller fails on the missing binding, not on anything the
 test asserts (the plugin refuses them for that reason).
+
+The native Windows suite does exercise real ConPTY output, EOF and process-tree
+cleanup in `backend/tests/test_windows_conpty_real.py`; its basic resize test
+checks that resizing succeeds. Those guarantees come from the Windows run,
+not the swapped-platform run, and do not certify a frozen release's bundled
+console host.
 
 > 請與現有程式碼風格保持一致。Python 提交前請執行完整 backend tests。
 > 新增 CLI 整合請依 `docs/adding-a-cli-vendor.md`，一家一檔，不要在共用模組加分支。

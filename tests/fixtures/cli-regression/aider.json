@@ -1,0 +1,46 @@
+{
+  "vendor": "aider",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_aider.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "aider-abcd1234-20260929-100000",
+  "path": "${WORKSPACE}/.aider.chat.history.abcd1234.md",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "text",
+        "text": "# aider chat started at 2026-09-29 10:00:00\n\n#### ${MARKER} work\n"
+      }
+    ],
+    "response": [
+      {
+        "kind": "text",
+        "append": true,
+        "text": "Regression reply: café 完成\n---MSG-END---\n"
+      }
+    ],
+    "complete": [
+      {
+        "kind": "text",
+        "append": true,
+        "text": "> Tokens: 12 sent, 3 received. Cost: $0.01 message\n"
+      }
+    ]
+  },
+  "binary": "aider",
+  "resumeCommand": "aider --restore-chat-history",
+  "guardedEnvironment": [
+    "AIDER_CHAT_HISTORY_FILE",
+    "AIDER_INPUT_HISTORY_FILE"
+  ]
+}

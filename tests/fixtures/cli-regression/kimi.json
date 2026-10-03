@@ -1,0 +1,94 @@
+{
+  "vendor": "kimi",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_kimi.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "session_12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.kimi-code/sessions/wd_fixture/session_12345678-1234-4234-8234-123456789abc/agents/main/wire.jsonl",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "json",
+        "path": "${HOME}/.kimi-code/sessions/wd_fixture/session_12345678-1234-4234-8234-123456789abc/state.json",
+        "value": {
+          "workDir": "${WORKSPACE}"
+        }
+      },
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "turn.prompt",
+            "input": [
+              {
+                "type": "text",
+                "text": "${MARKER} work"
+              }
+            ],
+            "time": 2000000000000
+          }
+        ],
+        "append": false
+      }
+    ],
+    "response": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "context.append_loop_event",
+            "event": {
+              "type": "content.part",
+              "part": {
+                "type": "text",
+                "text": "Regression reply: café 完成\n---MSG-END---"
+              }
+            },
+            "time": 2000000000001
+          },
+          {
+            "type": "usage.record",
+            "model": "fixture",
+            "usageScope": "turn",
+            "usage": {
+              "inputOther": 10,
+              "inputCacheRead": 1,
+              "inputCacheCreation": 1,
+              "output": 3
+            },
+            "time": 2000000000002
+          }
+        ],
+        "append": true
+      }
+    ],
+    "complete": [
+      {
+        "kind": "jsonl",
+        "records": [
+          {
+            "type": "turn.cancel",
+            "time": 2000000000003
+          }
+        ],
+        "append": true
+      }
+    ]
+  },
+  "binary": "kimi",
+  "resumeCommand": "kimi --session session_12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": [
+    "KIMI_CODE_HOME"
+  ],
+  "loginCommand": "kimi login"
+}

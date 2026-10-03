@@ -1,0 +1,72 @@
+{
+  "vendor": "copilot",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "backend/tests/vendors/test_copilot.py",
+    "revision": "c0eff2e8c30475371e0f665bd54188d87083307d",
+    "notes": "Hand-authored minimal records from the existing regression schema. No account data, provider calls, or claimed live recording."
+  },
+  "sessionId": "12345678-1234-4234-8234-123456789abc",
+  "path": "${HOME}/.copilot/session-store.db",
+  "expected": {
+    "tokens": [
+      12,
+      3
+    ],
+    "reply": "Regression reply: café 完成\n---MSG-END---"
+  },
+  "phases": {
+    "initial": [
+      {
+        "kind": "sqlite",
+        "schema": "CREATE TABLE sessions(id TEXT PRIMARY KEY,cwd TEXT,created_at TEXT); CREATE TABLE turns(id INTEGER PRIMARY KEY,session_id TEXT,turn_index INTEGER,user_message TEXT,assistant_response TEXT,timestamp TEXT); CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY,session_id TEXT,model TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_write_tokens INTEGER,reasoning_tokens INTEGER,created_at TEXT);",
+        "statements": [
+          {
+            "sql": "INSERT INTO sessions VALUES (?,?,?)",
+            "params": [
+              "12345678-1234-4234-8234-123456789abc",
+              "${WORKSPACE}",
+              "2026-09-29T10:00:00Z"
+            ]
+          }
+        ]
+      }
+    ],
+    "response": [
+      {
+        "kind": "sqlite",
+        "statements": [
+          {
+            "sql": "INSERT INTO assistant_usage_events VALUES (1,?,'fixture',12,3,1,1,1,?)",
+            "params": [
+              "12345678-1234-4234-8234-123456789abc",
+              "2026-09-29T10:00:00Z"
+            ]
+          }
+        ]
+      }
+    ],
+    "complete": [
+      {
+        "kind": "sqlite",
+        "statements": [
+          {
+            "sql": "INSERT INTO turns VALUES (1,?,0,?,?,?)",
+            "params": [
+              "12345678-1234-4234-8234-123456789abc",
+              "${MARKER} work",
+              "Regression reply: café 完成\n---MSG-END---",
+              "2026-09-29T10:00:00Z"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "binary": "copilot",
+  "resumeCommand": "copilot --resume 12345678-1234-4234-8234-123456789abc",
+  "guardedEnvironment": [
+    "COPILOT_HOME"
+  ],
+  "loginCommand": "copilot login"
+}

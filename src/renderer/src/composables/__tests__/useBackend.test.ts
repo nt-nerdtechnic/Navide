@@ -292,6 +292,9 @@ describe('useBackend init() deadline', () => {
         onBackendChanged: vi.fn()
       })
 
+      // init() awaits the optional setting lookup before its deadline begins.
+      await vi.advanceTimersByTimeAsync(0)
+
       await vi.advanceTimersByTimeAsync(defaultMs)
       expect(backend.status.value).not.toBe('error')
 

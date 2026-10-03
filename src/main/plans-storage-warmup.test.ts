@@ -26,7 +26,7 @@ vi.mock('electron', () => {
     // that still runs is running at module evaluation time.
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
-    commandLine: { appendSwitch: () => {} },
+    commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
     setAboutPanelOptions: () => {},
   }
   class BrowserWindow {

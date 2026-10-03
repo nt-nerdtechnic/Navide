@@ -147,7 +147,8 @@ import {
   CLI_PASTE_LINE_CAP
 } from '@navide/terminal'
 import { planDropPrompt, type PlanDragRef } from './lib/planDrag'
-import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, clearProvisionalStall, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, parseEventMs, turnTextFingerprint, loopBackoffMs, loopContinueReady, loopSettleMs, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
+import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, clearProvisionalStall, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, loopBackoffMs, loopContinueReady, loopSettleMs, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
+import { createPaneSessionPersistence, createTurnTextGate, MAX_KICKOFF_ATTEMPTS, runPipelineKickoff } from './lib/cliCoordination'
 import { reorderByIds, reorderStrings, sortByIdOrder } from './lib/paneOrder'
 import { computeRangeSelection } from './lib/paneSelection'
 import { resolveDragBatch, reorderBatchByIds, withFoldedSubtree } from './lib/paneBatchDrag'
@@ -1499,15 +1500,7 @@ interface ActivePane {
 
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
-const persistedPaneSessions = new Set<string>()
-// Bounded retry for persistPaneSession. The backend noops when the manual-pane
-// record doesn't exist yet (persist racing manual_pane.spawn) — normally
-// transient. But a permanently-missing record would otherwise re-send
-// manual_pane.session on every activity event forever, a ~60/sec flood that
-// saturates the backend event loop and times out terminal.create. Cap attempts
-// per key, then give up (treat as persisted so callers stop re-sending).
-const persistPaneAttempts = new Map<string, number>()
-const MAX_PERSIST_PANE_ATTEMPTS = 8
+const persistSessionOnce = createPaneSessionPersistence()
 
 // Tracks which issues have been dispatched/handled and to which pane.
 // key: issue.url  value: { paneId, mode, state }
@@ -2467,14 +2460,7 @@ async function pushDeliverAgentMessage(paneId: string, text: string): Promise<Pu
   return 'declined'
 }
 
-// Per-pane timestamp of the last turn_complete whose text was scanned for MSG
-// blocks — the hook and the watcher can deliver the same turn twice.
-const paneMsgProcessedAt = new Map<string, number>()
-// Same, for the turns whose timestamp does not parse at all: those read as
-// fresh above no matter how often they arrive, so the text itself is the only
-// thing left to recognise them by. Kept separate from the timestamp map so a
-// vendor that stamps its turns keeps the cheaper strictly-increasing gate.
-const paneMsgProcessedFingerprint = new Map<string, string>()
+const turnTextGate = createTurnTextGate()
 
 /** Close out the report a spawned pane owes its parent, on the first turn that
  *  ends after its task went in.
@@ -2511,17 +2497,7 @@ function settleSpawnReport(
 function onTurnCompleteForMessaging(paneId: string, text: string, timestamp: string): void {
   const senderName = panes.value.find((p) => p.id === paneId)?.messagingName
   if (senderName && text && !isReplayedTurnComplete(timestamp, Date.now(), TURN_TEXT_REPLAY_TOLERANCE_MS)) {
-    // parseEventMs, not Date.parse: a vendor that emits bare epoch milliseconds
-    // (Kimi) reads as unparseable to Date.parse and so was never deduped here.
-    const eventMs = parseEventMs(timestamp)
-    const stamped = !Number.isNaN(eventMs)
-    const fingerprint = stamped ? '' : turnTextFingerprint(text)
-    const fresh = stamped
-      ? eventMs > (paneMsgProcessedAt.get(paneId) ?? 0)
-      : fingerprint !== paneMsgProcessedFingerprint.get(paneId)
-    if (fresh) {
-      if (stamped) paneMsgProcessedAt.set(paneId, eventMs)
-      else paneMsgProcessedFingerprint.set(paneId, fingerprint)
+    if (turnTextGate.accept(paneId, text, timestamp)) {
       const parsed = parseMessages(text)
       // A turn that opened a block and produced none is the protocol's one
       // invisible failure: nothing queued, so no log row and no failure notice
@@ -5986,42 +5962,30 @@ function releaseInjectionSlot(): void {
 async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<void> {
   const id = normalizeResumeSessionId(pane.agentKey, sessionId)
   if (!id) return
-  const key = `${pane.id}:${id}`
-  if (persistedPaneSessions.has(key)) return
-  let saved: unknown = null
-  if (pane.origin !== 'pipeline') {
-    const resp = await sendQuiet<ProjectPayload>('manual_pane.session', {
-      workspace_path: pane.workspacePath,
-      pane_id: pane.id,
-      session_id: id,
-    })
-    // The backend silently noops when the manual pane record doesn't exist
-    // yet (persist can race manual_pane.spawn) — only cache a write the
-    // response confirms, so a later event can retry.
-    saved = resp?.project?.panes?.some(
-      (p) => p.pane_id === pane.id && p.session_id === id
-    ) ? resp : null
-  } else if (pane.slotLabel && pane.origin === 'pipeline') {
-    const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
-    if (stageIndex < 0) return
-    saved = await sendQuiet('pipeline.slot_session', {
-      workspace_path: pane.workspacePath,
-      stage_index: stageIndex,
-      slot_label: pane.slotLabel,
-      session_id: id,
-    })
-  }
-  if (saved) {
-    persistedPaneSessions.add(key)
-    persistPaneAttempts.delete(key)
-  } else {
-    // Unconfirmed (pane record missing). Retry a bounded number of times for the
-    // transient spawn race, then stop so a permanently-missing pane can't flood
-    // manual_pane.session on every activity event.
-    const attempts = (persistPaneAttempts.get(key) ?? 0) + 1
-    persistPaneAttempts.set(key, attempts)
-    if (attempts >= MAX_PERSIST_PANE_ATTEMPTS) persistedPaneSessions.add(key)
-  }
+  await persistSessionOnce(`${pane.id}:${id}`, async () => {
+    if (pane.origin !== 'pipeline') {
+      const resp = await sendQuiet<ProjectPayload>('manual_pane.session', {
+        workspace_path: pane.workspacePath,
+        pane_id: pane.id,
+        session_id: id,
+      })
+      // Only a confirmed write closes the transient manual_pane.spawn race.
+      return !!resp?.project?.panes?.some(
+        (p) => p.pane_id === pane.id && p.session_id === id
+      )
+    }
+    if (pane.slotLabel) {
+      const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
+      if (stageIndex < 0) return undefined
+      return !!await sendQuiet('pipeline.slot_session', {
+        workspace_path: pane.workspacePath,
+        stage_index: stageIndex,
+        slot_label: pane.slotLabel,
+        session_id: id,
+      })
+    }
+    return false
+  })
 }
 
 // A pane refuses keystrokes for as long as preparationStatus is neither 'ready'
@@ -6187,26 +6151,19 @@ function scheduleInjection(pane: ActivePane): void {
       // Use bracketed-paste so newlines in the context header (prior-stage
       // documents) are preserved — without it they become Enter keypresses
       // and fragment the prompt into multiple partial submissions.
-      const MAX_KICKOFF_ATTEMPTS = 3
-      let ok2 = false
-      for (let attempt = 1; attempt <= MAX_KICKOFF_ATTEMPTS; attempt++) {
-        // A failure has two shapes and only one of them may be retried. The
-        // bytes never reaching the input box is worth another attempt; the
-        // prompt sitting in the composer that Enter would not submit is not —
-        // resending appends a second copy to the text already there.
-        const attemptEvidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
-        ok2 = await injectPane(pane.id, pane.kickoffPrompt, `kickoff:stage-${pane.stageId}`, true, undefined, attemptEvidence)
-        if (ok2) break
-        if (attemptEvidence.echo != null) {
-          pipelineLog(`${tag} ✕ kickoff reached the input box but never submitted — not resending`)
-          break
-        }
-        if (attempt < MAX_KICKOFF_ATTEMPTS) {
-          pipelineLog(`${tag} ✕ kickoff injection failed (attempt ${attempt}/${MAX_KICKOFF_ATTEMPTS}) — retrying in 3s`)
-          await sleep(3_000)
-          if (!paneAlive(pane.id)) return
-        }
-      }
+      const kickoffResult = await runPipelineKickoff({
+        inject: async () => {
+          const evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+          const injected = await injectPane(pane.id, pane.kickoffPrompt, `kickoff:stage-${pane.stageId}`, true, undefined, evidence)
+          return { injected, echo: evidence.echo }
+        },
+        sleep,
+        paneAlive: () => paneAlive(pane.id),
+        onHeld: () => pipelineLog(`${tag} ✕ kickoff reached the input box but never submitted — not resending`),
+        onRetry: (attempt) => pipelineLog(`${tag} ✕ kickoff injection failed (attempt ${attempt}/${MAX_KICKOFF_ATTEMPTS}) — retrying in 3s`),
+      })
+      if (kickoffResult.cancelled) return
+      const ok2 = kickoffResult.sent
       pane.kickoffStatus = ok2 ? 'sent' : 'failed'
       setPrepStatus(pane, ok2 ? 'ready' : 'failed')
       syncViews()
@@ -7298,8 +7255,7 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
   // Only a real close releases a chat-channel binding; rebuild and idle-reclaim
   // keep the seat, and workspace close / teardown restore the pane later.
   if (markRemoved && !keepInList) useChannels(backend).paneClosed(paneId)
-  paneMsgProcessedAt.delete(paneId)
-  paneMsgProcessedFingerprint.delete(paneId)
+  turnTextGate.delete(paneId)
   // The auto-name guard is per pane id and pane ids are never reused, so a
   // stale entry cannot misfire — it just never leaves. Dropped here with the
   // rest of the per-pane state.
@@ -12142,27 +12098,22 @@ async function activateStage(index: number): Promise<void> {
       }) +
       sessionMarkerLine(pane.sessionMarker)
     pipelineLog(`${tag} ➜ injecting kickoff (${kickoff.length} chars)`)
-    const MAX_KICKOFF_ATTEMPTS = 3
-    let ok = false
-    for (let attempt = 1; attempt <= MAX_KICKOFF_ATTEMPTS; attempt++) {
-      // Retry only the failure that left nothing behind — see the stage
-      // kickoff above: a prompt already in the composer must not be sent twice.
-      const attemptEvidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
-      ok = await injectPane(pane.id, kickoff, `kickoff:stage-${stage.id}`, true, undefined, attemptEvidence)
-      if (ok) break
-      if (attemptEvidence.echo != null) {
-        pipelineLog(`${tag} ✕ kickoff reached the input box but never submitted — not resending`)
-        break
-      }
-      if (attempt < MAX_KICKOFF_ATTEMPTS) {
-        pipelineLog(`${tag} ✕ kickoff injection failed (attempt ${attempt}/${MAX_KICKOFF_ATTEMPTS}) — retrying in 3s`)
-        await sleep(3_000)
-        if (!paneAlive(pane.id)) {
-          releaseStageSlot(index, pane.id, `slot "${slot.label}" pane gone before its watcher armed`)
-          return
-        }
-      }
+    const kickoffResult = await runPipelineKickoff({
+      inject: async () => {
+        const evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+        const injected = await injectPane(pane.id, kickoff, `kickoff:stage-${stage.id}`, true, undefined, evidence)
+        return { injected, echo: evidence.echo }
+      },
+      sleep,
+      paneAlive: () => paneAlive(pane.id),
+      onHeld: () => pipelineLog(`${tag} ✕ kickoff reached the input box but never submitted — not resending`),
+      onRetry: (attempt) => pipelineLog(`${tag} ✕ kickoff injection failed (attempt ${attempt}/${MAX_KICKOFF_ATTEMPTS}) — retrying in 3s`),
+    })
+    if (kickoffResult.cancelled) {
+      releaseStageSlot(index, pane.id, `slot "${slot.label}" pane gone before its watcher armed`)
+      return
     }
+    const ok = kickoffResult.sent
     // Wire the Manager router HERE — the first statement after the kickoff
     // injection resolves, ahead of the render sync and the two backend round
     // trips below. The floor must be taken after the kickoff (its echo carries

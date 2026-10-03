@@ -27,6 +27,14 @@ You never need to read or modify the shared orchestration code.
    listed in `_CONFIGURED`; otherwise `test_native_memory` fails with a vendor
    in state `unknown`.
 6. Add `backend/tests/vendors/test_<key>.py` covering what you implemented.
+   Register executable cases and provenance-bearing fixtures in
+   `tests/fixtures/cli-regression/catalog.json`, and add the frontend command
+   contract under `tests/cli/`. The inventory must match both source registries;
+   a missing, skipped or uncollected required case fails the regression gate.
+   Exercise real Navide readers, attribution and launch wiring. Declare
+   unsupported capabilities with negative assertions instead of inventing
+   uniform capabilities or skipping the vendor. See
+   [CI and CLI regressions](en-US/ci-and-cli-regression.md).
 7. Add your key to the hardcoded lists in the tests: `EXPECTED_KEYS` in
    `backend/tests/test_cli_vendors_registry.py`, and the `SNAPSHOT` in
    `backend/tests/vendors/test_install_deps_snapshot.py`. The snapshot is

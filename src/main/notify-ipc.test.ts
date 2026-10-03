@@ -51,7 +51,7 @@ vi.mock('electron', () => {
     quit: () => {},
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
-    commandLine: { appendSwitch: () => {} },
+    commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
     setAboutPanelOptions: () => {},
     focus: (...args: unknown[]) => appFocus(...args),
     dock: { setBadge: (...args: unknown[]) => dockSetBadge(...args), setIcon: () => {} },
