@@ -9843,6 +9843,10 @@ async def agent_msg_register(session: "Session", msg_id: str, msg_type: str, pay
         # that knows it (lineage is renderer state), and cli_whoami is the only
         # reader — a child asking who it owes its report to.
         spawned_by=str(payload.get("spawned_by") or ""),
+        # Only an embedded AI panel (AiCliDock) sends these; a window pane
+        # leaves them out and is registered exactly as before.
+        surface=str(payload.get("surface") or ""),
+        window_kind=str(payload.get("window_kind") or ""),
     )
     # The ids this same CLI process was known by before the window rebuilt its
     # pane around it (reload, detach, group reattach). They stay resolvable, so
@@ -9887,6 +9891,42 @@ async def agent_msg_unregister(session: "Session", msg_id: str, msg_type: str, p
         app.forget_pane_activity(pane_id)
         server_link.roster_changed()
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "removed": removed}))
+
+
+@handler("agent_msg.register_dock")
+async def agent_msg_register_dock(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """agent_msg.register for an embedded AI panel (AiCliDock), and the only
+    roster write a plugin window's broker can reach. It is the same register,
+    fenced so it can only ever create or refresh a panel: the surface must name
+    one, and a pane id a window pane already holds is refused rather than
+    renamed and turned into a panel under that window's feet."""
+    pane_id = str(payload.get("pane_id") or "")
+    surface = str(payload.get("surface") or "")
+    if not surface or surface == "main":
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "agent_msg.register_dock needs a panel surface")
+        )
+        return
+    existing = agent_messaging.get(pane_id) if pane_id else None
+    if existing is not None and not existing.is_dock:
+        await session.send_json(
+            make_error(msg_id, msg_type, "FORBIDDEN", "that pane id belongs to a window pane, not a panel")
+        )
+        return
+    await agent_msg_register(session, msg_id, msg_type, payload)
+
+
+@handler("agent_msg.unregister_dock")
+async def agent_msg_unregister_dock(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """agent_msg.unregister fenced the same way: it removes panels only."""
+    pane_id = str(payload.get("pane_id") or "")
+    existing = agent_messaging.get(pane_id) if pane_id else None
+    if existing is not None and not existing.is_dock:
+        await session.send_json(
+            make_error(msg_id, msg_type, "FORBIDDEN", "that pane id belongs to a window pane, not a panel")
+        )
+        return
+    await agent_msg_unregister(session, msg_id, msg_type, payload)
 
 
 @handler("agent_msg.set_busy")

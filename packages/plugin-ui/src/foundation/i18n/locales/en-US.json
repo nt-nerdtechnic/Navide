@@ -217,6 +217,7 @@
     "reason-unknown-pane-id": "No pane with id “{pane_id}” on this machine",
     "reason-ambiguous-target": "{n} panes in “{ws}” are named “{name}” — rename one of them",
     "reason-target-offline": "“{to}” is offline — its window disconnected {seconds}s ago; the pane still exists",
+    "reason-target-is-dock": "“{to}” is an embedded AI panel ({surface}) — it cannot receive messages yet",
     "reason-unknown-device": "Unknown device “{device}” — this machine is not connected to Navide Cloud, so it can only address panes on itself",
     "rename-collision-title": "Messaging name in use",
     "rename-collision-body": "The name “{name}” is already used by another CLI. Choose a different messaging name:",

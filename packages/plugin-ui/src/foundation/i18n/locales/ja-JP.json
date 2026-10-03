@@ -217,6 +217,7 @@
     "reason-unknown-pane-id": "このマシンに ID「{pane_id}」のペインはありません",
     "reason-ambiguous-target": "「{ws}」に「{name}」という名前のペインが {n} 個あります。いずれかの名前を変更してください",
     "reason-target-offline": "「{to}」はオフラインです。{seconds} 秒前にウィンドウの接続が切れましたが、ペインはまだ存在します",
+    "reason-target-is-dock": "「{to}」は埋め込み AI パネル（{surface}）のため、まだメッセージを受け取れません",
     "reason-unknown-device": "不明なデバイス「{device}」です。このマシンは Navide Cloud に接続されていないため、自身のペインのみ指定できます",
     "rename-collision-title": "メッセージ用の名前は使用中です",
     "rename-collision-body": "「{name}」は別の CLI がすでに使用しています。別のメッセージ用の名前を選んでください：",

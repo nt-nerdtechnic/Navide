@@ -95,6 +95,22 @@ class RegisteredPane:
     #: this is a fact about yourself, which is the one lineage question you are
     #: entitled to ask.
     spawned_by: str = ""
+    #: Which window surface hosts this pane, for an embedded AI panel
+    #: (AiCliDock): "pm" for the Pipeline Manager modal, "plans" / "git" /
+    #: "editor" for those windows. Empty for an ordinary window pane — which is
+    #: every pane the main window registers, since it never sends the field.
+    surface: str = ""
+    #: The kind of window that surface lives in ("main" for the Pipeline
+    #: Manager modal, else the surface's own window). Empty alongside `surface`.
+    window_kind: str = ""
+
+    @property
+    def is_dock(self) -> bool:
+        """An embedded AI panel rather than a pane of a window's pane pool.
+
+        It can act through the MCP tools like any pane, but nothing delivers
+        messages into it yet, so it is refused as a target (see _accept)."""
+        return bool(self.surface) and self.surface != "main"
 
     @property
     def offline(self) -> bool:
@@ -113,7 +129,7 @@ class RegisteredPane:
         return f"{self.workspace_label}/{self.name}"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        view: dict[str, Any] = {
             "pane_id": self.pane_id,
             "name": self.name,
             "workspace_path": self.workspace_path,
@@ -125,6 +141,13 @@ class RegisteredPane:
             "realized": self.realized,
             "displayStatus": self.display_status,
         }
+        # Added only when set, so a pane registered without them — every pane
+        # the main window mirrors — reports exactly the keys it always has.
+        if self.surface:
+            view["surface"] = self.surface
+        if self.window_kind:
+            view["window_kind"] = self.window_kind
+        return view
 
 
 @dataclass
@@ -282,6 +305,8 @@ def register(
     owner: Any = None,
     realized: bool = True,
     spawned_by: str = "",
+    surface: str = "",
+    window_kind: str = "",
 ) -> RegisteredPane:
     """Mirror one window's pane handle. Re-registering the same pane replaces
     its entry, which is how renames propagate."""
@@ -304,6 +329,8 @@ def register(
         # such a re-register — carrying the old value over would pin the pane to
         # an id nothing answers to any more.
         spawned_by=spawned_by,
+        surface=surface,
+        window_kind=window_kind,
         # A reconnecting window re-runs agent_msg.register for every pane it
         # mirrors, which is what clears the offline flag drop_owner set:
         # offline_since starts at None on the fresh entry.
@@ -670,6 +697,19 @@ def _accept(entry: RegisteredPane, to: str, *, cross_workspace: bool = False) ->
     means the address is right and the answer is to wait or retry.
     """
     if entry.offline_since is None:
+        if entry.is_dock:
+            # Nothing in any window delivers into an embedded panel yet: the
+            # main window's delivery looks the target up in its own pane pool,
+            # which a dock is not part of. Accepting would park the message
+            # forever, so it is refused while the address is still on screen.
+            return _resolve_error(
+                "target-is-dock",
+                f'target "{to}" is an embedded AI panel ({entry.surface}) — it can '
+                f"use Navide's tools but cannot receive messages yet; send to a "
+                f"window pane instead",
+                to=to,
+                surface=entry.surface,
+            )
         return ResolveResult(pane=entry, cross_workspace=cross_workspace)
     seconds = entry.offline_seconds()
     return _resolve_error(
