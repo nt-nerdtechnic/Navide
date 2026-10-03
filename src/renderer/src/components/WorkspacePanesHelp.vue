@@ -63,6 +63,37 @@ const infoPopovers = ['backend', 'announcements', 'clock', 'resource'] as const
 
 const { t } = useI18n()
 
+// Labels the prose quotes, read from the keys the product itself renders.
+const sidebarModeLabels = computed(() => ({
+  workspace: t('label.workspace'),
+  free: t('label.sidebar-mode-free'),
+}))
+
+// ── Voice input ─────────────────────────────────────────────────────────
+// One take, in order, then the rows of Settings ▸ Voice Input in the order
+// VoiceSettingsSection.vue stacks them; each row is titled with its own key.
+const voiceTake = ['start', 'release', 'enter', 'esc', 'limit', 'target'] as const
+const voiceRows = [
+  { key: 'enabled', labelKey: 'settings.voice.enabled' },
+  { key: 'shortcut', labelKey: 'settings.voice.shortcut' },
+  { key: 'fnKey', labelKey: 'settings.voice.fn-key' },
+  { key: 'device', labelKey: 'settings.voice.device' },
+  { key: 'mode', labelKey: 'settings.voice.mode' },
+  { key: 'script', labelKey: 'settings.voice.script' },
+  { key: 'model', labelKey: 'settings.voice.model' },
+  { key: 'engine', labelKey: 'settings.voice.engine' },
+] as const
+const voiceLabels = computed(() => ({
+  nav: t('settings.nav.voice'),
+  enabled: t('settings.voice.enabled'),
+  model: t('settings.voice.model'),
+  engine: t('settings.voice.engine'),
+  holdTap: t('settings.voice.mode-hold-tap'),
+  hold: t('settings.voice.mode-hold'),
+  toggle: t('settings.voice.mode-toggle'),
+  hantTw: t('settings.voice.script-hant-tw'),
+}))
+
 // ── Mock screenshots ────────────────────────────────────────────────────────
 // Two HTML pictures of the real window, drawn from the components they depict
 // rather than captured, so they follow the user's theme and never show anyone's
@@ -451,6 +482,10 @@ const shortcuts: { key: string; keys: string }[] = [
         <div class="wph-callout-text" v-html="$t('settings.help.workspace.s5.callout.text')"></div>
       </div>
 
+      <h3 class="wph-h3">{{ $t('settings.help.workspace.s5.hMode', sidebarModeLabels) }}</h3>
+      <p class="wph-p" v-html="$t('settings.help.workspace.s5.mode', sidebarModeLabels)"></p>
+      <p class="wph-p" v-html="$t('settings.help.workspace.s5.modeNote', sidebarModeLabels)"></p>
+
       <h3 class="wph-h3">{{ $t('settings.help.workspace.s5.h3') }}</h3>
       <p class="wph-p" v-html="$t('settings.help.workspace.s5.p2')"></p>
       <ul class="wph-list">
@@ -533,9 +568,28 @@ const shortcuts: { key: string; keys: string }[] = [
       </div>
     </section>
 
-    <!-- ── 7 · Shortcut quick reference ────────────────────────────── -->
+    <!-- ── 7 · Voice input ──────────────────────────────────────────── -->
     <section class="wph-section">
-      <h2 class="wph-h2">7 · {{ $t('settings.help.workspace.s7.title') }}</h2>
+      <h2 class="wph-h2">7 · {{ $t('settings.help.workspace.voice.title') }}</h2>
+      <p class="wph-p" v-html="$t('settings.help.workspace.voice.p1', voiceLabels)"></p>
+
+      <h3 class="wph-h3">{{ $t('settings.help.workspace.voice.h1') }}</h3>
+      <ul class="wph-list">
+        <li v-for="key in voiceTake" :key="key" v-html="$t(`settings.help.workspace.voice.take.${key}`)"></li>
+      </ul>
+
+      <h3 class="wph-h3">{{ $t('settings.help.workspace.voice.h2', voiceLabels) }}</h3>
+      <ul class="wph-list">
+        <li v-for="row in voiceRows" :key="row.key">
+          <strong>{{ $t(row.labelKey) }}</strong> — <span v-html="$t(`settings.help.workspace.voice.rows.${row.key}`, voiceLabels)"></span>
+        </li>
+      </ul>
+      <p class="wph-note" v-html="$t('settings.help.workspace.voice.note', voiceLabels)"></p>
+    </section>
+
+    <!-- ── 8 · Shortcut quick reference ────────────────────────────── -->
+    <section class="wph-section">
+      <h2 class="wph-h2">8 · {{ $t('settings.help.workspace.s7.title') }}</h2>
       <p class="wph-p" v-html="$t('settings.help.workspace.s7.p1')"></p>
       <div class="wph-tablewrap">
         <table class="wph-table">

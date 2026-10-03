@@ -120,7 +120,7 @@ describe('WorkspacePanesHelp', () => {
     expectNoChineseText(text)
     expect(text).toContain('Three terms')
     expect(text).toContain('Shortcut quick reference')
-    expect(wrapper.findAll('.wph-h2')).toHaveLength(7)
+    expect(wrapper.findAll('.wph-h2')).toHaveLength(8)
     expect(wrapper.findAll('.wph-table').map((t) => t.findAll('tbody tr').length)).toEqual(
       TABLE_ROWS,
     )
@@ -141,7 +141,7 @@ describe('WorkspacePanesHelp', () => {
     expect(text).toContain('關閉工作區與 CLI 視窗')
     expect(text).toContain('格狀')
     expect(text).toContain('排程')
-    expect(wrapper.findAll('.wph-h2')).toHaveLength(7)
+    expect(wrapper.findAll('.wph-h2')).toHaveLength(8)
     expect(wrapper.findAll('.wph-table').map((t) => t.findAll('tbody tr').length)).toEqual(
       TABLE_ROWS,
     )

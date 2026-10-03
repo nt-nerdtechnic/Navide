@@ -47,7 +47,7 @@ describe('CliMessagingHelp', () => {
     expect(text).toContain('How it works')
     expect(text).toContain('Which CLIs can send')
     expect(text).toContain('Known limits')
-    expect(wrapper.findAll('.cmh-h2')).toHaveLength(12)
+    expect(wrapper.findAll('.cmh-h2')).toHaveLength(13)
 
     const tables = wrapper.findAll('.cmh-table')
     expect(tables).toHaveLength(5)
@@ -87,7 +87,7 @@ describe('CliMessagingHelp', () => {
     expect(text).toContain('哪些 CLI 送得出訊息')
     expect(text).toContain('已知限制')
     expect(text).toContain('僅輸出協定')
-    expect(wrapper.findAll('.cmh-h2')).toHaveLength(12)
+    expect(wrapper.findAll('.cmh-h2')).toHaveLength(13)
     expect(wrapper.findAll('.cmh-table').at(0)!.findAll('tbody tr')).toHaveLength(15)
     expect(wrapper.findAll('.mk-fig')).toHaveLength(2)
 

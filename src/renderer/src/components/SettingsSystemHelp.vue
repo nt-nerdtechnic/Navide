@@ -42,17 +42,20 @@ interface StageRow {
   stageSpan?: number
 }
 
-// ── 1 · The nineteen tabs ────────────────────────────────────────────────
+// ── 1 · The twenty-two tabs ──────────────────────────────────────────────
 const tabs: TabRow[] = [
-  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 6, navKey: 'settings.nav.general' },
+  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 7, navKey: 'settings.nav.general' },
   { key: 'appearance', navKey: 'settings.nav.appearance' },
   { key: 'language', navKey: 'settings.nav.language' },
   { key: 'statusBadges', navKey: 'settings.nav.statusBadges' },
   { key: 'layout', navKey: 'settings.nav.layout' },
   { key: 'notifications', navKey: 'settings.nav.notifications' },
-  { key: 'accounts', groupKey: 'settings.nav.group.accountsAgents', groupSpan: 4, navKey: 'settings.nav.accounts' },
+  { key: 'voice', navKey: 'settings.nav.voice' },
+  { key: 'accounts', groupKey: 'settings.nav.group.accountsAgents', groupSpan: 6, navKey: 'settings.nav.accounts' },
   { key: 'cliAgents', navKey: 'settings.nav.cliAgents' },
   { key: 'analyzer', navKey: 'settings.nav.analyzer' },
+  { key: 'security', navKey: 'guard.nav' },
+  { key: 'channels', navKey: 'channels.nav' },
   { key: 'cloud', navKey: 'settings.nav.crossDevice' },
   { key: 'mcp', groupKey: 'settings.nav.group.integration', groupSpan: 6, navKey: 'settings.nav.mcp' },
   { key: 'skills', navKey: 'settings.nav.skills' },
@@ -215,7 +218,51 @@ const { t } = useI18n()
 // Labels the prose quotes, read from the keys the product itself renders so a
 // renamed tab, topic or button renames the help text too.
 const topicNames = computed(() => ({
+  workspace: t('settings.help.topic.workspace'),
+  messaging: t('settings.help.topic.messaging'),
   mcp: t('settings.help.topic.mcp'),
+}))
+const searchGaps = computed(() => ({
+  layout: t('settings.nav.layout'),
+  notifications: t('settings.nav.notifications'),
+  security: t('guard.nav'),
+  channels: t('channels.nav'),
+}))
+const extensionLabels = computed(() => ({
+  toBundled: t('settings.extensions.rollback.toBundled'),
+  toVersion: t('settings.extensions.rollback.toVersion', { version: '…' }),
+  restart: t('settings.extensions.restartPlugin'),
+  prerelease: t('settings.extensions.getPrereleases'),
+  native: t('settings.extensions.nativeBackends.title'),
+  nativeEnable: t('settings.extensions.nativeBackends.enable'),
+  allow: t('settings.extensions.nativeBackends.allow'),
+  marketplace: t('settings.nav.marketplace'),
+  featured: t('settings.extensions.marketplace.featured'),
+  pack: t('settings.extensions.pack.badge'),
+  packInstall: t('settings.extensions.pack.install', { count: '…' }),
+}))
+// ── 9 · Security ─────────────────────────────────────────────────────────
+// SecurityPane.vue's sections, in its own order, minus the enable switch, the
+// fixed decision table and the vendor list, which the prose covers.
+const guardItems = ['builtin', 'branches', 'rules', 'test', 'taint', 'audit'] as const
+const guardLabels = computed(() => ({
+  nav: t('guard.nav'),
+  critical: t('guard.level.critical'),
+  high: t('guard.level.high'),
+  off: t('guard.builtin.off'),
+  builtin: t('guard.builtin.title'),
+  branches: t('guard.branches.title'),
+  rules: t('guard.rules.title'),
+  deny: t('guard.rules.kind.deny'),
+  allow: t('guard.rules.kind.allow'),
+  test: t('guard.test.title'),
+  taint: t('guard.taint.title'),
+  badge: t('guard.pane.badge'),
+  audit: t('guard.audit.title'),
+  terminal: t('guard.terminal.title'),
+  block: t('guard.terminal.block.title'),
+  allowEx: t('guard.terminal.allow.title'),
+  termTest: t('guard.terminal.test.title'),
 }))
 
 // ── Mock screenshots ────────────────────────────────────────────────────────
@@ -246,7 +293,7 @@ const navLegend = computed(() => mockLegend('nav', ['search', 'groups', 'active'
 const resourceLegend = computed(() => mockLegend('resource', ['totals', 'rows', 'actions']))
 
 // The nav exactly as SettingsModal.vue renders it: four groups,
-// nineteen pages, in this order. Labels come from the same `settings.nav.*`
+// twenty-two pages, in this order. Labels come from the same `settings.nav.*`
 // keys the real nav reads, so renaming a page renames it here.
 //
 // Drawing this is what caught the prose claiming four groups and sixteen
@@ -262,6 +309,7 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.statusBadges') },
       { label: t('settings.nav.layout') },
       { label: t('settings.nav.notifications') },
+      { label: t('settings.nav.voice') },
     ],
   },
   {
@@ -270,6 +318,8 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.accounts') },
       { label: t('settings.nav.cliAgents') },
       { label: t('settings.nav.analyzer') },
+      { label: t('guard.nav') },
+      { label: t('channels.nav') },
       { label: t('settings.nav.crossDevice') },
     ],
   },
@@ -357,7 +407,7 @@ const resourceRows = computed(() => [
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s1.p2')"></p>
       <div class="syh-callout">
         <div class="syh-callout-title">{{ $t('settings.help.settingsSystem.s1.callout.title') }}</div>
-        <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s1.callout.text')"></div>
+        <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s1.callout.text', searchGaps)"></div>
       </div>
 
       <MockFigure
@@ -600,6 +650,10 @@ const resourceRows = computed(() => [
       <p class="syh-note" v-html="$t('settings.help.settingsSystem.s4.policyNote')"></p>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p6')"></p>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p7')"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.extRollback', extensionLabels)"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.extPrerelease', extensionLabels)"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.extNative', extensionLabels)"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.marketplace', extensionLabels)"></p>
       <p class="syh-note" v-html="$t('settings.help.settingsSystem.s4.extNote')"></p>
     </section>
 
@@ -944,6 +998,21 @@ const resourceRows = computed(() => [
         <div class="syh-callout-title">{{ $t('settings.help.settingsSystem.s8.callout2.title') }}</div>
         <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s8.callout2.text')"></div>
       </div>
+    </section>
+
+    <!-- ── 9 · Security ─────────────────────────────────────────────── -->
+    <section class="syh-section">
+      <h2 class="syh-h2"><span class="syh-num">9</span>{{ $t('settings.help.settingsSystem.s9.title') }}</h2>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s9.p1', guardLabels)"></p>
+
+      <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s9.h1') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s9.p2', guardLabels)"></p>
+      <ul class="syh-list">
+        <li v-for="key in guardItems" :key="key" v-html="$t(`settings.help.settingsSystem.s9.items.${key}`, guardLabels)"></li>
+      </ul>
+
+      <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s9.h2', guardLabels) }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s9.p3', guardLabels)"></p>
     </section>
   </div>
 </template>

@@ -88,6 +88,30 @@ const troubleshooting = [
 
 const { t } = useI18n()
 
+// ── Channels ─────────────────────────────────────────────────────────────
+// Settings ▸ Channels, the bind dialog and the titlebar monitor, quoted with
+// the keys those surfaces render (ChannelsPane.vue, PaneChannelButton.vue,
+// ChannelMonitorModal.vue). Mirror levels are listed in the bind dialog's own
+// order, least to most.
+const channelSetup = ['global', 'bots', 'quick', 'link', 'pairing'] as const
+const channelLevels = ['replies', 'minimal', 'standard', 'full'] as const
+const channelAnswers = ['bare', 'which', 'never', 'guard'] as const
+const channelLabels = computed(() => ({
+  nav: t('channels.nav'),
+  global: t('channels.global.title'),
+  botAdd: t('channels.bot.add'),
+  quickAdd: t('channels.quick.add'),
+  linkAccount: t('channels.link.link-account'),
+  pairing: t('channels.pairing.title'),
+  allow: t('channels.allow.title'),
+  connect: t('channels.pane.connect'),
+  replies: t('channels.pane.verbosity-replies'),
+  minimal: t('channels.pane.verbosity-minimal'),
+  standard: t('channels.pane.verbosity-standard'),
+  full: t('channels.pane.verbosity-full'),
+  monitor: t('channels.monitor.open'),
+}))
+
 // ── Mock screenshots ────────────────────────────────────────────────────────
 // Two HTML pictures, drawn from the components they depict rather than
 // captured. The ASCII diagram in section 1 stays: it is a SEQUENCE (who acts,
@@ -444,6 +468,32 @@ const logRows = computed(() => [
       <p class="cmh-note">{{ $t('settings.help.messaging.s12.note') }}</p>
     </section>
 
+    <!-- ── Channels: talking to a pane from a chat app ──────────────── -->
+    <section class="cmh-section">
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.channels.title', channelLabels) }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.channels.p1', channelLabels)"></p>
+
+      <h3 class="cmh-h3">{{ $t('settings.help.messaging.channels.h1') }}</h3>
+      <ul class="cmh-list">
+        <li v-for="key in channelSetup" :key="key" v-html="$t(`settings.help.messaging.channels.setup.${key}`, channelLabels)"></li>
+      </ul>
+
+      <h3 class="cmh-h3">{{ $t('settings.help.messaging.channels.h2') }}</h3>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.channels.p2', channelLabels)"></p>
+      <ul class="cmh-list">
+        <li v-for="key in channelLevels" :key="key" v-html="$t(`settings.help.messaging.channels.levels.${key}`, channelLabels)"></li>
+      </ul>
+      <p class="cmh-p">{{ $t('settings.help.messaging.channels.p3') }}</p>
+
+      <h3 class="cmh-h3">{{ $t('settings.help.messaging.channels.h3') }}</h3>
+      <ul class="cmh-list">
+        <li v-for="key in channelAnswers" :key="key" v-html="$t(`settings.help.messaging.channels.answer.${key}`)"></li>
+      </ul>
+
+      <h3 class="cmh-h3">{{ $t('settings.help.messaging.channels.h4') }}</h3>
+      <p class="cmh-p">{{ $t('settings.help.messaging.channels.p4', channelLabels) }}</p>
+    </section>
+
     <p class="cmh-tip">{{ $t('settings.help.messaging.tip') }}</p>
   </div>
 </template>
@@ -493,6 +543,12 @@ const logRows = computed(() => [
 .cmh-h2 {
   margin: 0;
   font-size: var(--font-md);
+  font-weight: 700;
+  color: var(--text-bright);
+}
+.cmh-h3 {
+  margin: 6px 0 0;
+  font-size: var(--font-sm);
   font-weight: 700;
   color: var(--text-bright);
 }

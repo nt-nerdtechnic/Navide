@@ -25,7 +25,7 @@ const LITERAL_OPTIONS = ['繁體中文', '日本語']
 // The first table is the settings nav: nineteen pages in four groups,
 // counted from SettingsModal.vue's `.s-nav-group` blocks rather than from the
 // prose. The last one is section 8's which-surface-is-which table.
-const TABLE_ROWS = [19, 14, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
+const TABLE_ROWS = [22, 14, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
 
 function unexpectedWarnings(warn: ReturnType<typeof vi.spyOn>): unknown[][] {
   return warn.mock.calls.filter(([first]) => !String(first).startsWith(HTML_ADVISORY))
@@ -66,7 +66,7 @@ describe('SettingsSystemHelp', () => {
     expect(text).toContain('Status badges')
     expect(text).toContain('Confirm before closing a pane')
     expect(text).toContain('Pipeline Manager')
-    expect(wrapper.findAll('.syh-h2')).toHaveLength(8)
+    expect(wrapper.findAll('.syh-h2')).toHaveLength(9)
     expect(rowCounts(wrapper)).toEqual(TABLE_ROWS)
 
     // Placeholder prose, not interpolations — the escapes must survive.
@@ -91,7 +91,7 @@ describe('SettingsSystemHelp', () => {
     expect(text).toContain('狀態徽章')
     expect(text).toContain('關閉 pane 前確認')
     expect(text).toContain('流程管理')
-    expect(wrapper.findAll('.syh-h2')).toHaveLength(8)
+    expect(wrapper.findAll('.syh-h2')).toHaveLength(9)
     expect(rowCounts(wrapper)).toEqual(TABLE_ROWS)
 
     expect(text).toContain('{file}')
@@ -110,7 +110,7 @@ describe('SettingsSystemHelp', () => {
     expect(figures.map((f) => f.findAll('.mk-fig-legend li').length)).toEqual([3, 3])
     // The nav picture draws the real sidebar: four groups, nineteen pages.
     expect(figures[0].findAll('.mk-set-grouptitle')).toHaveLength(4)
-    expect(figures[0].findAll('.mk-set-navitem')).toHaveLength(19)
+    expect(figures[0].findAll('.mk-set-navitem')).toHaveLength(22)
     // ...and the search box with the two hits it drops down.
     expect(figures[0].findAll('.mk-set-result')).toHaveLength(2)
     // The resource picture: a header row plus one row per pane.

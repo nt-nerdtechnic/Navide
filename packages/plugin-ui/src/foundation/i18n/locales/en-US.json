@@ -1878,14 +1878,14 @@
         "intro": "What each of the nineteen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
         "s1": {
           "title": "Settings overview",
-          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>19 tabs</strong> in total.",
+          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>22 tabs</strong> in total.",
           "h1": "The search field",
           "p2": "Below the sidebar heading is a search field with the placeholder <code>Search settings…</code>. It matches setting titles, their section and their keywords <strong>across tabs</strong> (using the current interface language and indexed keywords), listing at most 8 results; clicking one switches to that tab and scrolls to the section (with one exception: \"Storage\" closes settings and opens the Resource Manager directly). With no match it shows <code>No matching settings</code>. <kbd class=\"syh-kbd\">Esc</kbd> clears it.",
           "callout": {
             "title": "The search index is not exhaustive",
-            "text": "The index is a hand-maintained list, and <strong>the CLI Agents, Layout, Notifications and Extensions tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself."
+            "text": "The index is a hand-maintained list, and <strong>the {layout}, {notifications}, {security} and {channels} tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself. A CLI Agents entry opens one CLI's settings drawer directly (see the \"CLI Agents & Accounts\" topic)."
           },
-          "h2": "The nineteen tabs",
+          "h2": "The twenty-two tabs",
           "tabTable": {
             "group": "Group",
             "tab": "Tab",
@@ -1917,6 +1917,10 @@
               "what": "Desktop notifications and the completion chime for CLI turns, plus the macOS permission check",
               "more": "section 2 of this page"
             },
+            "voice": {
+              "what": "Hold-to-talk voice input transcribed on this machine: shortcut, microphone, recording mode, Chinese output, model and engine",
+              "more": "The \"Voice input\" chapter of the \"{workspace}\" topic"
+            },
             "cloud": {
               "what": "Cross-device link status, this machine's fingerprint, who may command this machine",
               "more": "section 5 of this page"
@@ -1932,6 +1936,14 @@
             "analyzer": {
               "what": "The local inference backend, model downloads, model benchmarks",
               "more": "section 4 of this page"
+            },
+            "security": {
+              "what": "Navide Guard's rules and levels, protected branches, custom rules, and command protection for plain terminals",
+              "more": "Chapter 9 of this page"
+            },
+            "channels": {
+              "what": "Connect chat-app bots such as Telegram or Slack to CLI panes: bots, pairing, allowlist, account linking",
+              "more": "The \"{messaging}\" topic"
             },
             "mcp": {
               "what": "Adding, enabling and inspecting MCP servers",
@@ -2226,6 +2238,10 @@
           "h4": "Extensions",
           "p6": "Below the policy block sits the plugin inventory, in <strong>two parts</strong>: <strong>Bundled</strong> (packages shipped with the app, such as Bundled Git, which can be disabled and then <em>Restore</em>d) and <strong>Installed</strong> (ones you installed yourself, listing their sensitive capabilities and dependencies, with <em>Remove</em>). Every row in both parts carries an extra line with its <em>Manifest Permissions</em> and <em>Package-version Grant</em>, spelling out what this version was actually granted; with no matching grant it says so. <strong>Searching the registry and installing new packages is now its own tab, Marketplace</strong> — not here.",
           "p7": "Installing takes <strong>up to two confirmations</strong>, each shown only when needed, and nothing is written to disk before them: if the publisher is not trusted yet, \"trust the publisher\" comes first — the screen says plainly that <em>a valid signature only proves the package was not tampered with, not that you are willing to run this publisher's code</em>; if the package carries a risk that needs confirming, \"confirm the plugin's permissions\" follows, listing the sensitive capabilities it asks for and warning specifically when it ships a native backend executable. When neither applies, it installs straight away.",
+          "extRollback": "When the host has a package to go back to, the row gains \"{toBundled}\" or \"{toVersion}\": after a confirmation it rolls back to the package it displaced, and \"{restart}\" finishes the switch. A refused or failed rollback shows the host's own reason, translated, and a failed one restores the views it took down.",
+          "extPrerelease": "Each extension's row has a \"{prerelease}\" box, so pre-releases are opted into per extension; the Marketplace's version list marks which versions are pre-releases and can install one directly.",
+          "extNative": "<strong>{native}</strong>: a third-party extension may ship its own backend program, which never runs by default. Turn on \"{nativeEnable}\", then press \"{allow}\" for that exact version of the extension. It runs in a sandbox with no network (Seatbelt on macOS, bubblewrap on Linux), can read only the workspace opened with it and write only where you allow; any change to the program or its permissions asks again. Windows is not supported yet.",
+          "marketplace": "The \"{marketplace}\" tab: search, filter by category, sort by downloads, last update or rating, hide incompatible entries, with up to three \"{featured}\" at the top. A detail page has the README, changelog and version list, with permissions and compatibility beside them; ratings are read-only here — rating or reporting an extension happens on the registry website after signing in. An entry badged \"{pack}\" installs a whole set with \"{packInstall}\"; removing a pack never removes a member another installed pack still uses. A <code>navide://</code> link only opens the extension's detail page; pressing Install is always left to you.",
           "mirror": "<strong>The download mirror</strong>: every release's files are published twice, on the GitHub Release and on <code>dl.navide.dev</code> — the same bytes, with sha256 sums to check them against. <strong>The mirror is the default update source</strong>: the app points its feed at <code>dl.navide.dev</code> on startup, and GitHub is the fallback. It falls back only on a <strong>network-shaped failure</strong> (unreachable host, timeout, 5xx/429), and once it has, it <strong>stays on GitHub for the rest of the session</strong> — only a restart goes back to the mirror. <strong>A 404 or a signature/checksum error never triggers the fallback</strong> — both hosts carry the same files, so it would fail the same way, and reporting the failure as it is helps more than hiding it.",
           "policyIntro": "The <strong>execution policy</strong> decides what a plugin's backend may execute. It is <strong>not a tab of its own</strong>: it is the block at the top of the Extensions page, with its own scope badge (per user and per workspace) and policy file path. The top of it shows the <em>effective policy</em> — its source, its mode, and its status: <em>active</em>, <em>stale</em>, <em>unavailable</em> or <em>corrupt</em>.",
           "policy": {
@@ -2585,6 +2601,22 @@
             "title": "The account dimension has a start date, and the screen says so",
             "text": "Saved and historical identities remain reachable without open panes, including removed profiles. Unattributed records remain in the separate Unknown bucket; they are never assigned to Default by guesswork. History is read locally, and retry does not enable disabled polling."
           }
+        },
+        "s9": {
+          "title": "Security: Navide Guard and terminal command protection",
+          "p1": "Settings ▸ {nav} manages two gates. Both are <strong>fixed code, never an AI</strong>.",
+          "h1": "Navide Guard",
+          "p2": "Guard grades each risky CLI action as {critical}, {high} or normal, then handles it by <strong>where the request came from</strong>: you at this computer, a chat app, another pane or device, or a pane that has taken in outside content. The decision table at the top is fixed; requests approved from a chat are refused at high and above.",
+          "items": {
+            "builtin": "<strong>{builtin}</strong>: each rule can be set to {critical}, {high} or \"{off}\". Raising takes effect at once; lowering or turning off needs a confirmation, and eight floor rules (reading or sending credentials, Keychain, download-and-run, deleting root or home, formatting, raw disk writes) can go no lower than {high}.",
+            "branches": "<strong>{branches}</strong>: force-pushing or deleting these branches is {critical}; terminal command protection's force-push check uses the same list. Removing a branch needs a confirmation.",
+            "rules": "<strong>{rules}</strong>: each is \"{deny}\" or \"{allow}\". A deny pattern raises matching commands to the level you choose; an allow pattern can lower {high} to normal (never {critical}) — that is what an exception is; there is no separate exceptions list. Adding an allow or removing a deny needs a confirmation.",
+            "test": "<strong>{test}</strong>: type a command to see how Guard would grade it.",
+            "taint": "<strong>{taint}</strong>: a pane that has received content from a chat, a remote device, another pane or MCP shows an \"{badge}\" badge in its header, and until you clear the mark every {high} and {critical} action it takes is asked at this computer first. The badge opens the log of what was delivered and clears the mark.",
+            "audit": "<strong>{audit}</strong>: the decisions Guard made most recently."
+          },
+          "h2": "{terminal}",
+          "p3": "Plain terminal panes (not CLI agents) refuse destructive commands such as <code>rm -rf /</code> or <code>format C:</code>, reading each line the way every shell would. Here you can switch categories on and off (turning one off needs a confirmation, turning one on does not), add \"{block}\" and \"{allowEx}\", and try a command in \"{termTest}\"."
         }
       },
       "codeWorkflow": {
@@ -4056,6 +4088,36 @@
             "busy": "<strong>An agent too busy to be told goes and asks</strong> — a notice can only be written while the pane is idle, so one that works solidly for an hour receives none. It can check between pieces of its own work whether anything it sent is stuck."
           },
           "note": "There is only a pane to write a notice into when the sender is a local pane; a message sent from an external client has none, so looking it up is the only route."
+        },
+        "channels": {
+          "title": "Talking to agents from a chat app ({nav})",
+          "p1": "{nav} bridges Telegram, Discord, Slack, Feishu, DingTalk, Matrix, Mattermost and iMessage to CLI panes, so you can talk to an agent from your phone. <strong>A chat binds to one pane</strong>, and binding and unbinding are announced in that chat.",
+          "h1": "Setting up bots",
+          "setup": {
+            "global": "At the top of Settings ▸ {nav} is the master switch, \"{global}\".",
+            "bots": "Each platform can hold <strong>several bots</strong>: the first is marked as the main bot, and once the platform is set up \"{botAdd}\" adds more. Each bot can be renamed, switched on or off on its own, and removed (which asks first and says how many panes it disconnects), and each keeps its own allowlist, pairing requests and link codes.",
+            "quick": "For platforms that need a secret (all but iMessage), \"{quickAdd}\" sets up a new bot: the clipboard is read only when you press the button, a token is pre-filled only if it has the right shape, and the bot is kept only once the platform accepts its credential.",
+            "link": "Once a bot is connected, a guide under the platform links your own account (\"{linkAccount}\"): open a Telegram DM or add the bot to a group, add it to a Discord server, open a Slack DM, or on the other platforms get a one-time code to send to the bot. The code works once within 10 minutes; when it expires, cannot be saved, or the backend connection drops, the guide stops and says why.",
+            "pairing": "A stranger messaging the bot gets a pairing code (valid for 1 hour) that waits under \"{pairing}\" for your approval; approved people appear under \"{allow}\"."
+          },
+          "h2": "Binding a pane to a chat",
+          "p2": "A pane's header has a \"{connect}\" button. Step one picks the chat, grouped by platform and bot: an existing chat, or a new topic; a chat another pane already uses is marked. Step two confirms <strong>how much reaches the chat</strong>:",
+          "levels": {
+            "replies": "<strong>{replies}</strong> (preselected for a new binding): only answers messages sent from the chat; nothing you type at the computer is sent.",
+            "minimal": "<strong>{minimal}</strong>: adds each turn's result and confirmation prompts.",
+            "standard": "<strong>{standard}</strong>: also adds notices of local commands, progress and subagent summaries.",
+            "full": "<strong>{full}</strong>: sends everything."
+          },
+          "p3": "A pane that was bound to the same chat before reuses its last level. Redaction only masks this bot's own credentials; everything else is sent as is, and the dialog says so. Once bound, the header shows a chip with the level, whose menu changes the level and lists child panes. Child panes it opens get their own topic under the same chat automatically, and moving the pane to another chat moves its child topics with it.",
+          "h3": "Answering CLI prompts from the chat",
+          "answer": {
+            "bare": "Permission prompts and questions are posted to the chat one at a time. When only one is open, a bare <code>1</code>–<code>9</code>, <code>yes</code> or <code>no</code> answers it; with several open, add the id after the answer (for example <code>yes &lt;id&gt;</code>). Any other text gets an immediate hint instead of waiting in a queue.",
+            "which": "Only Claude Code, Codex and Aider can be answered from the chat; other CLIs, multi-select and free-text questions ask you to answer at the computer instead of showing buttons that do nothing.",
+            "never": "Permanent choices such as \"don't ask again\", \"always allow\" or \"allow for this session\" are <strong>never pressed from a chat</strong>.",
+            "guard": "Requests approved from a chat still go through Navide Guard: anything graded critical or high is refused, and so is anything Guard cannot judge; the chat is told the action needs confirming at the computer."
+          },
+          "h4": "The titlebar monitor",
+          "p4": "The titlebar's \"{monitor}\" button carries a status dot: red when a bot is blocked, yellow while one is reconnecting, green when they are fine, and no dot when no bot is enabled. It opens a list of every pane bound to a chat, where you can jump to the pane or disconnect it; automatic child topics are grouped under their parent binding."
         }
       },
       "workspace": {
@@ -4305,7 +4367,7 @@
           "h2": "The three levels of the Agents tab",
           "p1": "Top to bottom: <strong>workspace row → group row → pane row</strong>.",
           "rows": {
-            "workspace": "<strong>Workspace row</strong>: collapse arrow, fold button, project name and path, pane count, and on the right <code>↻</code> (rebuild all), History, <code>⋯</code> and <code>＋</code>. The context menu has <em>Open this folder in Finder</em>, <em>Copy path</em>, <em>Reclaim this project's CLIs</em>, moving it into a workspace group, <em>Close workspace</em> (drops the row and leaves its CLIs running for a later reopen) and <em>Close workspace and its panes</em> (ends them). <code>⋯</code> opens the full version of the same set (rebuild all panes, History, Finder, copy path, rename project, open in its own window, reclaim, close); it <strong>flips upward near the bottom of the window</strong>, and when the menu itself is long, <strong>scrolling inside it no longer dismisses it</strong> — only scrolling elsewhere does.",
+            "workspace": "<strong>Workspace row</strong>: collapse arrow, fold button, project name and path, pane count (<code>live / total</code>; reclaimed panes and placeholders waiting to be restored do not count as live), and on the right <code>↻</code> (rebuild all), History, <code>⋯</code> and <code>＋</code>. The context menu has <em>Open this folder in Finder</em>, <em>Copy path</em>, <em>Reclaim this project's CLIs</em>, moving it into a workspace group, <em>Close workspace</em> (drops the row and leaves its CLIs running for a later reopen) and <em>Close workspace and its panes</em> (ends them). <code>⋯</code> opens the full version of the same set (rebuild all panes, History, Finder, copy path, rename project, open in its own window, reclaim, close); it <strong>flips upward near the bottom of the window</strong>, and when the menu itself is long, <strong>scrolling inside it no longer dismisses it</strong> — only scrolling elsewhere does.",
             "group": "<strong>Group row</strong>: sticks to the top while scrolling and shows a status dot, the group name, the member count, a fold button that only appears on hover, and a <code>＋</code> that opens an agent inside that group. Member rows carry a neutral-colored rail along their left edge to show they belong to one group.",
             "pane": "<strong>Pane row</strong>: name, status, the Docked label and so on."
           },
@@ -4313,6 +4375,9 @@
             "title": "Renaming and deleting groups is not in the sidebar",
             "text": "Rename / delete / detach for a group happen on its tab in the <strong>tab bar at the top</strong>; the sidebar's group row only displays it and adds panes."
           },
+          "hMode": "Sidebar mode: {workspace} / {free}",
+          "mode": "The Agents tab's header has a two-way switch (shown only when at least one workspace exists and the window is not a detached one). <strong>{workspace}</strong> is the three-level tree described above. <strong>{free}</strong> drops the workspace and group levels and lists every agent in one flat list (child panes still indent under their parent); each row is an outlined card with a <code>parent/workspace</code> line under the name telling you which workspace it belongs to. In Free mode the stage shows <strong>every</strong> pane, and focusing a pane from the sidebar <strong>does not switch workspace</strong>.",
+          "modeNote": "The choice is stored in your user settings, so it carries over to a restart and to new windows, and windows already open follow it live; detached windows always stay in {workspace}. In Free mode, closing, rebuilding or reclaiming a tab <strong>still only acts on the current workspace's panes</strong>, and says how many panes from other workspaces were left alone. The <code>＋</code> at the far right of the header opens an agent in the current workspace in Free mode; in {workspace} mode, or with no workspace open, it opens the workspace picker.",
           "h3": "Lineage indentation",
           "p2": "Sub-panes opened by an agent or by MCP hang under their parent with 13px of indentation per level, and the parent row carries a <code>▾</code> / <code>▸</code> that collapses the whole subtree. <strong>There is no separate label</strong> — the indentation itself is what says \"someone else opened this, you did not\".",
           "folds": {
@@ -4449,6 +4514,31 @@
               "action": "Preview tab"
             }
           }
+        },
+        "voice": {
+          "title": "Voice input",
+          "p1": "Hold a key and speak: Navide turns the speech into text <strong>on this machine</strong> with Whisper and types it into the input box of <strong>the CLI pane that had focus when you pressed the key</strong>. No audio leaves the computer. The feature is off by default: turn on \"{enabled}\" in Settings ▸ {nav}, then press Download on the \"{model}\" row (about 148 MB), and it is ready.",
+          "h1": "How one take works",
+          "take": {
+            "start": "Hold the shortcut (<kbd class=\"wph-kbd\">Ctrl</kbd>+<kbd class=\"wph-kbd\">Alt</kbd>+<kbd class=\"wph-kbd\">M</kbd> by default). A capsule appears at the bottom of the pane and shows the partial text it has recognised while you speak.",
+            "release": "Release: the text goes into the input box and is <strong>not sent</strong>; read it, then press <kbd class=\"wph-kbd\">Enter</kbd> yourself.",
+            "enter": "Press <kbd class=\"wph-kbd\">Enter</kbd> during a take to end it and send at once. If the pane could not press Enter, the capsule says the text is in the input box but was not sent.",
+            "esc": "<kbd class=\"wph-kbd\">Esc</kbd> cancels while recording or transcribing. While the capsule shows an error, Esc goes to the CLI instead; dismiss the error with the capsule's ✕.",
+            "limit": "Limits: 60 seconds for a held take, 5 minutes hands-free, with a countdown over the last 10 seconds.",
+            "target": "If the focused pane is not a CLI pane, nothing starts and the capsule says voice input only goes to CLI panes."
+          },
+          "h2": "Settings ▸ {nav}",
+          "rows": {
+            "enabled": "The master switch, off by default. While it is off, the rows below are hidden.",
+            "shortcut": "Records a key in place. It can be a chord, a function key such as F13, a lone modifier (for example Right Option), or the fn (🌐) key on a Mac; a lone ⌘ or ⌃ starts only after being held alone for a moment, so ⌘ shortcuts keep working. Typing keys (letters, Space, Enter, Tab, Esc), chords macOS reserves and keys a Navide menu already uses are refused; a ⌘ chord is only allowed in \"{toggle}\" mode and must not clash with another command. A refusal says why and suggests up to three free keys. This is the same binding as the one in Settings ▸ Shortcuts; the two stay in step.",
+            "fnKey": "Shown only on macOS, and only while fn is the shortcut. It relies on a small listen-only helper that needs Input Monitoring permission; a failed start, a failed or timed-out permission request is reported on this row with a retry.",
+            "device": "Follows the system default. A chosen microphone that disappears is flagged; a silent microphone or a refused permission makes the capsule name the device.",
+            "mode": "Three: \"{holdTap}\" (the default — hold to talk and release to insert, or tap quickly to record hands-free until you press again), \"{hold}\" and \"{toggle}\".",
+            "script": "Whether recognised Chinese is converted; \"{hantTw}\" by default, or Simplified, or no conversion.",
+            "model": "The Whisper model. You download it once with the button; it is kept in Navide's data folder.",
+            "engine": "The state of the local transcription engine (including whether it uses the GPU), with a retry when it fails. It warms up when the backend connects and after the model downloads, so the first take already shows live text."
+          },
+          "note": "Platforms: the fn key is macOS only; everything else works on macOS, Windows and Linux. On a few architectures (Linux arm64, Windows arm64) a package that ships without the speech engine says so on the \"{engine}\" row."
         }
       },
       "mcp": {
