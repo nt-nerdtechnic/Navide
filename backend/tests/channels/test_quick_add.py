@@ -1,0 +1,148 @@
+"""``channels.quick_add``: configure, wait for the platform to accept the credential,
+name the bot after its identity and hand back a link invite; any failure leaves no trace."""
+
+from __future__ import annotations
+
+import pytest
+
+from agent_team_backend.channels import manager as mgr_mod
+from agent_team_backend.channels import ws_api
+
+from .test_manager import Env, env, fast_timers  # noqa: F401 — fixtures shared with the manager suite
+
+ACCOUNT = "bot-q1"
+
+
+@pytest.fixture(autouse=True)
+def fast_quick_add(monkeypatch):
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_POLL_S", 0.01)
+
+
+def _login_as(env: Env, behaviour: str, identity: str = "@quick_bot") -> None:
+    """Make bots built from now on log in like ``behaviour``: ready / rejected / silent."""
+    original = env.m._factory_for
+
+    def factory_for(platform: str):
+        build = original(platform)
+
+        def wrapped(config, secret, store):
+            ad = build(config, secret, store)
+
+            async def start(emit) -> None:
+                ad.emit = emit
+                if behaviour == "ready":
+                    ad.status.identity = identity
+                    ad.status.lifecycle = "ready"
+                    ad.status.connected = True
+                elif behaviour == "rejected":
+                    ad.status.lifecycle = "blocked"
+                    ad.status.last_error = "401 Unauthorized"
+                else:  # silent: connecting forever, the last attempt failed
+                    ad.status.lifecycle = "recovering"
+                    ad.status.last_error = "ConnectError: unreachable"
+
+            ad.start = start
+            return ad
+        return wrapped
+
+    env.m._factory_for = factory_for
+
+
+def _no_trace(env: Env, platform: str = "telegram", account: str = ACCOUNT) -> None:
+    assert env.fake.secrets.get(f"channel-{platform}-{account}") is None
+    assert (platform, account) not in env.store.accounts()
+    assert env.m.adapter_for(platform, account) is None
+    assert all(holder != (platform, account) for holder in env.m._lease.values())
+
+
+async def test_success_names_the_bot_and_returns_a_link(env: Env) -> None:
+    _login_as(env, "ready")
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT, "direct")
+    assert res["ok"], res
+    assert res["identity"] == "@quick_bot" and res["name"] == "@quick_bot"
+    assert env.store.accounts()[("telegram", ACCOUNT)]["config"]["name"] == "@quick_bot"
+    assert env.fake.secrets["channel-telegram-bot-q1"] == '{"token":"tok-Q"}'
+    link = res["link"]
+    assert link["target"] == "direct" and link["code"] and link["expires_at"] > 0 and "ok" not in link
+    # The invite is live: sending it links the chat as it would from the link guide.
+    assert env.m.invites.consume("telegram", link["code"], ACCOUNT) is not None
+
+
+async def test_success_keeps_a_name_the_user_gave(env: Env) -> None:
+    _login_as(env, "ready")
+    res = await env.m.quick_add("telegram", {"name": "Ops"}, {"token": "tok-Q"}, ACCOUNT)
+    assert res["ok"] and res["name"] == "Ops" and res["link"] is None  # no target asked: no invite
+    assert env.store.accounts()[("telegram", ACCOUNT)]["config"]["name"] == "Ops"
+
+
+async def test_rejected_token_leaves_no_trace(env: Env) -> None:
+    _login_as(env, "rejected")
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-bad"}, ACCOUNT)
+    assert res == {"ok": False, "reason": "rejected", "error": "401 Unauthorized"}
+    _no_trace(env)
+    # The token is free again: the lease went with the bot.
+    _login_as(env, "ready")
+    assert (await env.m.quick_add("telegram", {}, {"token": "tok-bad"}, ACCOUNT))["ok"]
+
+
+async def test_timeout_leaves_no_trace(env: Env) -> None:
+    _login_as(env, "silent")
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-slow"}, ACCOUNT)
+    assert not res["ok"] and res["reason"] == "timeout"
+    assert "unreachable" in res["error"]
+    _no_trace(env)
+
+
+async def test_duplicate_token_is_refused_before_anything_is_stored(env: Env) -> None:
+    # The env's default telegram bot already polls with tok-A.
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-A"}, ACCOUNT)
+    assert not res["ok"] and res["reason"] == "invalid" and "telegram" in res["error"]
+    _no_trace(env)
+    assert env.m.adapter_for("telegram").status.lifecycle == "ready"
+
+
+async def test_an_existing_bot_is_never_quick_added_over(env: Env) -> None:
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-other"}, "default")
+    assert not res["ok"] and "already configured" in res["error"]
+    assert env.fake.secrets["channel-telegram-default"] == '{"token":"tok-A"}'
+
+
+async def test_channels_turned_off_refuse_before_storing(env: Env) -> None:
+    await env.m.set_global_enabled(False)
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT)
+    assert not res["ok"] and res["reason"] == "invalid"
+    _no_trace(env)
+
+
+async def test_adapter_without_a_login_signal_answers_on_save(env: Env) -> None:
+    _login_as(env, "ready")
+    original = env.m._factory_for
+
+    def factory_for(platform: str):
+        build = original(platform)
+
+        def wrapped(config, secret, store):
+            ad = build(config, secret, store)
+
+            async def start(emit) -> None:  # never touches its status
+                ad.emit = emit
+
+            ad.start = start
+            return ad
+        return wrapped
+
+    env.m._factory_for = factory_for
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT)
+    assert res["ok"] and res["identity"] == "" and res["name"] == ""
+
+
+async def test_ws_dispatch_routes_quick_add(env: Env) -> None:
+    _login_as(env, "ready")
+    res = await ws_api._dispatch(env.m, "channels.quick_add", {
+        "platform": "telegram", "account": ACCOUNT, "config": {}, "secret": {"token": "tok-Q"},
+        "link_target": "direct"})
+    assert res["ok"] and res["link"]["code"]
+    assert "channels.quick_add" in ws_api.MESSAGE_TYPES
+    bad = await ws_api._dispatch(env.m, "channels.quick_add", {"platform": "telegram", "secret": "x"})
+    assert bad == {"ok": False, "error": "config and secret must be objects"}

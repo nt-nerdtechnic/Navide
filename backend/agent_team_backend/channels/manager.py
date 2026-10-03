@@ -78,6 +78,8 @@ MSG_HELD_BY_PROMPT = "⚠️ pane 正在等確認，這則訊息沒有送出。{
 MSG_LINKED = "✅ 已連結 Navide。回到 Navide 在 pane 的聊天按鈕選這個聊天室即可。"
 MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
+QUICK_ADD_TIMEOUT_S = 10.0  # how long a quick add waits for the platform to accept the credential
+QUICK_ADD_POLL_S = 0.1
 
 
 # A bot is (platform, account). "default" is every bot from before several bots
@@ -518,6 +520,77 @@ class ChannelManager:
         await self._changed()
         await self.broadcast_status_changes()
         return {"ok": err is None, "platform": platform, "account": account, **({"error": err} if err else {})}
+
+    async def quick_add(self, platform: str, config: dict[str, Any], secret: dict[str, Any] | None,
+                        account: str, link_target: str = "") -> dict[str, Any]:
+        """Add a new bot in one step: ``configure`` it, wait until the platform accepted
+        its credential, name it after its identity when unnamed, and with ``link_target``
+        hand back a link invite (as ``link_create``). Any failure removes everything this
+        call stored; ``reason`` is "rejected" (credential refused), "timeout" or "invalid"
+        (refused before connecting)."""
+        _check_platform(platform)
+        _check_account(account)
+        bot = (platform, account)
+        if bot in self.store.accounts():
+            return {"ok": False, "reason": "invalid", "error": f"{_bot_label(bot)} is already configured"}
+        if not self.store.global_enabled():
+            return {"ok": False, "reason": "invalid", "error": "chat channels are turned off"}
+        result = await self.configure(platform, config, secret, account)
+        if not result.get("ok"):
+            if bot in self.store.accounts():  # stored, but the bot could not start
+                await self._discard_bot(platform, account)
+            return {"ok": False, "reason": "invalid", "error": result.get("error") or "configure failed"}
+        adapter = self._adapters.get(bot)
+        failure = await self._await_first_login(bot, adapter) if adapter is not None else None
+        if failure is not None:
+            await self._discard_bot(platform, account)
+            return {"ok": False, **failure}
+        identity = adapter.status.identity if adapter is not None else ""
+        async with self._lock:
+            acct = self.store.accounts().get(bot)
+            if acct is not None and not acct["config"].get("name") and identity:
+                self.store.upsert_account(platform, {**acct["config"], "name": identity}, account=account)
+        await self._changed()
+        name = str(((self.store.accounts().get(bot) or {}).get("config") or {}).get("name") or "")
+        link = self.link_create(platform, link_target, account) if link_target else {}
+        return {"ok": True, "platform": platform, "account": account, "name": name, "identity": identity,
+                "link": {k: v for k, v in link.items() if k != "ok"} if link.get("ok") else None}
+
+    async def _await_first_login(self, bot: BotKey, adapter: ChannelAdapter) -> dict[str, str] | None:
+        """None once ``adapter`` reached ready (or never reports progress at all);
+        otherwise why it did not within QUICK_ADD_TIMEOUT_S."""
+        status = adapter.status
+        # An adapter that never left "stopped" has no login signal to wait for.
+        if status.lifecycle == "stopped":
+            return None
+
+        async def settled() -> dict[str, str] | None:
+            while True:
+                if status.lifecycle == "ready":
+                    return None
+                if status.lifecycle == "blocked":
+                    return {"reason": "rejected", "error": status.last_error or "credential rejected"}
+                if self._adapters.get(bot) is not adapter:
+                    return {"reason": "invalid", "error": "the bot was stopped while connecting"}
+                await asyncio.sleep(QUICK_ADD_POLL_S)
+
+        try:
+            return await asyncio.wait_for(settled(), QUICK_ADD_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            detail = f": {status.last_error}" if status.last_error else ""
+            return {"reason": "timeout", "error": f"no answer from {bot[0]} within {QUICK_ADD_TIMEOUT_S:g}s{detail}"}
+
+    async def _discard_bot(self, platform: str, account: str) -> None:
+        """Undo a quick add: the connection, the stored credential and every row of the bot."""
+        bot = (platform, account)
+        async with self._lock:
+            await self._stop_bot(platform, account)
+            await self._seams.write_secret(_secret_name(platform, account), None)
+            self._errors.pop(bot, None)
+            self._secret_hints.pop(bot, None)
+            self.store.remove_account(platform, account)
+        await self._changed()
+        await self.broadcast_status_changes()
 
     async def rename_account(self, platform: str, account: str, name: str) -> dict[str, Any]:
         """A bot's display name only: its id, credential and connection stay as they are."""
