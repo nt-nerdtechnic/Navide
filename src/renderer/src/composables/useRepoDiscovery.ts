@@ -5,6 +5,8 @@ import type { GitTransport } from '../../../shared/gitCompatibility'
 export interface RepoBadge {
   branch: string
   dirtyCount: number
+  /** Set when the status read failed, so the tab never shows a fake clean repo. */
+  error?: string
 }
 
 export interface DiscoveredRepoWithBadge extends DiscoveredRepo {
@@ -39,15 +41,22 @@ export function useRepoDiscovery(
             workspace_path: repo.abs_path,
             include_ignored: false,
           })
-          if (sr.ok && sr.payload) {
+          // A failed or timed-out read arrives as { ok: false, error } inside a
+          // successful envelope (#144); only a payload with is_git_repo is a status.
+          if (sr.ok && sr.payload && typeof sr.payload.is_git_repo === 'boolean') {
             const s = sr.payload
             badge = {
               branch: s.branch || repo.branch,
               dirtyCount: s.staged.length + s.unstaged.length + s.untracked.length,
             }
+          } else {
+            const payloadError = (sr.payload as { error?: unknown } | null)?.error
+            badge.error = sr.error?.message
+              || (typeof payloadError === 'string' ? payloadError : '')
+              || 'Unable to load Git status'
           }
-        } catch {
-          // leave default badge
+        } catch (error) {
+          badge.error = error instanceof Error ? error.message : String(error)
         }
         return { ...repo, badge }
       }),

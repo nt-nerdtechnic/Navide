@@ -78,6 +78,26 @@ describe('useRepoDiscovery forced refresh ownership', () => {
 })
 
 describe('useRepoDiscovery failure and Windows paths', () => {
+  it('marks the badge when the status read failed instead of showing a clean repo', async () => {
+    // get_status reports a failed or timed-out read inside a successful envelope (#144).
+    const send = vi.fn(async (type: string) => type === 'git.discover_repositories'
+      ? { ok: true, payload: { ok: true, repositories: [{ rel_path: 'a', abs_path: '/ws/a', branch: 'main' }] } }
+      : { ok: true, payload: { ok: false, error: 'git timed out' } })
+    const transport = { send, on: () => () => undefined } as unknown as GitTransport
+    const scope = effectScope()
+    const discovery = scope.run(() => useRepoDiscovery(() => '/ws', transport))!
+    await flush()
+    await flush()
+    expect(discovery.repositories.value[0].badge).toEqual({
+      branch: 'main', dirtyCount: 0, error: 'git timed out',
+    })
+
+    await discovery.adopt([{ rel_path: 'b', abs_path: '/ws/b', branch: 'dev' }])
+    expect(discovery.repositories.value[0].badge).toEqual({
+      branch: 'dev', dirtyCount: 0, error: 'git timed out',
+    })
+    scope.stop()
+  })
   it('flags a failed scan and clears the flag once a scan succeeds (MED-5)', async () => {
     let fail = true
     const send = vi.fn(async (type: string) => {

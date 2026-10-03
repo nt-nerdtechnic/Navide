@@ -9,7 +9,7 @@ import {
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 
 // Stub useRepoDiscovery so we can control the repositories list.
-const mockRepositories = ref<{ rel_path: string; abs_path: string; branch: string; badge: { branch: string; dirtyCount: number } }[]>([])
+const mockRepositories = ref<{ rel_path: string; abs_path: string; branch: string; badge: { branch: string; dirtyCount: number; error?: string } }[]>([])
 
 import MultiRepoGit from '../MultiRepoGit.vue'
 
@@ -134,6 +134,19 @@ describe('MultiRepoGit – multi-repo tab bar', () => {
 
     const secondTab = wrapper.findAll('.repo-tab')[1]
     expect(secondTab.find('.repo-tab-badge').exists()).toBe(false)
+  })
+
+  it('marks a tab whose status read failed', () => {
+    mockRepositories.value = [
+      { ...makeRepo('.', '/ws', ''), badge: { branch: '', dirtyCount: 0, error: 'git timed out' } },
+      makeRepo('sub', '/ws/sub', 'dev'),
+    ]
+    const wrapper = mountMultiRepo({
+      props: { workspacePath: '/ws', legacyRepoSelection: stubLegacyRepoSelection, surfacePorts: stubSurfacePorts, repositorySource: mockRepositories },
+    })
+    const badge = wrapper.find('.repo-tab-badge-error')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toBe('git timed out')
   })
 
   it('clicking a tab switches active state', async () => {

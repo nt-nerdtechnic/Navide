@@ -82,6 +82,25 @@ describe('useRepoDiscovery', () => {
     scope.stop()
   })
 
+  it('marks the badge when the status read failed instead of showing a clean repo', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+    ]))
+    // get_status reports a failed or timed-out read inside a successful envelope (#144).
+    mock.setResponse('git.status', { ok: false, error: 'git timed out' })
+
+    const { result, scope } = withScope(() =>
+      useRepoDiscovery(() => '/ws', mock.backend),
+    )
+    await flush()
+
+    expect(result.repositories.value[0].badge).toEqual({
+      branch: 'main', dirtyCount: 0, error: 'git timed out',
+    })
+    scope.stop()
+  })
+
   it('refreshes on git.changed broadcast after debounce', async () => {
     vi.useFakeTimers()
     const mock = createMockBackend('connected')

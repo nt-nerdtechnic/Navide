@@ -5,7 +5,7 @@ import { ref } from 'vue'
 import MultiRepoGit from '../MultiRepoGit.vue'
 
 // Stub useRepoDiscovery so we can control the repositories list.
-const mockRepositories = ref<{ rel_path: string; abs_path: string; branch: string; badge: { branch: string; dirtyCount: number } }[]>([])
+const mockRepositories = ref<{ rel_path: string; abs_path: string; branch: string; badge: { branch: string; dirtyCount: number; error?: string } }[]>([])
 
 vi.mock('../../composables/useRepoDiscovery', () => ({
   useRepoDiscovery: () => ({ repositories: mockRepositories, refresh: vi.fn(), adopt: vi.fn() }),
@@ -100,6 +100,19 @@ describe('MultiRepoGit – multi-repo tab bar', () => {
 
     const secondTab = wrapper.findAll('.repo-tab')[1]
     expect(secondTab.find('.repo-tab-badge').exists()).toBe(false)
+  })
+
+  it('marks a tab whose status read failed', () => {
+    mockRepositories.value = [
+      { ...makeRepo('.', '/ws', ''), badge: { branch: '', dirtyCount: 0, error: 'git timed out' } },
+      makeRepo('sub', '/ws/sub', 'dev'),
+    ]
+    const wrapper = shallowMount(MultiRepoGit, {
+      props: { workspacePath: '/ws', backend: stubBackend, surfacePorts: stubSurfacePorts },
+    })
+    const badge = wrapper.find('.repo-tab-badge-error')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toBe('git timed out')
   })
 
   it('clicking a tab switches active state', async () => {
