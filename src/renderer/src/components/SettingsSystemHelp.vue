@@ -212,6 +212,12 @@ const usageSurfaces = [
 
 const { t } = useI18n()
 
+// Labels the prose quotes, read from the keys the product itself renders so a
+// renamed tab, topic or button renames the help text too.
+const topicNames = computed(() => ({
+  mcp: t('settings.help.topic.mcp'),
+}))
+
 // ── Mock screenshots ────────────────────────────────────────────────────────
 // Two HTML pictures, drawn from the components they depict. Both are about
 // ARRANGEMENT — which control sits where — because that is the one thing the
@@ -383,7 +389,7 @@ const resourceRows = computed(() => [
               <td v-if="row.groupKey" :rowspan="row.groupSpan" class="syh-group">{{ $t(row.groupKey) }}</td>
               <td class="syh-nowrap"><strong>{{ $t(row.navKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s1.tabs.${row.key}.what`) }}</td>
-              <td class="syh-muted">{{ $t(`settings.help.settingsSystem.s1.tabs.${row.key}.more`) }}</td>
+              <td class="syh-muted">{{ $t(`settings.help.settingsSystem.s1.tabs.${row.key}.more`, topicNames) }}</td>
             </tr>
           </tbody>
         </table>
@@ -430,7 +436,7 @@ const resourceRows = computed(() => [
       </div>
 
       <h3 class="syh-h3">{{ $t('settings.nav.language') }}</h3>
-      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s2.appearance.language')"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s2.language')"></p>
 
       <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s2.h3') }}</h3>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s2.p1')"></p>

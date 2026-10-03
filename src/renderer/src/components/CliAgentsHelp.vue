@@ -175,6 +175,27 @@ const installLegend = computed(() => mockLegend('install', ['steps', 'chain', 'c
 const settingsLegend = computed(() => mockLegend('settings', ['grip', 'toggle', 'launch', 'perm']))
 const usageLegend = computed(() => mockLegend('usage', ['windows', 'reset', 'accounts']))
 
+// Settings ▸ CLI Agents labels quoted by the s4 prose, read from the product's
+// own keys so a renamed button renames the help text too.
+const cardLabels = computed(() => ({
+  search: t('settings.cliAgents.search'),
+  all: t('settings.cliAgents.filter-all'),
+  enabled: t('settings.cliAgents.filter-enabled'),
+  attention: t('settings.cliAgents.filter-attention'),
+  redetect: t('cli-manage.redetect'),
+  enabledBox: t('settings.cliAgents.enabled'),
+  reorderFiltered: t('settings.cliAgents.reorder-filtered'),
+}))
+const drawerLabels = computed(() => ({
+  manage: t('settings.cliAgents.manage'),
+  overview: t('settings.cliAgents.tab-overview'),
+  launch: t('settings.cliLaunch.title'),
+  perm: t('settings.cliPermission.title'),
+  push: t('settings.pushChannels.title'),
+  install: t('cli-manage.title'),
+  enabledBox: t('settings.cliAgents.enabled'),
+}))
+
 // The + menu, with the fourth vendor in its "binary not found" form.
 const menuItems = computed(() => [
   { label: sample('vendorA'), checked: true },
@@ -372,11 +393,12 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
     <!-- ── 4 · Settings ▸ CLI Agents ───────────────────────────────── -->
     <section class="cah-section">
       <h2 class="cah-h2"><span class="cah-num">4</span>{{ $t('settings.help.cliAgents.s4.title') }}</h2>
-      <p class="cah-p">{{ $t('settings.help.cliAgents.s4.p1') }}</p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.p1', { manage: $t('settings.cliAgents.manage') })"></p>
 
       <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h1') }}</h3>
-      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.p2')"></p>
-      <p class="cah-p">{{ $t('settings.help.cliAgents.s4.chipsIntro') }}</p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.p2', cardLabels)"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.attention', cardLabels)"></p>
+      <p class="cah-p">{{ $t('settings.help.cliAgents.s4.chipsIntro', drawerLabels) }}</p>
       <div class="cah-tablewrap">
         <table class="cah-table">
           <thead>
@@ -394,6 +416,10 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
         </table>
       </div>
       <p class="cah-note">{{ $t('settings.help.cliAgents.s4.chipsLegend') }}</p>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.hDrawer') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.drawer', drawerLabels)"></p>
+      <p class="cah-p">{{ $t('settings.help.cliAgents.s4.drawerSearch') }}</p>
 
       <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h2') }}</h3>
       <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.launchIntro')"></p>
@@ -458,7 +484,13 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
       >
         <MockPanel :label="$t('settings.cliAgents.title')">
           <MockFormRow grip check="on" :label="sample('vendorA')" />
-          <MockFormRow grip check="on" :label="sample('vendorB')" />
+          <MockFormRow
+            grip
+            check="on"
+            :label="sample('vendorB')"
+            badge="!"
+            badge-tone="warn"
+          />
           <MockFormRow grip check="off" :label="sample('vendorC')" dim />
         </MockPanel>
         <MockPanel :label="$t('settings.cliLaunch.title')">
@@ -483,11 +515,6 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
             :label="sample('vendorA')"
             code="--dangerously-skip-permissions"
             :select="$t('settings.cliPermission.mode-inherit')"
-          />
-          <MockFormRow
-            :label="sample('vendorC')"
-            code="--yolo"
-            :select="$t('settings.cliPermission.mode-force-off')"
           />
         </MockPanel>
       </MockFigure>

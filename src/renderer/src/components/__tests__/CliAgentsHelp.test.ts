@@ -81,8 +81,9 @@ describe('CliAgentsHelp', () => {
     // + menu, install dialog, settings rows, quota bars — one per figure.
     expect(figures.map((f) => f.findAll('.mk-menu').length)).toEqual([1, 0, 0, 0])
     expect(figures.map((f) => f.findAll('.mk-dlg').length)).toEqual([0, 1, 0, 0])
-    // Settings: three list rows, four launch-override rows, three permission rows.
-    expect(figures.map((f) => f.findAll('.mk-frow').length)).toEqual([0, 4, 10, 2])
+    // Settings: three cards, then the drawer's four launch-override rows and
+    // its two permission rows (the global switch and this CLI's own row).
+    expect(figures.map((f) => f.findAll('.mk-frow').length)).toEqual([0, 4, 9, 2])
     expect(figures.map((f) => f.findAll('.mk-meter').length)).toEqual([0, 0, 0, 2])
 
     // The pictures reuse the product's own strings, so they turn English with

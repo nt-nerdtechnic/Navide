@@ -1935,7 +1935,7 @@
             },
             "mcp": {
               "what": "Adding, enabling and inspecting MCP servers",
-              "more": "the \"Agent collaboration\" topic"
+              "more": "the \"{mcp}\" topic"
             },
             "skills": {
               "what": "The shared skill library and the routing matrix",
@@ -1973,7 +1973,7 @@
           "note": "The Help tab holds no settings at all: it is a row of <strong>topic tabs</strong>, one page per topic, and the one you are reading is \"Settings &amp; System\". <strong>Individual settings tabs do not carry help of their own</strong> — all of it lives here. When settings search matches a help entry it switches to the Help tab <strong>and jumps to the matching topic</strong>; in the other direction, neither the main window nor the native menus has an entry point straight to it, so settings is the only way in. Moving the whole set of settings to another machine lives in <strong>General ▸ Settings management</strong> (section 2), not at the bottom of the window."
         },
         "s2": {
-          "title": "General, Appearance, Status badges",
+          "title": "General, Appearance, Language, Status badges",
           "h1": "General",
           "generalTable": {
             "name": "Setting",
@@ -2042,7 +2042,6 @@
           "appearance": {
             "theme": "<strong>Theme</strong> — five built in: Dark (GitHub), Midnight, Forest, Light and High Contrast, with Dark (GitHub) as the default.",
             "colors": "<strong>Custom Colors</strong> — eight overridable color tokens (background, surface, text, secondary text, border, accent, success, danger). Overrides sit on top of the current theme and are <strong>kept when you switch themes</strong>; <em>↺ Reset to defaults</em> restores them.",
-            "language": "<strong>Language</strong> — <strong>three languages</strong>: <code>繁體中文</code>, <code>English</code>, and <code>日本語</code>. Until you pick one, Navide follows the system language. This is a user-level preference and applies to every workspace.",
             "uiScale": "<strong>Interface Scale</strong> — the first row of the <strong>Appearance ▸ Other</strong> block, and a <strong>dropdown</strong> rather than a slider: six steps (80%, 90%, 100%, 110%, 125%, 150%; 100% by default), on <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd>. It drives Electron's page zoom rather than a CSS variable, so text, icons, borders and spacing all move together, and the main process applies it to <strong>every window</strong>, plugin windows included. It is a <strong>separate axis</strong> from pane font size: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change only the terminal <strong>content</strong> font size (one value shared by every CLI pane in the window), while Interface Scale changes the shell around it — and the two <strong>multiply</strong>, the way a browser's page zoom multiplies with a site's own font size.",
             "restore": "<strong>Restore Windows</strong> — reopen the workspace windows that were open when you last quit."
           },
@@ -2050,6 +2049,7 @@
             "title": "Notifications and sound live on the Notifications tab",
             "text": "The notification toggles do exist — they are simply not on Appearance but on the <strong>Notifications tab</strong>, three of them: <em>System notifications</em> (a desktop notification when a CLI finishes its turn or needs your input while Navide is in the background; the Dock badge keeps counting either way), <em>Notification sound</em> (a short chime on turn completion and a double ping while a CLI waits for you), and <em>Notification permission</em> — macOS does not report the real authorization to Navide, so this one can only send a test notification for you to confirm it appears; if it does not, allow Navide under System Settings → Notifications. That last row only appears on platforms where it applies."
           },
+          "language": "Language is a tab of its own, not part of Appearance. <strong>Three languages</strong>: <code>繁體中文</code>, <code>English</code>, and <code>日本語</code>. Until you pick one, Navide follows the system language (Traditional Chinese when the system language is none of the three). This is a user-level preference and applies to every workspace.",
           "h3": "Status badges",
           "p1": "<strong>Rename and recolor</strong> each of the nine pane states. The Chinese, English, and Japanese names are filled in separately (24 characters each; leave one blank to fall back to the built-in translation). Once changed, the pane badges, the sidebar, the meeting bar and the resource panel all follow. <strong>The setting lives on your account, not with the project.</strong>",
           "statusTable": {
@@ -2225,7 +2225,7 @@
           },
           "h4": "Extensions",
           "p6": "Below the policy block sits the plugin inventory, in <strong>two parts</strong>: <strong>Bundled</strong> (packages shipped with the app, such as Bundled Git, which can be disabled and then <em>Restore</em>d) and <strong>Installed</strong> (ones you installed yourself, listing their sensitive capabilities and dependencies, with <em>Remove</em>). Every row in both parts carries an extra line with its <em>Manifest Permissions</em> and <em>Package-version Grant</em>, spelling out what this version was actually granted; with no matching grant it says so. <strong>Searching the registry and installing new packages is now its own tab, Marketplace</strong> — not here.",
-          "p7": "Installing takes <strong>two confirmations</strong>, and nothing is written to disk before them: first \"trust the publisher\" — the screen says plainly that <em>a valid signature only proves the package was not tampered with, not that you are willing to run this publisher's code</em>; then \"confirm the plugin's permissions\", which lists the sensitive capabilities it asks for and warns specifically when it ships a native backend executable.",
+          "p7": "Installing takes <strong>up to two confirmations</strong>, each shown only when needed, and nothing is written to disk before them: if the publisher is not trusted yet, \"trust the publisher\" comes first — the screen says plainly that <em>a valid signature only proves the package was not tampered with, not that you are willing to run this publisher's code</em>; if the package carries a risk that needs confirming, \"confirm the plugin's permissions\" follows, listing the sensitive capabilities it asks for and warning specifically when it ships a native backend executable. When neither applies, it installs straight away.",
           "mirror": "<strong>The download mirror</strong>: every release's files are published twice, on the GitHub Release and on <code>dl.navide.dev</code> — the same bytes, with sha256 sums to check them against. <strong>The mirror is the default update source</strong>: the app points its feed at <code>dl.navide.dev</code> on startup, and GitHub is the fallback. It falls back only on a <strong>network-shaped failure</strong> (unreachable host, timeout, 5xx/429), and once it has, it <strong>stays on GitHub for the rest of the session</strong> — only a restart goes back to the mirror. <strong>A 404 or a signature/checksum error never triggers the fallback</strong> — both hosts carry the same files, so it would fail the same way, and reporting the failure as it is helps more than hiding it.",
           "policyIntro": "The <strong>execution policy</strong> decides what a plugin's backend may execute. It is <strong>not a tab of its own</strong>: it is the block at the top of the Extensions page, with its own scope badge (per user and per workspace) and policy file path. The top of it shows the <em>effective policy</em> — its source, its mode, and its status: <em>active</em>, <em>stale</em>, <em>unavailable</em> or <em>corrupt</em>.",
           "policy": {
@@ -3221,16 +3221,16 @@
               },
               "command": {
                 "label": "Command that will run",
-                "text": "Shown verbatim, and only runs once you press the button. The few CLIs that need a real terminal say so underneath."
+                "text": "Shown verbatim, and only runs once you press the button; the output then appears in the terminal inside the dialog."
               }
             }
           },
           "settings": {
-            "caption": "The first three parts of Settings ▸ CLI Agents: the list, launch overrides, and permission bypass.",
+            "caption": "Settings ▸ CLI Agents: the card grid, and the launch overrides and permission bypass in the drawer opened for Claude Code.",
             "legend": {
               "grip": {
                 "label": "Drag grip",
-                "text": "Dragging reorders the ＋ menu, and with it which CLI each of Ctrl+1…9 opens."
+                "text": "Dragging reorders the ＋ menu, and with it which CLI each of Ctrl+1…9 opens. It only works while the filter is \"All\" and the search box is empty."
               },
               "toggle": {
                 "label": "Enabled box",
@@ -3238,11 +3238,11 @@
               },
               "perm": {
                 "label": "Three-state bypass",
-                "text": "Each CLI can follow the global setting, always bypass, or never bypass. The CLIs with no bypass flag of their own are not listed here."
+                "text": "The drawer holds this CLI's row only: follow the global setting, always bypass, or never bypass. The global switch above it is the same one in every CLI's drawer."
               },
               "launch": {
                 "label": "Launch overrides",
-                "text": "The fields only appear once a vendor is expanded, and only one opens at a time. A red \"Not passed through\" means Navide manages that variable itself, so the value never reaches the CLI."
+                "text": "The drawer shows this CLI's fields directly; there is nothing to expand. A red \"Not passed through\" means Navide manages that variable itself, so the value never reaches the CLI."
               }
             }
           },
@@ -3328,13 +3328,13 @@
               "when": "The pane actually opened but the CLI was not found — the PTY exited with 127; or the backend's pre-launch probe reported the binary missing (covers Open Agent, ↻ Resume, a pane opened by the issue-handling flow, and pipeline stages)."
             },
             "settings": {
-              "when": "You pressed \"Install\" in the \"Installation and updates\" list at the bottom of Settings ▸ CLI Agents."
+              "when": "You opened that CLI's drawer in Settings ▸ CLI Agents and pressed \"Install\" in its last part, \"Installation and updates\" (the button only appears while the CLI is missing)."
             }
           },
           "p6": "The dialog always has three steps: <strong>Check → Install → Verify</strong>.",
           "steps": {
             "check": "<strong>Check</strong>: shows installed / not installed / outdated and how many steps this Mac needs (for example a numbered Homebrew → Node → CLI chain). Prerequisites that cannot be installed automatically are listed separately. \"Command that will run\" is shown verbatim.",
-            "install": "<strong>Install</strong>: the command usually runs in an external Terminal window so you can answer its prompts (password, sign-in). A chain continues into the next step by itself.",
+            "install": "<strong>Install</strong>: the command runs in a terminal embedded in the dialog, where you can watch the output and answer its prompts (password, sign-in). A chain continues into the next step by itself.",
             "verify": "<strong>Verify</strong>: once a version is detected, shows ✓ and the binary path. <strong>Only when it was opened from a pane</strong> (<code>pane</code>) is there an extra \"Start {'{'}CLI{'}'} again\" button that reconnects the pane that just died."
           },
           "p7": "Only one install dialog exists at a time — a pipeline that makes five panes of the same CLI exit 127 together does not stack five dialogs.",
@@ -3375,24 +3375,25 @@
         },
         "s4": {
           "title": "Settings ▸ CLI Agents",
-          "p1": "This tab has five parts, top to bottom: the list, launch overrides, permission bypass, push channels, and installation and updates.",
-          "h1": "1 · CLI Agents list",
-          "p2": "Tick per vendor whether it appears in the + menu and the Manual spawn dropdown, and drag the <code>⠿</code> handle on the left to reorder — that order also decides which vendor <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> maps to. At least one must stay enabled.",
-          "h2": "2 · Launch overrides",
+          "p1": "The tab opens on a <strong>grid of cards</strong>, one per CLI. To adjust one, click anywhere on its card or on <em>{manage} ›</em>, and that CLI's own <strong>settings drawer</strong> slides in from the right. Launch overrides, permission bypass, push channels and installation and updates, which used to be laid out down one page, now all live in that drawer, one CLI at a time.",
+          "h1": "1 · The card grid",
+          "p2": "Above the grid sits a toolbar: a search box (<code>{search}</code>, matched against the name), three filter buttons <em>{all}</em> / <em>{enabled}</em> / <em>{attention}</em>, and <em>{redetect}</em>. A line below it counts how many CLIs are shown, how many exist and how many are enabled. Each card has an <em>{enabledBox}</em> box at the bottom that decides whether the CLI appears in the + menu and the Manual spawn dropdown; at least one must stay enabled, so the last box locks. Drag the <code>⠿</code> in a card's top-left corner to reorder — that order also decides which CLI <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> maps to — but <strong>only while the filter is \"{all}\" and the search box is empty</strong>; otherwise the count line says \"{reorderFiltered}\".",
+          "attention": "A <strong>!</strong> beside a card's name means \"{attention}\". Any one of four things sets it: the CLI is not installed, it is outdated, it is detected as signed out, or the environment check has a finding about it. The \"{attention}\" filter lists exactly these cards.",
+          "h2": "3 · Launch overrides",
           "p3": "Most CLIs have a flag that skips their permission prompts so the agent runs unattended. The setting has two layers:",
           "list": {
-            "global": "A <strong>global switch</strong> at the top: <em>Bypass permission prompts by default (YOLO mode)</em>.",
-            "perVendor": "One row per vendor below it, each showing the vendor's actual flag (for example <code>--yolo</code>) with a three-way dropdown on the right: <strong>Follow global / Always bypass / Never bypass</strong>."
+            "global": "A <strong>global switch</strong> at the top: <em>Bypass permission prompts by default (YOLO mode)</em>. Every CLI's drawer shows this same switch, so changing it in any one changes it for all.",
+            "perVendor": "Below it, one row for this CLI, showing its actual flag (for example <code>--yolo</code>) with a three-way dropdown on the right: <strong>Follow global / Always bypass / Never bypass</strong>."
           },
-          "p4": "The four vendors without a flag (Grok CLI / OpenCode / Pi / MiniMax Code) are not in this list; a note at the bottom of the page names them and says there is nothing to switch.",
+          "p4": "For the four CLIs without a flag (Grok CLI / OpenCode / Pi / MiniMax Code), this part of the drawer shows only the global switch, with a line below it saying that this CLI has no bypass flag and there is nothing to switch.",
           "callout1": {
             "title": "Changes do not reach running panes",
             "text": "The flag is written into a pane's command line <strong>the moment it starts</strong>. Changes here only affect panes spawned afterwards; a running pane keeps what it started with until you rebuild or restore it."
           },
           "h3": "Also: Model and Effort in the Manual spawn dialog",
-          "p5": "Four CLIs (Claude Code, Kilo Code, OpenCode, Qwen Code) can be handed a message directly instead of having it typed into their input box. Each has its own switch, and every row states that vendor’s cost (a local port with no password, a local port with a per-pane password, a plaintext temp file, a background hook). Changing one updates every open window at once. Details are in the \"Inter-CLI Messaging\" and \"MCP\" topics.",
-          "h4": "3 · Permission bypass",
-          "p6": "One row per CLI, showing a status badge (installed / not installed / outdated), the version, the install method (npm / Homebrew / official installer / official install script) and the full binary path. Available actions:",
+          "p5": "Four CLIs (Claude Code, Kilo Code, OpenCode, Qwen Code) can be handed a message directly instead of having it typed into their input box. Each has its own switch in its drawer, beside a line stating that vendor’s cost (a local port with no password, a local port with a per-pane password, a plaintext temp file, a background hook). For every other CLI this part of the drawer is a single line: no push channel is declared, so messages arrive as ordinary terminal input. Changing one updates every open window at once. Details are in the \"Inter-CLI Messaging\" and \"MCP\" topics.",
+          "h4": "4 · Permission bypass",
+          "p6": "The last part of the drawer covers this CLI only: a status badge (installed / not installed / outdated), the version, the install method (npm / Homebrew / official installer / official install script), the full binary path, and the outcome of the last update (success or failure, when, and from which version to which). Available actions:",
           "table": {
             "action": "Action",
             "detail": "What it does"
@@ -3400,15 +3401,15 @@
           "installActions": {
             "update": {
               "action": "Update (command)",
-              "detail": "Runs the vendor's own update command in a real Terminal. Vendors without an official command get an \"Update via vendor docs\" link instead."
+              "detail": "Runs the vendor's own update command in the <strong>embedded terminal</strong> below this part, where you can watch the output and answer its prompts. Vendors without an official command get an \"Update via vendor docs\" link instead."
             },
             "doctor": {
               "action": "Diagnose (command)",
-              "detail": "Runs the vendor's doctor command."
+              "detail": "Runs the vendor's doctor command in the same embedded terminal."
             },
             "install": {
               "action": "Install",
-              "detail": "Opens the guided install dialog from chapter 2."
+              "detail": "When the CLI is missing, opens the guided install dialog from chapter 2. When it is installed, the button becomes \"Reinstall (command)\" and reruns the vendor's install command in the embedded terminal, to repair a CLI that is installed but misbehaving."
             },
             "autoUpdate": {
               "action": "Auto-update",
@@ -3416,16 +3417,16 @@
             },
             "redetect": {
               "action": "Re-detect",
-              "detail": "Top right; forces a fresh scan."
+              "detail": "One sits in the toolbar above the card grid and one beside this part's heading in the drawer; both force a fresh scan."
             }
           },
-          "p7": "When <strong>several physical installations of one CLI</strong> are detected, an extra list appears with every path, marking the active one; for the others you can press <em>Use this one</em> to switch, or <em>Remove</em> (which likewise runs the vendor's uninstall command in Terminal).",
+          "p7": "When <strong>several physical installations of one CLI</strong> are detected, an extra list appears with every path, marking the active one; for the others you can press <em>Use this one</em> to switch, or <em>Remove</em> — which, unlike updates, opens a separate external terminal to run the vendor's uninstall command.",
           "note": "Updates replace the binary; panes already running must restart to pick up the new version.",
           "callout2": {
             "title": "What is not here",
-            "text": "There is still <strong>no \"default arguments\" field</strong> — a launch command <em>replaces</em> the line rather than appending to the default. <strong>The binary is still not chosen by typing a path</strong>, but by picking one of the candidates when several physical installations are detected (after which the list row gains a \"Custom binary\" chip). Model and reasoning effort, though, are <strong>no longer MCP-only</strong>: launch overrides has proper fields for them, and so does the Manual spawn dialog."
+            "text": "There is still <strong>no \"default arguments\" field</strong> — a launch command <em>replaces</em> the line rather than appending to the default. <strong>The binary is still not chosen by typing a path</strong>, but by picking one of the candidates when several physical installations are detected (after which the drawer's overview gains a \"Custom binary\" chip). Model and reasoning effort, though, are <strong>no longer MCP-only</strong>: launch overrides has proper fields for them, and so does the Manual spawn dialog."
           },
-          "chipsIntro": "Besides the name, each row carries a strip of chips that read back how that CLI is currently set up. The order is fixed, and follows \"what it is → what it runs as → how it is reached\":",
+          "chipsIntro": "A card shows only three chips: install status, sign-in and accounts, and push channel. The full strip sits in \"{overview}\" at the top of the drawer and reads back how that CLI is currently set up. The order is fixed, and follows \"what it is → what it runs as → how it is reached\":",
           "chipsTable": {
             "chip": "Chip",
             "shows": "What it reads back"
@@ -3465,7 +3466,10 @@
             }
           },
           "chipsLegend": "The colours are consistent: green = normal or on, amber = a deviation worth noticing, red = unusable or switched off, grey = a neutral fact.",
-          "launchIntro": "This part decides which command line a <strong>newly spawned</strong> pane of each CLI starts on. It is an accordion and <strong>only one vendor opens at a time</strong> — fifteen environment-variable tables laid out flat would be fifteen tables down one page. Everything here is per CLI and per machine, not per project, and applies to every window. A collapsed row summarises in one line (model, effort, custom command, how many env) what has been changed.",
+          "hDrawer": "2 · The agent settings drawer",
+          "drawer": "The drawer is titled with the CLI's name and detected version. It holds five parts, top to bottom — <strong>{overview}, {launch}, {perm}, {push}, {install}</strong> — on one scrolling page, not as tabs. \"{overview}\" repeats the full chip strip and the same <em>{enabledBox}</em> switch. While the drawer is open the card grid behind it is inert; close it with ✕, a click on the dimmed area outside it, or <kbd class=\"cah-kbd\">Esc</kbd>, and focus returns to that card's <em>{manage} ›</em>. Every change is saved as you make it; there is no Save button.",
+          "drawerSearch": "Settings search opens the drawer too: a launch, permission, push or install result opens the CLI named in your query; with no name, the one you managed last, and failing that the first one it applies to (a permission result only picks a CLI that has a bypass flag).",
+          "launchIntro": "This part decides which command line a <strong>newly spawned</strong> pane of this CLI starts on. The drawer only holds this CLI's fields, so there is nothing to expand. Everything here is per CLI and per machine, not per project, and applies to every window. The chips at the top of the drawer show what has been changed (model, effort, custom command, how many env).",
           "launchTable": {
             "field": "Field",
             "detail": "What it does"
@@ -3516,9 +3520,9 @@
             }
           },
           "spawnNote": "The seven \"Model only\" CLIs are not short of a reasoning knob; the knob just is not a launch argument. For some it is baked into the model id (a trailing <code>-high</code>, say), for others it lives in a config file or behind an in-session command. A value that breaks the rules (a model id containing a space, or starting with \"-\") is explained on the spot and disables the submit button. And if that CLI has a custom launch command, both fields are disabled with the reason spelled out — that line runs as written and Navide adds no model to it.",
-          "h5": "4 · Push channels",
-          "h6": "5 · Installation and updates",
-          "pushAllOff": "<strong>Turning all of them off is a legitimate choice</strong> — there is no \"keep at least one\" rule here. With all of them off the page lists the three costs outright: a message now waits for the receiving pane to go idle and is then typed in, so it takes longer to land; Claude Code’s rewake is the only way to wake an idle agent, and with it off there is nothing to do but wait for the agent to come back to idle on its own; and a pane already running keeps the channel it started with until it is restarted."
+          "h5": "5 · Push channels",
+          "h6": "6 · Installation and updates",
+          "pushAllOff": "<strong>Turning them all off is a valid choice</strong>; there is no \"keep at least one\" rule here. With all four off, the drawer's push part lists three costs: messages wait until the receiving pane is idle and are then typed into its input, so they arrive later; Claude Code's rewake is the only way to wake an idle agent, so without it you wait for the agent to go idle on its own; and panes already open keep the channel they started with until they restart."
         },
         "s5": {
           "title": "Accounts",
