@@ -76,6 +76,7 @@ MSG_RELAY_DONE_LOCALLY = "✔ 已在電腦上處理"
 MSG_RELAY_SUPERSEDED = "↪ 已被新的確認取代"
 MSG_RELAY_TURN_ENDED = "✔ 回合已結束，不需要再確認"
 MSG_RELAY_PANE_GONE = "⚠️ pane 已離線，這個確認已失效"
+MSG_RELAY_ANSWERED_IN_CHAT = "✅ 已在聊天室回答："  # + the answer
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
 MSG_AWAITING_LOCAL = "pane 在等確認，請在電腦上回答"
@@ -1202,6 +1203,7 @@ class ChannelManager:
         if not relay.same_prompt(str(info.get("prompt") or ""), request.prompt):
             # The screen moved on: this id is stale, and the next probe relays what is there now.
             self.relay.take(request.id)
+            self._spawn(self._settle_prompt(request, MSG_RELAY_SUPERSEDED))
             self._awaiting_unmark(request.pane_id)
             await self._reply(msg, MSG_RELAY_EXPIRED)
             return
@@ -1211,6 +1213,7 @@ class ChannelManager:
             result = {"ok": False, "error": str(exc)}
         if result.get("ok"):
             self.relay.take(request.id)  # used up only once the keys went in
+            self._spawn(self._settle_prompt(request, MSG_RELAY_ANSWERED_IN_CHAT + relay.describe_answer(payload)))
             shown = self._awaiting_shown.get(request.pane_id)
             if shown is not None and shown.request_id == request.id:
                 shown.request_id = ""  # answered: only a different prompt is relayed next
@@ -1563,7 +1566,7 @@ class ChannelManager:
 
     async def _settle_prompt(self, request: relay.RelayRequest, note: str) -> None:
         adapter = self._adapters.get((request.loc.platform, request.loc.account))
-        if adapter is None or not adapter.capabilities.edit:
+        if not request.message_id or adapter is None or not adapter.capabilities.edit:
             return
         text = f"{request.message_text}\n\n{note}" if request.message_text else note
         try:

@@ -801,6 +801,29 @@ async def test_relay_prompt_is_settled_when_the_turn_ends(env: Env) -> None:
     assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_TURN_ENDED}") in env.tg.edits
 
 
+async def test_relay_prompt_answered_from_the_chat_is_settled(env: Env) -> None:
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    mid, text = _prompt_message(env)
+    await env.inbound(f"yes {_relay_id(env)}")
+    assert env.tg.texts()[-1] == "✅ 已送出：允許"
+    await _until(lambda: any(m == mid for m, _ in env.tg.edits))
+    assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_ANSWERED_IN_CHAT}允許") in env.tg.edits
+
+
+async def test_relay_prompt_answered_against_a_stale_screen_is_settled(env: Env) -> None:
+    env.fake.prompt = "Allow Bash(rm -rf build)?"
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    mid, text = _prompt_message(env)
+    rid = _relay_id(env)
+    env.fake.prompt = "Allow Bash(npm publish)?"
+    await env.inbound(f"yes {rid}")
+    assert env.fake.answers == [] and mgr_mod.MSG_RELAY_EXPIRED in env.tg.texts()
+    await _until(lambda: any(m == mid for m, _ in env.tg.edits))
+    assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_SUPERSEDED}") in env.tg.edits
+
+
 def _fail_relay_sends(env: Env, times: int) -> list[int]:
     """Make the next ``times`` relay prompt sends raise; returns a one-item failure counter."""
     failed = [0]
