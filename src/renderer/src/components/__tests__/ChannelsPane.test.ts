@@ -547,6 +547,26 @@ describe('ChannelsPane', () => {
       expect(dc.get('[data-testid="channel-quick-copied"]').text()).toContain('paste it to the bot in Discord')
     })
 
+    it('sends one quick add when pressed twice while the clipboard is being read', async () => {
+      seedEmpty()
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      await flushPromises()
+      let finishRead!: (text: string) => void
+      const read = new Promise<string>((r) => { finishRead = r })
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { readText: () => read, writeText: async () => {} },
+        configurable: true,
+      })
+      mock.setResponse('channels.quick_add', { ok: false, reason: 'invalid', error: 'x' })
+      await tg.get('form').trigger('submit')
+      await tg.get('form').trigger('submit')
+      finishRead(TG_TOKEN)
+      await flushPromises()
+      expect(mock.sent.filter((m) => m.type === 'channels.quick_add')).toHaveLength(1)
+    })
+
     it('shows why the platform refused the token and keeps the form', async () => {
       seedEmpty()
       const w = await render()

@@ -257,19 +257,21 @@ async function save(spec: RegisteredChannelPlatform, bot: BotRow): Promise<void>
 }
 
 async function quickAdd(spec: RegisteredChannelPlatform, bot: BotRow): Promise<void> {
-  if (spec.fields.some((f) => f.secret && !(drafts[bot.key]?.[f.key] ?? '').trim())) {
-    await prefillFromClipboard(spec, bot.key)
-  }
-  const req = formRequest(spec, bot)
-  if (!req) return
-  // Only a platform whose primary link button opens a link gets an invite right away;
-  // the others show their link guide once the bot is connected.
-  const primary = spec.link.targets[0]
-  const linkTarget = primary?.opensLink ? primary.target : undefined
-  errorByBot[bot.key] = ''
-  quickStep[bot.key] = 'verifying'
+  // Busy before the clipboard read: a second press meanwhile would add the same bot twice.
+  if (busy.value) return
   busy.value = true
   try {
+    if (spec.fields.some((f) => f.secret && !(drafts[bot.key]?.[f.key] ?? '').trim())) {
+      await prefillFromClipboard(spec, bot.key)
+    }
+    const req = formRequest(spec, bot)
+    if (!req) return
+    // Only a platform whose primary link button opens a link gets an invite right away;
+    // the others show their link guide once the bot is connected.
+    const primary = spec.link.targets[0]
+    const linkTarget = primary?.opensLink ? primary.target : undefined
+    errorByBot[bot.key] = ''
+    quickStep[bot.key] = 'verifying'
     const res = await store.quickAdd(spec.id, req.config, req.secret ?? {}, bot.account, linkTarget)
     if (!res.ok || !res.data) {
       delete quickStep[bot.key]
