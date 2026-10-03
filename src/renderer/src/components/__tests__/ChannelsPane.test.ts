@@ -13,6 +13,9 @@ vi.mock('@navide/plugin-ui/shared', async (importOriginal) => ({
 
 let wrapper: VueWrapper | undefined
 let mock: ReturnType<typeof createMockBackend>
+// The clipboard quick add may read, and what the link guide copies.
+const clip = { text: '', written: [] as string[], reads: 0 }
+const openExternal = vi.fn(async (_url: string) => ({ ok: true }))
 
 function seed(): void {
   mock.setResponse('channels.list', {
@@ -51,8 +54,28 @@ beforeEach(() => {
   mac.value = true
   mock = createMockBackend('connected')
   seed()
+  clip.text = ''
+  clip.written = []
+  clip.reads = 0
+  Object.defineProperty(navigator, 'clipboard', {
+    value: {
+      readText: async () => {
+        clip.reads += 1
+        return clip.text
+      },
+      writeText: async (text: string) => {
+        clip.written.push(text)
+      },
+    },
+    configurable: true,
+  })
+  openExternal.mockClear()
+  ;(window as unknown as { agentTeam?: unknown }).agentTeam = { openExternal }
 })
-afterEach(() => wrapper?.unmount())
+afterEach(() => {
+  wrapper?.unmount()
+  delete (window as unknown as { agentTeam?: unknown }).agentTeam
+})
 
 describe('ChannelsPane', () => {
   it('renders every platform in order, with iMessage only on macOS', async () => {
@@ -154,23 +177,29 @@ describe('ChannelsPane', () => {
     expect(sent?.payload).toEqual({ platform: 'telegram', config: {} })
   })
 
-  it('requires the secret for a new platform and sends it once', async () => {
+  it('requires the secret for a new platform and sends it once, through quick add', async () => {
+    mock.setResponse('channels.quick_add', { ok: true, account: 'default', name: '', identity: '', link: null })
     const w = await render()
     const card = w.get('[data-platform="feishu"]')
     await card.get('[data-testid="channel-manage"]').trigger('click')
     expect(card.get('[data-testid="channel-hint"]').text()).toContain('@mention')
     await card.get('form').trigger('submit')
-    expect(mock.sent.some((s) => s.type === 'channels.configure')).toBe(false)
+    await flushPromises()
+    expect(mock.sent.some((s) => s.type === 'channels.quick_add' || s.type === 'channels.configure')).toBe(false)
     expect(card.text()).toContain('Fill in')
     await card.get('input[name="app_id"]').setValue('cli_x')
     await card.get('input[name="app_secret"]').setValue('s3cret')
     await card.get('form').trigger('submit')
     await flushPromises()
-    expect(mock.sent.find((s) => s.type === 'channels.configure')?.payload).toEqual({
+    // Feishu's link guide has no link to open: no invite is asked for, the guide shows once connected.
+    expect(mock.sent.find((s) => s.type === 'channels.quick_add')?.payload).toEqual({
       platform: 'feishu',
       config: { domain: 'feishu' },
       secret: { app_id: 'cli_x', app_secret: 's3cret' },
     })
+    expect(mock.sent.some((s) => s.type === 'channels.configure')).toBe(false)
+    expect(card.find('form').exists()).toBe(false)
+    expect(card.find('[data-testid="channel-quick-steps"]').exists()).toBe(false)
   })
 
   it('sends an empty secret for iMessage, which has no token', async () => {
@@ -264,23 +293,27 @@ describe('ChannelsPane', () => {
       })
     })
 
-    it('adds a bot with its own id, name and token', async () => {
+    it('adds a bot with its own id, name (under Advanced) and token', async () => {
       seedTwoBots()
+      mock.setResponse('channels.quick_add', { ok: false, error: 'nope', reason: 'invalid' })
       const w = await render()
       await w.get('[data-platform="telegram"] [data-testid="channel-add-bot"]').trigger('click')
       const added = w.findAll('[data-platform="telegram"] [data-testid="channel-bot"]')[2]
       expect(added.attributes('data-account')).toMatch(/^bot-[0-9a-f]{6}$/)
       await added.get('form').trigger('submit')
-      expect(mock.sent.some((s) => s.type === 'channels.configure')).toBe(false)
+      await flushPromises()
+      expect(mock.sent.some((s) => s.type === 'channels.quick_add')).toBe(false)
       expect(added.text()).toContain('Fill in')
+      expect(added.get('[data-testid="channel-advanced"]').find('input[name="name"]').exists()).toBe(true)
       await added.get('input[name="name"]').setValue('  Night shift ')
       await added.get('input[name="token"]').setValue('123:abc')
       await added.get('form').trigger('submit')
       await flushPromises()
-      expect(mock.sent.find((s) => s.type === 'channels.configure')?.payload).toEqual({
+      expect(mock.sent.find((s) => s.type === 'channels.quick_add')?.payload).toEqual({
         platform: 'telegram', account: added.attributes('data-account'),
-        config: { name: 'Night shift' }, secret: { token: '123:abc' },
+        config: { name: 'Night shift' }, secret: { token: '123:abc' }, link_target: 'direct',
       })
+      expect(mock.sent.some((s) => s.type === 'channels.configure')).toBe(false)
     })
 
     it('renames a bot without touching its credential', async () => {
@@ -395,6 +428,184 @@ describe('ChannelsPane', () => {
       await flushPromises()
       expect(mock.sent.find((m) => m.type === 'channels.link.create')?.payload).toEqual({ platform: 'telegram', target: 'group' })
       expect(tg.get('[data-testid="channel-link-code"]').text()).toBe('/start ABCD2345')
+    })
+  })
+
+  describe('quick add', () => {
+    const TG_TOKEN = '123456789:AAHk3x-ZyQwErTyUiOpAsDfGhJkLzXcVbNm'
+    const expires = () => Date.now() / 1000 + 600
+
+    /** Telegram (or `platform`) not set up yet, with nothing else configured. */
+    function seedEmpty(): void {
+      mock.setResponse('channels.list', { ok: true, enabled: true, platforms: [] })
+      mock.setResponse('channels.pairing.list', { ok: true, requests: [] })
+      mock.setResponse('channels.allow.list', { ok: true, entries: [] })
+    }
+
+    /** After the quick add: the backend lists the bot connected, knowing no chat yet. */
+    function seedAdded(platform: string, identity: string): void {
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform, configured: true, enabled: true,
+          status: { lifecycle: 'ready', connected: true, identity }, config: { name: identity }, capabilities: null,
+          accounts: [{
+            account: 'default', name: identity, configured: true, enabled: true,
+            status: { lifecycle: 'ready', connected: true, identity }, config: { name: identity }, capabilities: null,
+          }],
+        }],
+      })
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+    }
+
+    /** Hold `channels.quick_add` until the returned release() is called. */
+    function holdQuickAdd(): () => void {
+      const send = mock.backend.send
+      let release!: () => void
+      const gate = new Promise<void>((r) => { release = r })
+      ;(mock.backend as { send: typeof send }).send = (async (type: string, payload?: Record<string, unknown>, timeoutMs?: number) => {
+        if (type === 'channels.quick_add') await gate
+        return send(type, payload, timeoutMs)
+      }) as typeof send
+      return release
+    }
+
+    const steps = (card: ReturnType<VueWrapper['get']>) => card.get('[data-testid="channel-quick-steps"]')
+
+    it('Telegram: verifies, opens the deep link, waits for Start, then shows done', async () => {
+      seedEmpty()
+      clip.text = `  ${TG_TOKEN}\n`
+      const w = await render()
+      expect(clip.reads).toBe(0) // never read until a button is pressed
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      await flushPromises()
+      expect(clip.reads).toBe(1)
+      expect((tg.get('input[name="token"]').element as HTMLInputElement).value).toBe(TG_TOKEN)
+      expect(tg.find('[data-testid="channel-save"]').exists()).toBe(false)
+      expect(tg.get('[data-testid="channel-quick-add"]').text()).toBe('Quick add')
+
+      const release = holdQuickAdd()
+      mock.setResponse('channels.quick_add', {
+        ok: true, platform: 'telegram', account: 'default', name: '@quick_bot', identity: '@quick_bot',
+        link: { platform: 'telegram', code: 'QK7M2XAB', target: 'direct', expires_at: expires(), url: 'https://t.me/quick_bot?start=QK7M2XAB' },
+      })
+      await tg.get('form').trigger('submit')
+      await flushPromises()
+      expect(tg.get('[data-testid="channel-quick-add"]').text()).toBe('Verifying…')
+      expect(steps(tg).attributes('data-step')).toBe('verifying')
+      expect(steps(tg).get('li.current').text()).toBe('Verifying')
+
+      seedAdded('telegram', '@quick_bot')
+      release()
+      await flushPromises()
+      const sent = mock.sent.find((m) => m.type === 'channels.quick_add')
+      expect(sent?.payload).toEqual({ platform: 'telegram', config: {}, secret: { token: TG_TOKEN }, link_target: 'direct' })
+      expect(sent?.timeoutMs).toBe(30_000) // outlasts the backend's 10 s wait
+      expect(mock.sent.some((m) => m.type === 'channels.configure' || m.type === 'channels.link.create')).toBe(false)
+      expect(openExternal).toHaveBeenCalledWith('https://t.me/quick_bot?start=QK7M2XAB')
+      expect(clip.written).toEqual([]) // the deep link carries the code: nothing to paste
+      expect(steps(tg).attributes('data-step')).toBe('waiting')
+      expect(steps(tg).get('li.current').text()).toBe('Waiting for you to tap Start in the app')
+      expect(steps(tg).findAll('li.past').map((l) => l.text())).toEqual(['Verifying', 'Opening Telegram'])
+      expect(tg.get('[data-testid="channel-link-code"]').text()).toBe('/start QK7M2XAB')
+      expect(tg.get('[data-testid="channel-bot-name"]').text()).toBe('@quick_bot')
+
+      mock.setResponse('channels.locations', { ok: true, locations: [{ chat_id: '42', title: 'neil', kind: 'private', supports_topics: false }] })
+      mock.emit('channels.linked', { platform: 'telegram', code: 'QK7M2XAB', chat_id: '42', title: 'neil', kind: 'direct', confirmed: true })
+      await flushPromises()
+      expect(steps(tg).attributes('data-step')).toBe('done')
+      expect(steps(tg).get('li.current').text()).toBe('Done')
+      expect(tg.get('[data-testid="channel-linked-summary"]').text()).toContain('1 chat(s) linked')
+      expect(openExternal).toHaveBeenCalledTimes(1)
+    })
+
+    it('Discord: copies the link command before opening the install link, and says to paste it', async () => {
+      seedEmpty()
+      const w = await render()
+      const dc = w.get('[data-platform="discord"]')
+      await dc.get('[data-testid="channel-manage"]').trigger('click')
+      await dc.get('input[name="token"]').setValue('discord-token')
+      mock.setResponse('channels.quick_add', {
+        ok: true, platform: 'discord', account: 'default', name: '@navide', identity: '@navide',
+        link: { platform: 'discord', code: 'DC4X7QAB', target: 'group', expires_at: expires(), url: 'https://discord.com/oauth2/authorize?client_id=1' },
+      })
+      seedAdded('discord', '@navide')
+      let copiedBeforeOpen = false
+      openExternal.mockImplementationOnce(async () => {
+        copiedBeforeOpen = clip.written.includes('link DC4X7QAB')
+        return { ok: true }
+      })
+      await dc.get('form').trigger('submit')
+      await flushPromises()
+      expect(mock.sent.find((m) => m.type === 'channels.quick_add')?.payload).toMatchObject({ link_target: 'group' })
+      expect(copiedBeforeOpen).toBe(true)
+      expect(openExternal).toHaveBeenCalledWith('https://discord.com/oauth2/authorize?client_id=1')
+      expect(steps(dc).get('li.current').text()).toBe('Waiting for you to paste the link code in the app')
+      expect(dc.get('[data-testid="channel-quick-copied"]').text()).toContain('paste it to the bot in Discord')
+    })
+
+    it('shows why the platform refused the token and keeps the form', async () => {
+      seedEmpty()
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      await tg.get('input[name="token"]').setValue(TG_TOKEN)
+      mock.setResponse('channels.quick_add', { ok: false, reason: 'rejected', error: 'Unauthorized' })
+      await tg.get('form').trigger('submit')
+      await flushPromises()
+      expect(tg.get('form [role="alert"]').text()).toBe('Telegram rejected the credential: Unauthorized')
+      expect(tg.find('[data-testid="channel-quick-steps"]').exists()).toBe(false)
+      expect(tg.get('[data-testid="channel-quick-add"]').text()).toBe('Quick add')
+      expect(openExternal).not.toHaveBeenCalled()
+
+      mock.setResponse('channels.quick_add', { ok: false, reason: 'timeout', error: 'no answer' })
+      await tg.get('form').trigger('submit')
+      await flushPromises()
+      expect(tg.get('form [role="alert"]').text()).toContain('Telegram did not answer in time')
+    })
+
+    it('ignores a clipboard that does not look like the token, and never overwrites a typed one', async () => {
+      seedEmpty()
+      clip.text = 'my bank password'
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      await flushPromises()
+      expect((tg.get('input[name="token"]').element as HTMLInputElement).value).toBe('')
+      expect(w.text()).not.toContain('my bank password')
+      await tg.get('input[name="token"]').setValue('typed:token')
+      clip.text = TG_TOKEN
+      mock.setResponse('channels.quick_add', { ok: false, reason: 'invalid', error: 'x' })
+      await tg.get('form').trigger('submit')
+      await flushPromises()
+      expect(mock.sent.find((m) => m.type === 'channels.quick_add')?.payload).toMatchObject({ secret: { token: 'typed:token' } })
+    })
+
+    it('fills an empty token from the clipboard when Quick add is pressed', async () => {
+      seedEmpty()
+      const w = await render()
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      await flushPromises()
+      clip.text = TG_TOKEN
+      mock.setResponse('channels.quick_add', { ok: false, reason: 'invalid', error: 'x' })
+      await tg.get('form').trigger('submit')
+      await flushPromises()
+      expect(mock.sent.find((m) => m.type === 'channels.quick_add')?.payload).toMatchObject({ secret: { token: TG_TOKEN } })
+    })
+
+    it('iMessage keeps its plain save; an existing bot keeps configure', async () => {
+      const w = await render()
+      const im = w.get('[data-platform="imessage"]')
+      await im.get('[data-testid="channel-manage"]').trigger('click')
+      expect(im.find('[data-testid="channel-quick-add"]').exists()).toBe(false)
+      expect(im.find('[data-testid="channel-save"]').exists()).toBe(true)
+      const tg = w.get('[data-platform="telegram"]')
+      await tg.get('[data-testid="channel-manage"]').trigger('click')
+      expect(tg.find('[data-testid="channel-quick-add"]').exists()).toBe(false)
+      expect(clip.reads).toBe(0)
     })
   })
 })

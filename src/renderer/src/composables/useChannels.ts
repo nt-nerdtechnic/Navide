@@ -65,6 +65,10 @@ export interface ChannelPlatformState {
 
 export const DEFAULT_ACCOUNT = 'default'
 
+// The backend waits up to 10 s for the platform to accept a credential, then may
+// undo what it stored: past the WS client's default 10 s request timeout.
+const QUICK_ADD_TIMEOUT_MS = 30_000
+
 /** A fresh id for a bot being added: stable for its life, whatever it is renamed to. */
 export function newAccountId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(3))
@@ -127,6 +131,15 @@ export interface ChannelLinkInvite {
   expires_at: number
   /** Platform deep link that sends the code (Telegram) or opens the bot (Discord install, Slack DM). */
   url: string | null
+}
+
+/** `channels.quick_add`: the new bot, verified, named and (when asked) with a live invite. */
+export interface ChannelQuickAddResult {
+  account: string
+  /** The stored display name: the one given, else the identity the platform reported. */
+  name: string
+  identity: string
+  link: ChannelLinkInvite | null
 }
 
 /** `channels.linked`: a chat was linked by an invite code. */
@@ -319,6 +332,25 @@ function createChannelsStore(backend: Backend) {
     configure: (platform: ChannelPlatform, config: Record<string, unknown>, secret?: Record<string, string>,
       account?: string) =>
       mutate('channels.configure', secret ? { platform, ...acct(account), config, secret } : { platform, ...acct(account), config }),
+    /** Add a new bot in one step: the backend stores it only once the platform accepted
+     *  the credential, and with `linkTarget` answers with a link invite too. A failure
+     *  carries `reason` ("rejected" | "timeout" | "invalid") and leaves nothing stored. */
+    quickAdd: async (platform: ChannelPlatform, config: Record<string, unknown>, secret: Record<string, string>,
+      account: string, linkTarget?: 'direct' | 'group'): Promise<ChannelResult<ChannelQuickAddResult> & { reason?: string }> => {
+      const type = 'channels.quick_add'
+      try {
+        const resp = await backend.send<ChannelQuickAddResult & { ok?: boolean; error?: string; reason?: string }>(type, {
+          platform, ...acct(account), config, secret, ...(linkTarget ? { link_target: linkTarget } : {}),
+        }, QUICK_ADD_TIMEOUT_MS)
+        const body = resp.payload
+        if (!resp.ok || !body) return { ok: false, error: resp.error?.message ?? `${type} failed` }
+        if (body.ok === false) return { ok: false, error: body.error ?? `${type} failed`, reason: body.reason }
+        await refresh()
+        return { ok: true, data: body }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
     setEnabled: (platform: ChannelPlatform, on: boolean, account?: string) =>
       mutate('channels.set_enabled', { platform, ...acct(account), enabled: on }),
     renameAccount: (platform: ChannelPlatform, account: string, name: string) =>

@@ -10,15 +10,19 @@ import { channelPlatform, type ChannelLinkTarget } from '../platform/channels'
  * for `channels.linked`. Whoever sends the code is allowlisted and their chat
  * remembered, so no pairing approval is needed. Pending pairing requests for
  * the platform are approvable here too. Used by the pane picker's empty state
- * and by the Settings → Channels card.
+ * and by the Settings → Channels card. Quick add hands it the invite it already
+ * got (`initialInvite`): the guide opens and waits on it as if a button made it.
  */
 const props = defineProps<{
   store: ChannelsStore
   platform: ChannelPlatform
   /** The bot to link with; the platform's default bot when missing. */
   account?: string
+  /** An invite created elsewhere (quick add): opened once, with the code command
+   *  copied first when the platform's link does not carry the code. */
+  initialInvite?: ChannelLinkInvite | null
 }>()
-const emit = defineEmits<{ linked: [title: string] }>()
+const emit = defineEmits<{ linked: [title: string]; opened: [] }>()
 
 // Global instance: the pane header mounts without the i18n plugin in tests.
 const t = i18n.global.t
@@ -74,19 +78,26 @@ async function start(action: ChannelLinkTarget): Promise<void> {
       error.value = res.error ?? t('channels.error.generic')
       return
     }
-    invite.value = res.data
-    const code = res.data.code
-    expiryTimer = setTimeout(() => {
-      if (invite.value?.code === code) dropInvite(t('channels.link.expired'))
-    }, Math.max(0, res.data.expires_at * 1000 - Date.now()))
-    if (!res.data.url) noDeepLink.value = !!action.opensLink
-    else {
-      // Main-process opener: http(s) only, app windows only.
-      const opened = await window.agentTeam?.openExternal?.(res.data.url)
-      if (opened && !opened.ok) error.value = t('channels.link.open-failed', { error: opened.error ?? '' })
-    }
+    await adopt(res.data, action)
   } finally {
     busy.value = false
+  }
+}
+
+/** Wait on `data` and open its platform link. With `copyFirst` the code command goes
+ *  to the clipboard before the link takes focus away from this window. */
+async function adopt(data: ChannelLinkInvite, action: ChannelLinkTarget, copyFirst = false): Promise<void> {
+  invite.value = data
+  const code = data.code
+  expiryTimer = setTimeout(() => {
+    if (invite.value?.code === code) dropInvite(t('channels.link.expired'))
+  }, Math.max(0, data.expires_at * 1000 - Date.now()))
+  if (copyFirst) await copy()
+  if (!data.url) noDeepLink.value = !!action.opensLink
+  else {
+    // Main-process opener: http(s) only, app windows only.
+    const opened = await window.agentTeam?.openExternal?.(data.url)
+    if (opened && !opened.ok) error.value = t('channels.link.open-failed', { error: opened.error ?? '' })
   }
 }
 
@@ -106,6 +117,21 @@ async function approve(code: string): Promise<void> {
   busy.value = false
   if (!res.ok) error.value = res.error ?? t('channels.error.generic')
 }
+
+watch(
+  () => props.initialInvite,
+  async (data) => {
+    if (!data || data.code === invite.value?.code) return
+    error.value = ''
+    linkedTitle.value = ''
+    noDeepLink.value = false
+    clearExpiry()
+    const action = actions.value.find((a) => a.target === data.target) ?? FALLBACK_TARGETS[0]
+    await adopt(data, action, !spec.value?.link.urlCarriesCode)
+    emit('opened')
+  },
+  { immediate: true }
+)
 
 watch(
   () => props.store.lastLinked.value,

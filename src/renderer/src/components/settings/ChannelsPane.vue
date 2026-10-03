@@ -8,9 +8,15 @@ import {
   newAccountId,
   useChannels,
   type ChannelAccountState,
+  type ChannelLinkInvite,
   type ChannelPlatform,
 } from '../../composables/useChannels'
-import { CHANNEL_PLATFORM_SPECS, channelPlatform, type RegisteredChannelPlatform } from '../../platform/channels'
+import {
+  CHANNEL_PLATFORM_SPECS,
+  channelPlatform,
+  clipboardTokenField,
+  type RegisteredChannelPlatform,
+} from '../../platform/channels'
 import ChannelLinkGuide from '../ChannelLinkGuide.vue'
 import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
@@ -22,7 +28,9 @@ import ToggleSwitch from './ToggleSwitch.vue'
  * approve pairing requests and manage who may talk to panes. A platform can run
  * several bots, each with its own credential, connection and linked chats.
  * Secrets go to the backend once and are never shown again — a stored secret
- * only shows as masked.
+ * only shows as masked. A new bot is added with "quick add": the backend keeps it
+ * only once the platform accepted its credential, then the bot's link guide opens
+ * the chat app with a fresh code.
  */
 const props = defineProps<{
   backend: Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>
@@ -57,6 +65,11 @@ const listError = ref('')
 const renaming = ref<string | null>(null)
 const renameDraft = ref('')
 const confirmingRemove = ref<string | null>(null)
+// Quick add progress per bot; the invite it got is handed to the bot's link guide.
+type QuickStep = 'verifying' | 'opening' | 'waiting' | 'done'
+const quickStep = reactive<Record<string, QuickStep>>({})
+const quickInvite = reactive<Record<string, ChannelLinkInvite>>({})
+const QUICK_STEPS: readonly QuickStep[] = ['verifying', 'opening', 'waiting', 'done']
 
 function botKey(platform: string, account: string): string {
   return `${platform}:${account}`
@@ -155,12 +168,35 @@ function toggleExpanded(spec: RegisteredChannelPlatform, bot: BotRow): void {
     return
   }
   openForm(spec, bot)
+  if (usesQuickAdd(spec, bot)) void prefillFromClipboard(spec, bot.key)
 }
 
 function startAdding(spec: RegisteredChannelPlatform): void {
   const account = newAccountId()
   adding[spec.id] = account
-  openForm(spec, emptyBot(spec.id, account, true))
+  const bot = emptyBot(spec.id, account, true)
+  openForm(spec, bot)
+  if (usesQuickAdd(spec, bot)) void prefillFromClipboard(spec, bot.key)
+}
+
+/** A bot not set up yet, on a platform with a credential to verify (not iMessage). */
+function usesQuickAdd(spec: RegisteredChannelPlatform, bot: BotRow): boolean {
+  return !bot.configured && spec.fields.some((f) => f.secret)
+}
+
+/** Read the clipboard only on a button press, and keep it only when it has the
+ *  shape of one of the platform's empty credential fields; anything else is dropped unseen. */
+async function prefillFromClipboard(spec: RegisteredChannelPlatform, key: string): Promise<void> {
+  if (!spec.fields.some((f) => f.clipboardPattern)) return
+  let text = ''
+  try {
+    text = await navigator.clipboard.readText()
+  } catch {
+    return
+  }
+  const field = clipboardTokenField(spec.fields, text)
+  const draft = drafts[key]
+  if (field && draft && !draft[field]) draft[field] = text.trim()
 }
 
 function closeForm(spec: RegisteredChannelPlatform, bot: BotRow): void {
@@ -181,8 +217,8 @@ async function run(key: string | null, op: () => Promise<{ ok: boolean; error?: 
   }
 }
 
-async function save(spec: RegisteredChannelPlatform, bot: BotRow): Promise<void> {
-  const platform = spec.id
+/** The form as a configure request; null (with the error shown) when a required field is empty. */
+function formRequest(spec: RegisteredChannelPlatform, bot: BotRow): { config: Record<string, unknown>; secret: Record<string, string> | undefined } | null {
   const draft = drafts[bot.key] ?? {}
   const config: Record<string, unknown> = { ...bot.config }
   // The permission relay is always on (Navide Guard screens every chat approval).
@@ -206,12 +242,80 @@ async function save(spec: RegisteredChannelPlatform, bot: BotRow): Promise<void>
   )
   if (missing.length) {
     errorByBot[bot.key] = t('channels.error.missing', { fields: missing.map((f) => t(`channels.field.${f.key}`)).join(', ') })
-    return
+    return null
   }
   // A platform without credentials (iMessage) still sends an empty secret.
   const sendSecret = Object.keys(secret).length > 0 || !spec.fields.some((f) => f.secret)
-  const ok = await run(bot.key, () => store.configure(platform, config, sendSecret ? secret : undefined, bot.account))
+  return { config, secret: sendSecret ? secret : undefined }
+}
+
+async function save(spec: RegisteredChannelPlatform, bot: BotRow): Promise<void> {
+  const req = formRequest(spec, bot)
+  if (!req) return
+  const ok = await run(bot.key, () => store.configure(spec.id, req.config, req.secret, bot.account))
   if (ok) closeForm(spec, bot)
+}
+
+async function quickAdd(spec: RegisteredChannelPlatform, bot: BotRow): Promise<void> {
+  if (spec.fields.some((f) => f.secret && !(drafts[bot.key]?.[f.key] ?? '').trim())) {
+    await prefillFromClipboard(spec, bot.key)
+  }
+  const req = formRequest(spec, bot)
+  if (!req) return
+  // Only a platform whose primary link button opens a link gets an invite right away;
+  // the others show their link guide once the bot is connected.
+  const primary = spec.link.targets[0]
+  const linkTarget = primary?.opensLink ? primary.target : undefined
+  errorByBot[bot.key] = ''
+  quickStep[bot.key] = 'verifying'
+  busy.value = true
+  try {
+    const res = await store.quickAdd(spec.id, req.config, req.secret ?? {}, bot.account, linkTarget)
+    if (!res.ok || !res.data) {
+      delete quickStep[bot.key]
+      const error = res.error ?? t('channels.error.generic')
+      errorByBot[bot.key] = res.reason === 'rejected' || res.reason === 'timeout'
+        ? t(`channels.quick.${res.reason}`, { platform: platformName(spec.id), error })
+        : error
+      return
+    }
+    closeForm(spec, bot)
+    if (res.data.link) {
+      quickStep[bot.key] = 'opening'
+      quickInvite[bot.key] = res.data.link
+    } else {
+      delete quickStep[bot.key]
+    }
+  } finally {
+    busy.value = false
+  }
+}
+
+function quickOpened(key: string): void {
+  delete quickInvite[key]
+  if (quickStep[key] === 'opening') quickStep[key] = 'waiting'
+}
+
+function botLinked(key: string): void {
+  if (quickStep[key]) quickStep[key] = 'done'
+  void loadChatCounts()
+}
+
+function stepState(key: string, step: QuickStep): string {
+  const at = QUICK_STEPS.indexOf(quickStep[key] ?? 'verifying')
+  const i = QUICK_STEPS.indexOf(step)
+  return i === at ? 'current' : i < at ? 'past' : ''
+}
+
+function quickStepText(spec: RegisteredChannelPlatform, step: QuickStep): string {
+  if (step === 'waiting') {
+    return t(spec.link.urlCarriesCode ? 'channels.quick.step.waiting-start' : 'channels.quick.step.waiting-paste')
+  }
+  return t(`channels.quick.step.${step}`, { platform: platformName(spec.id) })
+}
+
+function openSetupLink(url: string): void {
+  void window.agentTeam?.openExternal?.(url)
 }
 
 /** Panes connected through this bot: removing it disconnects them. */
@@ -385,6 +489,17 @@ function formatTime(ts: number | null | undefined): string {
               </div>
             </div>
 
+            <template v-if="quickStep[bot.key]">
+              <ol class="ch-quick-steps" data-testid="channel-quick-steps" :data-step="quickStep[bot.key]">
+                <li v-for="step in QUICK_STEPS" :key="step" :class="stepState(bot.key, step)">{{ quickStepText(spec, step) }}</li>
+              </ol>
+              <p
+                v-if="quickStep[bot.key] === 'waiting' && !spec.link.urlCarriesCode"
+                class="ch-form-hint"
+                data-testid="channel-quick-copied"
+              >{{ t('channels.quick.copied-code', { platform: platformName(spec.id) }) }}</p>
+            </template>
+
             <div
               v-if="isConnected(bot) && (chatCounts[bot.key] !== undefined || chatCountErrors[bot.key])"
               class="ch-link"
@@ -395,10 +510,17 @@ function formatTime(ts: number | null | undefined): string {
                 <span class="ch-link-error" role="alert">{{ t('channels.link.count-failed', { error: chatCountErrors[bot.key] }) }}</span>
                 <button type="button" class="ch-btn ghost sm" data-testid="channel-link-retry" @click="loadChatCounts">{{ t('action.retry') }}</button>
               </div>
-              <template v-else-if="!chatCounts[bot.key]">
+              <template v-else-if="!chatCounts[bot.key] || (quickStep[bot.key] && quickStep[bot.key] !== 'done')">
                 <div class="ch-link-title" data-testid="channel-next-step">{{ t('channels.link.next-step') }}</div>
                 <p class="ch-link-desc">{{ t('channels.link.next-step-desc', { platform: platformName(spec.id) }) }}</p>
-                <ChannelLinkGuide :store="store" :platform="spec.id" :account="bot.account" @linked="loadChatCounts" />
+                <ChannelLinkGuide
+                  :store="store"
+                  :platform="spec.id"
+                  :account="bot.account"
+                  :initial-invite="quickInvite[bot.key] ?? null"
+                  @opened="quickOpened(bot.key)"
+                  @linked="botLinked(bot.key)"
+                />
               </template>
               <template v-else>
                 <div class="ch-link-summary">
@@ -415,13 +537,22 @@ function formatTime(ts: number | null | undefined): string {
               </template>
             </div>
 
-            <form v-if="expanded === bot.key" class="ch-form" @submit.prevent="save(spec, bot)">
+            <form v-if="expanded === bot.key" class="ch-form" @submit.prevent="usesQuickAdd(spec, bot) ? quickAdd(spec, bot) : save(spec, bot)">
               <div class="ch-form-notes">
                 <p class="ch-form-needs" data-testid="channel-needs">{{ needsText(spec) }}</p>
+                <template v-if="spec.setupLink && !bot.configured">
+                  <a
+                    class="ch-setup-link"
+                    :href="spec.setupLink.url"
+                    data-testid="channel-setup-link"
+                    @click.prevent="openSetupLink(spec.setupLink.url)"
+                  >{{ t(spec.setupLink.label) }}</a>
+                  <p class="ch-form-hint">{{ t(spec.setupLink.hint) }}</p>
+                </template>
                 <p v-if="te(`channels.hint.${spec.id}`)" class="ch-form-hint" data-testid="channel-hint">{{ t(`channels.hint.${spec.id}`) }}</p>
                 <p v-if="spec.singleReceiver" class="ch-form-hint" data-testid="channel-single-receiver">{{ t('channels.single-receiver-hint') }}</p>
               </div>
-              <label v-if="bot.isNew" class="ch-field">
+              <label v-if="bot.isNew && !usesQuickAdd(spec, bot)" class="ch-field">
                 <span class="ch-field-label">{{ t('channels.bot.name') }} {{ t('channels.optional') }}</span>
                 <input v-model="drafts[bot.key]!.name" class="ch-input" name="name" autocomplete="off" spellcheck="false" />
               </label>
@@ -441,6 +572,13 @@ function formatTime(ts: number | null | undefined): string {
                   :placeholder="f.secret && bot.configured ? t('channels.secret-stored') : ''"
                 />
               </label>
+              <details v-if="bot.isNew && usesQuickAdd(spec, bot)" class="ch-advanced" data-testid="channel-advanced">
+                <summary>{{ t('channels.quick.advanced') }}</summary>
+                <label class="ch-field">
+                  <span class="ch-field-label">{{ t('channels.bot.name') }} {{ t('channels.optional') }}</span>
+                  <input v-model="drafts[bot.key]!.name" class="ch-input" name="name" autocomplete="off" spellcheck="false" />
+                </label>
+              </details>
               <p v-if="errorByBot[bot.key]" class="ch-error" role="alert">{{ errorByBot[bot.key] }}</p>
               <p v-if="confirmingRemove === bot.key" class="ch-form-hint ch-remove-ask" data-testid="channel-remove-ask">
                 {{ t('channels.bot.remove-ask', { n: boundCount(spec.id, bot.account) }) }}
@@ -462,7 +600,10 @@ function formatTime(ts: number | null | undefined): string {
                 </template>
                 <span class="ch-spacer"></span>
                 <button type="button" class="ch-btn ghost sm" :disabled="busy" @click="closeForm(spec, bot)">{{ t('channels.cancel') }}</button>
-                <button type="submit" class="ch-btn primary sm" :disabled="busy" data-testid="channel-save">{{ t('channels.save') }}</button>
+                <button v-if="usesQuickAdd(spec, bot)" type="submit" class="ch-btn primary sm" :disabled="busy" data-testid="channel-quick-add">
+                  {{ quickStep[bot.key] === 'verifying' ? t('channels.quick.verifying') : t('channels.quick.add') }}
+                </button>
+                <button v-else type="submit" class="ch-btn primary sm" :disabled="busy" data-testid="channel-save">{{ t('channels.save') }}</button>
               </div>
             </form>
           </div>
@@ -593,6 +734,14 @@ function formatTime(ts: number | null | undefined): string {
 .ch-input:hover { border-color: var(--border-strong); }
 .ch-input:focus { outline: none; border-color: var(--accent-focus); }
 .ch-form-actions { display: flex; align-items: center; gap: 8px; }
+.ch-setup-link { align-self: flex-start; font-size: var(--font-row-desc); color: var(--accent-fg); }
+.ch-advanced > summary { cursor: pointer; font-size: var(--font-2xs); color: var(--text-secondary); }
+.ch-advanced > .ch-field { margin-top: 6px; }
+
+/* Quick add progress: verifying → opening → waiting → done. */
+.ch-quick-steps { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; padding: 0; list-style: none; font-size: var(--font-2xs); color: var(--text-secondary); }
+.ch-quick-steps li.past { color: var(--success-fg); }
+.ch-quick-steps li.current { color: var(--text-bright); font-weight: 600; }
 .ch-spacer { flex: 1; }
 
 /* Buttons: the Accounts page's button set. */

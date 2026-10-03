@@ -13,6 +13,8 @@ export interface ChannelField {
   optional?: boolean
   /** Fixed choices; the first is the default. */
   options?: string[]
+  /** Shape of this credential: quick add fills the field from the clipboard only on a match. */
+  clipboardPattern?: RegExp
 }
 
 /** One button in the "link my chat account" guide. */
@@ -38,6 +40,14 @@ export interface ChannelPlatformSpec {
   singleReceiver?: boolean
   /** i18n key shown instead of "needs <fields>" when `fields` is empty. */
   configNoteKey?: string
+  /** A page that creates the bot for the user (e.g. Slack's app-from-manifest), shown in the new-bot form. */
+  setupLink?: {
+    /** i18n key of the link text. */
+    label: string
+    /** i18n key of the hint under the link. */
+    hint: string
+    url: string
+  }
   link: {
     /** Buttons of the link guide; the first is the primary one. */
     targets: readonly ChannelLinkTarget[]
@@ -47,5 +57,8 @@ export interface ChannelPlatformSpec {
     sendCodeKey: (target: 'direct' | 'group') => string
     /** i18n key shown while waiting for the code; receives `{ platform }`. */
     waitingKey: string
+    /** The deep link itself sends the code (Telegram's `?start=`); otherwise quick add
+     *  copies the code command for the user to paste. */
+    urlCarriesCode?: boolean
   }
 }

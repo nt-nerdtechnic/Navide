@@ -5,7 +5,7 @@
  * id set; the registry test cross-checks it.
  */
 
-import type { ChannelPlatformSpec } from './types'
+import type { ChannelField, ChannelPlatformSpec } from './types'
 import { SPEC as telegram } from './telegram'
 import { SPEC as discord } from './discord'
 import { SPEC as slack } from './slack'
@@ -33,4 +33,10 @@ const BY_ID = new Map<string, RegisteredChannelPlatform>(ORDERED.map((s) => [s.i
 /** The spec for a platform id; undefined for an id this build does not know. */
 export function channelPlatform(id: string): RegisteredChannelPlatform | undefined {
   return BY_ID.get(id)
+}
+
+/** The credential field whose `clipboardPattern` `text` matches; null when none does. */
+export function clipboardTokenField(fields: readonly ChannelField[], text: string): string | null {
+  const value = text.trim()
+  return fields.find((f) => f.clipboardPattern?.test(value))?.key ?? null
 }
