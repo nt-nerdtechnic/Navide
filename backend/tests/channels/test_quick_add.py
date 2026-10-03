@@ -22,7 +22,7 @@ def fast_quick_add(monkeypatch):
 
 
 def _login_as(env: Env, behaviour: str, identity: str = "@quick_bot") -> None:
-    """Make bots built from now on log in like ``behaviour``: ready / rejected / silent."""
+    """Make bots built from now on log in like ``behaviour``: ready / rejected / identified / silent."""
     original = env.m._factory_for
 
     def factory_for(platform: str):
@@ -40,6 +40,11 @@ def _login_as(env: Env, behaviour: str, identity: str = "@quick_bot") -> None:
                 elif behaviour == "rejected":
                     ad.status.lifecycle = "blocked"
                     ad.status.last_error = "401 Unauthorized"
+                elif behaviour == "identified":  # getMe answered, then polling keeps failing (409)
+                    ad.identity_confirms_credential = True
+                    ad.status.identity = identity
+                    ad.status.lifecycle = "recovering"
+                    ad.status.last_error = "409 Conflict"
                 else:  # silent: connecting forever, the last attempt failed
                     ad.status.lifecycle = "recovering"
                     ad.status.last_error = "ConnectError: unreachable"
@@ -202,6 +207,50 @@ async def test_a_second_quick_add_of_the_same_bot_does_not_break_the_first(env: 
     assert not second["ok"] and second["reason"] == "invalid"
     assert ("telegram", ACCOUNT) in env.store.accounts()
     assert env.m.adapter_for("telegram", ACCOUNT).status.lifecycle == "ready"
+
+
+async def test_an_identity_that_proves_the_credential_counts_without_ready(env: Env) -> None:
+    # Telegram's getMe already proved the token; a busy getUpdates must not turn that into a timeout.
+    _login_as(env, "identified")
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT)
+    assert res["ok"], res
+    assert res["identity"] == "@quick_bot" and res["name"] == "@quick_bot"
+
+
+async def test_an_identity_alone_is_not_enough_for_other_adapters(env: Env) -> None:
+    # Slack learns its identity from the bot token before the app token is checked.
+    _login_as(env, "identified")
+    original = env.m._factory_for
+
+    def factory_for(platform: str):
+        build = original(platform)
+
+        def wrapped(config, secret, store):
+            ad = build(config, secret, store)
+            start = ad.start
+
+            async def start_unproven(emit) -> None:
+                await start(emit)
+                ad.identity_confirms_credential = False
+
+            ad.start = start_unproven
+            return ad
+        return wrapped
+
+    env.m._factory_for = factory_for
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT)
+    assert not res["ok"] and res["reason"] == "timeout"
+    _no_trace(env)
+
+
+def test_only_telegram_says_its_identity_proves_the_credential() -> None:
+    from agent_team_backend.channels.discord import DiscordAdapter
+    from agent_team_backend.channels.slack import SlackAdapter
+    from agent_team_backend.channels.telegram import TelegramAdapter
+
+    assert TelegramAdapter.identity_confirms_credential is True
+    assert not getattr(SlackAdapter, "identity_confirms_credential", False)
+    assert not getattr(DiscordAdapter, "identity_confirms_credential", False)
 
 
 async def test_a_bot_that_did_not_start_is_not_reported_added(env: Env, monkeypatch) -> None:

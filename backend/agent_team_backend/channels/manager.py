@@ -571,19 +571,21 @@ class ChannelManager:
                 "link": {k: v for k, v in link.items() if k != "ok"} if link.get("ok") else None}
 
     async def _await_first_login(self, bot: BotKey, adapter: ChannelAdapter) -> dict[str, str] | None:
-        """None once ``adapter`` reached ready (or never reports progress at all);
-        otherwise why it did not within QUICK_ADD_TIMEOUT_S."""
+        """None once ``adapter`` reached ready, or reported an identity when it says that
+        proves the credential (or never reports progress at all); otherwise why it did
+        not within QUICK_ADD_TIMEOUT_S."""
         status = adapter.status
+        identity_proves = bool(getattr(adapter, "identity_confirms_credential", False))
         # An adapter that never left "stopped" has no login signal to wait for.
         if status.lifecycle == "stopped":
             return None
 
         async def settled() -> dict[str, str] | None:
             while True:
-                if status.lifecycle == "ready":
-                    return None
                 if status.lifecycle == "blocked":
                     return {"reason": "rejected", "error": status.last_error or "credential rejected"}
+                if status.lifecycle == "ready" or (identity_proves and status.identity):
+                    return None
                 if self._adapters.get(bot) is not adapter:
                     return {"reason": "invalid", "error": "the bot was stopped while connecting"}
                 await asyncio.sleep(QUICK_ADD_POLL_S)

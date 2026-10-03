@@ -72,6 +72,9 @@ class TelegramApiError(Exception):
 
 
 class TelegramAdapter:
+    # getMe answering sets the identity: the token is accepted even while getUpdates
+    # still fails (another poller holds it, 409), so quick add need not wait for ready.
+    identity_confirms_credential = True
     platform = "telegram"
     capabilities = Capabilities(
         threads=True, create_location=True, edit=True, typing=True, buttons=True,
