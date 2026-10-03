@@ -585,6 +585,16 @@ async def test_running_watch_is_capped_but_late_reply_still_sent(clocked) -> Non
     await _until(lambda: _said(env, "finally"))
 
 
+async def test_running_status_edits_carry_no_elapsed_seconds(clocked) -> None:
+    env, clock = clocked
+    await env.inbound("long job")
+    env.fake.verdicts["k1"] = {"status": "delivered"}
+    await _until(lambda: MSG_WORKING in env.tg.texts())
+    clock.t += mgr_mod.STATUS_EDIT_EVERY_S + 1
+    await _until(lambda: env.tg.edits)
+    assert {text for _, text in env.tg.edits} == {MSG_WORKING}
+
+
 async def test_pane_close_drops_pending_and_its_task(env: Env) -> None:
     await env.inbound("go")
     env.fake.verdicts["k1"] = {"status": "delivered"}

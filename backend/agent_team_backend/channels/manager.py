@@ -1422,7 +1422,7 @@ class ChannelManager:
                     pass
             if not capped and caps.edit and not pending.quiet and pending.status_id and now >= next_edit:
                 next_edit = now + STATUS_EDIT_EVERY_S
-                await self._edit_status(adapter, pending, f"{MSG_WORKING}（{int(now - pending.started)}s）")
+                await self._edit_status(adapter, pending, MSG_WORKING)
             if now >= next_probe:
                 next_probe = now + AWAITING_PROBE_EVERY_S
                 await self._check_awaiting(adapter, pane_id, pending)
