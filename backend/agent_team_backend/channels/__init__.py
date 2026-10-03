@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
+from . import relay
 from .manager import ChannelManager, Seams
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,8 @@ def default_seams() -> Seams:
             "kind": kind,
             "prompt": str(result.get("awaitingPrompt") or ""),
             "options": [str(o) for o in options] if isinstance(options, list) else [],
+            # A window that does not report the vendor keeps the old behaviour.
+            "answerable": not pane.agent_key or pane.agent_key in relay.ANSWERABLE_AGENTS,
         }
 
     async def answer(pane_id: str, answer_payload: dict[str, Any]) -> dict[str, Any]:

@@ -73,6 +73,7 @@ MSG_OFFLINE = "⚠️ pane 目前不在線上（可能在其他 workspace 或已
 MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
+MSG_AWAITING_LOCAL = "pane 在等確認，請在電腦上回答"
 MSG_LINKED = "✅ 已連結 Navide。回到 Navide 在 pane 的聊天按鈕選這個聊天室即可。"
 MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
@@ -1337,6 +1338,10 @@ class ChannelManager:
         if options:
             kind = "permission" if options[0].strip().lower().startswith("yes") else "question"
         who = f"↳ {child} " if child else ""
+        if not info.get("answerable", True):
+            # No keys Navide could press for this vendor: buttons would only fail.
+            await self._send_awaiting(pane_id, loc, who + MSG_AWAITING_LOCAL)
+            return
         if not self._relay_enabled(loc.platform, loc.account):
             await self._notice(adapter, loc, f"{who}⏸ pane 等待確認（{kind}）")
             return
@@ -1350,6 +1355,16 @@ class ChannelManager:
         except Exception as exc:  # noqa: BLE001
             log.warning("channels: relay prompt to %s failed: %s", loc.key(), exc)
             self.relay.expire_pane(pane_id)  # never delivered: nothing may answer it
+            self._awaiting_failed(pane_id, str(exc))
+            return
+        self._awaiting_failures.pop(pane_id, None)
+
+    async def _send_awaiting(self, pane_id: str, loc: Location, text: str) -> None:
+        """An awaiting notice with nothing to answer, retried like a relay prompt."""
+        try:
+            await self.mirror.send(loc, text, owner=pane_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("channels: awaiting notice to %s failed: %s", loc.key(), exc)
             self._awaiting_failed(pane_id, str(exc))
             return
         self._awaiting_failures.pop(pane_id, None)

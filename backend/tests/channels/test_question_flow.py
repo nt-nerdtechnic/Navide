@@ -102,3 +102,21 @@ async def test_a_plain_text_question_gets_no_relay_prompt(env: Env) -> None:
     await env.inbound("yes please")
     assert env.fake.delivered[-1][1] == "yes please"
 
+
+# --- F6: a vendor Navide cannot answer for is told to the chat, without buttons ---------
+
+
+async def test_an_unanswerable_vendor_gets_a_notice_without_buttons(env: Env) -> None:
+    sent = _capture_buttons(env)
+    orig = env.fake.awaiting_info
+
+    async def info(pane_id):
+        return {**await orig(pane_id), "answerable": False}
+
+    env.m._seams.awaiting_info = info
+    await _awaiting(env)
+    await _until(lambda: any("pane 在等確認，請在電腦上回答" in t for t, _ in sent))
+    notice = next((t, b) for t, b in sent if "請在電腦上回答" in t)
+    assert notice == ("pane 在等確認，請在電腦上回答", None)
+    assert env.m.relay._by_id == {}
+

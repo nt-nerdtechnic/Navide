@@ -32,6 +32,10 @@ CALLBACK_PREFIX = "nv1:"
 _TEXT_ANSWER_RE = re.compile(rf"^\s*(yes|y|no|n|[1-9])\s+([{ID_ALPHABET}]{{{ID_LENGTH}}})\s*$", re.IGNORECASE)
 _CALLBACK_RE = re.compile(rf"^nv1:([{ID_ALPHABET}]{{{ID_LENGTH}}}):(y|n|[1-9])$")
 
+# Vendors whose prompts Navide can answer with keys. Keep in sync with MENU_VENDORS
+# and LINE_PROMPT_VENDORS in src/renderer/src/lib/paneAnswerKeys.ts.
+ANSWERABLE_AGENTS = frozenset({"claude", "codex", "aider"})
+
 # Keep in sync with PERMANENT_ALLOW in src/renderer/src/lib/paneAnswerKeys.ts.
 _PERMANENT_ALLOW_RE = re.compile(
     r"\bdon['’]?t ask again\b|\bdo not ask again\b|\balways\b|\b(?:this|the) session\b"
