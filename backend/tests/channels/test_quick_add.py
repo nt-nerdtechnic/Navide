@@ -3,6 +3,8 @@ name the bot after its identity and hand back a link invite; any failure leaves 
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from agent_team_backend.channels import manager as mgr_mod
@@ -148,6 +150,24 @@ async def test_ws_dispatch_routes_quick_add(env: Env) -> None:
     assert bad == {"ok": False, "error": "config and secret must be objects"}
 
 
+async def test_cancelled_while_waiting_leaves_no_trace(env: Env) -> None:
+    # A closed window cancels its in-flight requests: the bot it was adding must go too.
+    _login_as(env, "silent")
+    task = asyncio.create_task(env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT))
+    for _ in range(100):
+        if env.m.adapter_for("telegram", ACCOUNT) is not None:
+            break
+        await asyncio.sleep(0.005)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(100):
+        if ("telegram", ACCOUNT) not in env.store.accounts():
+            break
+        await asyncio.sleep(0.005)
+    _no_trace(env)
+
+
 async def test_failed_secret_delete_still_removes_the_bot(env: Env) -> None:
     _login_as(env, "rejected")
     write = env.fake.write_secret
@@ -164,3 +184,21 @@ async def test_failed_secret_delete_still_removes_the_bot(env: Env) -> None:
     assert env.m.adapter_for("telegram", ACCOUNT) is None
     assert all(holder != ("telegram", ACCOUNT) for holder in env.m._lease.values())
 
+
+async def test_a_second_quick_add_of_the_same_bot_does_not_break_the_first(env: Env) -> None:
+    _login_as(env, "ready")
+    write = env.fake.write_secret
+
+    async def keychain_write(name: str, secret: str | None) -> None:
+        await asyncio.sleep(0.01)  # the real vault runs in a thread
+        await write(name, secret)
+
+    env.m._seams.write_secret = keychain_write
+    first, second = await asyncio.gather(
+        env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT),
+        env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT),
+    )
+    assert first["ok"], first
+    assert not second["ok"] and second["reason"] == "invalid"
+    assert ("telegram", ACCOUNT) in env.store.accounts()
+    assert env.m.adapter_for("telegram", ACCOUNT).status.lifecycle == "ready"

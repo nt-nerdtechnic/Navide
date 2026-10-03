@@ -230,6 +230,7 @@ class ChannelManager:
         self._status_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = asyncio.Lock()
+        self._quick_adding: set[BotKey] = set()  # bots a quick add is storing and verifying
         self.relay = relay.RelayTable(clock=clock)
         self._debounce: dict[tuple[str, str], _Debounce] = {}
         # One serial worker per location: order kept within a chat, chats never block each other.
@@ -531,20 +532,30 @@ class ChannelManager:
         _check_platform(platform)
         _check_account(account)
         bot = (platform, account)
-        if bot in self.store.accounts():
+        if bot in self.store.accounts() or bot in self._quick_adding:
             return {"ok": False, "reason": "invalid", "error": f"{_bot_label(bot)} is already configured"}
         if not self.store.global_enabled():
             return {"ok": False, "reason": "invalid", "error": "chat channels are turned off"}
-        result = await self.configure(platform, config, secret, account)
-        if not result.get("ok"):
-            if bot in self.store.accounts():  # stored, but the bot could not start
+        self._quick_adding.add(bot)
+        try:
+            result = await self.configure(platform, config, secret, account)
+            if not result.get("ok"):
+                if bot in self.store.accounts():  # stored, but the bot could not start
+                    await self._discard_bot(platform, account)
+                return {"ok": False, "reason": "invalid", "error": result.get("error") or "configure failed"}
+            adapter = self._adapters.get(bot)
+            failure = await self._await_first_login(bot, adapter) if adapter is not None else None
+            if failure is not None:
                 await self._discard_bot(platform, account)
-            return {"ok": False, "reason": "invalid", "error": result.get("error") or "configure failed"}
-        adapter = self._adapters.get(bot)
-        failure = await self._await_first_login(bot, adapter) if adapter is not None else None
-        if failure is not None:
-            await self._discard_bot(platform, account)
-            return {"ok": False, **failure}
+                return {"ok": False, **failure}
+        except BaseException:
+            # Cancelled (the asking window went away) or failed midway: the caller never
+            # hears of this bot, so it must not stay. Shielded so a second cancel cannot stop the undo.
+            if bot in self.store.accounts() or bot in self._adapters:
+                await asyncio.shield(self._discard_bot(platform, account))
+            raise
+        finally:
+            self._quick_adding.discard(bot)
         identity = adapter.status.identity if adapter is not None else ""
         async with self._lock:
             acct = self.store.accounts().get(bot)
