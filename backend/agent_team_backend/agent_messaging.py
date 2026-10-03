@@ -224,6 +224,27 @@ _OWNERS: dict[str, Any] = {}
 # superseded pane_id -> the pane that took its place
 _ALIASES: dict[str, PaneAlias] = {}
 
+#: How many forgotten pane ids are remembered. Only the MCP caller check reads
+#: them, to tell "this id was a pane once" from "this id was never registered";
+#: a few hundred covers every pane a long session closes without growing forever.
+FORGOTTEN_IDS_MAX = 512
+# pane ids removed from the registry, oldest first (insertion order)
+_FORGOTTEN: dict[str, None] = {}
+
+
+def _remember_forgotten(pane_id: str) -> None:
+    _FORGOTTEN.pop(pane_id, None)
+    _FORGOTTEN[pane_id] = None
+    while len(_FORGOTTEN) > FORGOTTEN_IDS_MAX:
+        _FORGOTTEN.pop(next(iter(_FORGOTTEN)))
+
+
+def was_forgotten(pane_id: str) -> bool:
+    """Whether ``pane_id`` named a registered pane that has since been removed
+    (closed, or offline past the grace period) — as opposed to an id this
+    backend never saw registered at all."""
+    return pane_id in _FORGOTTEN
+
 # Observers of the registry (chat-channel mirroring), called synchronously as
 # (event, pane_id) with event "register" | "unregister" | "status", and of the
 # message-log rows windows append. They must be cheap and must not raise.
@@ -288,6 +309,7 @@ def register(
         # offline_since starts at None on the fresh entry.
     )
     _PANES[pane_id] = entry
+    _FORGOTTEN.pop(pane_id, None)
     if owner is not None:
         _OWNERS[pane_id] = owner
     _notify_pane("register", pane_id)
@@ -406,7 +428,8 @@ def unregister(pane_id: str, owner: Any = None) -> bool:
     Returns whether the entry was removed."""
     if owner is not None and pane_id in _OWNERS and _OWNERS[pane_id] is not owner:
         return False
-    _PANES.pop(pane_id, None)
+    if _PANES.pop(pane_id, None) is not None:
+        _remember_forgotten(pane_id)
     _OWNERS.pop(pane_id, None)
     _forget_aliases_to(pane_id)
     _notify_pane("unregister", pane_id)
@@ -453,6 +476,7 @@ def purge_expired() -> list[str]:
     ]
     for pane_id in expired:
         _PANES.pop(pane_id, None)
+        _remember_forgotten(pane_id)
         _OWNERS.pop(pane_id, None)
         _forget_aliases_to(pane_id)
         _notify_pane("unregister", pane_id)
@@ -853,3 +877,4 @@ def _reset_for_test() -> None:
     _PANES.clear()
     _OWNERS.clear()
     _ALIASES.clear()
+    _FORGOTTEN.clear()

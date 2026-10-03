@@ -207,3 +207,23 @@ def test_no_temp_file_survives_a_failed_write(monkeypatch) -> None:
     with pytest.raises(OSError):
         plan_mcp_auth.set_external_enabled(True)
     assert not tmp.exists()
+
+
+# ── _resolve_caller: never registered vs forgotten ──────────────────────────
+
+
+def test_resolve_caller_tells_a_forgotten_pane_from_a_never_registered_one(caplog: Any) -> None:
+    agent_messaging.register("pa", "sender", "/ws/alpha")
+    agent_messaging.unregister("pa")
+    token = plan_mcp_wiring.caller_token()
+    with pytest.raises(plan_mcp.CallerUnknown) as forgotten:
+        plan_mcp._resolve_caller(_ctx(pane="pa", t=token))
+    # A closed main-window pane hears exactly what it heard before.
+    assert str(forgotten.value) == plan_mcp._STALE
+
+    with caplog.at_level("WARNING", logger="agent_team_backend.mcp_server"):
+        with pytest.raises(plan_mcp.CallerUnknown) as never:
+            plan_mcp._resolve_caller(_ctx(pane="never-registered", t=token))
+    assert "never registered" in str(never.value)
+    assert "stale" in str(never.value)
+    assert any("never-registered" in r.getMessage() for r in caplog.records)

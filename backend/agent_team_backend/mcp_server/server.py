@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import time
@@ -323,6 +324,17 @@ _STALE = (
     "---MSG-START--- output protocol, which always resolves against the pane's "
     "current identity"
 )
+# Same refusal as _STALE, for an id the registry never saw: the window that
+# started this CLI did not register its pane. Kept apart so the caller (and the
+# log) can tell a pane that went away from one that never arrived — the second
+# is a wiring bug, not something reopening the pane fixes on its own.
+_UNREGISTERED = (
+    "this pane's id is stale: it was never registered with Navide, so there is "
+    "no pane to act as — the window that started this CLI did not register it "
+    "(an embedded AI panel on a build that predates registering them does this). "
+    "Restart the panel or reopen the pane, or use the ---MSG-START--- output "
+    "protocol"
+)
 _HOST_TOKEN_REJECTED = "host token rejected"
 _EXTERNAL_TOKEN_REJECTED = "external token rejected"
 _EXTERNAL_DISABLED = (
@@ -337,6 +349,11 @@ _QUALIFIED_TARGET_REQUIRED = (
     'a caller with no pane identity must address a pane as "<folder>/<pane>" '
     "— call cli_list_targets for the qualified address"
 )
+
+
+_log = logging.getLogger(__name__)
+# Pane ids already logged as never registered (see _resolve_caller).
+_logged_unregistered: set[str] = set()
 
 
 @dataclass
@@ -405,7 +422,14 @@ def _resolve_caller(ctx: Context) -> _Caller:
         raise CallerUnknown("caller token rejected; reopen the pane to re-wire it")
     entry = agent_messaging.current(pane_id)
     if entry is None:
-        raise CallerUnknown(_STALE)
+        if agent_messaging.was_forgotten(pane_id):
+            raise CallerUnknown(_STALE)
+        if pane_id not in _logged_unregistered:
+            # Once per id: a CLI that keeps calling would otherwise write the
+            # same line on every tool call for the rest of its life.
+            _logged_unregistered.add(pane_id)
+            _log.warning("plan-mcp: refused pane %s — it was never registered", pane_id)
+        raise CallerUnknown(_UNREGISTERED)
     return _Caller(kind="pane", pane_id=entry.pane_id)
 
 
