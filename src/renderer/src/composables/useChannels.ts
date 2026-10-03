@@ -65,9 +65,11 @@ export interface ChannelPlatformState {
 
 export const DEFAULT_ACCOUNT = 'default'
 
-// The backend waits up to 10 s for the platform to accept a credential, then may
-// undo what it stored: past the WS client's default 10 s request timeout.
-const QUICK_ADD_TIMEOUT_MS = 30_000
+// The backend's worst case, each step bounded on its side: storing the credential
+// (a Keychain write, up to 10 s), waiting for the platform to accept it (10 s,
+// QUICK_ADD_TIMEOUT_S), then undoing a failure (a Keychain delete, up to 10 s) —
+// 30 s, plus 15 s for the channels lock and the round trips.
+const QUICK_ADD_TIMEOUT_MS = 45_000
 
 /** A fresh id for a bot being added: stable for its life, whatever it is renamed to. */
 export function newAccountId(): string {

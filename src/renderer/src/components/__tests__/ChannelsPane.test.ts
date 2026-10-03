@@ -503,7 +503,7 @@ describe('ChannelsPane', () => {
       await flushPromises()
       const sent = mock.sent.find((m) => m.type === 'channels.quick_add')
       expect(sent?.payload).toEqual({ platform: 'telegram', config: {}, secret: { token: TG_TOKEN }, link_target: 'direct' })
-      expect(sent?.timeoutMs).toBe(30_000) // outlasts the backend's 10 s wait
+      expect(sent?.timeoutMs).toBe(45_000) // outlasts the backend's worst case (see QUICK_ADD_TIMEOUT_MS)
       expect(mock.sent.some((m) => m.type === 'channels.configure' || m.type === 'channels.link.create')).toBe(false)
       expect(openExternal).toHaveBeenCalledWith('https://t.me/quick_bot?start=QK7M2XAB')
       expect(clip.written).toEqual([]) // the deep link carries the code: nothing to paste
