@@ -596,6 +596,26 @@ describe('ChannelsPane', () => {
       expect(mock.sent.find((m) => m.type === 'channels.quick_add')?.payload).toMatchObject({ secret: { token: TG_TOKEN } })
     })
 
+    it('Slack: routes xapp- and xoxb- to their own fields and links the manifest template', async () => {
+      seedEmpty()
+      clip.text = 'xoxb-1234-5678-abcdEFGH'
+      const w = await render()
+      const sl = w.get('[data-platform="slack"]')
+      await sl.get('[data-testid="channel-manage"]').trigger('click')
+      await flushPromises()
+      expect((sl.get('input[name="bot_token"]').element as HTMLInputElement).value).toBe('xoxb-1234-5678-abcdEFGH')
+      expect((sl.get('input[name="app_token"]').element as HTMLInputElement).value).toBe('')
+      const link = sl.get('[data-testid="channel-setup-link"]')
+      expect(link.text()).toBe('Create the Slack app from a template')
+      const url = new URL(link.attributes('href')!)
+      expect(url.origin + url.pathname).toBe('https://api.slack.com/apps')
+      expect(url.searchParams.get('new_app')).toBe('1')
+      const manifest = JSON.parse(url.searchParams.get('manifest_json')!)
+      expect(manifest.settings.socket_mode_enabled).toBe(true)
+      await link.trigger('click')
+      expect(openExternal).toHaveBeenCalledWith(link.attributes('href'))
+    })
+
     it('iMessage keeps its plain save; an existing bot keeps configure', async () => {
       const w = await render()
       const im = w.get('[data-platform="imessage"]')
@@ -605,6 +625,7 @@ describe('ChannelsPane', () => {
       const tg = w.get('[data-platform="telegram"]')
       await tg.get('[data-testid="channel-manage"]').trigger('click')
       expect(tg.find('[data-testid="channel-quick-add"]').exists()).toBe(false)
+      expect(tg.find('[data-testid="channel-setup-link"]').exists()).toBe(false)
       expect(clip.reads).toBe(0)
     })
   })

@@ -14,6 +14,13 @@ describe('clipboardTokenField', () => {
     }
   })
 
+  it('tells the two Slack tokens apart', () => {
+    expect(clipboardTokenField(fields('slack'), 'xapp-1-A0123-4567-abcdef')).toBe('app_token')
+    expect(clipboardTokenField(fields('slack'), 'xoxb-1234-5678-abcdEFGH')).toBe('bot_token')
+    expect(clipboardTokenField(fields('slack'), 'xoxp-1234-5678')).toBeNull()
+    expect(clipboardTokenField(fields('slack'), 'see xoxb-1234')).toBeNull()
+  })
+
   it('never matches a platform without a declared token shape', () => {
     expect(clipboardTokenField(fields('discord'), 'anything.at.all')).toBeNull()
     expect(clipboardTokenField(fields('feishu'), 'cli_x')).toBeNull()
