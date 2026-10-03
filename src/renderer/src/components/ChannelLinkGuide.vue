@@ -22,7 +22,7 @@ const props = defineProps<{
    *  copied first when the platform's link does not carry the code. */
   initialInvite?: ChannelLinkInvite | null
 }>()
-const emit = defineEmits<{ linked: [title: string]; opened: [] }>()
+const emit = defineEmits<{ linked: [title: string]; opened: [copied: boolean] }>()
 
 // Global instance: the pane header mounts without the i18n plugin in tests.
 const t = i18n.global.t
@@ -128,7 +128,7 @@ watch(
     clearExpiry()
     const action = actions.value.find((a) => a.target === data.target) ?? FALLBACK_TARGETS[0]
     await adopt(data, action, !spec.value?.link.urlCarriesCode)
-    emit('opened')
+    emit('opened', copied.value)
   },
   { immediate: true }
 )

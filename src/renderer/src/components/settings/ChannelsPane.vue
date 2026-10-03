@@ -69,6 +69,8 @@ const confirmingRemove = ref<string | null>(null)
 type QuickStep = 'verifying' | 'opening' | 'waiting' | 'done'
 const quickStep = reactive<Record<string, QuickStep>>({})
 const quickInvite = reactive<Record<string, ChannelLinkInvite>>({})
+// Whether the link guide got the code command onto the clipboard.
+const quickCopied = reactive<Record<string, boolean>>({})
 const QUICK_STEPS: readonly QuickStep[] = ['verifying', 'opening', 'waiting', 'done']
 
 function botKey(platform: string, account: string): string {
@@ -293,8 +295,9 @@ async function quickAdd(spec: RegisteredChannelPlatform, bot: BotRow): Promise<v
   }
 }
 
-function quickOpened(key: string): void {
+function quickOpened(key: string, copied: boolean): void {
   delete quickInvite[key]
+  quickCopied[key] = copied
   if (quickStep[key] === 'opening') quickStep[key] = 'waiting'
 }
 
@@ -496,7 +499,7 @@ function formatTime(ts: number | null | undefined): string {
                 <li v-for="step in QUICK_STEPS" :key="step" :class="stepState(bot.key, step)">{{ quickStepText(spec, step) }}</li>
               </ol>
               <p
-                v-if="quickStep[bot.key] === 'waiting' && !spec.link.urlCarriesCode"
+                v-if="quickStep[bot.key] === 'waiting' && !spec.link.urlCarriesCode && quickCopied[bot.key]"
                 class="ch-form-hint"
                 data-testid="channel-quick-copied"
               >{{ t('channels.quick.copied-code', { platform: platformName(spec.id) }) }}</p>
@@ -520,7 +523,7 @@ function formatTime(ts: number | null | undefined): string {
                   :platform="spec.id"
                   :account="bot.account"
                   :initial-invite="quickInvite[bot.key] ?? null"
-                  @opened="quickOpened(bot.key)"
+                  @opened="(copied) => quickOpened(bot.key, copied)"
                   @linked="botLinked(bot.key)"
                 />
               </template>

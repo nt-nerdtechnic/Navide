@@ -547,6 +547,29 @@ describe('ChannelsPane', () => {
       expect(dc.get('[data-testid="channel-quick-copied"]').text()).toContain('paste it to the bot in Discord')
     })
 
+    it('does not say the code was copied when the clipboard refused it', async () => {
+      seedEmpty()
+      const w = await render()
+      const dc = w.get('[data-platform="discord"]')
+      await dc.get('[data-testid="channel-manage"]').trigger('click')
+      await dc.get('input[name="token"]').setValue('discord-token')
+      mock.setResponse('channels.quick_add', {
+        ok: true, platform: 'discord', account: 'default', name: '@navide', identity: '@navide',
+        link: { platform: 'discord', code: 'DC4X7QAB', target: 'group', expires_at: expires(), url: 'https://discord.com/oauth2/authorize?client_id=1' },
+      })
+      seedAdded('discord', '@navide')
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { readText: async () => '', writeText: async () => { throw new Error('denied') } },
+        configurable: true,
+      })
+      await dc.get('form').trigger('submit')
+      await flushPromises()
+      expect(openExternal).toHaveBeenCalledWith('https://discord.com/oauth2/authorize?client_id=1')
+      expect(steps(dc).attributes('data-step')).toBe('waiting')
+      expect(dc.find('[data-testid="channel-quick-copied"]').exists()).toBe(false)
+      expect(dc.get('[data-testid="channel-link-code"]').text()).toBe('link DC4X7QAB')
+    })
+
     it('sends one quick add when pressed twice while the clipboard is being read', async () => {
       seedEmpty()
       const w = await render()
