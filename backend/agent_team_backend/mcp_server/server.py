@@ -1692,6 +1692,14 @@ def _is_group_target(to: str) -> bool:
     return (to or "").strip().lower() == GROUP_TARGET
 
 
+def _is_chat_target(to: str) -> bool:
+    """A chat sender (`telegram:alice`), as the window's isChannelTarget reads it."""
+    from agent_team_backend.channels.registry import PLATFORMS
+
+    platform, sep, _ = (to or "").strip().partition(":")
+    return bool(sep) and platform in PLATFORMS
+
+
 async def _send_to_group(
     caller: "_Caller", me: str, text: str, reply_to: str = "", kind: str = ""
 ) -> dict[str, Any]:
@@ -1885,6 +1893,11 @@ async def cli_send(
     text is delivered verbatim and submitted for the receiving agent to act on,
     once that pane is idle; it is queued if the pane is mid-turn. An unknown or
     ambiguous target is refused rather than guessed.
+
+    A chat sender (`telegram:alice`) is not a pane: answer it in your turn (an
+    MSG block addressed to it), which Navide posts to your bound chat when the
+    turn ends. Sent here, nothing goes out — the answer is {ok: true,
+    handed_to_channel: true, note} and the text is dropped.
 
     A plain terminal pane (agent_key "terminal" in cli_get_status) is a
     login shell, not an agent: `text` is typed in bare — no sender line, no
@@ -2098,6 +2111,21 @@ async def _send(
                 "error_code": "no-group",
             }
         return await _send_to_group(caller, me, text, reply_to, send_kind)
+    if not target_id and _is_chat_target(to):
+        # Same as the window's isChannelTarget: a chat sender is not a pane, and
+        # the reply goes out from the turn itself when it ends
+        # (channels/manager.py _send_reply). Nothing is sent from here.
+        return {
+            "ok": True,
+            "target": to.strip(),
+            "handed_to_channel": True,
+            "note": (
+                "Chat senders are answered from your turn, not by this tool: this "
+                "text was NOT sent. Write the reply in your answer as an MSG block "
+                f"addressed to {to.strip()} (or as plain text); Navide posts it to "
+                "your pane's bound chat when the turn ends."
+            ),
+        }
     # An id is already as qualified as an address gets, so the rule that a
     # caller with no workspace of its own must name one does not apply to it.
     if not target_id and caller.kind != "pane" and "/" not in (to or ""):

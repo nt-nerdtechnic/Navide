@@ -175,6 +175,26 @@ async def test_send_refuses_unknown_ambiguous_and_self(
     assert captured == []
 
 
+@pytest.mark.asyncio
+async def test_send_to_a_chat_sender_is_handed_to_the_channel(
+    captured: list[dict[str, Any]],
+) -> None:
+    _seed()
+
+    for kind in ("message", "ack"):
+        res = await plan_mcp.cli_send(" telegram:neillu123 ", "done", _ctx(), kind=kind)
+        assert res["ok"] is True
+        assert res["handed_to_channel"] is True
+        assert res["target"] == "telegram:neillu123"
+        assert "MSG" in res["note"]
+
+    # A pane name that merely contains a colon is still a pane name.
+    unknown = await plan_mcp.cli_send("notaplatform:x", "x", _ctx())
+    assert unknown["ok"] is False and unknown["error_code"] == "unknown-target"
+
+    assert captured == []
+
+
 # ── Addressing one exact pane by id ────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_pane_id_names_one_of_two_panes_sharing_a_name(
