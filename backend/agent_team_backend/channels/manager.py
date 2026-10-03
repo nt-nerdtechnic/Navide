@@ -585,7 +585,10 @@ class ChannelManager:
         bot = (platform, account)
         async with self._lock:
             await self._stop_bot(platform, account)
-            await self._seams.write_secret(_secret_name(platform, account), None)
+            try:
+                await self._seams.write_secret(_secret_name(platform, account), None)
+            except Exception:  # noqa: BLE001 — the rows must go even when the vault fails
+                log.exception("channels: deleting the credential of %s failed", _bot_label(bot))
             self._errors.pop(bot, None)
             self._secret_hints.pop(bot, None)
             self.store.remove_account(platform, account)

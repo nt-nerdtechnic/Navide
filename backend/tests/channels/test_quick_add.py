@@ -146,3 +146,21 @@ async def test_ws_dispatch_routes_quick_add(env: Env) -> None:
     assert "channels.quick_add" in ws_api.MESSAGE_TYPES
     bad = await ws_api._dispatch(env.m, "channels.quick_add", {"platform": "telegram", "secret": "x"})
     assert bad == {"ok": False, "error": "config and secret must be objects"}
+
+
+async def test_failed_secret_delete_still_removes_the_bot(env: Env) -> None:
+    _login_as(env, "rejected")
+    write = env.fake.write_secret
+
+    async def failing_delete(name: str, secret: str | None) -> None:
+        if secret is None:
+            raise RuntimeError("keychain unavailable")
+        await write(name, secret)
+
+    env.m._seams.write_secret = failing_delete
+    res = await env.m.quick_add("telegram", {}, {"token": "tok-bad"}, ACCOUNT)
+    assert res == {"ok": False, "reason": "rejected", "error": "401 Unauthorized"}
+    assert ("telegram", ACCOUNT) not in env.store.accounts()
+    assert env.m.adapter_for("telegram", ACCOUNT) is None
+    assert all(holder != ("telegram", ACCOUNT) for holder in env.m._lease.values())
+
