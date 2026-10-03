@@ -979,10 +979,20 @@ not grant access.
 On every configured platform, a pane waiting on a permission
 prompt or a question posts the prompt with a 5-letter request id (a–z without
 `l`) and, where supported, buttons. Reply `yes <id>` / `no <id>`, or
-`<option number> <id>` for a question. Answers are handled before the message
-queue, only from allowlisted senders, only in the chat the request was posted
-to; each id is single-use and expires when the pane leaves the prompt or after
-30 minutes. Only vendor-known answer keystrokes are sent — never raw text.
+`<option number> <id>` for a question; when only one request is live in that
+chat, a bare `yes`, `no` or option number answers it. Answers are handled before
+the message queue, only from allowlisted senders, only in the chat the request
+was posted to. An id is used up only once its keys are sent: a wrong option
+number or a failed send can be retried. It expires when the pane leaves the
+prompt, when the screen shows a different prompt, or after 30 minutes; a pane
+still waiting then posts its current prompt again with a new id, and so does a
+pane that moves on to its next question. Only vendor-known answer keystrokes are
+sent — never raw text. What cannot be answered that way is left to the
+computer: multi-select menus and free-text ("Type something") options, and
+prompts from vendors Navide has no answer keys for (only Claude Code, Codex and
+Aider have them), which post a notice without buttons. A turn that ends on a
+plain-text question posts no request; reply by typing. Other text sent to a
+pane waiting on a prompt is not queued: the chat is told how to answer instead.
 
 **Security note:** anyone on the allowlist can approve tool calls on your
 machine while the relay is on. Keep the allowlist short; Navide Guard refuses

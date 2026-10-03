@@ -31,6 +31,7 @@ CALLBACK_PREFIX = "nv1:"
 
 _TEXT_ANSWER_RE = re.compile(rf"^\s*(yes|y|no|n|[1-9])\s+([{ID_ALPHABET}]{{{ID_LENGTH}}})\s*$", re.IGNORECASE)
 _CALLBACK_RE = re.compile(rf"^nv1:([{ID_ALPHABET}]{{{ID_LENGTH}}}):(y|n|[1-9])$")
+_BARE_ANSWER_RE = re.compile(r"^\s*(yes|y|no|n|[1-9])\s*$", re.IGNORECASE)
 
 # Vendors whose prompts Navide can answer with keys. Keep in sync with MENU_VENDORS
 # and LINE_PROMPT_VENDORS in src/renderer/src/lib/paneAnswerKeys.ts.
@@ -88,6 +89,15 @@ def parse_answer(text: str, callback_data: str) -> RelayAnswer | None:
     word = m.group(1).lower()
     choice = "y" if word in ("yes", "y") else "n" if word in ("no", "n") else word
     return RelayAnswer(m.group(2).lower(), choice)
+
+
+def parse_bare(text: str) -> str:
+    """The choice in a bare ``yes`` / ``n`` / ``2`` with no request id, else ""."""
+    m = _BARE_ANSWER_RE.match(text or "")
+    if not m:
+        return ""
+    word = m.group(1).lower()
+    return "y" if word in ("yes", "y") else "n" if word in ("no", "n") else word
 
 
 def is_permanent_allow(option: str) -> bool:
@@ -174,6 +184,15 @@ def prompt_text(request: RelayRequest, prompt: str) -> str:
     return "\n".join(lines)
 
 
+def answer_hint(request: RelayRequest) -> str:
+    """How to answer ``request`` from chat, in one line."""
+    if request.kind == "question":
+        return f"回覆 <選項編號> {request.id}"
+    if _allow_offered(request):
+        return f"回覆 yes {request.id} / no {request.id}"
+    return f"回覆 no {request.id}（允許請在電腦前操作）"
+
+
 def buttons_for(request: RelayRequest) -> list[tuple[str, str]]:
     if request.kind == "permission":
         deny = ("拒絕", f"{CALLBACK_PREFIX}{request.id}:n")
@@ -218,6 +237,10 @@ class RelayTable:
         for rid, req in list(self._by_id.items()):
             if req.created < cutoff:
                 del self._by_id[rid]
+
+    def for_location(self, location_key: str) -> list[RelayRequest]:
+        self.prune()
+        return [r for r in self._by_id.values() if r.loc.key() == location_key]
 
     def for_pane(self, pane_id: str) -> list[RelayRequest]:
         return [r for r in self._by_id.values() if r.pane_id == pane_id]

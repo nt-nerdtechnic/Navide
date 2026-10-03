@@ -715,6 +715,8 @@ class Mirror:
         import dataclasses
 
         forwarded = dataclasses.replace(msg, text=text)
+        if await self.m._held_by_prompt(forwarded, str(child["pane_id"])):
+            return  # not routed: the chat was told how to answer the child's prompt
         await self.m._deliver(forwarded, binding, str(child["pane_id"]))
         await self.m._reply(msg, MSG_ROUTED.format(child=child["name"]))
 

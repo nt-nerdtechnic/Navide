@@ -189,3 +189,53 @@ async def test_a_prompt_is_relayed_again_after_its_id_expires(clocked) -> None:
     clock.t += 1801  # past the relay TTL and the run watch, still awaiting
     await _until(lambda: len(_prompts(env)) == 2)
     assert _relay_id(env) != rid and len(env.m.relay._by_id) == 1
+
+
+# --- F3: a bare answer reaches the prompt; other text is not queued behind it ------------
+
+
+async def test_a_bare_option_number_answers_the_only_live_prompt(env: Env) -> None:
+    await _question(env, ["Keep", "Discard"])
+    delivered = len(env.fake.delivered)
+    await env.inbound("2")
+    assert env.fake.answers == [("pane-1", {"kind": "question", "option": 2})]
+    assert env.tg.texts()[-1] == "✅ 已送出：選項 2" and len(env.fake.delivered) == delivered
+
+
+async def test_a_bare_yes_answers_a_permission_prompt(env: Env) -> None:
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    await env.inbound("y")
+    assert env.fake.answers == [("pane-1", {"kind": "permission", "choice": "allow"})]
+
+
+async def test_text_to_a_pane_waiting_on_a_prompt_is_answered_not_queued(env: Env) -> None:
+    rid = await _question(env, ["Keep", "Discard"])
+    delivered = len(env.fake.delivered)
+    await env.inbound("what do you mean?")
+    assert len(env.fake.delivered) == delivered and env.fake.answers == []
+    assert "沒有送出" in env.tg.texts()[-1] and rid in env.tg.texts()[-1]
+
+
+async def test_a_bare_answer_with_two_live_prompts_is_not_guessed(env: Env) -> None:
+    await _question(env, ["Keep", "Discard"])
+    env.m.relay.create("pane-2", "question", ["A", "B"], env.m.relay.for_pane("pane-1")[0].loc)
+    delivered = len(env.fake.delivered)
+    await env.inbound("1")
+    assert env.fake.answers == [] and len(env.fake.delivered) == delivered
+    assert "沒有送出" in env.tg.texts()[-1]
+
+
+async def test_a_bare_answer_with_nothing_to_answer_is_not_queued(env: Env) -> None:
+    orig = env.fake.awaiting_info
+
+    async def info(pane_id):
+        return {**await orig(pane_id), "answerable": False}
+
+    env.m._seams.awaiting_info = info
+    await _awaiting(env)
+    await _until(lambda: any("請在電腦上回答" in t for t in env.tg.texts()))
+    delivered = len(env.fake.delivered)
+    await env.inbound("1")
+    assert len(env.fake.delivered) == delivered and env.fake.answers == []
+    assert "請在電腦上回答" in env.tg.texts()[-1] and "沒有送出" in env.tg.texts()[-1]

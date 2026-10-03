@@ -74,6 +74,7 @@ MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
 MSG_AWAITING_LOCAL = "pane 在等確認，請在電腦上回答"
+MSG_HELD_BY_PROMPT = "⚠️ pane 正在等確認，這則訊息沒有送出。{how}"
 MSG_LINKED = "✅ 已連結 Navide。回到 Navide 在 pane 的聊天按鈕選這個聊天室即可。"
 MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
@@ -984,6 +985,8 @@ class ChannelManager:
         # Relay answers go before any queueing: the pane is blocked on exactly this.
         if self._relay_enabled(msg.platform, msg.account):
             answer = relay.parse_answer(msg.text, msg.callback_data)
+            if answer is None and not msg.callback_data:
+                answer = self._bare_answer(msg)
             if answer is not None:
                 await self._handle_relay_answer(msg, answer)
                 return
@@ -1048,6 +1051,33 @@ class ChannelManager:
         # is no per-platform switch; a stale ``permission_relay: false`` is ignored.
         return bool(acct)
 
+    def _bare_answer(self, msg: InboundMessage) -> relay.RelayAnswer | None:
+        """``2`` / ``yes`` with no id answers the chat's prompt when exactly one is live."""
+        choice = relay.parse_bare(msg.text)
+        if not choice:
+            return None
+        live = self.relay.for_location(msg.location_key())
+        return relay.RelayAnswer(live[0].id, choice) if len(live) == 1 else None
+
+    async def _held_by_prompt(self, msg: InboundMessage, pane_id: str) -> bool:
+        """A pane waiting on a permission-type prompt would queue the text until the
+        prompt clears and then run it as a new prompt: say how to answer instead."""
+        if self._seams.pane_state(pane_id).get("display_status") != "awaiting":
+            return False
+        live = self.relay.for_pane(pane_id)
+        if live:
+            how = relay.answer_hint(live[0])
+        else:
+            try:
+                info = await self._seams.awaiting_info(pane_id)
+            except Exception:  # noqa: BLE001
+                return False
+            if info.get("kind") != "permission":
+                return False  # a question is answered by typing
+            how = MSG_AWAITING_LOCAL
+        await self._reply(msg, MSG_HELD_BY_PROMPT.format(how=how))
+        return True
+
     async def _handle_relay_answer(self, msg: InboundMessage, answer: relay.RelayAnswer) -> None:
         request = self.relay.get(answer.request_id)
         # The very chat (bot, chat and topic) the prompt went to: another bot in the
@@ -1060,7 +1090,7 @@ class ChannelManager:
             return
         payload = relay.answer_payload(request, answer.choice)
         if payload is None:
-            await self._reply(msg, MSG_RELAY_EXPIRED if request.kind == "permission"
+            await self._reply(msg, f"⚠️ {relay.answer_hint(request)}" if request.kind == "permission"
                               else "⚠️ 請回覆有效的選項編號")
             return
         if not relay.is_deny(request, payload) and self._guard_vetoes(request):
@@ -1174,6 +1204,8 @@ class ChannelManager:
             await self._reply(msg, f"⚠️ 中斷失敗：{result.get('error') or 'not sent'}")
 
     async def _deliver(self, msg: InboundMessage, binding: Binding, pane_id: str) -> None:
+        if await self._held_by_prompt(msg, pane_id):
+            return
         queued = self._queued.setdefault(pane_id, set())
         if len(queued) >= MAX_QUEUED_PER_PANE:
             await self._reply(msg, MSG_QUEUE_FULL)
