@@ -284,6 +284,7 @@
     "editor-open-failed": "無法開啟編輯器。",
     "repo-outside-workspace": "此儲存庫位於工作區之外，無法在此開啟。",
     "discovery-failed": "無法掃描儲存庫。",
+    "status-truncated": "Git 狀態只列出前 {count} 個路徑，此儲存庫還有更多未顯示的變更。",
     "commit-failed": "提交失敗。",
     "undo-failed": "復原失敗。",
     "generation-failed": "產生訊息失敗。",

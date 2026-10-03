@@ -18,6 +18,7 @@ export interface GitStatus {
   untracked: GitFileEntry[]
   ignored: GitFileEntry[]
   operation_in_progress: string // '' | 'merge' | 'rebase' | 'cherry-pick'
+  truncated?: boolean // the backend stopped at its entry or byte cap (#144)
 }
 
 export interface DiscoveredRepo {

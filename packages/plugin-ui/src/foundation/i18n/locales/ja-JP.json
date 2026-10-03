@@ -284,6 +284,7 @@
     "editor-open-failed": "エディターを開けませんでした。",
     "repo-outside-workspace": "このリポジトリはワークスペース外のため、ここでは開けません。",
     "discovery-failed": "リポジトリをスキャンできませんでした。",
+    "status-truncated": "Git ステータスは最初の {count} 件のパスのみ表示しています。このリポジトリには表示されていない変更がさらにあります。",
     "commit-failed": "コミットに失敗しました。",
     "undo-failed": "取り消しに失敗しました。",
     "generation-failed": "メッセージの生成に失敗しました。",

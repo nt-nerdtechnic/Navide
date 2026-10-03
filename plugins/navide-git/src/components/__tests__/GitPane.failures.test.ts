@@ -82,6 +82,23 @@ describe('GitPane failure outlets', () => {
     expect(wrapper.get('.account-pill-label').text()).toBe('git.account.unbound')
   })
 
+  it('says when the status list stopped at the backend cap (#144)', async () => {
+    const send = async (type: string) => {
+      if (type !== 'git.status') return statusFor(type)
+      const reply = statusFor(type) as { payload: Record<string, unknown> }
+      return { ...reply, payload: { ...reply.payload, untracked: [{ path: 'a.txt', status: '?' }], truncated: true } }
+    }
+    const { wrapper } = mountPane(async () => true, send)
+    await flushPromises()
+    expect(wrapper.find('.status-truncated-banner').text()).toBe('git.status-truncated')
+  })
+
+  it('shows no truncation notice for a complete status', async () => {
+    const { wrapper } = mountPane(async () => true)
+    await flushPromises()
+    expect(wrapper.find('.status-truncated-banner').exists()).toBe(false)
+  })
+
   it('reports auto-commit failures instead of stopping silently (MED-3)', async () => {
     seedSettings({ 'agentTeam.git.autoCommit': 'true' })
     vi.useFakeTimers()

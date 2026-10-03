@@ -284,6 +284,7 @@
     "editor-open-failed": "Could not open the editor.",
     "repo-outside-workspace": "This repository is outside the workspace and cannot be opened here.",
     "discovery-failed": "Could not scan for repositories.",
+    "status-truncated": "Git status listed only the first {count} paths; this repository has more changes that are not shown.",
     "commit-failed": "Commit failed.",
     "undo-failed": "Undo failed.",
     "generation-failed": "Message generation failed.",

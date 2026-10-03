@@ -514,6 +514,12 @@ async function doConnect(): Promise<void> {
 
 // ── abort in-progress operation ──────────────────────────────────────────────────
 const opInProgress = computed(() => gitStatus.value?.operation_in_progress ?? '')
+// Paths a truncated status still lists -- the backend stops at an entry or byte
+// cap on huge trees (#144), so the count is what was read, not a constant.
+const listedPathCount = computed(() => new Set(
+  [...(gitStatus.value?.staged ?? []), ...(gitStatus.value?.unstaged ?? []), ...(gitStatus.value?.untracked ?? [])]
+    .map((entry) => entry.path),
+).size)
 const conflictFileCount = computed(() => {
   const staged = gitStatus.value?.staged ?? []
   const unstaged = gitStatus.value?.unstaged ?? []
@@ -1797,6 +1803,9 @@ defineExpose({ getCloseState, setClosePrepared })
         </span>
         <button class="op-abort-btn" @click="doAbort">{{ $t('action.abort-op', { op: opInProgress }) }}</button>
       </div>
+      <div v-if="gitStatus.truncated" class="op-banner status-truncated-banner">
+        <span class="status-truncated-text">{{ $t('git.status-truncated', { count: listedPathCount }) }}</span>
+      </div>
 
       <!-- ── PART 1 scroll region ──────────────────────────────── -->
       <div ref="partTopEl" class="git-scroll part-top" :style="{ flexBasis: gitTopRatio * 100 + '%' }">
@@ -2889,6 +2898,7 @@ defineExpose({ getCloseState, setClosePrepared })
 .op-banner-conflict .op-text { color: var(--warning-fg); }
 .op-banner-ready { background: var(--success-subtle); border-bottom-color: var(--success-muted); }
 .op-banner-ready .op-text { color: var(--success-fg); font-weight: 600; }
+.status-truncated-text { color: var(--attention-bright); }
 .op-commit-btn {
   background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-fg);
   border-radius: var(--radius-xs); font-size: var(--font-2xs); padding: 2px 8px; cursor: pointer; margin-left: auto;
