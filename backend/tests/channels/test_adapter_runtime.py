@@ -4,7 +4,7 @@ import asyncio
 import time
 
 from agent_team_backend.channels.adapter_runtime import ReceiveLoop
-from agent_team_backend.channels.base import AdapterStatus
+from agent_team_backend.channels.base import AdapterStatus, backoff_delay
 
 
 async def test_stop_ends_the_loop_even_if_a_cancel_is_swallowed() -> None:
@@ -33,6 +33,7 @@ async def test_stop_ends_the_loop_even_if_a_cancel_is_swallowed() -> None:
     assert done, "stop() did not return"
     assert time.monotonic() - started < 2
     assert swallowed and loop.status.lifecycle == "stopped"
+
 
 async def test_a_connection_that_drops_right_after_ready_keeps_backing_off() -> None:
     # Matrix, Feishu, DingTalk and iMessage mark ready as soon as they connect.
@@ -78,3 +79,9 @@ async def test_a_connection_that_stayed_up_starts_a_fresh_backoff_series() -> No
     await asyncio.wait_for(loop._task, timeout=3)
     assert attempts == [1, 2, 1, 2]
 
+
+def test_backoff_starts_short_and_doubles_to_the_cap() -> None:
+    # rand 0.5 is the jitter midpoint: no jitter.
+    steps = [backoff_delay(n, 0.5) for n in range(1, 10)]
+    assert steps == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 320.0, 600.0, 600.0]
+    assert 4.0 <= backoff_delay(1, 0.0) and backoff_delay(1, 0.999) <= 6.0

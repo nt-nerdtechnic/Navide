@@ -18,8 +18,10 @@ Platform = Literal[
 ]
 Lifecycle = Literal["stopped", "starting", "ready", "recovering", "blocked"]
 
-# Reconnect policy shared by every adapter (OpenClaw model).
-RECONNECT_BASE_S = 30.0
+# Reconnect policy shared by every adapter (OpenClaw model). The first retry is
+# short so a network blip or a wake from sleep recovers in seconds; doubling
+# still reaches the cap after eight failures.
+RECONNECT_BASE_S = 5.0
 RECONNECT_CAP_S = 600.0
 RECONNECT_JITTER = 0.2
 STALL_WATCHDOG_S = 120.0
