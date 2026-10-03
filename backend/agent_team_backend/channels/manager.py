@@ -1342,6 +1342,12 @@ class ChannelManager:
             # No keys Navide could press for this vendor: buttons would only fail.
             await self._send_awaiting(pane_id, loc, who + MSG_AWAITING_LOCAL)
             return
+        if any(relay.is_multi_select(o) for o in options):
+            # Toggling a box is one key, submitting is more: nothing to relay safely.
+            prompt = str(info.get("prompt") or "").strip()
+            lines = [f"{who}⏸ pane 需要確認（question）", *([prompt] if prompt else []), relay.COMPUTER_ONLY]
+            await self._send_awaiting(pane_id, loc, "\n".join(lines))
+            return
         if not self._relay_enabled(loc.platform, loc.account):
             await self._notice(adapter, loc, f"{who}⏸ pane 等待確認（{kind}）")
             return

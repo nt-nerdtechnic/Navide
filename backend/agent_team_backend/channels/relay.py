@@ -47,6 +47,14 @@ _PERMANENT_ALLOW_RE = re.compile(
 )
 
 
+# A checkbox row of a multi-select menu ("[ ] Lint", "[✔] Tests", "☐ Docs"), and a
+# row that opens a free-text answer: neither can be answered with one key from chat.
+_MULTI_SELECT_RE = re.compile(r"^\s*(?:\[[^\]]?\]|[☐☑☒□■◻◼✓✔✗])")
+_FREE_TEXT_RE = re.compile(
+    r"^\s*(?:type something|type here|something else|other\b|自行輸入|自由輸入|其他)", re.IGNORECASE)
+COMPUTER_ONLY = "這題需要在電腦上操作（多選／自由輸入）"
+
+
 def new_request_id() -> str:
     return "".join(secrets.choice(ID_ALPHABET) for _ in range(ID_LENGTH))
 
@@ -87,6 +95,14 @@ def is_permanent_allow(option: str) -> bool:
     return bool(_PERMANENT_ALLOW_RE.search(option or ""))
 
 
+def is_multi_select(option: str) -> bool:
+    return bool(_MULTI_SELECT_RE.match(option or ""))
+
+
+def is_free_text(option: str) -> bool:
+    return bool(_FREE_TEXT_RE.match(option or ""))
+
+
 def refuses_permanent(request: RelayRequest, choice: str) -> bool:
     """``choice`` would press a permanent-allow option (``yes`` presses option 1)."""
     if request.kind == "permission":
@@ -114,7 +130,7 @@ def same_prompt(a: str, b: str) -> bool:
 
 def _offered(request: RelayRequest) -> list[tuple[int, str]]:
     return [(i, opt) for i, opt in enumerate(request.options[:MAX_BUTTON_OPTIONS], 1)
-            if not is_permanent_allow(opt)]
+            if not is_permanent_allow(opt) and not is_free_text(opt)]
 
 
 def _allow_offered(request: RelayRequest) -> bool:
@@ -129,6 +145,8 @@ def answer_payload(request: RelayRequest, choice: str) -> dict[str, Any] | None:
         n = int(choice)
         if request.options and n > len(request.options):
             return None
+        if request.options and is_free_text(request.options[n - 1]):
+            return None  # it opens a text box the relay never types into
         return {"kind": "question", "option": n}
     return None
 
@@ -146,6 +164,8 @@ def prompt_text(request: RelayRequest, prompt: str) -> str:
     if request.kind == "question":
         for i, opt in _offered(request):
             lines.append(f"{i}. {opt}")
+        if any(is_free_text(opt) for opt in request.options):
+            lines.append("自由輸入的選項需要在電腦上操作")
         lines.append(f"回覆 <選項編號> {request.id}")
     elif _allow_offered(request):
         lines.append(f"回覆 yes {request.id} / no {request.id}")

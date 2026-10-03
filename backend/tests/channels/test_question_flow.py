@@ -120,3 +120,27 @@ async def test_an_unanswerable_vendor_gets_a_notice_without_buttons(env: Env) ->
     assert notice == ("pane 在等確認，請在電腦上回答", None)
     assert env.m.relay._by_id == {}
 
+
+# --- F4: multi-select and free-text rows are not offered --------------------------------
+
+
+async def test_a_multi_select_question_is_left_to_the_computer(env: Env) -> None:
+    sent = _capture_buttons(env)
+    env.fake.kind = "permission"
+    env.fake.prompt = "Which checks should run?"
+    env.fake.options = ["[ ] Lint", "[ ] Unit tests", "Type something."]
+    await _awaiting(env)
+    await _until(lambda: any("這題需要在電腦上操作（多選／自由輸入）" in t for t, _ in sent))
+    text, buttons = next((t, b) for t, b in sent if "電腦上操作" in t)
+    assert buttons is None and "Lint" not in text.split("Which checks should run?")[-1]
+    assert env.m.relay._by_id == {}
+
+
+async def test_a_free_text_row_is_not_offered(env: Env) -> None:
+    sent = _capture_buttons(env)
+    rid = await _question(env, ["Keep", "Discard", "Type something."])
+    text, buttons = next((t, b) for t, b in sent if t.startswith("⏸"))
+    assert [label for label, _ in buttons] == ["1. Keep", "2. Discard"]
+    assert "Type something" not in text and "自由輸入的選項需要在電腦上操作" in text
+    await env.inbound(f"3 {rid}")
+    assert env.fake.answers == [] and env.tg.texts()[-1] == "⚠️ 請回覆有效的選項編號"
