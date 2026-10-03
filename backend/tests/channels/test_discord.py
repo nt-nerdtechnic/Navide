@@ -146,7 +146,9 @@ async def test_send_chunks_buttons_edit_typing_and_create_location(http: FakeHtt
     assert [b["custom_id"] for b in buttons] == ["nv1:abcde:yes", "nv1:abcde:no"]
 
     await adapter.edit_text(loc, ids[0], "edited")
-    assert http.calls_to("PATCH", f"/channels/T77/messages/{ids[0]}")[0].body["content"] == "edited"
+    patch = http.calls_to("PATCH", f"/channels/T77/messages/{ids[0]}")[0].body
+    # An edit replaces the message, buttons included: a settled prompt keeps none.
+    assert patch["content"] == "edited" and patch["components"] == []
     await adapter.send_typing(loc)
     assert http.calls_to("POST", "/channels/T77/typing")
     # A plain channel location posts to the channel itself.

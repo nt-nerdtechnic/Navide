@@ -367,7 +367,9 @@ class DiscordAdapter:
         return ids
 
     async def edit_text(self, loc: Location, message_id: str, text: str) -> None:
-        body = {"content": text[: self.capabilities.text_limit], "allowed_mentions": {"parse": []}}
+        # An edit replaces the message, buttons included (Telegram drops them too).
+        body = {"content": text[: self.capabilities.text_limit], "allowed_mentions": {"parse": []},
+                "components": []}
         await self._write("PATCH", f"/channels/{self._target(loc)}/messages/{message_id}", body)
 
     async def send_typing(self, loc: Location) -> None:

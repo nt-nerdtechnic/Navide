@@ -330,7 +330,10 @@ class SlackAdapter:
         ]}
 
     async def edit_text(self, loc: Location, message_id: str, text: str) -> None:
-        await self._write("chat.update", {"channel": loc.chat_id, "ts": message_id, "text": text[:EDIT_LIMIT]})
+        # chat.update keeps any blocks it is not given, buttons included; an edit
+        # replaces the message, so they go (Telegram drops them too).
+        await self._write("chat.update", {"channel": loc.chat_id, "ts": message_id,
+                                          "text": text[:EDIT_LIMIT], "blocks": []})
 
     async def send_typing(self, loc: Location) -> None:
         return None  # Slack exposes no bot typing indicator over Socket Mode / Web API.

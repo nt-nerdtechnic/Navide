@@ -144,6 +144,8 @@ async def test_send_chunks_buttons_edit_and_create_location(http: FakeHttp) -> N
     await adapter.edit_text(loc, "9.1", "x" * 5000)
     upd = http.calls_to("POST", "/chat.update")[0].body
     assert upd["channel"] == "C1" and upd["ts"] == "9.1" and len(upd["text"]) == 4000
+    # An edit replaces the message, buttons included: chat.update keeps blocks it is not given.
+    assert upd["blocks"] == []
     await adapter.send_typing(loc)  # no-op, no request
     assert not http.calls_to("POST", "/chat.typing")
     await adapter.stop()

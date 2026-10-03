@@ -259,6 +259,8 @@ async def test_edit_buttons_and_callback(api: FakeBotApi) -> None:
     assert markup["inline_keyboard"][0][1] == {"text": "No", "callback_data": "nv1:abcde:n"}
     await ad.edit_text(loc, "9", "working…")
     assert api.calls_of("editMessageText")[0]["message_id"] == 9
+    # No reply_markup: Telegram drops the inline keyboard, as a settled prompt needs.
+    assert "reply_markup" not in api.calls_of("editMessageText")[0]
 
     api.push_callback(chat_id=42, data="nv1:abcde:y")
     await ad.start(emit)

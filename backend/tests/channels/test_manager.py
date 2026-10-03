@@ -759,6 +759,48 @@ async def test_relay_id_expires_when_pane_leaves_awaiting_or_ttl(clocked, monkey
     assert env.tg.texts()[-1] == mgr_mod.MSG_RELAY_EXPIRED and env.fake.answers == []
 
 
+def _prompt_message(env: Env) -> tuple[str, str]:
+    """(message id, text) of the relay prompt the FakeAdapter sent last."""
+    i = max(n for n, t in enumerate(env.tg.texts()) if t.startswith("⏸"))
+    return str(i + 1), env.tg.texts()[i]
+
+
+async def test_relay_prompt_is_settled_when_the_pane_leaves_awaiting(clocked) -> None:
+    # Answered or skipped at the keyboard: the chat's prompt must say so and drop
+    # its buttons (an edit replaces the message), not wait to be pressed and fail.
+    env, clock = clocked
+    await _awaiting(env)
+    clock.t += 1
+    await _until_relay_prompt(env)
+    mid, text = _prompt_message(env)
+    env.fake.states["pane-1"] = {"exists": True, "busy": True, "display_status": "running"}
+    clock.t += 1
+    await _until(lambda: any(m == mid for m, _ in env.tg.edits))
+    assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_DONE_LOCALLY}") in env.tg.edits
+
+
+async def test_relay_prompt_is_settled_when_a_new_prompt_replaces_it(clocked) -> None:
+    env, clock = clocked
+    env.fake.prompt = "Allow Bash(rm -rf build)?"
+    await _awaiting(env)
+    clock.t += 1
+    await _until_relay_prompt(env)
+    mid, text = _prompt_message(env)
+    env.fake.prompt = "Allow Bash(npm publish)?"
+    clock.t += mgr_mod.AWAITING_PROBE_EVERY_S + 1
+    await _until(lambda: any(m == mid for m, _ in env.tg.edits))
+    assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_SUPERSEDED}") in env.tg.edits
+
+
+async def test_relay_prompt_is_settled_when_the_turn_ends(env: Env) -> None:
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    mid, text = _prompt_message(env)
+    env.turn_complete("pane-1", "done")
+    await _until(lambda: any(m == mid for m, _ in env.tg.edits))
+    assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_TURN_ENDED}") in env.tg.edits
+
+
 def _fail_relay_sends(env: Env, times: int) -> list[int]:
     """Make the next ``times`` relay prompt sends raise; returns a one-item failure counter."""
     failed = [0]

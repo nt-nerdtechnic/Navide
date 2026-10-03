@@ -546,7 +546,9 @@ class Mirror:
                 pending.awaiting_posted = False  # else the next prompt looks already relayed
             if pane_id in self.m._awaiting_posted:
                 self.m._awaiting_posted.discard(pane_id)
-                self.m.relay.expire_pane(pane_id)
+                from .manager import MSG_RELAY_DONE_LOCALLY  # manager imports this module
+
+                self.m._retire_relay(pane_id, MSG_RELAY_DONE_LOCALLY)
 
     # --- lineage --------------------------------------------------------------------
 

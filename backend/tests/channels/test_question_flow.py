@@ -239,3 +239,17 @@ async def test_a_bare_answer_with_nothing_to_answer_is_not_queued(env: Env) -> N
     await env.inbound("1")
     assert len(env.fake.delivered) == delivered and env.fake.answers == []
     assert "請在電腦上回答" in env.tg.texts()[-1] and "沒有送出" in env.tg.texts()[-1]
+
+
+async def test_a_prompt_left_by_a_status_change_is_settled_in_the_chat(env: Env) -> None:
+    # The status event usually beats the run's probe to it: that path must settle
+    # the chat's prompt (and drop its buttons) too.
+    from agent_team_backend.channels import manager as mgr_mod
+
+    await _awaiting(env)
+    await _until_relay_prompt(env)
+    i = max(n for n, t in enumerate(env.tg.texts()) if t.startswith("⏸"))
+    mid, text = str(i + 1), env.tg.texts()[i]
+    _set_status(env, "running")
+    await _until(lambda: any(m == mid for m, _ in env.tg.edits))
+    assert (mid, f"{text}\n\n{mgr_mod.MSG_RELAY_DONE_LOCALLY}") in env.tg.edits

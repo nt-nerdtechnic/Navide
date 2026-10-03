@@ -70,6 +70,10 @@ class RelayRequest:
     created: float = field(default_factory=time.monotonic)
     # The prompt text the request was made for; an answer applies only to it.
     prompt: str = ""
+    # The chat message carrying the request (its last chunk, where the buttons
+    # are) and that message's text, so a request that lapses can settle it.
+    message_id: str = ""
+    message_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -227,10 +231,12 @@ class RelayTable:
         self.prune()
         return self._by_id.get(request_id)
 
-    def expire_pane(self, pane_id: str) -> None:
-        for rid, req in list(self._by_id.items()):
-            if req.pane_id == pane_id:
-                del self._by_id[rid]
+    def expire_pane(self, pane_id: str) -> list[RelayRequest]:
+        """Drop the pane's requests; returns them so their chat messages can be settled."""
+        gone = [req for req in self._by_id.values() if req.pane_id == pane_id]
+        for req in gone:
+            del self._by_id[req.id]
+        return gone
 
     def prune(self) -> None:
         cutoff = self._clock() - REQUEST_TTL_S

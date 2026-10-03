@@ -71,6 +71,11 @@ MSG_EMPTY_REPLY = "（pane 回合結束，沒有文字輸出）"
 MSG_STILL_RUNNING = "⏳ 仍在執行，完成時會再回覆"
 MSG_OFFLINE = "⚠️ pane 目前不在線上（可能在其他 workspace 或已關閉）"
 MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
+# Appended to a relay prompt whose request lapsed, when the platform can edit it.
+MSG_RELAY_DONE_LOCALLY = "✔ 已在電腦上處理"
+MSG_RELAY_SUPERSEDED = "↪ 已被新的確認取代"
+MSG_RELAY_TURN_ENDED = "✔ 回合已結束，不需要再確認"
+MSG_RELAY_PANE_GONE = "⚠️ pane 已離線，這個確認已失效"
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
 MSG_AWAITING_LOCAL = "pane 在等確認，請在電腦上回答"
@@ -895,7 +900,7 @@ class ChannelManager:
             # unregisters too. Only the running watch goes; the binding stays
             # until channels.unbind / channels.rebind.
             self._drop_pending(pane_id)
-            self.relay.expire_pane(pane_id)
+            self._retire_relay(pane_id, MSG_RELAY_PANE_GONE)
             self._known_panes.discard(pane_id)
             self._turn_source.pop(pane_id, None)
             return
@@ -917,7 +922,7 @@ class ChannelManager:
         self._pending.pop(pane_id, None)
         if pending.task:
             pending.task.cancel()
-        self.relay.expire_pane(pane_id)
+        self._retire_relay(pane_id, MSG_RELAY_TURN_ENDED)
         self._awaiting_posted.discard(pane_id)
         self._awaiting_failures.pop(pane_id, None)
         self._awaiting_shown.pop(pane_id, None)
@@ -1445,7 +1450,7 @@ class ChannelManager:
         state = self._seams.pane_state(pane_id)
         if state.get("display_status") != "awaiting":
             if pending.awaiting_posted or pane_id in self._awaiting_posted:
-                self.relay.expire_pane(pane_id)  # the prompt was answered at the keyboard
+                self._retire_relay(pane_id, MSG_RELAY_DONE_LOCALLY)  # answered at the keyboard
             pending.awaiting_posted = False
             self._awaiting_posted.discard(pane_id)
             self._awaiting_failures.pop(pane_id, None)
@@ -1530,7 +1535,7 @@ class ChannelManager:
             await self._notice(adapter, loc, f"{who}⏸ pane 等待確認（{kind}）")
             self._awaiting_shown[pane_id] = _Shown(prompt)
             return
-        self.relay.expire_pane(pane_id)  # one live request per pane
+        self._retire_relay(pane_id, MSG_RELAY_SUPERSEDED)  # one live request per pane
         request = self.relay.create(pane_id, kind, options, loc, prompt=prompt)
         text = who + relay.prompt_text(request, prompt)
         buttons = relay.buttons_for(request) if adapter.capabilities.buttons else None
@@ -1541,12 +1546,34 @@ class ChannelManager:
             self.relay.expire_pane(pane_id)  # never delivered: nothing may answer it
             self._awaiting_failed(pane_id, str(exc))
             return
+        if ids:
+            request.message_id = ids[-1]
+            # A chunked prompt keeps only its last chunk in the edited message.
+            request.message_text = text if len(ids) == 1 else ""
         self._awaiting_failures.pop(pane_id, None)
         self._awaiting_shown[pane_id] = _Shown(prompt, request.id)
 
+    def _retire_relay(self, pane_id: str, note: str) -> None:
+        """Expire the pane's relay requests and mark their chat prompts settled, so a
+        button nobody can use any more is not left to be pressed. An edit replaces
+        the message, buttons included; a platform that cannot edit keeps it as is."""
+        for request in self.relay.expire_pane(pane_id):
+            if request.message_id:
+                self._spawn(self._settle_prompt(request, note))
+
+    async def _settle_prompt(self, request: relay.RelayRequest, note: str) -> None:
+        adapter = self._adapters.get((request.loc.platform, request.loc.account))
+        if adapter is None or not adapter.capabilities.edit:
+            return
+        text = f"{request.message_text}\n\n{note}" if request.message_text else note
+        try:
+            await adapter.edit_text(request.loc, request.message_id, redact.redact_text(text))
+        except Exception as exc:  # noqa: BLE001
+            log.info("channels: settling relay prompt in %s failed: %s", request.loc.key(), exc)
+
     async def _send_awaiting(self, pane_id: str, loc: Location, prompt: str, text: str) -> None:
         """An awaiting notice with nothing to answer, retried like a relay prompt."""
-        self.relay.expire_pane(pane_id)  # an earlier prompt's id no longer applies
+        self._retire_relay(pane_id, MSG_RELAY_SUPERSEDED)  # an earlier prompt's id no longer applies
         try:
             await self.mirror.send(loc, text, owner=pane_id)
         except Exception as exc:  # noqa: BLE001
