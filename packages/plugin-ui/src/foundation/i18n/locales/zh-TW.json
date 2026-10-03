@@ -9218,6 +9218,7 @@
         "waiting-paste": "等待你在 App 貼上連結碼",
         "done": "完成"
       },
+      "added": "已新增，請從下方連結指引完成綁定。",
       "copied-code": "已複製連結碼：在 {platform} 貼給 bot 並送出。",
       "slack-manifest": "用範本建立 Slack App",
       "slack-manifest-hint": "接著在 Basic Information 建立具 connections:write 的 App-level token，把 App 安裝到工作區，再把兩個 token 貼到這裡。"

@@ -71,6 +71,8 @@ const quickStep = reactive<Record<string, QuickStep>>({})
 const quickInvite = reactive<Record<string, ChannelLinkInvite>>({})
 // Whether the link guide got the code command onto the clipboard.
 const quickCopied = reactive<Record<string, boolean>>({})
+// Added, but no invite reached the link guide: the row says to link from the guide.
+const quickAdded = reactive<Record<string, boolean>>({})
 const QUICK_STEPS: readonly QuickStep[] = ['verifying', 'opening', 'waiting', 'done']
 
 function botKey(platform: string, account: string): string {
@@ -273,6 +275,7 @@ async function quickAdd(spec: RegisteredChannelPlatform, bot: BotRow): Promise<v
     const primary = spec.link.targets[0]
     const linkTarget = primary?.opensLink ? primary.target : undefined
     errorByBot[bot.key] = ''
+    delete quickAdded[bot.key]
     quickStep[bot.key] = 'verifying'
     const res = await store.quickAdd(spec.id, req.config, req.secret ?? {}, bot.account, linkTarget)
     if (!res.ok || !res.data) {
@@ -284,15 +287,24 @@ async function quickAdd(spec: RegisteredChannelPlatform, bot: BotRow): Promise<v
       return
     }
     closeForm(spec, bot)
-    if (res.data.link) {
+    // The link guide only shows on a connected bot: hand it the invite only then.
+    const added = botsOf(spec.id).find((b) => b.account === bot.account)
+    if (res.data.link && added && isConnected(added)) {
       quickStep[bot.key] = 'opening'
       quickInvite[bot.key] = res.data.link
     } else {
-      delete quickStep[bot.key]
+      endQuickSteps(bot.key)
     }
   } finally {
     busy.value = false
   }
+}
+
+/** Stop the steps where the link guide cannot go on: the row says to link from the guide. */
+function endQuickSteps(key: string): void {
+  delete quickStep[key]
+  delete quickInvite[key]
+  quickAdded[key] = true
 }
 
 function quickOpened(key: string, copied: boolean): void {
@@ -302,6 +314,7 @@ function quickOpened(key: string, copied: boolean): void {
 }
 
 function botLinked(key: string): void {
+  delete quickAdded[key]
   if (quickStep[key]) quickStep[key] = 'done'
   void loadChatCounts()
 }
@@ -386,6 +399,14 @@ watch(
   () => [store.platforms.value, store.lastLinked.value, connectedKey.value],
   () => void loadChatCounts(),
   { immediate: true }
+)
+
+// An invite waiting for the link guide, on a bot whose guide will not show
+// (its chats failed to load, or it is no longer connected), must not hold the steps at "opening".
+watch(
+  () => Object.keys(quickStep).filter((k) => quickStep[k] === 'opening'
+    && (chatCountErrors[k] !== undefined || !connectedBots.value.some((c) => c.bot.key === k))),
+  (stuck) => stuck.forEach(endQuickSteps)
 )
 
 function formatTime(ts: number | null | undefined): string {
@@ -504,6 +525,7 @@ function formatTime(ts: number | null | undefined): string {
                 data-testid="channel-quick-copied"
               >{{ t('channels.quick.copied-code', { platform: platformName(spec.id) }) }}</p>
             </template>
+            <p v-else-if="quickAdded[bot.key]" class="ch-form-hint" data-testid="channel-quick-added">{{ t('channels.quick.added') }}</p>
 
             <div
               v-if="isConnected(bot) && (chatCounts[bot.key] !== undefined || chatCountErrors[bot.key])"

@@ -590,6 +590,62 @@ describe('ChannelsPane', () => {
       expect(mock.sent.filter((m) => m.type === 'channels.quick_add')).toHaveLength(1)
     })
 
+    describe('when the link guide cannot take the invite', () => {
+      const quickOk = (link: boolean) => ({
+        ok: true, platform: 'telegram', account: 'default', name: '@quick_bot', identity: '@quick_bot',
+        link: link ? { platform: 'telegram', code: 'QK7M2XAB', target: 'direct', expires_at: expires(), url: 'https://t.me/quick_bot?start=QK7M2XAB' } : null,
+      })
+
+      async function submitTelegram(w: VueWrapper) {
+        const tg = w.get('[data-platform="telegram"]')
+        await tg.get('[data-testid="channel-manage"]').trigger('click')
+        await tg.get('input[name="token"]').setValue(TG_TOKEN)
+        await tg.get('form').trigger('submit')
+        await flushPromises()
+        return w.get('[data-platform="telegram"]')
+      }
+
+      it('says the bot was added and to link below when no invite came back', async () => {
+        seedEmpty()
+        const w = await render()
+        mock.setResponse('channels.quick_add', quickOk(false))
+        seedAdded('telegram', '@quick_bot')
+        const tg = await submitTelegram(w)
+        expect(tg.find('[data-testid="channel-quick-steps"]').exists()).toBe(false)
+        expect(tg.get('[data-testid="channel-quick-added"]').text()).toBe('Added. Finish linking a chat with the guide below.')
+      })
+
+      it('ends the steps instead of waiting on "opening" when the bot is not connected', async () => {
+        seedEmpty()
+        const w = await render()
+        mock.setResponse('channels.quick_add', quickOk(true))
+        const status = { lifecycle: 'recovering', connected: false, identity: '@quick_bot' }
+        mock.setResponse('channels.list', {
+          ok: true,
+          enabled: true,
+          platforms: [{
+            platform: 'telegram', configured: true, enabled: true, status, config: { name: '@quick_bot' }, capabilities: null,
+            accounts: [{ account: 'default', name: '@quick_bot', configured: true, enabled: true, status, config: { name: '@quick_bot' }, capabilities: null }],
+          }],
+        })
+        const tg = await submitTelegram(w)
+        expect(tg.find('[data-testid="channel-quick-steps"]').exists()).toBe(false)
+        expect(tg.find('[data-testid="channel-quick-added"]').exists()).toBe(true)
+        expect(openExternal).not.toHaveBeenCalled()
+      })
+
+      it('ends the steps when the chats of the new bot cannot be loaded', async () => {
+        seedEmpty()
+        const w = await render()
+        mock.setResponse('channels.quick_add', quickOk(true))
+        seedAdded('telegram', '@quick_bot')
+        mock.setResponse('channels.locations', { ok: false, error: 'boom' })
+        const tg = await submitTelegram(w)
+        expect(tg.find('[data-testid="channel-quick-steps"]').exists()).toBe(false)
+        expect(tg.find('[data-testid="channel-quick-added"]').exists()).toBe(true)
+      })
+    })
+
     it('shows why the platform refused the token and keeps the form', async () => {
       seedEmpty()
       const w = await render()

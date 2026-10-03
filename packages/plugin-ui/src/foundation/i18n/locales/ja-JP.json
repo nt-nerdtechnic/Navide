@@ -9218,6 +9218,7 @@
         "waiting-paste": "アプリでリンクコードを貼り付けるのを待っています",
         "done": "完了"
       },
+      "added": "追加しました。下のリンク手順でチャットの連携を完了してください。",
       "copied-code": "リンクコードをコピーしました。{platform} で bot に貼り付けて送信してください。",
       "slack-manifest": "テンプレートから Slack アプリを作成",
       "slack-manifest-hint": "次に Basic Information で connections:write を持つ App-level token を作成し、アプリをワークスペースにインストールして、両方のトークンをここに貼り付けてください。"

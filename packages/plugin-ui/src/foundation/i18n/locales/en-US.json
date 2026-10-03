@@ -9218,6 +9218,7 @@
         "waiting-paste": "Waiting for you to paste the link code in the app",
         "done": "Done"
       },
+      "added": "Added. Finish linking a chat with the guide below.",
       "copied-code": "The link code is copied: paste it to the bot in {platform} and send it.",
       "slack-manifest": "Create the Slack app from a template",
       "slack-manifest-hint": "Then, under Basic Information, create an app-level token with connections:write, install the app to your workspace, and paste both tokens here."
