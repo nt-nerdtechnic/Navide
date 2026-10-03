@@ -245,6 +245,8 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
       max_results: maxResults,
     }),
     listAgentPanes: () => request('agent_msg.list', {}),
+    registerAgentPane: (pane) => request('agent_msg.register_dock', { ...pane }),
+    unregisterAgentPane: (paneId) => request('agent_msg.unregister_dock', { pane_id: paneId }),
     statPath: (path, timeoutMs) => request('fs.stat_path', { path }, timeoutMs),
     openFile: async ({ workspacePath, filepath, line }) => {
       await requireOk(sdk.request('ui.open_in_editor', {

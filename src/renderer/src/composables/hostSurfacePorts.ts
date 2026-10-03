@@ -314,6 +314,8 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
       max_results: maxResults,
     }),
     listAgentPanes: () => send('agent_msg.list', {}),
+    registerAgentPane: (pane) => send('agent_msg.register_dock', { ...pane }),
+    unregisterAgentPane: (paneId) => send('agent_msg.unregister_dock', { pane_id: paneId }),
     statPath: (path, timeoutMs) => send('fs.stat_path', { path }, timeoutMs),
     async getHomeDirectory(): Promise<string> {
       return (await window.agentTeam?.getHomeDir?.()) || ''

@@ -15,6 +15,8 @@ const EXPECTED_EXPLICIT: Readonly<Record<string, string>> = {
   // Messaging roster read feeding the embedded CLI panel's @-mention menu —
   // rides the terminal namespace, so the WS type differs from the address.
   'terminal.agent_msg_list': 'agent_msg.list',
+  'terminal.agent_msg_register_dock': 'agent_msg.register_dock',
+  'terminal.agent_msg_unregister_dock': 'agent_msg.unregister_dock',
   'chat.editor_rewrite': 'editor.rewrite',
   'chat.editor_complete': 'editor.complete',
   // Retired AIChatPane surface trimmed to the settings store ReviewPane still

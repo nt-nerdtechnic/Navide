@@ -28,7 +28,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { CLI_AGENT_SPECS } from '../agents'
-import { bracketedPaste, resolveCliCommand } from '../lib/aiCliContext'
+import { bracketedPaste, dockSurfaceForOrigin, pickDockPaneName, resolveCliCommand } from '../lib/aiCliContext'
 import { cliPermissionKey } from '../lib/cliPermission'
 import { clusterMentionCandidates, type MentionCandidate, type TerminalDockPort } from '@navide/terminal'
 import AiCliTerminal from './AiCliTerminal.vue'
@@ -184,8 +184,8 @@ watch(
 // messaging roster except this one, as `<folder>/<pane>` addresses. Polled
 // rather than pushed (as in the main window) — the list only feeds
 // autocomplete, so a stale snapshot costs nothing; routing always re-resolves
-// in the backend. This panel is not itself registered in the roster, so the
-// mentions go one way: from here out to the main window's panes.
+// in the backend. The panel's own entry (see the roster registration below) is
+// left out — it cannot receive messages, so offering it would only bounce.
 const mentionTargets = ref<MentionCandidate[]>([])
 async function refreshMentionTargets(): Promise<void> {
   if (props.terminalPort.status.value !== 'connected') return
@@ -225,6 +225,80 @@ const mentionCandidateGetter = (): MentionCandidate[] => mentionTargets.value
 watch(() => props.terminalPort.status.value, () => void refreshMentionTargets(), { immediate: true })
 const mentionPollTimer = setInterval(() => void refreshMentionTargets(), 10_000)
 onUnmounted(() => clearInterval(mentionPollTimer))
+
+// ── Messaging roster registration ──────────────────────────────────────────
+// The CLI here is wired to Navide's MCP tools under this panel's pane id, and
+// every one of them refuses an id the backend's messaging roster has never
+// seen. So while a CLI runs, the panel registers itself — named after its
+// window (`pm-claude`, `plans-codex`, …) and marked with that window's surface,
+// which the backend uses to refuse it as a message target (nothing delivers
+// into a panel yet). Re-sent after a reconnect, as the main window re-mirrors
+// its panes; dropped when the CLI ends or the panel unmounts.
+const dockSurface = computed(() => dockSurfaceForOrigin(props.origin))
+let registeredAs: { paneId: string; name: string } | null = null
+// Bumped by every unregister, so a register still in flight when the CLI ends
+// knows to undo itself instead of leaving a dead panel in the roster.
+let registerSeq = 0
+
+function dropRegistration(paneId: string): void {
+  void Promise.resolve(props.terminalPort.unregisterAgentPane?.(paneId)).catch(() => undefined)
+}
+
+async function registerInRoster(): Promise<void> {
+  const port = props.terminalPort
+  if (!port.registerAgentPane || !props.workspacePath) return
+  const seq = ++registerSeq
+  const paneId = props.paneId
+  let name = registeredAs?.paneId === paneId ? registeredAs.name : ''
+  if (!name) {
+    let panes: Parameters<typeof pickDockPaneName>[3] = []
+    try {
+      panes = (await port.listAgentPanes()).payload?.panes ?? []
+    } catch { /* no roster to check against — take the plain name */ }
+    if (seq !== registerSeq) return
+    name = pickDockPaneName(`${dockSurface.value.surface}-${agentKey.value}`, props.workspacePath, paneId, panes)
+  }
+  try {
+    await port.registerAgentPane({
+      pane_id: paneId,
+      name,
+      workspace_path: props.workspacePath,
+      agent_key: agentKey.value,
+      surface: dockSurface.value.surface,
+      window_kind: dockSurface.value.windowKind,
+    })
+  } catch {
+    return
+  }
+  if (seq !== registerSeq) {
+    dropRegistration(paneId)
+    return
+  }
+  registeredAs = { paneId, name }
+}
+
+function unregisterFromRoster(): void {
+  registerSeq++
+  const previous = registeredAs
+  registeredAs = null
+  if (previous) dropRegistration(previous.paneId)
+}
+
+watch(
+  [active, () => props.terminalPort.status.value, () => props.paneId],
+  ([isActive, conn], [, prevConn]) => {
+    if (!isActive) {
+      unregisterFromRoster()
+      return
+    }
+    if (conn !== 'connected') return
+    if (registeredAs && registeredAs.paneId !== props.paneId) unregisterFromRoster()
+    // Newly running, back from a dropped connection (the backend marked the
+    // entry offline and will forget it), or re-keyed: (re-)register.
+    if (!registeredAs || prevConn !== 'connected') void registerInRoster()
+  },
+)
+onUnmounted(unregisterFromRoster)
 
 // The panel opens from display:none — refit once measurable so the terminal
 // paints at the real width (sanctioned explicit-refit path, no history loss).

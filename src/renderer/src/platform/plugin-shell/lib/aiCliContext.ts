@@ -40,6 +40,49 @@ export function aiTerminalPaneId(surface: string, workspacePath: string): string
   return `${hex8}-${surface}-ai-terminal`
 }
 
+/** Which window an embedded AI panel lives in, as the messaging roster records
+ *  it: `surface` is the panel's host, `windowKind` the window that host is in
+ *  (the Pipeline Manager is a modal inside the main window). Derived from the
+ *  `origin` every host already passes, so no host has to learn a new prop. */
+export interface DockSurface {
+  surface: string
+  windowKind: string
+}
+
+const DOCK_SURFACES: Readonly<Record<string, DockSurface>> = {
+  'pipeline-manager': { surface: 'pm', windowKind: 'main' },
+  'plan-window': { surface: 'plans', windowKind: 'plans' },
+  'git-window': { surface: 'git', windowKind: 'git' },
+  'mini-ide': { surface: 'editor', windowKind: 'editor' },
+}
+
+export function dockSurfaceForOrigin(origin: string): DockSurface {
+  return DOCK_SURFACES[origin] ?? { surface: origin, windowKind: origin }
+}
+
+/** The roster name for an embedded panel: `base` (`<surface>-<agent>`), or the
+ *  first `base-2`, `base-3` … no other pane in the same workspace holds. Names
+ *  are only unique within a workspace, and a bare-name address resolving to
+ *  two panes is refused, so a collision would make both unreachable. */
+export function pickDockPaneName(
+  base: string,
+  workspacePath: string,
+  selfPaneId: string,
+  panes: ReadonlyArray<{ pane_id?: string; name?: string; workspace_path?: string }>,
+): string {
+  const norm = (p: string | undefined) => (p ?? '').replace(/\/+$/, '')
+  const ws = norm(workspacePath)
+  const taken = new Set(
+    panes
+      .filter((p) => p.pane_id !== selfPaneId && norm(p.workspace_path) === ws && p.name)
+      .map((p) => p.name as string),
+  )
+  if (!taken.has(base)) return base
+  let n = 2
+  while (taken.has(`${base}-${n}`)) n++
+  return `${base}-${n}`
+}
+
 /** Truncate `text` to `at` characters, marking the cut. Used to cap injected
  *  payload fragments so the CLI is not buried under a huge startup paste. */
 export function truncateText(text: string, at: number): string {

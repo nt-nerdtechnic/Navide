@@ -564,3 +564,95 @@ describe('AiCliDock — @-mention sections key on the workspace path', () => {
     expect(readCandidates(wrapper).map((c) => c.address)).toEqual(['ws/claude-1'])
   })
 })
+
+describe('AiCliDock — messaging roster registration', () => {
+  function registeringPort(panes: Array<Record<string, string>> = []) {
+    const registerAgentPane = vi.fn(async (_pane: Record<string, string>) => ({ ok: true }))
+    const unregisterAgentPane = vi.fn(async () => ({ ok: true }))
+    const port = {
+      ...makeTerminalPort(),
+      listAgentPanes: vi.fn(async () => ({ ok: true, payload: { panes } })),
+      registerAgentPane,
+      unregisterAgentPane,
+    } as unknown as TerminalDockPort
+    return { port, registerAgentPane, unregisterAgentPane }
+  }
+
+  it('registers once its CLI is running, naming the window it lives in', async () => {
+    const { port, registerAgentPane } = registeringPort()
+    mountDock({ terminalPort: port, origin: 'pipeline-manager' })
+    await flushPromises()
+    expect(registerAgentPane).not.toHaveBeenCalled()
+
+    termState.status.value = 'running'
+    await flushPromises()
+    expect(registerAgentPane).toHaveBeenCalledTimes(1)
+    expect(registerAgentPane).toHaveBeenCalledWith({
+      pane_id: 'ab12cd34-test-cli-dock',
+      name: 'pm-claude',
+      workspace_path: '/tmp/ws',
+      agent_key: 'claude',
+      surface: 'pm',
+      window_kind: 'main',
+    })
+  })
+
+  it('takes the next free name when the workspace already has one', async () => {
+    const { port, registerAgentPane } = registeringPort([
+      { pane_id: 'other', name: 'pm-claude', workspace_path: '/tmp/ws' },
+    ])
+    mountDock({ terminalPort: port, origin: 'pipeline-manager' })
+    termState.status.value = 'running'
+    await flushPromises()
+    expect(registerAgentPane.mock.calls[0][0]).toMatchObject({ name: 'pm-claude-2' })
+  })
+
+  it('unregisters when the CLI exits, and again on unmount only if still registered', async () => {
+    const { port, registerAgentPane, unregisterAgentPane } = registeringPort()
+    const wrapper = mountDock({ terminalPort: port, origin: 'plan-window' })
+    termState.status.value = 'running'
+    await flushPromises()
+    expect(registerAgentPane).toHaveBeenCalledTimes(1)
+
+    termState.status.value = 'exited'
+    await flushPromises()
+    expect(unregisterAgentPane).toHaveBeenCalledWith('ab12cd34-test-cli-dock')
+
+    wrapper.unmount()
+    mounted.splice(mounted.indexOf(wrapper), 1)
+    await flushPromises()
+    expect(unregisterAgentPane).toHaveBeenCalledTimes(1)
+  })
+
+  it('unregisters on unmount while the CLI is still running', async () => {
+    const { port, unregisterAgentPane } = registeringPort()
+    const wrapper = mountDock({ terminalPort: port, origin: 'git-window' })
+    termState.status.value = 'running'
+    await flushPromises()
+    wrapper.unmount()
+    mounted.splice(mounted.indexOf(wrapper), 1)
+    await flushPromises()
+    expect(unregisterAgentPane).toHaveBeenCalledWith('ab12cd34-test-cli-dock')
+  })
+
+  it('re-registers after the backend connection comes back', async () => {
+    const { port, registerAgentPane } = registeringPort()
+    mountDock({ terminalPort: port, origin: 'pipeline-manager' })
+    termState.status.value = 'running'
+    await flushPromises()
+    const status = (port as unknown as { status: Ref<string> }).status
+    status.value = 'disconnected'
+    await flushPromises()
+    status.value = 'connected'
+    await flushPromises()
+    expect(registerAgentPane).toHaveBeenCalledTimes(2)
+  })
+
+  it('does nothing on a port that cannot register (older host)', async () => {
+    mountDock({ origin: 'pipeline-manager' })
+    termState.status.value = 'running'
+    await flushPromises()
+    // No throw, no unhandled rejection: the dock simply stays unregistered.
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+})

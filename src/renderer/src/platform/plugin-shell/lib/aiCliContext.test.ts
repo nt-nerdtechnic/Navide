@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   aiTerminalPaneId,
   bracketedPaste,
+  dockSurfaceForOrigin,
+  pickDockPaneName,
   buildPlanCliContext,
   PLAN_DOC_TRUNCATE_AT,
   resolveCliCommand,
@@ -192,5 +194,46 @@ describe('buildPlanCliContext', () => {
     expect(text).toContain('Document content (truncated):')
     expect(text).not.toContain(long)
     expect(text).toContain('y'.repeat(PLAN_DOC_TRUNCATE_AT) + '…[truncated]')
+  })
+})
+
+describe('dockSurfaceForOrigin', () => {
+  it('names the window each known dock host lives in', () => {
+    expect(dockSurfaceForOrigin('pipeline-manager')).toEqual({ surface: 'pm', windowKind: 'main' })
+    expect(dockSurfaceForOrigin('plan-window')).toEqual({ surface: 'plans', windowKind: 'plans' })
+    expect(dockSurfaceForOrigin('git-window')).toEqual({ surface: 'git', windowKind: 'git' })
+    expect(dockSurfaceForOrigin('mini-ide')).toEqual({ surface: 'editor', windowKind: 'editor' })
+  })
+
+  it('falls back to the origin itself for a host it does not know', () => {
+    expect(dockSurfaceForOrigin('test-window')).toEqual({ surface: 'test-window', windowKind: 'test-window' })
+  })
+})
+
+describe('pickDockPaneName', () => {
+  const ws = '/tmp/ws'
+  it('uses <surface>-<agent> when the workspace has no pane by that name', () => {
+    expect(pickDockPaneName('pm-claude', ws, 'self', [])).toBe('pm-claude')
+  })
+
+  it('adds -2, -3 … while another pane in the same workspace holds the name', () => {
+    const panes = [
+      { pane_id: 'a', name: 'pm-claude', workspace_path: ws },
+      { pane_id: 'b', name: 'pm-claude-2', workspace_path: ws },
+    ]
+    expect(pickDockPaneName('pm-claude', ws, 'self', panes)).toBe('pm-claude-3')
+  })
+
+  it('ignores its own entry and panes of other workspaces', () => {
+    const panes = [
+      { pane_id: 'self', name: 'pm-claude', workspace_path: ws },
+      { pane_id: 'x', name: 'pm-claude', workspace_path: '/tmp/other' },
+    ]
+    expect(pickDockPaneName('pm-claude', ws, 'self', panes)).toBe('pm-claude')
+  })
+
+  it('treats a trailing slash on the workspace path as the same workspace', () => {
+    const panes = [{ pane_id: 'a', name: 'pm-claude', workspace_path: '/tmp/ws/' }]
+    expect(pickDockPaneName('pm-claude', ws, 'self', panes)).toBe('pm-claude-2')
   })
 })

@@ -75,6 +75,18 @@ export interface TerminalInputOptions {
   human?: boolean
 }
 
+/** What an embedded AI panel tells the roster about itself (see
+ *  TerminalDockPort.registerAgentPane). `surface` / `window_kind` name the
+ *  window it lives in; the backend refuses it as a message target. */
+export interface DockPaneRegistration {
+  pane_id: string
+  name: string
+  workspace_path: string
+  agent_key: string
+  surface: string
+  window_kind: string
+}
+
 export interface TerminalDockPort {
   readonly status: ReactiveValue<'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'>
   readonly shell: ReactiveValue<string>
@@ -111,7 +123,14 @@ export interface TerminalDockPort {
    *  unique section key for mention menus (a folder name is not unique), and
    *  `workspace_display_name` is the workspace's user-set alias — both
    *  optional, since a backend older than either field sends neither. */
-  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string }> }>>
+  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; name?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string }> }>>
+  /** Register an embedded AI panel in the messaging roster, so the CLI running
+   *  in it can use Navide's MCP tools (they refuse a pane id the roster has
+   *  never seen). Optional: a host that omits it leaves the panel unregistered,
+   *  which is what every port did before. */
+  registerAgentPane?(pane: DockPaneRegistration): Promise<PortResponse>
+  /** Drop a panel registered with registerAgentPane. */
+  unregisterAgentPane?(paneId: string): Promise<PortResponse>
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
   /** `false` means the host could not open the file; `void` (older ports)

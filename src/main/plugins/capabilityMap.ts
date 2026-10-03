@@ -87,6 +87,12 @@ const EXPLICIT_CAP_MAP: Readonly<Record<string, string>> = {
   // every plugin that embeds AiCliDock) rather than adding an `agent_msg` one:
   // this is a read of names the panel completes into, not messaging itself.
   'terminal.agent_msg_list': 'agent_msg.list',
+  // TerminalCapability — the embedded CLI panel registering its own roster
+  // entry, which its CLI needs before Navide's MCP tools will answer it. Mapped
+  // to the panel-only handlers, which refuse to create, rename or remove a
+  // window pane's entry, so the terminal grant cannot reach other panes.
+  'terminal.agent_msg_register_dock': 'agent_msg.register_dock',
+  'terminal.agent_msg_unregister_dock': 'agent_msg.unregister_dock',
   // ChatCapability — editor inline AI
   'chat.editor_rewrite': 'editor.rewrite',
   'chat.editor_complete': 'editor.complete',

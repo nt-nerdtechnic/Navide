@@ -160,6 +160,10 @@ const EXPLICIT: Record<string, CapabilityRef> = {
   // Messaging roster read for the embedded CLI panel's @-mention menu (see
   // capabilityMap's note on why it rides the terminal namespace).
   'agent_msg.list': { ns: 'terminal', method: 'agent_msg_list' },
+  // The embedded CLI panel's own roster entry, so its CLI can use Navide's MCP
+  // tools. Panel-only handlers: they cannot touch a window pane's entry.
+  'agent_msg.register_dock': { ns: 'terminal', method: 'agent_msg_register_dock' },
+  'agent_msg.unregister_dock': { ns: 'terminal', method: 'agent_msg_unregister_dock' },
 }
 
 /**
