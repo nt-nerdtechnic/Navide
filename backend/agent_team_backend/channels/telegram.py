@@ -55,6 +55,9 @@ DEFAULT_BASE_URL = "https://api.telegram.org"
 POLL_TIMEOUT_S = 30
 GENERAL_TOPIC_ID = "1"
 SEND_CONNECT_RETRIES = 2
+# A 409 means another getUpdates consumer holds the bot; retrying at the first
+# step would only fight it for messages. Attempt 4 is base x 8 (~40s).
+CONFLICT_MIN_ATTEMPT = 4
 
 
 class OffsetStore(Protocol):
@@ -100,6 +103,7 @@ class TelegramAdapter:
         self._base = f"{base_url.rstrip('/')}/bot{self._token}"
         self._offsets = offset_store
         self._backoff = backoff
+        self._attempt = 0
         self._stall_timeout_s = stall_timeout_s
         self._poll_timeout_s = poll_timeout_s
         self.status = AdapterStatus()
@@ -136,7 +140,7 @@ class TelegramAdapter:
         self.status.connected = False
 
     async def _run(self) -> None:
-        attempt = 0
+        self._attempt = 0
         while True:
             try:
                 await self._session()
@@ -150,12 +154,14 @@ class TelegramAdapter:
                 log.warning("telegram: token rejected, polling stopped: %s", exc)
                 return
             except Exception as exc:  # noqa: BLE001 — every other failure is transient
-                attempt += 1
+                self._attempt += 1
+                if isinstance(exc, TelegramApiError) and exc.code == 409:
+                    self._attempt = max(self._attempt, CONFLICT_MIN_ATTEMPT)
                 self.status.lifecycle = "recovering"
                 self.status.connected = False
-                self.status.reconnect_attempts = attempt
+                self.status.reconnect_attempts = self._attempt
                 self.status.last_error = self._redact(_describe_failure(exc))
-                delay = self._backoff(attempt, random.random())
+                delay = self._backoff(self._attempt, random.random())
                 log.info("telegram: poll failed (%s); retry in %.1fs", self.status.last_error, delay)
                 await asyncio.sleep(delay)
 
@@ -184,6 +190,8 @@ class TelegramAdapter:
                 )
             except asyncio.TimeoutError as exc:
                 raise RuntimeError("getUpdates stalled; restarting") from exc
+            # A poll answered: the next failure is a fresh drop, not one more in a series.
+            self._attempt = 0
             self.status.lifecycle = "ready"
             self.status.connected = True
             self.status.reconnect_attempts = 0

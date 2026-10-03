@@ -6,7 +6,7 @@ import time
 import pytest
 
 from agent_team_backend.channels.base import ChannelSendError, InboundMessage, Location
-from agent_team_backend.channels.telegram import TelegramAdapter
+from agent_team_backend.channels.telegram import CONFLICT_MIN_ATTEMPT, TelegramAdapter
 
 from .fake_telegram import FakeBotApi
 
@@ -105,6 +105,53 @@ async def test_409_reports_another_consumer_and_recovers(api: FakeBotApi) -> Non
         api.push_message(chat_id=1, text="after")
         await _until(lambda: got)
         assert ad.status.lifecycle == "ready" and ad.status.last_error == ""
+    finally:
+        await ad.stop()
+
+
+async def test_backoff_restarts_after_a_successful_poll(api: FakeBotApi) -> None:
+    # Three failures, then polling works, then one more failure: that one is a
+    # fresh drop and must wait the first-step delay, not the fourth.
+    attempts: list[int] = []
+
+    def backoff(attempt: int, _r: float) -> float:
+        attempts.append(attempt)
+        return 0.01
+
+    async def emit(_msg: InboundMessage) -> None:
+        pass
+
+    api.fail("getUpdates", 500, "Internal Server Error", times=3)
+    ad = TelegramAdapter(TOKEN, base_url=api.base_url, backoff=backoff, poll_timeout_s=1)
+    await ad.start(emit)
+    try:
+        await _until(lambda: len(attempts) == 3 and ad.status.lifecycle == "ready"
+                     and len(api.calls_of("getUpdates")) >= 5)
+        api.fail("getUpdates", 500, "Internal Server Error")
+        await _until(lambda: len(attempts) == 4)
+        assert attempts == [1, 2, 3, 1]
+    finally:
+        await ad.stop()
+
+
+async def test_409_starts_backoff_at_the_conflict_floor(api: FakeBotApi) -> None:
+    # Another getUpdates consumer holds the bot: retrying fast only fights it
+    # for messages, so a conflict never starts at the first-step delay.
+    attempts: list[int] = []
+
+    def backoff(attempt: int, _r: float) -> float:
+        attempts.append(attempt)
+        return 0.01
+
+    async def emit(_msg: InboundMessage) -> None:
+        pass
+
+    api.fail("getUpdates", 409, "Conflict: terminated by other getUpdates request")
+    ad = TelegramAdapter(TOKEN, base_url=api.base_url, backoff=backoff, poll_timeout_s=1)
+    await ad.start(emit)
+    try:
+        await _until(lambda: attempts)
+        assert attempts[0] == CONFLICT_MIN_ATTEMPT
     finally:
         await ad.stop()
 
