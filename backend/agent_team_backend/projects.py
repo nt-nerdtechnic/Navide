@@ -131,6 +131,8 @@ class PaneRecord:
     is_minimized: bool = False      # collapsed to the sidebar. The renderer has been sending this since the feature shipped; the handler was missing, so it never persisted.
     is_muted: bool = False          # per-pane mute: no desktop notification and no sound for this pane; the Dock badge still counts it
     collapsed: bool = False         # lineage subtree folded in the agent lists. Lives here, not in a Project-level id set: pane_id is regenerated every restart, so such a set would silently empty itself.
+    surface: str = ""               # embedded AI panel (AiCliDock) host surface ("pm" / "plans" / "git" / "editor"); "" = a main-window pane, which is every record written before this field existed
+    window_kind: str = ""           # the window that surface lives in ("main" for the Pipeline Manager modal); "" alongside surface
 
 
 @dataclass
@@ -849,9 +851,17 @@ class ProjectStore:
         output_log_file: str = "",
         origin: str = "",
         spawned_by: str = "",
+        surface: str = "",
+        window_kind: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
         pane = self._find_manual_pane(project, pane_id, previous_pane_id, session_id)
+        if surface and pane is not None and not pane.surface:
+            # A panel's spawn (it reaches here from terminal.create, which a
+            # plugin window's broker can send) naming a window pane's record:
+            # leave that record alone. Taking it over would mark it a panel's,
+            # and the main window would stop restoring the pane.
+            return project
         if pane is None:
             pane = PaneRecord(pane_id=pane_id, origin=origin or "manual")
             project.panes.append(pane)
@@ -886,6 +896,10 @@ class ProjectStore:
         # existing record back to "manual" (that would strip the mcp marker).
         if origin: pane.origin = origin
         if spawned_by: pane.spawned_by = spawned_by
+        # Only a dock's spawn passes these; a main-window spawn leaves them
+        # empty and the record exactly as before.
+        if surface: pane.surface = surface
+        if window_kind: pane.window_kind = window_kind
         # A rebuild hop owns its session: retire any OTHER spawned manual
         # record sharing it (legacy duplicate accumulation) so restore cannot
         # resurrect a ghost pane. Gated on previous_pane_id for the same

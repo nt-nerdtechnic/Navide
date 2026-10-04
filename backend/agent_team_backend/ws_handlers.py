@@ -6796,6 +6796,68 @@ async def _rollback_terminal_create(
     await asyncio.shield(cleanup_task)
 
 
+def _record_dock_spawn(payload: dict, metadata: dict, agent_key: str) -> None:
+    """File an embedded AI panel's restore record and Agent History entry.
+
+    A window pane is recorded by its own window (manual_pane.spawn plus the
+    set_ui_state history snapshot); a panel (AiCliDock) has no window running
+    either, so its terminal.create does it here, reusing the same two writers.
+    Only metadata naming a panel surface reaches this — the main window never
+    sends `surface`, so its creates write nothing new."""
+    from . import app
+
+    surface = str(metadata.get("surface") or "")
+    if not surface or surface == "main":
+        return
+    workspace_path = str(metadata.get("workspace_path") or payload.get("cwd") or "")
+    if not workspace_path:
+        return
+    pane_id = str(payload["pane_id"])
+    window_kind = str(metadata.get("window_kind") or "")
+    origin = str(metadata.get("origin") or "")
+    command = str(metadata.get("cli_command") or "")
+    session_id = str(metadata.get("explicit_session_id") or "")
+    output_log_file = str(payload.get("output_log_file") or "")
+    try:
+        project = app.project_store.record_manual_pane_spawn(
+            workspace_path,
+            pane_id=pane_id,
+            agent=agent_key,
+            command=command,
+            session_id=session_id,
+            output_log_file=output_log_file,
+            origin=origin,
+            surface=surface,
+            window_kind=window_kind,
+        )
+        # The store leaves a window pane's record alone when a panel's create
+        # names its id; its Agent History entry must be left alone with it.
+        record = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if record is None or record.surface != surface:
+            log.warning("terminal.create: pane %s is a window pane's; not recorded as a panel", pane_id)
+            return
+        # Same shape the main window pushes for its panes (App.vue spawnPane).
+        entry: dict[str, Any] = {
+            "paneId": pane_id,
+            "agentKey": agent_key,
+            "command": command,
+            "origin": origin,
+            "workspacePath": workspace_path,
+            "spawnedAt": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "outputLogFile": output_log_file,
+            "surface": surface,
+            "windowKind": window_kind,
+        }
+        if session_id:
+            entry["sessionId"] = session_id
+        agent_label = str(metadata.get("agent_label") or "")
+        if agent_label:
+            entry["agentLabel"] = agent_label
+        app.spawn_history_store.merge(workspace_path, [entry])
+    except Exception:  # noqa: BLE001 — the PTY is up; a lost record must not fail the create
+        log.exception("terminal.create: recording dock pane %s failed", pane_id)
+
+
 async def _terminal_create_impl(
     session: "Session",
     msg_id: str,
@@ -7630,6 +7692,7 @@ async def _terminal_create_impl(
         raise _TerminalCreateCancelled
     transaction["response_payload"] = response_payload
     transaction["committed"] = True
+    _record_dock_spawn(payload, metadata, agent_key)
 
 
 @handler("terminal.create.cancel")
@@ -9867,6 +9930,7 @@ async def agent_msg_register(session: "Session", msg_id: str, msg_type: str, pay
         # leaves them out and is registered exactly as before.
         surface=str(payload.get("surface") or ""),
         window_kind=str(payload.get("window_kind") or ""),
+        deliverable=bool(payload.get("deliverable", False)),
     )
     # The ids this same CLI process was known by before the window rebuilt its
     # pane around it (reload, detach, group reattach). They stay resolvable, so
@@ -9945,7 +10009,9 @@ async def agent_msg_register_dock(session: "Session", msg_id: str, msg_type: str
     # alias other pane ids to this entry — a window pane's CLI would then act
     # as the panel and its push channel would move here — and `spawned_by`
     # would claim a parent; neither is something a panel ever has.
-    allowed = ("pane_id", "name", "workspace_path", "agent_key", "realized", "surface", "window_kind")
+    allowed = (
+        "pane_id", "name", "workspace_path", "agent_key", "realized", "surface", "window_kind", "deliverable",
+    )
     await agent_msg_register(session, msg_id, msg_type, {k: payload[k] for k in allowed if k in payload})
 
 

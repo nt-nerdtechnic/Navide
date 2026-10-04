@@ -103,13 +103,17 @@ class RegisteredPane:
     #: The kind of window that surface lives in ("main" for the Pipeline
     #: Manager modal, else the surface's own window). Empty alongside `surface`.
     window_kind: str = ""
+    #: True when the panel's window delivers messages into it itself (it
+    #: listens for agent_msg.deliver and reports agent_msg.delivered). Only a
+    #: panel sets it; a panel without it is refused as a target (see _accept).
+    deliverable: bool = False
 
     @property
     def is_dock(self) -> bool:
         """An embedded AI panel rather than a pane of a window's pane pool.
 
-        It can act through the MCP tools like any pane, but nothing delivers
-        messages into it yet, so it is refused as a target (see _accept)."""
+        It can act through the MCP tools like any pane; it is accepted as a
+        message target only when it registered as deliverable (see _accept)."""
         return bool(self.surface) and self.surface != "main"
 
     @property
@@ -147,6 +151,8 @@ class RegisteredPane:
             view["surface"] = self.surface
         if self.window_kind:
             view["window_kind"] = self.window_kind
+        if self.deliverable:
+            view["deliverable"] = True
         return view
 
 
@@ -307,6 +313,7 @@ def register(
     spawned_by: str = "",
     surface: str = "",
     window_kind: str = "",
+    deliverable: bool = False,
 ) -> RegisteredPane:
     """Mirror one window's pane handle. Re-registering the same pane replaces
     its entry, which is how renames propagate."""
@@ -331,6 +338,7 @@ def register(
         spawned_by=spawned_by,
         surface=surface,
         window_kind=window_kind,
+        deliverable=deliverable,
         # A reconnecting window re-runs agent_msg.register for every pane it
         # mirrors, which is what clears the offline flag drop_owner set:
         # offline_since starts at None on the fresh entry.
@@ -703,11 +711,12 @@ def _accept(entry: RegisteredPane, to: str, *, cross_workspace: bool = False) ->
     means the address is right and the answer is to wait or retry.
     """
     if entry.offline_since is None:
-        if entry.is_dock:
-            # Nothing in any window delivers into an embedded panel yet: the
-            # main window's delivery looks the target up in its own pane pool,
-            # which a dock is not part of. Accepting would park the message
-            # forever, so it is refused while the address is still on screen.
+        if entry.is_dock and not entry.deliverable:
+            # The main window's delivery looks the target up in its own pane
+            # pool, which a dock is not part of; only a panel whose own window
+            # delivers into it (registered as deliverable) can take a message.
+            # Accepting any other would park the message forever, so it is
+            # refused while the address is still on screen.
             return _resolve_error(
                 "target-is-dock",
                 f'target "{to}" is an embedded AI panel ({entry.surface}) — it can '
