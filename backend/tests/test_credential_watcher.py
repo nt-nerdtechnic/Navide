@@ -396,3 +396,159 @@ async def test_an_unmanaged_login_registers_no_profile(
 
     assert store.list()["profiles"] == []
     assert store.list()["defaults"].get("codex") is None
+
+
+# ---- unreadable or torn reads (#144) ----------------------------------------
+
+
+def _codex_watcher(tmp_path: Path, fingerprint, fired: list[str]) -> tuple[CredentialWatcher, Path]:
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    live = home / ".codex" / "auth.json"
+    live.write_text("{}", encoding="utf-8")
+
+    async def sink(agent_key: str) -> None:
+        fired.append(agent_key)
+
+    watcher = CredentialWatcher(
+        sink, real_home=home, agent_keys=("codex",),
+        fingerprint=fingerprint, debounce_s=0.1, poll_s=0.05,
+    )
+    return watcher, live
+
+
+async def test_an_unreadable_identity_is_retried_not_dropped(tmp_path: Path) -> None:
+    """A credential file written once at sign-in changes its stamp once. A read
+    that fails then (Keychain hiccup, file mid-write) must be retried; the
+    stamp is already consumed, so nothing else would ever look again."""
+    reads = {"fail": 0}
+    identity = {"codex": ("a@example.com", True)}
+
+    def fingerprint(key: str) -> object:
+        if reads["fail"]:
+            reads["fail"] -= 1
+            raise RuntimeError("keychain temporarily unavailable")
+        return identity[key]
+
+    fired: list[str] = []
+    watcher, live = _codex_watcher(tmp_path, fingerprint, fired)
+    watcher.start()
+    try:
+        await asyncio.sleep(0.2)
+        identity["codex"] = ("b@example.com", True)
+        reads["fail"] = 2
+        live.write_text(_codex_auth("b@example.com"), encoding="utf-8")
+        await _wait_for(fired)
+        assert fired == ["codex"]
+        assert watcher._fingerprints["codex"] == ("b@example.com", True)
+    finally:
+        watcher.stop()
+
+
+async def test_a_torn_read_is_not_taken_for_the_new_identity(tmp_path: Path) -> None:
+    """A file caught mid-write parses as signed out. A change is confirmed by a
+    second read, so the torn reading is never recorded or reported."""
+    script: list[object] = []
+    identity = {"codex": ("a@example.com", True)}
+
+    def fingerprint(key: str) -> object:
+        return script.pop(0) if script else identity[key]
+
+    fired: list[str] = []
+    watcher, live = _codex_watcher(tmp_path, fingerprint, fired)
+    watcher.start()
+    try:
+        await asyncio.sleep(0.2)
+        identity["codex"] = ("b@example.com", True)
+        script.append((None, False))  # the torn read
+        live.write_text(_codex_auth("b@example.com"), encoding="utf-8")
+        await _wait_for(fired)
+        await asyncio.sleep(0.4)
+        assert fired == ["codex"]
+        assert watcher._fingerprints["codex"] == ("b@example.com", True)
+    finally:
+        watcher.stop()
+
+
+async def test_a_real_sign_out_is_still_reported(tmp_path: Path) -> None:
+    """Signing out reads the same on every look, so it is not mistaken for a
+    torn read."""
+    identity = {"codex": ("a@example.com", True)}
+    fired: list[str] = []
+    watcher, live = _codex_watcher(tmp_path, lambda key: identity[key], fired)
+    watcher.start()
+    try:
+        await asyncio.sleep(0.2)
+        identity["codex"] = (None, False)
+        live.unlink()
+        await _wait_for(fired)
+        assert fired == ["codex"]
+        assert watcher._fingerprints["codex"] == (None, False)
+    finally:
+        watcher.stop()
+
+
+async def test_identity_checks_of_one_agent_do_not_overlap(tmp_path: Path) -> None:
+    """Two overlapping checks could finish out of order and leave the older
+    reading recorded."""
+    active = {"now": 0, "max": 0}
+
+    def fingerprint(key: str) -> object:
+        active["now"] += 1
+        active["max"] = max(active["max"], active["now"])
+        import time
+        time.sleep(0.05)
+        active["now"] -= 1
+        return ("a@example.com", True)
+
+    fired: list[str] = []
+    watcher, _ = _codex_watcher(tmp_path, fingerprint, fired)
+    watcher._loop = asyncio.get_running_loop()
+    await asyncio.gather(watcher._check("codex"), watcher._check("codex"))
+    assert active["max"] == 1
+
+
+def _claude_vault(tmp_path: Path):
+    from agent_team_backend.credential_vault import CredentialVault
+
+    home = tmp_path / "vault-home"
+    home.mkdir()
+    return CredentialVault(root=tmp_path / "profiles", real_home=home, platform="linux"), home
+
+
+def test_strict_claude_account_read_tells_torn_json_from_signed_out(tmp_path: Path) -> None:
+    vault, home = _claude_vault(tmp_path)
+    config = home / ".claude.json"
+    assert vault.live_account("claude", strict=True) is None  # no file: signed out
+    config.write_text('{"theme": "dark"}', encoding="utf-8")
+    assert vault.live_account("claude", strict=True) is None  # no account: signed out
+    config.write_text('{"oauthAccount": {"emailAddress": "a@exa', encoding="utf-8")
+    with pytest.raises(ValueError):
+        vault.live_account("claude", strict=True)
+    assert vault.live_account("claude") is None  # the display read never raises
+
+
+def test_strict_identity_surfaces_a_failed_read(tmp_path: Path, monkeypatch) -> None:
+    vault, _ = _claude_vault(tmp_path)
+
+    def failing(*_args, **_kwargs):
+        raise RuntimeError("keychain temporarily unavailable")
+
+    monkeypatch.setattr(vault, "read_live", failing)
+    assert vault.identity("codex") == {"email": None, "signedIn": False}
+    with pytest.raises(RuntimeError):
+        vault.identity("codex", strict=True)
+
+
+async def test_live_fingerprint_raises_while_the_identity_is_unreadable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agent_team_backend.credential_watcher import live_identity_fingerprint
+
+    vault, home = _claude_vault(tmp_path)
+    monkeypatch.setattr(app, "credential_vault", vault)
+    (home / ".claude.json").write_text('{"oauthAccount": {"emailAdd', encoding="utf-8")
+    with pytest.raises(ValueError):
+        live_identity_fingerprint("claude")
+    (home / ".claude.json").unlink()
+    assert live_identity_fingerprint("claude") == (None, None)

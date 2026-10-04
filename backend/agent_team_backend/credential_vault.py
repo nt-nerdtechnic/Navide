@@ -759,13 +759,15 @@ class CredentialVault:
         else:
             _write_private(self.app_secret_path(name), secret)
 
-    def _read_live_oauth_account(self) -> dict | None:
+    def _read_live_oauth_account(self, *, strict: bool = False) -> dict | None:
         raw = _read_text(self._claude_config_json())
         if raw is None:
             return None
         try:
             data = json.loads(raw)
         except ValueError:
+            if strict:
+                raise
             return None
         account = data.get("oauthAccount") if isinstance(data, dict) else None
         return account if isinstance(account, dict) else None
@@ -915,16 +917,23 @@ class CredentialVault:
         """The slot's display-only account info (claude's ``oauthAccount``)."""
         return self.read_slot(agent_key, slot_id).account
 
-    def live_account(self, agent_key: str) -> dict | None:
+    def live_account(self, agent_key: str, *, strict: bool = False) -> dict | None:
         """The live display-only account info — claude's ``oauthAccount`` in
         ``~/.claude.json``, read WITHOUT touching the Keychain. The credential
         watcher re-reads this on every write to that file (Claude Code rewrites
         it constantly), and telling one account from another needs no secret.
-        None for the other agents, which have no such block."""
-        return self._read_live_oauth_account() if agent_key == "claude" else None
+        None for the other agents, which have no such block. ``strict=True``
+        raises on unparsable JSON (a file caught mid-write) instead of reading
+        it as signed out."""
+        return self._read_live_oauth_account(strict=strict) if agent_key == "claude" else None
 
     def identity(
-        self, agent_key: str, slot_id: str | None = None, *, scope: str | None = None
+        self,
+        agent_key: str,
+        slot_id: str | None = None,
+        *,
+        scope: str | None = None,
+        strict: bool = False,
     ) -> dict:
         """Display-only identity for one account slot (``slot_id=None`` = the
         live state, i.e. the currently active account). ``signedIn`` reflects
@@ -934,13 +943,15 @@ class CredentialVault:
         display-only (a long-lived-token login carries no oauthAccount but is
         still signed in). Reads files — plus, for
         claude on macOS, the Keychain — so call off the event loop.
-        Returns ``{"email": str | None, "signedIn": bool}``; never raises."""
+        Returns ``{"email": str | None, "signedIn": bool}``; never raises unless
+        ``strict=True``, which surfaces a failed read (a transient Keychain
+        failure included) instead of reporting it as signed out."""
         try:
             if agent_key == "claude":
                 # The active row reads the live state (~/.claude.json account
                 # + live secret), a parked row its slot snapshot.
                 base = (
-                    self.read_live("claude") if slot_id is None
+                    self.read_live("claude", strict=strict) if slot_id is None
                     else self.read_slot("claude", slot_id)
                 )
                 email = (
@@ -963,12 +974,12 @@ class CredentialVault:
                 return {
                     "email": None,
                     "signedIn": any(
-                        self.identity(agent_key, slot_id, scope=candidate)["signedIn"]
+                        self.identity(agent_key, slot_id, scope=candidate, strict=strict)["signedIn"]
                         for candidate in switch.scopes
                     ),
                 }
             if slot_id is None:
-                secret = self.read_live(agent_key, scope=scope).secret
+                secret = self.read_live(agent_key, strict=strict, scope=scope).secret
             else:
                 secret = self.read_slot(agent_key, slot_id, scope=scope).secret
             if spec is not None and spec.identity_from_secret is not None:
@@ -978,6 +989,8 @@ class CredentialVault:
             data = _parse_json_dict(secret)
             return {"email": None, "signedIn": bool(data and data.get("access_token"))}
         except Exception:  # noqa: BLE001 — identity is display-only, never fatal
+            if strict:
+                raise
             return {"email": None, "signedIn": False}
 
     # ---- account switching ----

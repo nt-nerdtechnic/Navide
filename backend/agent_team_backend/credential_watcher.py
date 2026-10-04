@@ -59,6 +59,10 @@ CLAUDE_CONFIG_FILENAME = ".claude.json"
 # the change still waits out the debounce before the fingerprint is read.
 POLL_INTERVAL_S = 1.0
 
+# An identity read that failed, or a change that did not read the same twice,
+# is looked at again this many times before waiting for the next file change.
+CHECK_RETRIES = 5
+
 # Sentinel for "no fingerprint recorded yet" — a signed-out agent is a
 # legitimate reading, so no ordinary value can stand in for "never read".
 _UNSEEN = object()
@@ -93,14 +97,16 @@ def live_identity_fingerprint(agent_key: str) -> object:
     the common case costs one file read instead of a Keychain ``security``
     subprocess. The other agents read their live secret's identity — a file
     read too; kimi has no identity field, so all it can report is whether a
-    token exists. Blocking I/O: call through ``vault_to_thread``."""
+    token exists. Raises when the identity cannot be read (a file caught
+    mid-write, a transient Keychain failure) rather than reading that as signed
+    out. Blocking I/O: call through ``vault_to_thread``."""
     from . import app
 
     vault = app.credential_vault
     if agent_key == "claude":
-        account = vault.live_account("claude") or {}
+        account = vault.live_account("claude", strict=True) or {}
         return (account.get("emailAddress"), account.get("accountUuid"))
-    identity = vault.identity(agent_key)
+    identity = vault.identity(agent_key, strict=True)
     return (identity.get("email"), bool(identity.get("signedIn")))
 
 
@@ -299,6 +305,11 @@ class CredentialWatcher:
         self._fingerprints: dict[str, object] = {}
         self._pending: dict[str, asyncio.TimerHandle] = {}
         self._seed_task: asyncio.Task | None = None
+        # agent_key -> serializes that agent's checks, so an older reading
+        # can never be recorded after a newer one
+        self._check_locks: dict[str, asyncio.Lock] = {}
+        # agent_key -> checks still allowed before giving up until the next change
+        self._retries_left: dict[str, int] = {}
         self._started = False
         self._resolver = resolver
         # path -> (agent_key, last stamp)
@@ -327,7 +338,10 @@ class CredentialWatcher:
         # Bindings cannot be replaced. An unbound vendor had no previous
         # watch, so changes at the old path can never reconcile its new store.
         if path not in self._watched:
-            self._fingerprints[agent_key] = await vault_to_thread(self._fingerprint, agent_key)
+            try:
+                self._fingerprints[agent_key] = await vault_to_thread(self._fingerprint, agent_key)
+            except Exception as err:  # noqa: BLE001 — the watch matters more than the seed
+                log.warning("seeding the live %s identity failed: %s", agent_key, err)
             self._watch_file(path, agent_key)
 
     def stop(self) -> None:
@@ -375,6 +389,7 @@ class CredentialWatcher:
                 agent_key, last = self._watched[path]
                 if stamp != last:
                     self._watched[path] = (agent_key, stamp)
+                    self._retries_left[agent_key] = CHECK_RETRIES
                     self._schedule_fire(agent_key)
 
     def _schedule_fire(self, agent_key: str) -> None:
@@ -394,13 +409,37 @@ class CredentialWatcher:
 
     async def _check(self, agent_key: str) -> None:
         """The de-noising gate: read who the live credentials belong to and do
-        nothing unless that differs from the last reading."""
-        try:
-            fp = await vault_to_thread(self._fingerprint, agent_key)
-        except Exception as err:  # noqa: BLE001
-            log.warning("reading the live %s identity failed: %s", agent_key, err)
+        nothing unless that differs from the last reading.
+
+        A changed reading must read the same again after the debounce before
+        it counts: a file caught mid-write parses as signed out, and recording
+        that would hide the real change behind a stamp already consumed. A
+        read that fails, or a change that has not settled, is retried
+        (#144)."""
+        lock = self._check_locks.setdefault(agent_key, asyncio.Lock())
+        async with lock:
+            try:
+                fp = await vault_to_thread(self._fingerprint, agent_key)
+                if self._fingerprints.get(agent_key, _UNSEEN) == fp:
+                    return
+                await asyncio.sleep(self._debounce_s)
+                settled = await vault_to_thread(self._fingerprint, agent_key) == fp
+            except Exception as err:  # noqa: BLE001
+                log.warning("reading the live %s identity failed: %s", agent_key, err)
+                settled = None
+            if not settled:
+                self._retry(agent_key)
+                return
+            self._fingerprints[agent_key] = fp
+            await self._on_identity_change(agent_key)
+
+    def _retry(self, agent_key: str) -> None:
+        left = self._retries_left.get(agent_key, CHECK_RETRIES)
+        if left <= 0:
+            log.warning(
+                "the live %s identity did not settle; waiting for the next change",
+                agent_key,
+            )
             return
-        if self._fingerprints.get(agent_key, _UNSEEN) == fp:
-            return
-        self._fingerprints[agent_key] = fp
-        await self._on_identity_change(agent_key)
+        self._retries_left[agent_key] = left - 1
+        self._schedule_fire(agent_key)
