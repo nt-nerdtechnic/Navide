@@ -9331,6 +9331,14 @@
       "slack-manifest": "用範本建立 Slack App",
       "slack-manifest-hint": "接著在 Basic Information 建立具 connections:write 的 App-level token，把 App 安裝到工作區，再把兩個 token 貼到這裡。"
     },
+    "managed": {
+      "create": "一鍵建立新 bot",
+      "disclose": "{manager} 能隨時取得並更換新 bot 的 token。拿到 {manager} token 的人能控制它建立的所有 bot。",
+      "enable-mode": "要用這隻 bot 建立新 bot，請先在 BotFather 開啟「Bot Management Mode」。",
+      "waiting": "請在 Telegram 按「建立」…",
+      "timeout": "10 分鐘內沒有收到建立結果，請再試一次。",
+      "token-unavailable": "bot 已在 Telegram 建立，但無法取得 token。請到 BotFather 查看。"
+    },
     "connect": "連接",
     "needs": "需要：{fields}",
     "imessage-note": "不需要 token，僅限 macOS。",

@@ -9331,6 +9331,14 @@
       "slack-manifest": "テンプレートから Slack アプリを作成",
       "slack-manifest-hint": "次に Basic Information で connections:write を持つ App-level token を作成し、アプリをワークスペースにインストールして、両方のトークンをここに貼り付けてください。"
     },
+    "managed": {
+      "create": "新しい bot を作成",
+      "disclose": "{manager} は新しい bot のトークンをいつでも取得・再発行できます。{manager} のトークンを持つ人は、作成したすべての bot を操作できます。",
+      "enable-mode": "この bot で新しい bot を作るには、先に BotFather で「Bot Management Mode」をオンにしてください。",
+      "waiting": "Telegram で「作成」をタップしてください…",
+      "timeout": "10 分以内に bot が作成されませんでした。もう一度お試しください。",
+      "token-unavailable": "bot は Telegram で作成されましたが、トークンを取得できませんでした。BotFather で確認してください。"
+    },
     "connect": "接続",
     "needs": "必要なもの：{fields}",
     "imessage-note": "トークン不要。macOS のみ。",

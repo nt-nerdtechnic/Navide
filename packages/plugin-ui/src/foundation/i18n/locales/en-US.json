@@ -9331,6 +9331,14 @@
       "slack-manifest": "Create the Slack app from a template",
       "slack-manifest-hint": "Then, under Basic Information, create an app-level token with connections:write, install the app to your workspace, and paste both tokens here."
     },
+    "managed": {
+      "create": "Create a new bot",
+      "disclose": "{manager} can read and replace the new bot's token at any time. Whoever holds {manager}'s token controls every bot it creates.",
+      "enable-mode": "To create bots with this bot, turn on \"Bot Management Mode\" in BotFather first.",
+      "waiting": "Tap Create in Telegram…",
+      "timeout": "No bot was created within 10 minutes. Try again.",
+      "token-unavailable": "The bot was created in Telegram, but its token could not be read. Check it in BotFather."
+    },
     "connect": "Connect",
     "needs": "Needs: {fields}",
     "imessage-note": "No token needed. macOS only.",
