@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from agent_team_backend import osplat
 
 from tests.test_navide_plans_backend_wire import (  # noqa: F401 - backend_process is a fixture
     CLIENT_META,
@@ -481,7 +482,8 @@ def test_write_is_atomic_and_rejects_stale_mtime(backend_process: subprocess.Pop
     plans = mine / ".agent-team" / "plans"
     target = plans / "doc_aaaaaa.html"
     target.write_text(_plan_html("Original"), encoding="utf-8")
-    target.chmod(0o640)
+    if osplat.paths.enforces_posix_modes():
+        target.chmod(0o640)
     os.utime(target, (1_000.0, 1_000.0))
     before = target.stat()
     host = _RootOnlyHost({"instance-1": mine})
@@ -497,7 +499,8 @@ def test_write_is_atomic_and_rejects_stale_mtime(backend_process: subprocess.Pop
     assert target.read_text(encoding="utf-8") == _plan_html("Updated")
     # Replaced by rename, never rewritten in place, and the mode survives it.
     assert after.st_ino != before.st_ino
-    assert after.st_mode & 0o777 == 0o640
+    if osplat.paths.enforces_posix_modes():
+        assert after.st_mode & 0o777 == 0o640
     assert sorted(path.name for path in plans.iterdir()) == ["doc_aaaaaa.html"]
 
     # A document sent in parts swaps in the same way, with the same check.
