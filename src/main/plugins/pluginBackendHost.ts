@@ -27,7 +27,7 @@ import {
   createProductionPlansBridgeDispatcher,
   type BackendBridgeDispatcher,
 } from './plansBridge'
-import type { ThirdPartyAdmission } from './pluginThirdPartyBackends'
+import { noteBackendFailure, type ThirdPartyAdmission } from './pluginThirdPartyBackends'
 import {
   canonicalExistingDirectory,
   isWorkspaceContainedPath,
@@ -215,6 +215,8 @@ export class PluginBackendHost {
   private readonly thirdPartyIdleMs: number
   private readonly backends = new Map<string, RegisteredBackend>()
   private readonly views = new Map<string, BoundView>()
+  /** First-party child failure times per plugin, for restart backoff. */
+  private readonly firstPartyFailures = new Map<string, number[]>()
   /** Package-version revocations are serialized and also act as an admission
    *  barrier while the old views and child are being drained. */
   private readonly packageRevocations = new Map<string, Promise<void>>()
@@ -477,6 +479,22 @@ export class PluginBackendHost {
           } catch {
             // A liveness observer must not change the child failure result.
           }
+          const delay = noteBackendFailure(this.firstPartyFailures, view.runtime.pluginId, Date.now())
+          if (delay === null) {
+            console.warn(`[plugin-backend] ${view.runtime.pluginId} failed too often; leaving it stopped`)
+            return
+          }
+          const timer = setTimeout(() => {
+            if (
+              this.views.get(view.runtime.instanceId ?? '') !== view ||
+              view.closing ||
+              view.supervisor !== supervisor
+            ) return
+            supervisor.restart().catch(() => {
+              // The next failure is reported through onFailure again.
+            })
+          }, delay)
+          timer.unref?.()
         },
         ...(needsFilesystem && this.resolvePlanRoot && view.workspacePath !== undefined
           ? {
@@ -485,7 +503,8 @@ export class PluginBackendHost {
             }
           : {}),
       }
-      view.supervisor = this.createSupervisor(view.activation, supervisorOptions)
+      const supervisor: PluginBackendSupervisor = this.createSupervisor(view.activation, supervisorOptions)
+      view.supervisor = supervisor
     } catch (error) {
       if (error instanceof BackendPluginError) throw error
       throw new BackendPluginError('BACKEND_UNAVAILABLE')

@@ -251,6 +251,16 @@ export interface ThirdPartyBackendControllerOptions {
 export const BACKEND_RESTART_DELAYS_MS = [1_000, 5_000, 30_000] as const
 export const BACKEND_CRASH_WINDOW_MS = 10 * 60_000
 
+/** Record one child failure for `key` and return the restart delay, or null
+ * once more failures than restart delays fell inside the crash window. */
+export function noteBackendFailure(failures: Map<string, number[]>, key: string, now: number): number | null {
+  const recent = (failures.get(key) ?? []).filter((at) => now - at < BACKEND_CRASH_WINDOW_MS)
+  recent.push(now)
+  failures.set(key, recent)
+  if (recent.length > BACKEND_RESTART_DELAYS_MS.length) return null
+  return BACKEND_RESTART_DELAYS_MS[recent.length - 1]
+}
+
 const PACKAGE_FS_READ_OPERATIONS = new Set(['read_file', 'read_range', 'list_dir', 'stat_path'])
 const PACKAGE_FS_WRITE_OPERATIONS = new Set([
   'write_file', 'write_part', 'write_commit', 'write_abort', 'delete', 'rename',
@@ -444,15 +454,9 @@ export class ThirdPartyBackendController {
   }
 
   private noteFailure(pluginId: string): number | null {
-    const now = this.now()
-    const recent = (this.failures.get(pluginId) ?? []).filter((at) => now - at < BACKEND_CRASH_WINDOW_MS)
-    recent.push(now)
-    this.failures.set(pluginId, recent)
-    if (recent.length > BACKEND_RESTART_DELAYS_MS.length) {
-      this.tripped.add(pluginId)
-      return null
-    }
-    return BACKEND_RESTART_DELAYS_MS[recent.length - 1]
+    const delay = noteBackendFailure(this.failures, pluginId, this.now())
+    if (delay === null) this.tripped.add(pluginId)
+    return delay
   }
 
   /** Workspace filesystem bridge for one third-party backend: reads inside the

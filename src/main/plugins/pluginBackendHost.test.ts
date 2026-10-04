@@ -17,6 +17,7 @@ import {
   MAX_BACKEND_SUBSCRIPTIONS_PER_INSTANCE,
   MAX_BACKEND_TIMEOUT_MS,
 } from './pluginBackendLimits'
+import { BACKEND_CRASH_WINDOW_MS, BACKEND_RESTART_DELAYS_MS } from './pluginThirdPartyBackends'
 
 const fixture = fileURLToPath(new URL('./test-fixtures/backend-wire-child.mjs', import.meta.url))
 const packagedFixture = join(process.cwd(), 'dist-test-fixtures/plans/backend/navide-plans')
@@ -674,6 +675,103 @@ describe('PluginBackendHost', () => {
     await expect(host.call('view-1', 'fixture.echo', null)).rejects.toMatchObject({
       code: 'INVALID_RUNTIME',
     })
+  })
+})
+
+describe('first-party backend restart after a child failure', () => {
+  const hosts: PluginBackendHost[] = []
+
+  afterEach(async () => {
+    vi.useRealTimers()
+    await Promise.all(hosts.splice(0).map((host) => host.close()))
+  })
+
+  async function bindFailingView(): Promise<{
+    host: PluginBackendHost
+    restart: ReturnType<typeof vi.fn>
+    fail: () => void
+  }> {
+    let notifyFailure: ((error: BackendPluginError) => void) | undefined
+    const restart = vi.fn(async () => ({ serverInfo: { name: 'controlled', version: '1.0.0' } }))
+    const supervisor = {
+      start: vi.fn(async () => ({ serverInfo: { name: 'controlled', version: '1.0.0' } })),
+      restart,
+      clientFor: vi.fn(() => ({ call: vi.fn(async () => null as never), subscribe: vi.fn() })),
+      close: vi.fn(async () => undefined),
+    }
+    const host = new PluginBackendHost({
+      createSupervisor: (_activation, options) => {
+        notifyFailure = options.onFailure
+        return supervisor as unknown as PluginBackendSupervisor
+      },
+      resolvePlanRoot: async ({ workspacePath }) => workspacePath,
+    })
+    hosts.push(host)
+    host.register(activation)
+    await host.bindView(runtime, activation.packageDir, process.cwd())
+    return {
+      host,
+      restart,
+      fail: () => notifyFailure?.(new BackendPluginError('BACKEND_UNAVAILABLE')),
+    }
+  }
+
+  it('restarts a failed child after the shared backoff delay', async () => {
+    vi.useFakeTimers()
+    const { restart, fail } = await bindFailingView()
+
+    fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0] - 1)
+    expect(restart).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(restart).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops restarting once the failure budget is spent', async () => {
+    vi.useFakeTimers()
+    const { restart, fail } = await bindFailingView()
+
+    for (const [index, delay] of BACKEND_RESTART_DELAYS_MS.entries()) {
+      fail()
+      await vi.advanceTimersByTimeAsync(delay)
+      expect(restart).toHaveBeenCalledTimes(index + 1)
+    }
+    fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_CRASH_WINDOW_MS)
+    expect(restart).toHaveBeenCalledTimes(BACKEND_RESTART_DELAYS_MS.length)
+  })
+
+  it('does not restart a child whose view was unbound before the delay elapsed', async () => {
+    vi.useFakeTimers()
+    const { host, restart, fail } = await bindFailingView()
+
+    fail()
+    await host.unbindView(runtime.instanceId)
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('does not restart a child after the Host started closing', async () => {
+    vi.useFakeTimers()
+    const { host, restart, fail } = await bindFailingView()
+
+    fail()
+    await host.close()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('leaves a failed restart to the next failure report', async () => {
+    vi.useFakeTimers()
+    const { restart, fail } = await bindFailingView()
+    restart.mockRejectedValueOnce(new BackendPluginError('BACKEND_UNAVAILABLE'))
+
+    fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+    expect(restart).toHaveBeenCalledTimes(1)
+    fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[1])
+    expect(restart).toHaveBeenCalledTimes(2)
   })
 })
 
