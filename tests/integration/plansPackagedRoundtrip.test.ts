@@ -403,11 +403,28 @@ describe('Plans packaged backend composition', () => {
         packageVersion,
         packageDir: expectedPlanRoot,
         requires: [...PLANS_PLUGIN_REQUIRES],
+        capabilityPolicy: {
+          kind: 'manifest-v2',
+          system: ['fs', 'ui', 'aiCli'],
+          shell: 'allowlist',
+          grants: [],
+        },
         devUrl: '',
         entryFile: view.entryFile,
         views: [view],
       }
       manager.registerDescriptor(descriptor, { builtin: true })
+      // The Host hands the child its plan root only under the package's fs
+      // Grant, as it does for every filesystem operation.
+      manager.setCapabilityGrantResolver((pluginId, version) => {
+        if (pluginId !== PLANS_PLUGIN_ID || version !== packageVersion) return null
+        return {
+          packageVersion,
+          system: ['fs', 'ui', 'aiCli'],
+          shell: 'allowlist',
+          storage: true,
+        }
+      })
       manager.configurePlansFilesystemService()
       manager.registerBackendActivation({
         pluginId: PLANS_PLUGIN_ID,
@@ -425,10 +442,13 @@ describe('Plans packaged backend composition', () => {
       // The production bridge is configured explicitly; the package child
       // never receives a direct Node filesystem adapter.
       manager.setBackendWsUrl('ws://plans-core-test')
+      const capabilityContext = manager.plansCapabilityContext(packageVersion, workspacePath, view.contributionKey)
+      expect(capabilityContext).toBeDefined()
       const handle = await manager.openView(descriptor, view, {
         hostWindow: hostWindow as never,
         bounds: 'fill',
         workspacePath,
+        ...(capabilityContext ? { capabilityContext } : {}),
         query: `?window=plans&workspace_path=${encodeURIComponent(workspacePath)}&rel_path=${encodeURIComponent('.agent-team/plans/integration.html')}`,
       })
       const mountedView = mock.views.at(-1)
