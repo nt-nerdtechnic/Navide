@@ -7516,6 +7516,27 @@ export class FrontendPluginManager {
     return false
   }
 
+  /** Whether the app is quitting; index.ts owns the quit flags. */
+  private appQuitting: () => boolean = () => false
+
+  setAppQuittingProbe(probe: () => boolean): void {
+    this.appQuitting = probe
+  }
+
+  /** A window hosting embedded AI panels (AiCliDock) closed: end the panels of
+   *  its `surface` — in `workspacePath`, or in every workspace when the window
+   *  cannot say which (terminal.kill_surface). Skipped during an app quit, so
+   *  the panels' records stay 'spawned' and restore next launch.
+   *  Fire-and-forget: a backend that is down has no PTY to end. */
+  endDockSurface(surface: string, workspacePath = ''): void {
+    if (this.appQuitting()) return
+    const client = this.ensureBackend()
+    if (!client) return
+    void client.send('terminal.kill_surface', { surface, workspace_path: workspacePath }).catch(() => {
+      // Nothing to undo: the panels linger until the backend's ownerless sweep.
+    })
+  }
+
   /** Lazily create + connect the backend transport, subscribing to the
    *  server-push events the broker forwards. Returns null when no backend url
    *  is known yet. */
@@ -11923,6 +11944,9 @@ function ensureMiniIdeWindow(): BrowserWindow {
   miniIdeWindow = win
   win.on('closed', () => {
     if (miniIdeWindow === win) miniIdeWindow = null
+    // The one window an editor panel lives in; it does not track which
+    // workspace that panel last ran in, so every editor panel ends with it.
+    frontendPluginManager.endDockSurface('editor')
   })
   return win
 }
@@ -12569,6 +12593,8 @@ function ensureGitWindow(): BrowserWindow {
       gitWindow = null
       gitWindowViewInstanceId = null
     }
+    // The one window a git panel lives in (see the Mini-IDE window above).
+    frontendPluginManager.endDockSurface('git')
   })
   return win
 }

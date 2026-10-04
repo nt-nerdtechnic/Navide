@@ -14326,3 +14326,52 @@ describe('installed package inventory scope disclosure', () => {
     })
   })
 })
+
+// Closing a window that hosts embedded AI panels (AiCliDock) ends them: the
+// manager owns the main process's backend connection, so it sends the
+// terminal.kill_surface. During an app quit nothing is sent — the panels'
+// records stay 'spawned' and restore next launch.
+describe('FrontendPluginManager — ending a closed window\'s AI panels', () => {
+  function sentOfType(socket: { sent: string[] }, type: string): Array<Record<string, unknown>> {
+    return socket.sent
+      .map((raw) => JSON.parse(raw) as { type: string; payload: Record<string, unknown> })
+      .filter((request) => request.type === type)
+      .map((request) => request.payload)
+  }
+
+  it('sends terminal.kill_surface for the surface and workspace', () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://dock-close-test')
+    mgr.endDockSurface('plans', '/ws/a')
+    // The first send connects the manager's transport; queued sends go out on open.
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    expect(socket.url).toBe('ws://dock-close-test')
+    socket.open()
+    mgr.endDockSurface('git')
+    expect(sentOfType(socket, 'terminal.kill_surface')).toEqual([
+      { surface: 'plans', workspace_path: '/ws/a' },
+      { surface: 'git', workspace_path: '' },
+    ])
+  })
+
+  it('sends nothing while the app is quitting', () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://dock-close-test-quit')
+    const before = wsMock.FakeNodeWebSocket.instances.length
+    let quitting = true
+    mgr.setAppQuittingProbe(() => quitting)
+    mgr.endDockSurface('editor')
+    // Not even a connection is opened for it.
+    expect(wsMock.FakeNodeWebSocket.instances.length).toBe(before)
+    quitting = false
+    mgr.endDockSurface('editor')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    expect(sentOfType(socket, 'terminal.kill_surface')).toEqual([{ surface: 'editor', workspace_path: '' }])
+  })
+
+  it('does nothing before a backend is known', () => {
+    const mgr = new FrontendPluginManager()
+    expect(() => mgr.endDockSurface('plans', '/ws/a')).not.toThrow()
+  })
+})

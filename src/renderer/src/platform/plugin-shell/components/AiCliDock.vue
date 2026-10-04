@@ -35,7 +35,8 @@ import {
   pickDockPaneName,
   resolveCliCommand,
 } from '../lib/aiCliContext'
-import { cliPermissionKey } from '../lib/cliPermission'
+import { cliPermissionKey, parseCliPermissionMode, skipPermissionFlagFor } from '../lib/cliPermission'
+import { buildResumeCommand, isShellSafeSessionId } from '../lib/resume-command'
 import {
   clusterMentionCandidates,
   type DockAgentMessage,
@@ -176,14 +177,36 @@ async function maybeReattach(): Promise<void> {
   if (!props.workspacePath) return
   reattachAttempted = true
   reattaching.value = true
+  let reattached = false
   try {
     await nextTick() // the v-if just unlocked — let the terminal mount first
     // Pass the agent: this path never calls spawn(), which is the only other
     // place useTerminal records it, and the input protocol (Shift+Enter,
     // bracketed paste) degrades to plain-shell encoding without it.
-    await termRef.value?.tryReattach({ agentKey: agentKey.value })
+    reattached = (await termRef.value?.tryReattach({ agentKey: agentKey.value })) === true
   } catch { /* PTY gone — fall through to the Start UI */ }
   finally { reattaching.value = false }
+  if (!reattached && !active.value) await maybeResume()
+}
+
+// Restore: no PTY survived, but the backend still holds this panel's record as
+// 'spawned' — the app quit with the CLI running (closing the panel's window
+// retires the record). Resume that conversation as the main window resumes a
+// pane after a restart; with no record, no session id, or a port that cannot
+// read one, the Start UI stays as it was.
+async function maybeResume(): Promise<void> {
+  const read = props.terminalPort.readDockRestore
+  if (!read) return
+  let record: { agentKey: string; sessionId: string } | null = null
+  try {
+    record = await read(props.workspacePath, props.paneId)
+  } catch {
+    return
+  }
+  if (!record?.sessionId || !isShellSafeSessionId(record.sessionId)) return
+  if (!agentSpecs.value.some((s) => s.agentKey === record.agentKey)) return
+  agentKey.value = record.agentKey
+  await launch(record.sessionId)
 }
 watch(
   [() => props.terminalPort.status.value, () => props.workspacePath],
@@ -319,7 +342,13 @@ watch(open, (o) => {
   if (o) void nextTick(() => termRef.value?.fitTerminal({ redrawAfterSettle: true }))
 })
 
-async function start(): Promise<void> {
+function start(): Promise<void> {
+  return launch('')
+}
+
+/** Spawn the CLI: fresh, or resuming `resumeSessionId` (restore only — it
+ *  gets neither a new session pin nor the host's context). */
+async function launch(resumeSessionId: string): Promise<void> {
   const term = termRef.value
   // Also require a live connection: a create queued while disconnected would
   // race the connect-time tryReattach and double-bind output handlers.
@@ -328,6 +357,14 @@ async function start(): Promise<void> {
   starting.value = true
   try {
     const shell = props.terminalPort.shell.value || 'bash'
+    const resumeCommand = resumeSessionId
+      ? buildResumeCommand(agentKey.value, resumeSessionId, skipPermissionFlagFor({
+        spec: CLI_AGENT_SPECS.find((s) => s.agentKey === agentKey.value),
+        globalYolo: (settingsGet<string | null>('agentTeam.yolo', null) ?? '1') === '1',
+        mode: parseCliPermissionMode(settingsGet<string | null>(cliPermissionKey(agentKey.value), null)),
+      }))
+      : ''
+    if (resumeSessionId && !resumeCommand) return // vendor cannot resume by id
     const resolved = resolveCliCommand({
       agentKey: agentKey.value,
       paneId: props.paneId,
@@ -338,9 +375,11 @@ async function start(): Promise<void> {
     // Pin the session id the way the main window does for a fresh pane, so the
     // backend binds this CLI's session to the panel deterministically. The
     // host owns the function; a port without it spawns unpinned, as before.
-    const pinned = props.terminalPort.pinFreshSessionAtLaunch?.(
-      agentKey.value, false, resolved, undefined, () => crypto.randomUUID(),
-    ) ?? { command: resolved, explicitSessionId: '' }
+    const pinned = resumeCommand
+      ? { command: resumeCommand, explicitSessionId: resumeSessionId }
+      : props.terminalPort.pinFreshSessionAtLaunch?.(
+        agentKey.value, false, resolved, undefined, () => crypto.randomUUID(),
+      ) ?? { command: resolved, explicitSessionId: '' }
     const command = pinned.command
     await term.spawn({
       // The host port knows the platform and builds the command (PowerShell and
@@ -382,7 +421,7 @@ async function start(): Promise<void> {
     // PTY, so reaching here means this spawn created a new one).
     if (term.status === 'running') {
       emit('spawned', agentKey.value)
-      void injectContext()
+      if (!resumeCommand) void injectContext()
     }
   } catch { /* spawn errors are rendered inside the terminal by useTerminal */ }
   finally { starting.value = false }

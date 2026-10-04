@@ -1005,6 +1005,10 @@ const miniIdeSource = {
 }
 const installedMiniIdeDescriptorPresent = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID) !== undefined
 frontendPluginManager.setContributionIconResolver(contributionIcon)
+// Windows hosting embedded AI panels end them on close, but not while the app
+// quits: those panels restore next launch. Cmd+Q without the prompt sets only
+// quittingWindowsPrepared; an update install sets only quitConfirmed.
+frontendPluginManager.setAppQuittingProbe(() => quitConfirmed || quittingWindowsPrepared)
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
 )
@@ -3972,6 +3976,8 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
   win.on('closed', () => {
     planWindowPending.delete(win)
     planWindows.remove(workspacePath, win)
+    // Its embedded AI panel ends with the window (not on app quit).
+    frontendPluginManager.endDockSurface('plans', workspacePath)
   })
   loadWindow(win, {
     window: 'plans',

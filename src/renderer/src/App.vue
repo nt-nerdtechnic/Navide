@@ -12622,6 +12622,9 @@ async function doCloseWorkspace(): Promise<void> {
     await sendQuiet('pipeline.abort', { workspace_path: wsPathForAbort, reason: 'user' })
   }
   await onPipelineReset(paneIdsToKill)
+  // The Pipeline Manager's embedded AI panel is no pane of this window, so the
+  // kill above never reaches it; end it by its surface. Kill all does not.
+  if (closing) void sendQuiet('terminal.kill_surface', { surface: 'pm', workspace_path: closing })
   // Closing one of several is not "back to the picker": the others are still
   // held and their agents are still running, so a Welcome screen over them
   // says the window is empty when it is not. Land on one of them instead.

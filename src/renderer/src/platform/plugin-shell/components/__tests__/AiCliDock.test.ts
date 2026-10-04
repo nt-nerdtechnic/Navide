@@ -833,3 +833,92 @@ describe('AiCliDock — message delivery into the panel', () => {
     expect(registerAgentPane.mock.calls[0][0]).not.toHaveProperty('deliverable')
   })
 })
+
+describe('AiCliDock — restore from the panel record', () => {
+  // The backend keeps a panel's record 'spawned' across an app quit (closing
+  // its window retires it). When the window comes back and its PTY is gone, the
+  // panel resumes that conversation instead of waiting for Start.
+  function restorePort(record: { agentKey: string; sessionId: string } | null): TerminalDockPort {
+    return {
+      ...makeTerminalPort(),
+      readDockRestore: vi.fn(async () => record),
+    } as unknown as TerminalDockPort
+  }
+
+  it('resumes the recorded session when the reattach finds no PTY', async () => {
+    const terminalPort = restorePort({ agentKey: 'claude', sessionId: 'sess-123' })
+    const pin = vi.fn()
+    mountDock({ terminalPort: { ...terminalPort, pinFreshSessionAtLaunch: pin } as unknown as TerminalDockPort, origin: 'plan-window' })
+    await flushPromises()
+    expect(terminalPort.readDockRestore).toHaveBeenCalledWith('/tmp/ws', 'ab12cd34-test-cli-dock')
+    expect(termSpies.spawn).toHaveBeenCalledTimes(1)
+    const opts = (termSpies.spawn.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+    expect(opts.command).toEqual(['bash', '-lc', 'claude --resume sess-123 --dangerously-skip-permissions'])
+    expect(opts.skipReattach).toBe(true)
+    expect(opts.outputLogFile).toBe(dockOutputLogFile('/tmp/ws', 'claude', 'ab12cd34-test-cli-dock'))
+    expect(opts.metadata).toMatchObject({
+      surface: 'plans',
+      window_kind: 'plans',
+      cli_command: 'claude --resume sess-123 --dangerously-skip-permissions',
+      explicit_session_id: 'sess-123',
+    })
+    // A resume is not a fresh launch: no new pin.
+    expect(pin).not.toHaveBeenCalled()
+  })
+
+  it('injects no context into a resumed conversation', async () => {
+    const buildContext = vi.fn(() => 'CTX')
+    termSpies.spawn.mockImplementation(async () => { termState.status.value = 'running' })
+    mountDock({ terminalPort: restorePort({ agentKey: 'claude', sessionId: 'sess-123' }), buildContext })
+    await flushPromises()
+    expect(termSpies.spawn).toHaveBeenCalledTimes(1)
+    expect(buildContext).not.toHaveBeenCalled()
+    expect(termSpies.pasteText).not.toHaveBeenCalled()
+  })
+
+  it('resumes with the recorded agent, not the picker default', async () => {
+    settingsState.stored['test-cli-panel-width.agent'] = 'claude'
+    mountDock({ terminalPort: restorePort({ agentKey: 'codex', sessionId: 'abc-1' }) })
+    await flushPromises()
+    const opts = (termSpies.spawn.mock.calls[0] as unknown as [{ agentKey: string }])[0]
+    expect(opts.agentKey).toBe('codex')
+  })
+
+  it('leaves the Start UI when there is no record', async () => {
+    const terminalPort = restorePort(null)
+    mountDock({ terminalPort })
+    await flushPromises()
+    expect(terminalPort.readDockRestore).toHaveBeenCalledTimes(1)
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+
+  it('leaves the Start UI when the record has no session id', async () => {
+    mountDock({ terminalPort: restorePort({ agentKey: 'claude', sessionId: '' }) })
+    await flushPromises()
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+
+  it('refuses a session id that is not shell-safe', async () => {
+    mountDock({ terminalPort: restorePort({ agentKey: 'claude', sessionId: 'x; rm -rf ~' }) })
+    await flushPromises()
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+
+  it('does not resume when the reattach claimed a live PTY', async () => {
+    termSpies.tryReattach.mockImplementation(async () => {
+      termState.status.value = 'running'
+      return true as unknown as undefined
+    })
+    const terminalPort = restorePort({ agentKey: 'claude', sessionId: 'sess-123' })
+    mountDock({ terminalPort })
+    await flushPromises()
+    expect(terminalPort.readDockRestore).not.toHaveBeenCalled()
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+
+  it('does nothing on a port that cannot read the record (older host)', async () => {
+    mountDock()
+    await flushPromises()
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+})

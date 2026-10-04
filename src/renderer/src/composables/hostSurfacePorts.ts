@@ -351,6 +351,13 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
       reason: reason ? encodeReason({ key: reason }) : '',
     }),
     pinFreshSessionAtLaunch,
+    async readDockRestore(workspacePath, paneId) {
+      const response = await send<{ record?: { agent?: string; session_id?: string } | null }>(
+        'terminal.dock_record', { workspace_path: workspacePath, pane_id: paneId },
+      )
+      const record = response.ok ? response.payload?.record : null
+      return record?.agent ? { agentKey: record.agent, sessionId: record.session_id ?? '' } : null
+    },
     statPath: (path, timeoutMs) => send('fs.stat_path', { path }, timeoutMs),
     async getHomeDirectory(): Promise<string> {
       return (await window.agentTeam?.getHomeDir?.()) || ''

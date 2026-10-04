@@ -160,6 +160,11 @@ export interface TerminalDockPort {
     requestedId: string | undefined,
     generate: () => string,
   ): { command: string; explicitSessionId: string }
+  /** The panel's restore record: the agent and session of its last CLI when
+   *  the backend still holds that record as 'spawned' (an app quit keeps it,
+   *  closing the panel's window retires it); null otherwise. Optional: without
+   *  it the panel never resumes on its own and shows Start, as before. */
+  readDockRestore?(workspacePath: string, paneId: string): Promise<{ agentKey: string; sessionId: string } | null>
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
   /** `false` means the host could not open the file; `void` (older ports)
