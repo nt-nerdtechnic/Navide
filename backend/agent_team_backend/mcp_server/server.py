@@ -4557,8 +4557,28 @@ async def cli_send_and_wait(
 # supplies the production Plans tool route. Keeping the handoff here lets that
 # route use the same authenticated Host boundary without allowing an MCP
 # caller or package child to supply an Initiator object.
-_AGENT_CAPABILITY_TIMEOUT_S = 30.0
+#
+# The Host gives a backend call its own deadline (payload ``timeoutMs`` within
+# its 120 s bound, else 30 s) and answers with a specific timeout error when it
+# passes. Waiting a short grace past that deadline lets that answer arrive
+# instead of the generic "did not answer".
+_HOST_BACKEND_DEFAULT_TIMEOUT_S = 30.0
+_HOST_BACKEND_MAX_TIMEOUT_MS = 120_000
+_HOST_ANSWER_GRACE_S = 5.0
+_AGENT_CAPABILITY_TIMEOUT_S = _HOST_BACKEND_DEFAULT_TIMEOUT_S + _HOST_ANSWER_GRACE_S
 _agent_capability_pending: PendingRegistry[dict[str, Any]] = PendingRegistry()
+
+
+def _host_answer_timeout_s(payload: dict[str, Any]) -> float:
+    """How long to wait for the Host to answer a request carrying ``payload``."""
+    timeout_ms = payload.get("timeoutMs")
+    if (
+        isinstance(timeout_ms, (int, float))
+        and not isinstance(timeout_ms, bool)
+        and 0 < timeout_ms <= _HOST_BACKEND_MAX_TIMEOUT_MS
+    ):
+        return timeout_ms / 1000 + _HOST_ANSWER_GRACE_S
+    return _AGENT_CAPABILITY_TIMEOUT_S
 
 
 def resolve_agent_capability(request_id: str, result: dict[str, Any]) -> bool:
@@ -4613,7 +4633,7 @@ async def request_host_agent_capability(
         result = await _agent_capability_pending.wait(
             request_id,
             future,
-            timeout=_AGENT_CAPABILITY_TIMEOUT_S,
+            timeout=_host_answer_timeout_s(payload),
         )
         if result is TIMEOUT:
             return {
@@ -4672,7 +4692,7 @@ async def request_host_agent_workspace_backend(
         result = await _agent_capability_pending.wait(
             request_id,
             future,
-            timeout=_AGENT_CAPABILITY_TIMEOUT_S,
+            timeout=_host_answer_timeout_s(payload),
         )
         if result is TIMEOUT:
             return {

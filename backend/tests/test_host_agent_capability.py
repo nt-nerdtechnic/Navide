@@ -168,3 +168,59 @@ async def test_agent_capability_result_requires_an_authenticated_host(
     })
     assert resolved == [("mcp:1", {"ok": True})]
     assert session.websocket.sent[-1]["payload"] == {"ok": True, "delivered": True}  # type: ignore[attr-defined]
+
+
+# The Host gives a backend call its own deadline (payload ``timeoutMs``, else
+# 30 s) and reports that timeout itself; the MCP side must still be listening.
+_HOST_DEFAULT_BACKEND_DEADLINE_S = 30.0
+
+
+async def _waited_timeout(monkeypatch: pytest.MonkeyPatch, call) -> float:
+    from agent_team_backend.pending_registry import TIMEOUT
+
+    waits: list[float] = []
+
+    async def host_silent(event: dict[str, Any]) -> bool:
+        return True
+
+    async def fake_wait(request_id: str, future: Any, *, timeout: float) -> Any:
+        waits.append(timeout)
+        return TIMEOUT
+
+    monkeypatch.setattr(app, "unicast_host", host_silent)
+    monkeypatch.setattr(plan_mcp._agent_capability_pending, "wait", fake_wait)
+    result = await call()
+    assert result["error_code"] == "host_timeout"
+    assert len(waits) == 1
+    return waits[0]
+
+
+def _routes(payload: dict[str, Any]):
+    return [
+        lambda: request_host_agent_capability(
+            "view-1", "backend", payload, caller=_Caller(kind="external"),
+        ),
+        lambda: request_host_agent_workspace_backend(
+            "navide.plans", "/workspace", payload, caller=_Caller(kind="external"),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", [0, 1])
+async def test_mcp_outwaits_the_host_default_backend_deadline(
+    monkeypatch: pytest.MonkeyPatch, route: int,
+) -> None:
+    payload = {"reqId": "plans-1", "name": "plans.list", "args": {}}
+    waited = await _waited_timeout(monkeypatch, _routes(payload)[route])
+    assert waited > _HOST_DEFAULT_BACKEND_DEADLINE_S
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", [0, 1])
+async def test_mcp_outwaits_a_caller_supplied_backend_deadline(
+    monkeypatch: pytest.MonkeyPatch, route: int,
+) -> None:
+    payload = {"reqId": "plans-1", "name": "plans.list", "args": {}, "timeoutMs": 90_000}
+    waited = await _waited_timeout(monkeypatch, _routes(payload)[route])
+    assert waited > 90.0
