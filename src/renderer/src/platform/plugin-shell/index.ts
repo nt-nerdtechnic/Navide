@@ -50,6 +50,7 @@ export {
   aiTerminalPaneId,
   bracketedPaste,
   buildPlanCliContext,
+  dockOutputLogFile,
   resolveCliCommand,
   truncateText,
   PLAN_DOC_TRUNCATE_AT,

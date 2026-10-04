@@ -85,6 +85,21 @@ export interface DockPaneRegistration {
   agent_key: string
   surface: string
   window_kind: string
+  /** The panel's window delivers messages into it (its port has
+   *  onAgentMessage), so the backend may accept it as a message target. Left
+   *  out otherwise, and the backend keeps refusing it. */
+  deliverable?: boolean
+}
+
+/** One message the backend routed to some pane, as a panel's port hands it
+ *  over: `text` is already the envelope the main window would inject. */
+export interface DockAgentMessage {
+  msgKey: string
+  targetPaneId: string
+  text: string
+  fromDisplay: string
+  /** cli_send(kind="ack"): reported, never typed. */
+  kind?: 'ack'
 }
 
 export interface TerminalDockPort {
@@ -131,6 +146,20 @@ export interface TerminalDockPort {
   registerAgentPane?(pane: DockPaneRegistration): Promise<PortResponse>
   /** Drop a panel registered with registerAgentPane. */
   unregisterAgentPane?(paneId: string): Promise<PortResponse>
+  /** Every message the backend routes, for any pane — the panel picks out its
+   *  own. Optional: without it the panel registers as not deliverable. */
+  onAgentMessage?(callback: (message: DockAgentMessage) => void): () => void
+  /** Report a delivery outcome; `reason` is a `msg.reason-*` key. */
+  reportAgentDelivery?(msgKey: string, ok: boolean, reason?: string): Promise<PortResponse>
+  /** The host's fresh-launch session pinning (lib/sessionHeal
+   *  pinFreshSessionAtLaunch). Optional: without it the panel spawns unpinned. */
+  pinFreshSessionAtLaunch?(
+    agentKey: string,
+    isResume: boolean,
+    command: string,
+    requestedId: string | undefined,
+    generate: () => string,
+  ): { command: string; explicitSessionId: string }
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
   /** `false` means the host could not open the file; `void` (older ports)

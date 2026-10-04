@@ -9946,6 +9946,9 @@ interface ProjectPane {
   collapsed?: boolean
   output_log_file?: string
   stopped?: boolean
+  /** Embedded AI panel host surface ('pm' / 'plans' / 'git' / 'editor'); empty
+   *  or absent for a window pane. */
+  surface?: string
   /** When the pane was opened / closed, as the backend recorded it. Empty on
    *  every record written before the fields existed, which reads as "the time
    *  is not known" — never as "now". */
@@ -10662,6 +10665,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   else if (detachedGroupIds.value.size > 0) {
     toRestore = toRestore.filter((p) => !detachedGroupIds.value.has(p.run_group_id ?? ''))
   }
+  // An embedded AI panel's record (it carries the panel's surface) belongs to
+  // that panel's window, which reattaches it itself; restoring it here would
+  // open a second copy as a window pane. Records without a surface are window
+  // panes, which is every record written before the field existed.
+  toRestore = toRestore.filter((p) => !p.surface || p.surface === 'main')
   // Collapse duplicate records that resume the SAME conversation: spawning
   // several `--resume <same id>` concurrently makes the CLI fork/conflict and
   // leak processes (a source of the leftover-agent pileup).

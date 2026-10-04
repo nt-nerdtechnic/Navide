@@ -22,6 +22,7 @@ import type {
 } from '@navide/terminal'
 import type { Issue, IssueDetail, IssueProviderInfo } from '../../src/composables/useIssues'
 import type { GitTransportStatusSource } from '../../../shared/gitCompatibility'
+import { pinFreshSessionAtLaunch } from '../../src/lib/sessionHeal'
 
 export interface PluginCapabilitySdk {
   readonly status: GitTransportStatusSource
@@ -247,6 +248,9 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
     listAgentPanes: () => request('agent_msg.list', {}),
     registerAgentPane: (pane) => request('agent_msg.register_dock', { ...pane }),
     unregisterAgentPane: (paneId) => request('agent_msg.unregister_dock', { pane_id: paneId }),
+    // No onAgentMessage / reportAgentDelivery: the broker does not forward
+    // agent_msg.* events, so this panel registers as not deliverable.
+    pinFreshSessionAtLaunch,
     statPath: (path, timeoutMs) => request('fs.stat_path', { path }, timeoutMs),
     openFile: async ({ workspacePath, filepath, line }) => {
       await requireOk(sdk.request('ui.open_in_editor', {

@@ -28,9 +28,20 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { CLI_AGENT_SPECS } from '../agents'
-import { bracketedPaste, dockSurfaceForOrigin, pickDockPaneName, resolveCliCommand } from '../lib/aiCliContext'
+import {
+  bracketedPaste,
+  dockOutputLogFile,
+  dockSurfaceForOrigin,
+  pickDockPaneName,
+  resolveCliCommand,
+} from '../lib/aiCliContext'
 import { cliPermissionKey } from '../lib/cliPermission'
-import { clusterMentionCandidates, type MentionCandidate, type TerminalDockPort } from '@navide/terminal'
+import {
+  clusterMentionCandidates,
+  type DockAgentMessage,
+  type MentionCandidate,
+  type TerminalDockPort,
+} from '@navide/terminal'
 import AiCliTerminal from './AiCliTerminal.vue'
 
 const props = withDefaults(
@@ -230,10 +241,11 @@ onUnmounted(() => clearInterval(mentionPollTimer))
 // The CLI here is wired to Navide's MCP tools under this panel's pane id, and
 // every one of them refuses an id the backend's messaging roster has never
 // seen. So while a CLI runs, the panel registers itself — named after its
-// window (`pm-claude`, `plans-codex`, …) and marked with that window's surface,
-// which the backend uses to refuse it as a message target (nothing delivers
-// into a panel yet). Re-sent after a reconnect, as the main window re-mirrors
-// its panes; dropped when the CLI ends or the panel unmounts.
+// window (`pm-claude`, `plans-codex`, …) and marked with that window's surface.
+// The backend refuses it as a message target unless it registers as
+// deliverable, which it does when its port can hand it messages (see the
+// delivery section below). Re-sent after a reconnect, as the main window
+// re-mirrors its panes; dropped when the CLI ends or the panel unmounts.
 const dockSurface = computed(() => dockSurfaceForOrigin(props.origin))
 let registeredAs: { paneId: string; name: string } | null = null
 // Bumped by every unregister, so a register still in flight when the CLI ends
@@ -266,6 +278,7 @@ async function registerInRoster(): Promise<void> {
       agent_key: agentKey.value,
       surface: dockSurface.value.surface,
       window_kind: dockSurface.value.windowKind,
+      ...(port.onAgentMessage ? { deliverable: true } : {}),
     })
   } catch {
     return
@@ -315,13 +328,20 @@ async function start(): Promise<void> {
   starting.value = true
   try {
     const shell = props.terminalPort.shell.value || 'bash'
-    const command = resolveCliCommand({
+    const resolved = resolveCliCommand({
       agentKey: agentKey.value,
       paneId: props.paneId,
       historyRoot: props.workspacePath,
       yoloStored: settingsGet<string | null>('agentTeam.yolo', null),
       permissionStored: settingsGet<string | null>(cliPermissionKey(agentKey.value), null),
     })
+    // Pin the session id the way the main window does for a fresh pane, so the
+    // backend binds this CLI's session to the panel deterministically. The
+    // host owns the function; a port without it spawns unpinned, as before.
+    const pinned = props.terminalPort.pinFreshSessionAtLaunch?.(
+      agentKey.value, false, resolved, undefined, () => crypto.randomUUID(),
+    ) ?? { command: resolved, explicitSessionId: '' }
+    const command = pinned.command
     await term.spawn({
       // The host port knows the platform and builds the command (PowerShell and
       // cmd.exe on Windows; the same wrapping as App.vue spawns elsewhere).
@@ -339,7 +359,18 @@ async function start(): Promise<void> {
         workspace_path: props.workspacePath,
         origin: props.origin,
         yolo: settingsGet<string>('agentTeam.yolo', '1') !== '0',
+        // A panel surface makes the backend file this spawn's restore record
+        // and Agent History entry, which no window does for a panel.
+        surface: dockSurface.value.surface,
+        window_kind: dockSurface.value.windowKind,
+        cli_command: command,
+        agent_label: agentLabel.value,
+        ...(pinned.explicitSessionId ? { explicit_session_id: pinned.explicitSessionId } : {}),
       },
+      // Same place the main window logs a manual pane. No resumeKey: it would
+      // rewrite useTerminal's persist key, and the connect-time reattach finds
+      // the PTY by pane id.
+      outputLogFile: dockOutputLogFile(props.workspacePath, agentKey.value, props.paneId),
       // Start always means a NEW PTY. Reattach belongs to the connect-time
       // tryReattach above — letting spawn's internal reattach run here could
       // rebind a live conversation and re-inject context into it. A still-live
@@ -357,40 +388,101 @@ async function start(): Promise<void> {
   finally { starting.value = false }
 }
 
+/** Paste `build()`'s text and submit it. True when both the paste and the
+ *  submitting CR left; false when there was nothing to send or a send failed. */
 async function pasteContext(
   term: InstanceType<typeof AiCliTerminal>,
   build: () => string | Promise<string>
-): Promise<void> {
+): Promise<boolean> {
   const text = await build()
-  if (!text) return
+  if (!text) return false
   // The two halves are separate sends 300 ms apart, so the transport can go
   // down between them. Sending the CR regardless would submit whatever the
   // prompt already held — or an empty line — as if it were this context.
-  if (!term.pasteText(bracketedPaste(text))) return
+  if (!term.pasteText(bracketedPaste(text))) return false
   // Let the CLI ingest the paste before the submitting CR.
   await new Promise((r) => setTimeout(r, 300))
-  term.pasteText('\r')
+  return term.pasteText('\r')
+}
+
+/** Wait for the CLI's output to go quiet (injectQuietMs of silence after its
+ *  first output, injectTimeoutMs cap). False when the CLI died meanwhile. */
+async function waitForQuiet(term: InstanceType<typeof AiCliTerminal>): Promise<boolean> {
+  const deadline = Date.now() + props.injectTimeoutMs
+  for (;;) {
+    const last = term.lastRawActivityAt
+    if ((last > 0 && Date.now() - last >= props.injectQuietMs) || Date.now() >= deadline) return true
+    await new Promise((r) => setTimeout(r, 250))
+    if (term.status !== 'running') return false
+  }
 }
 
 /** Best-effort context injection after a fresh spawn: wait for the CLI's
- *  startup output to go quiet (injectQuietMs of silence after first output,
- *  injectTimeoutMs cap), then bracketed-paste the host's context and submit.
- *  Failure never blocks the CLI. */
+ *  startup output to go quiet, then bracketed-paste the host's context and
+ *  submit. Failure never blocks the CLI. */
 async function injectContext(): Promise<void> {
   const term = termRef.value
   const build = props.buildContext
   if (!term || !build) return
   try {
-    const deadline = Date.now() + props.injectTimeoutMs
-    for (;;) {
-      const last = term.lastRawActivityAt
-      if ((last > 0 && Date.now() - last >= props.injectQuietMs) || Date.now() >= deadline) break
-      await new Promise((r) => setTimeout(r, 250))
-      if (term.status !== 'running') return // died during startup — nothing to inject
-    }
+    if (!(await waitForQuiet(term))) return // died during startup — nothing to inject
     await pasteContext(term, build)
   } catch { /* best-effort */ }
 }
+
+// ── Message delivery ────────────────────────────────────────────────────────
+// A port that can hand over routed messages (onAgentMessage) makes this panel
+// a message target like any window pane: the backend broadcasts every routed
+// message, the port renders the main window's envelope, and the panel takes
+// the ones addressed to it — once each, one at a time, after the CLI goes
+// quiet — and reports the outcome. Messages for other panes are left to their
+// own windows without a word, as the main window does.
+const DELIVERED_KEYS_CAP = 200
+const seenMsgKeys = new Set<string>()
+let deliveryChain: Promise<void> = Promise.resolve()
+
+async function deliverAgentMessage(message: DockAgentMessage): Promise<void> {
+  const port = props.terminalPort
+  const report = (ok: boolean, reason?: string) =>
+    void Promise.resolve(
+      reason === undefined
+        ? port.reportAgentDelivery?.(message.msgKey, ok)
+        : port.reportAgentDelivery?.(message.msgKey, ok, reason),
+    ).catch(() => undefined)
+  if (message.kind === 'ack') {
+    report(true, 'ack')
+    return
+  }
+  const term = termRef.value
+  if (!term || term.status !== 'running') {
+    report(false, 'pane-closed')
+    return
+  }
+  try {
+    if (!(await waitForQuiet(term))) {
+      report(false, 'pane-closed')
+      return
+    }
+    if (await pasteContext(term, () => message.text)) report(true)
+    else report(false, 'inject-failed')
+  } catch {
+    report(false, 'inject-failed')
+  }
+}
+
+function onAgentMessage(message: DockAgentMessage): void {
+  if (message.targetPaneId !== props.paneId) return
+  if (seenMsgKeys.has(message.msgKey)) return
+  seenMsgKeys.add(message.msgKey)
+  if (seenMsgKeys.size > DELIVERED_KEYS_CAP) {
+    const oldest = seenMsgKeys.values().next().value
+    if (oldest !== undefined) seenMsgKeys.delete(oldest)
+  }
+  deliveryChain = deliveryChain.then(() => deliverAgentMessage(message))
+}
+
+const stopAgentMessages = props.terminalPort.onAgentMessage?.(onAgentMessage)
+onUnmounted(() => stopAgentMessages?.())
 
 /** Host-triggered re-injection into a running CLI (no quiet-wait: the CLI is
  *  already interactive). No-op without buildContext or a running PTY. */

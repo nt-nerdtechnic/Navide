@@ -40,6 +40,20 @@ export function aiTerminalPaneId(surface: string, workspacePath: string): string
   return `${hex8}-${surface}-ai-terminal`
 }
 
+/** Where an embedded AI panel writes its conversation log: the same
+ *  `<ws>/.agent-team/manual/<yyyymmdd>/<agent>-<id8>.log` the main window
+ *  builds inline for a manual pane (App.vue spawnPane). A source-scan test
+ *  keeps the two templates identical. */
+export function dockOutputLogFile(
+  workspacePath: string,
+  agentKey: string,
+  paneId: string,
+  now: Date = new Date(),
+): string {
+  const ymd = now.toISOString().slice(0, 10).replace(/-/g, '')
+  return `${workspacePath}/.agent-team/manual/${ymd}/${agentKey}-${paneId.slice(0, 8)}.log`
+}
+
 /** Which window an embedded AI panel lives in, as the messaging roster records
  *  it: `surface` is the panel's host, `windowKind` the window that host is in
  *  (the Pipeline Manager is a modal inside the main window). Derived from the

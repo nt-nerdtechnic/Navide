@@ -345,6 +345,21 @@ describe('useAgentMessaging — cross-workspace routing', () => {
     expect(m.messages.value).toHaveLength(0)
   })
 
+  // An embedded AI panel's window answers for its own panel; a main window that
+  // reported a failure for it would race that window's verdict.
+  it('never reports on a delivery for a pane it does not own', async () => {
+    m.registerPane('p1', 'claude', 'local')
+    m.acceptRemoteMessage({
+      msgKey: 'k-dock',
+      targetPaneId: 'ab12cd34-plans-ai-terminal',
+      fromDisplay: 'alpha/sender',
+      content: 'hi',
+    })
+    await flush()
+    expect(reports).toEqual([])
+    expect(delivered).toHaveLength(0)
+  })
+
   it('fences a chat-channel or remote-device delivery as external content', async () => {
     m.registerPane('p2', 'claude', 'reviewer')
     m.acceptRemoteMessage({

@@ -35,6 +35,8 @@ vi.mock('@navide/plugin-shell', () => ({
   AiCliDock: defineComponent({ name: 'AiCliDock', render: () => h('div', { class: 'stub-dock' }) }),
   aiTerminalPaneId: vi.fn(() => 'dock-id'),
   buildPlanCliContext: vi.fn(async () => ''),
+  // Read at load time by the host terminal port's messaging imports.
+  AGENT_SPECS: [],
 }))
 
 vi.mock('../../editor/PlansPane.vue', () => ({
