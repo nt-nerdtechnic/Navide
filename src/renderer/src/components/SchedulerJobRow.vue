@@ -30,7 +30,7 @@ const updatedBy = computed(() => props.api.updatedByLabel(props.job))
     <div class="sj-line1">
       <span class="sj-dot" :class="light" data-test="light" />
       <button class="sj-name" :title="t('scheduler.edit')" @click="$emit('edit', job)">{{ job.name }}</button>
-      <span v-if="light === 'err'" class="sj-fail" data-test="fail-pill">
+      <span v-if="light === 'err' && !gone" class="sj-fail" data-test="fail-pill">
         <span class="sj-fail-count">{{ t('scheduler.failed', { n: job.state?.consecutive_errors ?? 0 }) }}</span>
         <button
           class="sj-fail-repair"
@@ -92,6 +92,9 @@ const updatedBy = computed(() => props.api.updatedByLabel(props.job))
     </div>
     <div v-if="gone" class="sj-gone" data-test="target-gone">
       <span>{{ t('scheduler.skip.target_gone') }}</span>
+      <span v-if="job.state?.disabled_reason === 'target_gone'" data-test="gone-disabled">
+        · {{ t('scheduler.gone-disabled', { n: job.state.consecutive_target_gone ?? 0 }) }}
+      </span>
       <button class="sj-retarget" data-test="retarget" @click="$emit('edit', job)">
         {{ t('scheduler.retarget') }}
       </button>
@@ -295,7 +298,7 @@ const updatedBy = computed(() => props.api.updatedByLabel(props.job))
   margin-top: 3px;
   padding-left: 11px;
   font-size: var(--font-3xs);
-  color: var(--text-secondary);
+  color: var(--danger-fg);
 }
 .sj-retarget {
   appearance: none;

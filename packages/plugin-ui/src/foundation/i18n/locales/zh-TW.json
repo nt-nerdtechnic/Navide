@@ -7931,6 +7931,8 @@
     "load-more": "載入更多（還有 {count} 則）",
     "mcp-tools-changed": "MCP 工具可能已變更",
     "mcp-tools-changed-note": "CLI agent 只在啟動時讀一次 Navide 的 MCP 工具清單。從上一個版本（{from}）就連著的對象 — CLI pane 或外部 MCP client — 拿到的還是當時那份清單；重開 pane 或重新連線才會拿到新的工具。",
+    "scheduler-disabled": "排程「{name}」已停用：目標 pane 不存在",
+    "scheduler-disabled-note": "連續 {n} 次到點都找不到目標 pane，所以自動停用。到排程面板按「重新綁定」指向現有的 pane，再重新啟用。",
     "quota": {
       "status": {
         "detected": "{agent}：{source} 額度已耗盡",
@@ -8786,7 +8788,8 @@
     "when-backoff": "backoff 至 {time}",
     "target": "→ 喚醒並傳給 pane「{name}」",
     "target-with-id": "→ 喚醒並傳給 pane「{name}」（#{id}）",
-    "retarget": "重新指定",
+    "retarget": "重新綁定",
+    "gone-disabled": "連續 {n} 次找不到，已自動停用",
     "every-minutes": "每 {n} 分鐘",
     "every-hours": "每 {n} 小時",
     "daily-at": "每天 {time}",

@@ -304,7 +304,7 @@ import {
 import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntriesFor, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryCleanupMode, type HistoryDeletePreview, type HistoryDeleteTarget, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
 import { executeCommand, initKeybindingsPort, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
 import { useUiActionBus } from './composables/useUiActionBus'
-import { releaseAnnouncementId, useAnnouncements } from './composables/useAnnouncements'
+import { releaseAnnouncementId, useAnnouncements, type SchedulerDisabledNotice } from './composables/useAnnouncements'
 import {
   useQuotaFailover,
   type HotSwitchedPane,
@@ -13371,6 +13371,14 @@ backend.on('app.version_changed', (raw) => {
   const ev = raw as { from?: string; to?: string }
   if (!ev?.from || !ev.to) return
   announcements.noteBackendUpgrade(ev.from, ev.to)
+})
+
+// The scheduler disabled a job whose target pane stayed gone, and its owner
+// pane could not be told (the user owns it, or that pane is gone too).
+backend.on('scheduler.job_disabled', (raw) => {
+  const ev = raw as SchedulerDisabledNotice
+  if (!ev?.id) return
+  announcements.noteSchedulerDisabled(ev)
 })
 
 backend.on('session.detected', (raw) => {

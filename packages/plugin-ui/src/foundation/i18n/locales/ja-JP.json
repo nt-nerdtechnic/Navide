@@ -7931,6 +7931,8 @@
     "load-more": "さらに読み込む（残り {count} 件）",
     "mcp-tools-changed": "MCP ツールが変更された可能性があります",
     "mcp-tools-changed-note": "CLI エージェントは起動時に一度だけ Navide の MCP ツール一覧を読み込みます。以前のバージョン（{from}）から接続したままの CLI ペインや外部 MCP クライアントは、当時のツールを保持しています。新しいツールを読み込むには、ペインを開き直すか、クライアントを再接続してください。",
+    "scheduler-disabled": "スケジュール「{name}」を停止しました：対象ペインが存在しません",
+    "scheduler-disabled-note": "対象ペインが {n} 回続けて見つからなかったため、自動的に停止しました。スケジュールパネルの「再バインド」で既存のペインを指定してから、再度有効にしてください。",
     "quota": {
       "status": {
         "detected": "{agent}：{source} の利用枠を使い切りました",
@@ -8786,7 +8788,8 @@
     "when-backoff": "{time} まで backoff",
     "target": "→ pane「{name}」を起こして送信",
     "target-with-id": "→ pane「{name}」（#{id}）を起こして送信",
-    "retarget": "再指定",
+    "retarget": "再バインド",
+    "gone-disabled": "{n} 回続けて見つからず、停止しました",
     "every-minutes": "{n} 分ごと",
     "every-hours": "{n} 時間ごと",
     "daily-at": "毎日 {time}",

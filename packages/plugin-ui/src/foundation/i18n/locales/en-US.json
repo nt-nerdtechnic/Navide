@@ -7931,6 +7931,8 @@
     "load-more": "Load more ({count} left)",
     "mcp-tools-changed": "MCP tools may have changed",
     "mcp-tools-changed-note": "A CLI agent reads Navide's MCP tool list once, when it starts. Anything still connected from the previous version ({from}) — a CLI pane, or an external MCP client — keeps the tools it saw then; reopen the pane or reconnect the client to pick up new ones.",
+    "scheduler-disabled": "Scheduled job \"{name}\" was disabled: its target pane is gone",
+    "scheduler-disabled-note": "Its target pane could not be found {n} runs in a row, so the job was disabled. In the Schedule panel, use \"Rebind\" to point it at a live pane, then enable it again.",
     "quota": {
       "status": {
         "detected": "{agent}: {source} has run out of quota",
@@ -8786,7 +8788,8 @@
     "when-backoff": "backoff until {time}",
     "target": "→ wake and send to pane \"{name}\"",
     "target-with-id": "→ wake and send to pane \"{name}\" (#{id})",
-    "retarget": "Retarget",
+    "retarget": "Rebind",
+    "gone-disabled": "missing {n} runs in a row, disabled",
     "every-minutes": "Every {n} min",
     "every-hours": "Every {n} h",
     "daily-at": "Daily at {time}",

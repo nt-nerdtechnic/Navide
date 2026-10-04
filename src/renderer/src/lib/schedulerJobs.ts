@@ -49,6 +49,12 @@ export interface JobState {
   consecutive_errors?: number
   backoff_until?: number | null
   last_skip_reason?: SkipReason | string | null
+  /** target_gone runs in a row; the backend disables the job at 3. */
+  consecutive_target_gone?: number
+  /** Why the backend disabled the job itself ('target_gone'); cleared on re-enable. */
+  disabled_reason?: string | null
+  /** The pane id a rebuild moved this job off (session lineage). */
+  rebound_from?: string
 }
 
 /** Who created a job (`owner`) or last changed it (`updated_by`). A job saved

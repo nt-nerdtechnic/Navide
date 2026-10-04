@@ -73,6 +73,7 @@ function actionKey(action: AnnouncementActionSpec): string {
 function iconOf(item: Announcement): string {
   if (item.kind === 'release') return '🏷'
   if (item.kind === 'quota') return '◔'
+  if (item.kind === 'scheduler') return '⏲'
   return '⬆'
 }
 

@@ -202,6 +202,24 @@ describe('useAnnouncements', () => {
     expect(releaseAnnouncementId('0.1.77')).toBe('release:0.1.77')
   })
 
+  it('surfaces a scheduled job the backend disabled for a gone target, unread, once per notice', async () => {
+    store.set(READ_IDS_KEY, [])
+    const { useAnnouncements, i18n } = await load()
+    const a = useAnnouncements()
+    const before = a.unreadCount.value
+    const ev = { id: 'j1', name: 'tk-watch', reason: 'target_gone', pane_id: 'p-9', count: 3 }
+    a.noteSchedulerDisabled(ev, 1_800_000_000_000)
+    a.noteSchedulerDisabled(ev, 1_800_000_000_000)
+    const rows = a.items.value.filter((i) => i.kind === 'scheduler')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].title).toBe(i18n.global.t('announce.scheduler-disabled', { name: 'tk-watch' }))
+    expect(rows[0].note).toBe(i18n.global.t('announce.scheduler-disabled-note', { n: 3 }))
+    expect(rows[0].read).toBe(false)
+    expect(a.unreadCount.value).toBe(before + 1)
+    a.markRead(rows[0].id)
+    expect(a.unreadCount.value).toBe(before)
+  })
+
   describe('quota incidents', () => {
     const T0 = Date.parse('2026-09-21T10:00:00.000Z')
 

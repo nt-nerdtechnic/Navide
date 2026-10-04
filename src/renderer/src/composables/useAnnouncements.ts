@@ -21,7 +21,7 @@ import type { UpdateState } from '../../../shared/updater'
  * popover read the same feed without prop drilling.
  */
 
-export type AnnouncementKind = 'release' | 'update' | 'quota'
+export type AnnouncementKind = 'release' | 'update' | 'quota' | 'scheduler'
 /** The button an update row offers, when its status affords one. */
 export type AnnouncementAction = 'download' | 'install'
 
@@ -282,6 +282,46 @@ function backendItems(): Announcement[] {
       read: false,
     },
   ]
+}
+
+/** What the backend's `scheduler.job_disabled` event carries: a job it
+ *  disabled because its target pane stayed gone, whose owner pane could not be
+ *  told (the user owns it, or that pane is gone too). */
+export interface SchedulerDisabledNotice {
+  id: string
+  name: string
+  reason: string
+  pane_id?: string
+  count?: number
+}
+
+/** Disabled-job notices this window heard, newest first. Not persisted: the
+ *  job's own row in the Schedule panel keeps showing why it stopped. */
+const schedulerNotices = ref<{ notice: SchedulerDisabledNotice; at: number }[]>([])
+
+function schedulerAnnouncementId(jobId: string, at: number): string {
+  return `scheduler-disabled:${jobId}:${at}`
+}
+
+function schedulerItems(): Announcement[] {
+  const t = i18n.global.t
+  return schedulerNotices.value.map(({ notice, at }) => ({
+    id: schedulerAnnouncementId(notice.id, at),
+    kind: 'scheduler' as const,
+    title: t('announce.scheduler-disabled', { name: notice.name }),
+    highlights: [],
+    note: t('announce.scheduler-disabled-note', { n: notice.count ?? 0 }),
+    createdAt: at,
+    read: false,
+  }))
+}
+
+/** Record a job the backend disabled; the same notice twice is one row. */
+function noteSchedulerDisabled(notice: SchedulerDisabledNotice, at: number = Date.now()): void {
+  if (!notice?.id) return
+  const id = schedulerAnnouncementId(notice.id, at)
+  if (schedulerNotices.value.some((n) => schedulerAnnouncementId(n.notice.id, n.at) === id)) return
+  schedulerNotices.value = [{ notice, at }, ...schedulerNotices.value]
 }
 
 /** Live quota incidents by id, newest update first when listed. Not
@@ -603,6 +643,7 @@ const items: ComputedRef<Announcement[]> = computed(() => {
   const locale = i18n.global.locale.value
   const seen = new Set(readIds.value)
   const merged = [
+    ...schedulerItems(),
     ...backendItems(),
     ...updateItems(updateSource.value?.state.value ?? null),
     ...releaseItems(locale, appVersion.value),
@@ -680,6 +721,7 @@ export function useAnnouncements() {
     markAllRead,
     setUpdateSource,
     noteBackendUpgrade,
+    noteSchedulerDisabled,
     noteQuotaIncident,
     invalidateQuotaActions,
     dismissQuotaIncident,
