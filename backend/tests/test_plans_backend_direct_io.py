@@ -304,6 +304,14 @@ def test_large_plans_are_listed_and_paged_back_byte_identical(
     listed = {entry["rel_path"]: entry for entry in _value(_call(backend_process, host, "plans.list", {}))}
     assert listed[".agent-team/plans/medium_aaaaaa.html"]["name"] == "About 197 KB"
     assert listed[".agent-team/plans/huge_bbbbbb.html"]["name"] == "About 5.8 MB"
+    # The Plans view's paged list shows them as plans too.
+    page = _value(_call(backend_process, host, "plans.list", {"offset": 0}))
+    assert page["next_offset"] is None
+    paged = {entry["rel_path"]: entry for entry in page["entries"]}
+    assert {path: (entry["kind"], entry["meta"]["name"]) for path, entry in paged.items()} == {
+        ".agent-team/plans/huge_bbbbbb.html": ("plan", "About 5.8 MB"),
+        ".agent-team/plans/medium_aaaaaa.html": ("plan", "About 197 KB"),
+    }
     for name, text in documents.items():
         rel_path = f".agent-team/plans/{name}"
         pages: list[str] = []
