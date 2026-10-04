@@ -32,6 +32,7 @@ import {
   bracketedPaste,
   dockOutputLogFile,
   dockSurfaceForOrigin,
+  dockWindowLabelKey,
   pickDockPaneName,
   resolveCliCommand,
 } from '../lib/aiCliContext'
@@ -242,10 +243,14 @@ async function refreshMentionTargets(): Promise<void> {
           // alias is absent rather than blank when unknown, so a whitespace-only
           // value never blanks a section header.
           const label = p.workspace_display_name?.trim() || folder
+          // Another embedded panel names the window it lives in, as in the
+          // main window's menu; a window pane has no label.
+          const windowKey = dockWindowLabelKey(p.surface)
           return {
             address: p.qualified_name as string,
             group: p.workspace_path || folder,
             groupLabel: label,
+            ...(windowKey ? { windowLabel: t(windowKey) } : {}),
           }
         })
     )
@@ -296,8 +301,9 @@ async function registerInRoster(): Promise<void> {
     if (seq !== registerSeq) return
     name = pickDockPaneName(`${dockSurface.value.surface}-${agentKey.value}`, props.workspacePath, paneId, panes)
   }
+  let accepted = false
   try {
-    await port.registerAgentPane({
+    accepted = (await port.registerAgentPane({
       pane_id: paneId,
       name,
       workspace_path: props.workspacePath,
@@ -305,10 +311,13 @@ async function registerInRoster(): Promise<void> {
       surface: dockSurface.value.surface,
       window_kind: dockSurface.value.windowKind,
       ...(port.onAgentMessage ? { deliverable: true } : {}),
-    })
+    })).ok
   } catch {
     return
   }
+  // A refused or unroutable registration leaves no entry: show no address that
+  // nothing answers at (a reconnect tries again).
+  if (!accepted) return
   if (seq !== registerSeq) {
     dropRegistration(paneId)
     return
@@ -414,7 +423,7 @@ async function launch(resumeSessionId: string): Promise<void> {
       // Same place the main window logs a manual pane. No resumeKey: it would
       // rewrite useTerminal's persist key, and the connect-time reattach finds
       // the PTY by pane id.
-      outputLogFile: dockOutputLogFile(props.workspacePath, agentKey.value, props.paneId),
+      outputLogFile: dockOutputLogFile(props.workspacePath, agentKey.value, props.paneId, dockSurface.value.surface),
       // Start always means a NEW PTY. Reattach belongs to the connect-time
       // tryReattach above — letting spawn's internal reattach run here could
       // rebind a live conversation and re-inject context into it. A still-live

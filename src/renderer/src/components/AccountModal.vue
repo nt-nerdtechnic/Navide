@@ -19,6 +19,7 @@ import { usePairingState } from '../composables/usePairingState'
 import NavideCloudMark from './NavideCloudMark.vue'
 import { relativeTime } from '../lib/relativeTime'
 import PaneGitChip, { type PaneGit } from './PaneGitChip.vue'
+import { dockWindowLabelKey } from '../lib/dockWindow'
 import type { useBackend } from '../composables/useBackend'
 
 const props = defineProps<{
@@ -134,6 +135,9 @@ interface NetworkPane {
   /** This machine's own panes only, and only inside a git checkout: the
    *  backend reads it locally and never uploads it. */
   git?: PaneGit
+  /** An embedded AI panel's window ('pm', 'plans', 'git', 'editor'); absent
+   *  for a window pane, and from a backend or peer that does not send it. */
+  surface?: string
 }
 
 interface NetworkDevice {
@@ -2057,6 +2061,7 @@ onUnmounted(() => {
                   <li v-for="hit in paneHits" :key="hit.key" class="pane">
                     <span class="pane-agent">{{ hit.pane.agentKey || '—' }}</span>
                     <span class="pane-name" :title="hit.pane.title">{{ hit.pane.title }}</span>
+                    <span v-if="dockWindowLabelKey(hit.pane.surface)" class="pane-window">{{ t(dockWindowLabelKey(hit.pane.surface)!) }}</span>
                     <span class="pane-ws">{{ hit.device }} · {{ hit.pane.workspace }}</span>
                     <!-- The pill comes back here and only here: out of its
                          section, the row has nothing else saying what state it
@@ -2201,6 +2206,8 @@ onUnmounted(() => {
                                carrying the most information, and it was the one
                                being clipped. -->
                           <span class="pane-name" :title="row.pane.title">{{ row.pane.title }}</span>
+                          <!-- An embedded AI panel says which window it lives in. -->
+                          <span v-if="dockWindowLabelKey(row.pane.surface)" class="pane-window">{{ t(dockWindowLabelKey(row.pane.surface)!) }}</span>
                           <PaneGitChip v-if="device.isLocal && row.pane.git" :git="row.pane.git" />
                           <span class="pane-time" :title="startedTitle(row.pane)">
                             {{ startedLabel(row.pane) }}
@@ -2625,6 +2632,10 @@ input:focus {
 }
 .pane-time {
   flex: none; font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+.pane-window {
+  flex: none; padding: 0 5px; border-radius: var(--radius-pill, 999px); font-size: var(--font-3xs);
+  border: 1px solid var(--border-muted); color: var(--text-secondary);
 }
 /* Search results only: there the row is out of its section, so the workspace
    and the device have to be said again. */

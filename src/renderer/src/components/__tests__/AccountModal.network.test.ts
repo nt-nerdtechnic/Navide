@@ -100,6 +100,18 @@ describe('account modal — your network', () => {
     expect(grouped).not.toContain('class="pane-ws"')
   })
 
+  it('names the window an embedded AI panel lives in, and only for a panel', () => {
+    // The roster carries `surface` only for a panel (absent for a window pane,
+    // and from an older peer), so every other row renders exactly as before.
+    expect(MODAL).toContain("import { dockWindowLabelKey } from '../lib/dockWindow'")
+    expect(MODAL).toMatch(/surface\?: string/)
+    for (const pane of ['hit.pane', 'row.pane']) {
+      const label = `dockWindowLabelKey(${pane}.surface)`
+      expect(MODAL).toContain(`v-if="${label}" class="pane-window"`)
+      expect(MODAL).toContain(`{{ t(${label}!) }}`)
+    }
+  })
+
   it('says the state on a search hit, which has no section to say it', () => {
     // The one rule that keeps dropping the pill honest: out of its section a
     // row has nothing else reporting what state it is in, so the flat search

@@ -130,6 +130,12 @@ const EXPLICIT: Record<string, CapabilityRef> = {
   // Messaging roster read for the embedded CLI panel's @-mention menu (see
   // capabilityMap's note on why it rides the terminal namespace).
   'agent_msg.list': { ns: 'terminal', method: 'agent_msg_list' },
+  // The embedded AI panel's own roster entry and restore record, which
+  // EditorWindowApp's host terminal port sends (see capabilityMap's notes).
+  // Panel-only handlers: they cannot touch a window pane's entry or record.
+  'agent_msg.register_dock': { ns: 'terminal', method: 'agent_msg_register_dock' },
+  'agent_msg.unregister_dock': { ns: 'terminal', method: 'agent_msg_unregister_dock' },
+  'terminal.dock_record': { ns: 'terminal', method: 'dock_record' },
   // editor inline AI → ChatCapability
   'editor.rewrite': { ns: 'chat', method: 'editor_rewrite' },
   'editor.complete': { ns: 'chat', method: 'editor_complete' },
@@ -246,6 +252,11 @@ export function useBackend(): {
   on: (type: string, cb: (payload: unknown) => void) => () => void
   restart: () => Promise<unknown>
   stop: () => Promise<unknown>
+  /** False: the broker never forwards agent_msg.deliver to a plugin view, so
+   *  the host terminal port built over this shim offers no message delivery
+   *  and its AI panel registers as not deliverable. The real useBackend has no
+   *  such field and hears the broadcast. */
+  forwardsAgentMessages?: boolean
 } {
   // The broker owns the real WS liveness and fans every transition out as the
   // host-synthesized `nav.backend_status` event (frontendPluginManager
@@ -311,5 +322,8 @@ export function useBackend(): {
     return Promise.resolve()
   }
 
-  return { status, wsUrl, httpUrl, shell, port, pid, lastError, autoRestart, send, on, restart, stop }
+  return {
+    status, wsUrl, httpUrl, shell, port, pid, lastError, autoRestart, send, on, restart, stop,
+    forwardsAgentMessages: false,
+  }
 }

@@ -40,18 +40,21 @@ export function aiTerminalPaneId(surface: string, workspacePath: string): string
   return `${hex8}-${surface}-ai-terminal`
 }
 
-/** Where an embedded AI panel writes its conversation log: the same
+/** Where an embedded AI panel writes its conversation log: the
  *  `<ws>/.agent-team/manual/<yyyymmdd>/<agent>-<id8>.log` the main window
- *  builds inline for a manual pane (App.vue spawnPane). A source-scan test
- *  keeps the two templates identical. */
+ *  builds inline for a manual pane (App.vue spawnPane), with the panel's
+ *  surface before the extension — every panel of one workspace shares the id8
+ *  (the workspace hash), so without it they would all append to one file. A
+ *  source-scan test keeps the shared layout identical to the main window's. */
 export function dockOutputLogFile(
   workspacePath: string,
   agentKey: string,
   paneId: string,
+  surface: string,
   now: Date = new Date(),
 ): string {
   const ymd = now.toISOString().slice(0, 10).replace(/-/g, '')
-  return `${workspacePath}/.agent-team/manual/${ymd}/${agentKey}-${paneId.slice(0, 8)}.log`
+  return `${workspacePath}/.agent-team/manual/${ymd}/${agentKey}-${paneId.slice(0, 8)}-${surface}.log`
 }
 
 /** Which window an embedded AI panel lives in, as the messaging roster records
@@ -72,6 +75,22 @@ const DOCK_SURFACES: Readonly<Record<string, DockSurface>> = {
 
 export function dockSurfaceForOrigin(origin: string): DockSurface {
   return DOCK_SURFACES[origin] ?? { surface: origin, windowKind: origin }
+}
+
+/** The window an embedded AI panel (AiCliDock) lives in, as other panes' menus
+ *  name it. A panel registers with a surface ('pm' for the Pipeline Manager
+ *  modal, else its own window); a window pane has none — or 'main' — and gets
+ *  no label, so it is drawn exactly as before. */
+const DOCK_WINDOW_KEYS: Readonly<Record<string, string>> = {
+  pm: 'dockWindow.pm',
+  plans: 'dockWindow.plans',
+  git: 'dockWindow.git',
+  editor: 'dockWindow.editor',
+}
+
+/** i18n key naming the panel's window, or null for a window pane. */
+export function dockWindowLabelKey(surface: string | undefined): string | null {
+  return (surface && DOCK_WINDOW_KEYS[surface]) || null
 }
 
 /** The roster name for an embedded panel: `base` (`<surface>-<agent>`), or the

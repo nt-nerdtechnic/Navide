@@ -46,6 +46,10 @@ const MINI_IDE_SENT_TYPES = [
   'terminal.create', 'terminal.create.cancel', 'terminal.input', 'terminal.log_sent',
   'terminal.resize', 'terminal.interrupt', 'terminal.kill', 'terminal.reattach',
   'terminal.redraw',
+  // the embedded AI panel's roster entry and restore record (AiCliDock through
+  // createHostTerminalDockPort)
+  'agent_msg.list', 'agent_msg.register_dock', 'agent_msg.unregister_dock',
+  'terminal.dock_record',
   // editor inline AI
   'editor.rewrite', 'editor.complete',
   // ai.chat settings (ReviewPane analyzer credentials)

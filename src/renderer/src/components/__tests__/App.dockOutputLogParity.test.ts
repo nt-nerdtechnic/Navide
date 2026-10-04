@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest'
 import { dockOutputLogFile } from '@navide/plugin-shell'
 
 // An embedded AI panel writes its conversation log where the main window
-// writes a manual pane's: `<ws>/.agent-team/manual/<yyyymmdd>/<agent>-<id8>.log`.
-// The main window builds that path inline in spawnPane, the panel through
-// dockOutputLogFile — this pins the two to the same template so they cannot
-// drift apart.
+// writes a manual pane's: `<ws>/.agent-team/manual/<yyyymmdd>/<agent>-<id8>.log`,
+// plus a `-<surface>` suffix: every panel of one workspace shares the id8 (it
+// is the workspace hash), so without it the Plans, Git, Editor and Pipeline
+// Manager panels would all append to one file. The main window builds its path
+// inline in spawnPane, the panel through dockOutputLogFile — this pins the
+// shared directory/date/agent/id8 layout so the two cannot drift apart.
 const read = (p: string): string => readFileSync(resolve(process.cwd(), p), 'utf8')
 const appSource = read('src/renderer/src/App.vue')
 const helperSource = read('src/renderer/src/platform/plugin-shell/lib/aiCliContext.ts')
@@ -28,11 +30,20 @@ describe('dock output log path matches the main window manual pane path', () => 
       .replace('opts.workspacePath', 'workspacePath')
       .replace('opts.agentKey', 'agentKey')
       .replace('id.slice(0, 8)', 'paneId.slice(0, 8)')
+      // The one difference: the panel's surface before the extension.
+      .replace('.log`', '-${surface}.log`')
     expect(helperSource).toContain(renamed)
   })
 
   it('renders the path for a known date', () => {
-    expect(dockOutputLogFile('/ws/a', 'claude', 'ab12cd34-plans-ai-terminal', new Date('2026-10-04T06:00:00Z')))
-      .toBe('/ws/a/.agent-team/manual/20261004/claude-ab12cd34.log')
+    expect(dockOutputLogFile('/ws/a', 'claude', 'ab12cd34-plans-ai-terminal', 'plans', new Date('2026-10-04T06:00:00Z')))
+      .toBe('/ws/a/.agent-team/manual/20261004/claude-ab12cd34-plans.log')
+  })
+
+  it('gives each panel of one workspace its own file', () => {
+    const at = new Date('2026-10-04T06:00:00Z')
+    const files = ['pm', 'plans', 'git', 'editor'].map((surface) =>
+      dockOutputLogFile('/ws/a', 'claude', `ab12cd34-${surface}-ai-terminal`, surface, at))
+    expect(new Set(files).size).toBe(4)
   })
 })

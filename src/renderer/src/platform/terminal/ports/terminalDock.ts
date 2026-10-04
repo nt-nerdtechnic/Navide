@@ -138,7 +138,7 @@ export interface TerminalDockPort {
    *  unique section key for mention menus (a folder name is not unique), and
    *  `workspace_display_name` is the workspace's user-set alias — both
    *  optional, since a backend older than either field sends neither. */
-  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; name?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string }> }>>
+  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; name?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string; surface?: string }> }>>
   /** Register an embedded AI panel in the messaging roster, so the CLI running
    *  in it can use Navide's MCP tools (they refuse a pane id the roster has
    *  never seen). Optional: a host that omits it leaves the panel unregistered,

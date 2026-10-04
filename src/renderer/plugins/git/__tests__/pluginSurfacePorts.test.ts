@@ -65,6 +65,40 @@ describe('plugin terminal dock adapter', () => {
   })
 })
 
+describe('plugin terminal dock adapter — restore record', () => {
+  it('reads the panel restore record through terminal.dock_record', async () => {
+    const harness = createHarness()
+    const requests: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const sdk: PluginCapabilitySdk = {
+      ...harness.sdk,
+      async request<T = unknown>(type: string, payload: Record<string, unknown> = {}) {
+        requests.push({ type, payload })
+        const record = type === 'terminal.dock_record' ? { agent: 'claude', session_id: 's-9' } : null
+        return { ok: true, payload: { record } as T, error: null }
+      },
+    }
+    const port = createPluginTerminalDockPort(sdk)
+    expect(await port.readDockRestore!('/w', 'ab12cd34-git-ai-terminal'))
+      .toEqual({ agentKey: 'claude', sessionId: 's-9' })
+    expect(requests).toEqual([{
+      type: 'terminal.dock_record',
+      payload: { workspace_path: '/w', pane_id: 'ab12cd34-git-ai-terminal' },
+    }])
+  })
+
+  it('reads no record from a failed or empty answer', async () => {
+    const harness = createHarness()
+    const failing = createPluginTerminalDockPort({
+      ...harness.sdk,
+      async request<T = unknown>() {
+        return { ok: false, payload: null as T | null, error: { code: 'X', message: 'x' } }
+      },
+    })
+    expect(await failing.readDockRestore!('/w', 'p')).toBeNull()
+    expect(await harness.port.readDockRestore!('/w', 'p')).toBeNull()
+  })
+})
+
 describe('plugin Git UI adapter', () => {
   it('exposes only UI capabilities available to the plugin window', () => {
     const ui = createPluginGitUiPort(createHarness().sdk)

@@ -164,6 +164,8 @@ const EXPLICIT: Record<string, CapabilityRef> = {
   // tools. Panel-only handlers: they cannot touch a window pane's entry.
   'agent_msg.register_dock': { ns: 'terminal', method: 'agent_msg_register_dock' },
   'agent_msg.unregister_dock': { ns: 'terminal', method: 'agent_msg_unregister_dock' },
+  // The panel's own restore record (read-only; see capabilityMap's note).
+  'terminal.dock_record': { ns: 'terminal', method: 'dock_record' },
 }
 
 /**

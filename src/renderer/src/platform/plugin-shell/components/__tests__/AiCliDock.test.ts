@@ -316,7 +316,7 @@ describe('AiCliDock — start guards and spawn path', () => {
         cli_command: 'claude --dangerously-skip-permissions',
         agent_label: 'Claude Code (Anthropic)',
       },
-      outputLogFile: dockOutputLogFile('/tmp/ws', 'claude', 'ab12cd34-test-cli-dock'),
+      outputLogFile: dockOutputLogFile('/tmp/ws', 'claude', 'ab12cd34-test-cli-dock', 'test-window'),
       skipReattach: true,
     })
   })
@@ -592,6 +592,18 @@ describe('AiCliDock — @-mention sections key on the workspace path', () => {
     expect(readCandidates(wrapper)[0].groupLabel).toBe('api')
   })
 
+  it('names the window an embedded panel lives in, and nothing for a window pane', async () => {
+    const wrapper = mountWithRoster([
+      { pane_id: 'p1', qualified_name: 'ws/pm-claude', workspace_path: '/tmp/ws', surface: 'pm' },
+      { pane_id: 'p2', qualified_name: 'ws/claude-1', workspace_path: '/tmp/ws' },
+    ])
+    await flushPromises()
+
+    const byAddress = new Map(readCandidates(wrapper).map((c) => [c.address, c]))
+    expect(byAddress.get('ws/pm-claude')!.windowLabel).toBe('Pipeline Manager')
+    expect('windowLabel' in byAddress.get('ws/claude-1')!).toBe(false)
+  })
+
   it('leaves this panel out of its own mention list', async () => {
     const wrapper = mountWithRoster([
       {
@@ -692,6 +704,29 @@ describe('AiCliDock — messaging roster registration', () => {
     status.value = 'connected'
     await flushPromises()
     expect(registerAgentPane).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows its address in the header once the backend accepts the registration', async () => {
+    const { port } = registeringPort()
+    const wrapper = mountDock({ terminalPort: port, origin: 'pipeline-manager' })
+    termState.status.value = 'running'
+    await flushPromises()
+    expect(wrapper.find('.ai-cli-address').text()).toBe('@pm-claude')
+  })
+
+  it('shows no address when the backend refuses the registration', async () => {
+    const { port, registerAgentPane } = registeringPort()
+    // A host whose bridge cannot map the call answers ok:false rather than
+    // throwing (the plugin shim's UNMAPPED_CAPABILITY), as does a backend refusal.
+    registerAgentPane.mockImplementation(async () => ({
+      ok: false,
+      error: { code: 'UNMAPPED_CAPABILITY', message: 'no capability mapping' },
+    }) as never)
+    const wrapper = mountDock({ terminalPort: port, origin: 'mini-ide' })
+    termState.status.value = 'running'
+    await flushPromises()
+    expect(registerAgentPane).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.ai-cli-address').exists()).toBe(false)
   })
 
   it('does nothing on a port that cannot register (older host)', async () => {
@@ -855,7 +890,7 @@ describe('AiCliDock — restore from the panel record', () => {
     const opts = (termSpies.spawn.mock.calls[0] as unknown as [Record<string, unknown>])[0]
     expect(opts.command).toEqual(['bash', '-lc', 'claude --resume sess-123 --dangerously-skip-permissions'])
     expect(opts.skipReattach).toBe(true)
-    expect(opts.outputLogFile).toBe(dockOutputLogFile('/tmp/ws', 'claude', 'ab12cd34-test-cli-dock'))
+    expect(opts.outputLogFile).toBe(dockOutputLogFile('/tmp/ws', 'claude', 'ab12cd34-test-cli-dock', 'plans'))
     expect(opts.metadata).toMatchObject({
       surface: 'plans',
       window_kind: 'plans',

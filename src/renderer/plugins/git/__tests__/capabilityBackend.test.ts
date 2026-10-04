@@ -89,6 +89,12 @@ describe('TYPE_TO_CAP git surface', () => {
     expect(resolveCapability('fs.stat_path')).toEqual({ ns: 'fs', method: 'stat_path' })
   })
 
+  it('maps the embedded AI panel restore record onto the terminal namespace', () => {
+    expect(resolveCapability('terminal.dock_record')).toEqual({ ns: 'terminal', method: 'dock_record' })
+    // Delivery stays unmapped: the broker never forwards agent_msg.deliver here.
+    expect(resolveCapability('agent_msg.delivered')).toBeNull()
+  })
+
   it('no longer maps the retired AIChatPane chat/search surface', () => {
     expect(resolveCapability('ai.chat.start')).toBeNull()
     expect(resolveCapability('ai.enhance_prompt')).toBeNull()

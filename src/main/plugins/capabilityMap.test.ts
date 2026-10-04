@@ -17,6 +17,8 @@ const EXPECTED_EXPLICIT: Readonly<Record<string, string>> = {
   'terminal.agent_msg_list': 'agent_msg.list',
   'terminal.agent_msg_register_dock': 'agent_msg.register_dock',
   'terminal.agent_msg_unregister_dock': 'agent_msg.unregister_dock',
+  // The embedded CLI panel's own restore record (read-only, panel records only).
+  'terminal.dock_record': 'terminal.dock_record',
   'chat.editor_rewrite': 'editor.rewrite',
   'chat.editor_complete': 'editor.complete',
   // Retired AIChatPane surface trimmed to the settings store ReviewPane still
@@ -198,5 +200,13 @@ describe('eventNamespace', () => {
   it('returns null for an unforwarded event', () => {
     expect(eventNamespace('terminal.data')).toBeNull()
     expect(eventNamespace('agent.activity')).toBeNull()
+  })
+
+  it('never forwards routed messages to plugins, nor lets one report a delivery', () => {
+    // agent_msg.deliver carries every routed message for every pane; a plugin
+    // with the terminal grant must not read other panes' mail. A plugin-hosted
+    // panel therefore registers as not deliverable and has nothing to report.
+    expect(eventNamespace('agent_msg.deliver')).toBeNull()
+    expect(Object.values(CAP_MAP)).not.toContain('agent_msg.delivered')
   })
 })

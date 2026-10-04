@@ -51,6 +51,7 @@ export {
   bracketedPaste,
   buildPlanCliContext,
   dockOutputLogFile,
+  dockWindowLabelKey,
   resolveCliCommand,
   truncateText,
   PLAN_DOC_TRUNCATE_AT,

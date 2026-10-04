@@ -27,7 +27,9 @@ import { useGitAccounts } from './useGitAccounts'
 import { encodeReason } from './useAgentMessaging'
 import { isExternalDelivery, renderEnvelope } from '../lib/agentMessaging'
 import { pinFreshSessionAtLaunch } from '../lib/sessionHeal'
+import { dockRestoreFromResponse } from '../lib/dockWindow'
 import type {
+  DockAgentMessage,
   TerminalCreateRequest,
   TerminalDockPort,
   TerminalExitEvent,
@@ -321,42 +323,44 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
     unregisterAgentPane: (paneId) => send('agent_msg.unregister_dock', { pane_id: paneId }),
     // An embedded panel takes messages the way a main-window pane does: the
     // same broadcast (App.vue's agent_msg.deliver handler), the same envelope
-    // (useAgentMessaging.acceptRemoteMessage) and the same report.
-    onAgentMessage: (callback) => backend.on('agent_msg.deliver' as never, (raw) => {
-      const ev = raw as {
-        msg_key?: string
-        target_pane_id?: string
-        from_pane_id?: string
-        from_display?: string
-        content?: string
-        kind?: string
-        origin?: string
-      }
-      if (!ev?.msg_key || !ev.target_pane_id || !ev.content) return
-      const fromDisplay = ev.from_display || 'unknown'
-      callback({
-        msgKey: ev.msg_key,
-        targetPaneId: ev.target_pane_id,
-        fromDisplay,
-        text: renderEnvelope(fromDisplay, ev.content, {
-          correlationId: ev.msg_key,
-          external: isExternalDelivery(ev),
-        }),
-        ...(ev.kind === 'ack' ? { kind: 'ack' as const } : {}),
-      })
-    }),
-    reportAgentDelivery: (msgKey, ok, reason) => send('agent_msg.delivered', {
-      msg_key: msgKey,
-      ok,
-      reason: reason ? encodeReason({ key: reason }) : '',
+    // (useAgentMessaging.acceptRemoteMessage) and the same report. Only over a
+    // backend that hears that broadcast: the Mini-IDE plugin's capability shim
+    // says it does not, and its panel then registers as not deliverable.
+    ...((backend as { forwardsAgentMessages?: boolean }).forwardsAgentMessages === false ? {} : {
+      onAgentMessage: (callback: (message: DockAgentMessage) => void) => backend.on('agent_msg.deliver' as never, (raw) => {
+        const ev = raw as {
+          msg_key?: string
+          target_pane_id?: string
+          from_pane_id?: string
+          from_display?: string
+          content?: string
+          kind?: string
+          origin?: string
+        }
+        if (!ev?.msg_key || !ev.target_pane_id || !ev.content) return
+        const fromDisplay = ev.from_display || 'unknown'
+        callback({
+          msgKey: ev.msg_key,
+          targetPaneId: ev.target_pane_id,
+          fromDisplay,
+          text: renderEnvelope(fromDisplay, ev.content, {
+            correlationId: ev.msg_key,
+            external: isExternalDelivery(ev),
+          }),
+          ...(ev.kind === 'ack' ? { kind: 'ack' as const } : {}),
+        })
+      }),
+      reportAgentDelivery: (msgKey: string, ok: boolean, reason?: string) => send('agent_msg.delivered', {
+        msg_key: msgKey,
+        ok,
+        reason: reason ? encodeReason({ key: reason }) : '',
+      }),
     }),
     pinFreshSessionAtLaunch,
     async readDockRestore(workspacePath, paneId) {
-      const response = await send<{ record?: { agent?: string; session_id?: string } | null }>(
+      return dockRestoreFromResponse(await send<{ record?: { agent?: string; session_id?: string } | null }>(
         'terminal.dock_record', { workspace_path: workspacePath, pane_id: paneId },
-      )
-      const record = response.ok ? response.payload?.record : null
-      return record?.agent ? { agentKey: record.agent, sessionId: record.session_id ?? '' } : null
+      ))
     },
     statPath: (path, timeoutMs) => send('fs.stat_path', { path }, timeoutMs),
     async getHomeDirectory(): Promise<string> {

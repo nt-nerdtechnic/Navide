@@ -93,6 +93,13 @@ const EXPLICIT_CAP_MAP: Readonly<Record<string, string>> = {
   // window pane's entry, so the terminal grant cannot reach other panes.
   'terminal.agent_msg_register_dock': 'agent_msg.register_dock',
   'terminal.agent_msg_unregister_dock': 'agent_msg.unregister_dock',
+  // TerminalCapability — the embedded CLI panel's own restore record, so it can
+  // resume its conversation after an app quit. Read-only, and the handler only
+  // ever answers a panel's record ({agent, session_id}), never a window pane's:
+  // less than the terminal grant already allows (it can run any command).
+  // agent_msg.deliver is deliberately not forwarded to plugins (it carries every
+  // pane's mail), so there is no agent_msg.delivered mapping either.
+  'terminal.dock_record': 'terminal.dock_record',
   // ChatCapability — editor inline AI
   'chat.editor_rewrite': 'editor.rewrite',
   'chat.editor_complete': 'editor.complete',
