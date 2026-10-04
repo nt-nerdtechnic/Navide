@@ -207,6 +207,12 @@ class Project:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        # A window pane's record serializes exactly as it did before panels
+        # existed: the two panel-only keys appear only when set.
+        for pane in d["panes"]:
+            for key in ("surface", "window_kind"):
+                if not pane[key]:
+                    del pane[key]
         return d
 
     @classmethod
@@ -861,6 +867,12 @@ class ProjectStore:
             # plugin window's broker can send) naming a window pane's record:
             # leave that record alone. Taking it over would mark it a panel's,
             # and the main window would stop restoring the pane.
+            return project
+        if surface and any(p.pane_id == pane_id and not p.surface for p in project.panes):
+            # Any other record under this id is not a panel's either — a
+            # pipeline pane (which _find_manual_pane skips) or a window pane's
+            # pending stub. Adding a second record beside it, or folding the
+            # stub into the panel's, would corrupt that pane's restore.
             return project
         if pane is None:
             pane = PaneRecord(pane_id=pane_id, origin=origin or "manual")

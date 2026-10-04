@@ -275,6 +275,125 @@ async def test_a_dock_create_naming_a_window_panes_id_leaves_its_history_alone(
     assert project_store.peek(ws).panes[0].surface == ""  # type: ignore[union-attr]
 
 
+@pytest.mark.asyncio
+async def test_a_dock_create_leaves_a_window_panes_history_entry_alone(
+    tmp_path: Path, stores: Any
+) -> None:
+    """QA's scenario: the window pane has an Agent History entry but no project
+    record (its history outlives the record). A plugin's terminal.create naming
+    that pane id with a panel surface must not replace the entry."""
+    project_store, history_store = stores
+    ws = str(tmp_path)
+    original = {
+        "paneId": _DOCK_PANE,
+        "agentKey": "claude",
+        "command": "claude",
+        "sessionId": "original-session",
+        "customName": "my pane",
+        "workspacePath": ws,
+    }
+    history_store.merge(ws, [original])
+    await _create(_session(), ws, {**_dock_metadata(), "surface": "git", "window_kind": "git"})
+
+    rows, total = history_store.read_page(ws)
+    assert total == 1
+    assert rows[0] == original
+    # Nor is the id filed as a panel's restore record.
+    project = project_store.peek(ws)
+    assert not any(p.pane_id == _DOCK_PANE and p.surface for p in (project.panes if project else []))
+
+
+@pytest.mark.asyncio
+async def test_a_dock_create_over_its_own_history_entry_still_updates_it(
+    tmp_path: Path, stores: Any
+) -> None:
+    """The guard only spares window panes: a panel's own entry is upserted."""
+    _, history_store = stores
+    ws = str(tmp_path)
+    history_store.merge(ws, [{"paneId": _DOCK_PANE, "agentKey": "codex", "surface": "plans", "workspacePath": ws}])
+    await _create(_session(), ws, _dock_metadata())
+    rows, total = history_store.read_page(ws)
+    assert total == 1
+    assert rows[0]["agentKey"] == "claude"
+    assert rows[0]["sessionId"] == "11111111-2222-3333-4444-555555555555"
+
+
+def test_a_dock_spawn_cannot_add_a_second_record_beside_a_pipeline_pane(tmp_path: Path) -> None:
+    """_find_manual_pane skips pipeline records, so a panel naming a pipeline
+    pane's id used to append a second record under that id."""
+    store = ProjectStore()
+    project = store.load_or_create(str(tmp_path))
+    project.panes.append(PaneRecord(pane_id="pipe-1", origin="pipeline", agent="claude", spawn_status="spawned"))
+    store.save(project)
+    store.record_manual_pane_spawn(
+        str(tmp_path), pane_id="pipe-1", agent="codex", surface="git", window_kind="git"
+    )
+    panes = ProjectStore().peek(str(tmp_path)).panes  # type: ignore[union-attr]
+    assert [(p.pane_id, p.origin, p.agent, p.surface) for p in panes] == [
+        ("pipe-1", "pipeline", "claude", ""),
+    ]
+
+
+def test_a_dock_spawn_does_not_fold_a_pipeline_pending_stub(tmp_path: Path) -> None:
+    store = ProjectStore()
+    project = store.load_or_create(str(tmp_path))
+    project.panes.append(PaneRecord(
+        pane_id="pipe-2", origin="pipeline", spawn_status="pending", session_id="s-pipe",
+    ))
+    store.save(project)
+    store.record_manual_pane_spawn(
+        str(tmp_path), pane_id="pipe-2", agent="codex", surface="git", window_kind="git"
+    )
+    panes = ProjectStore().peek(str(tmp_path)).panes  # type: ignore[union-attr]
+    assert [(p.pane_id, p.origin, p.spawn_status, p.session_id, p.surface) for p in panes] == [
+        ("pipe-2", "pipeline", "pending", "s-pipe", ""),
+    ]
+
+
+def test_a_dock_spawn_does_not_fold_a_window_panes_pending_stub(tmp_path: Path) -> None:
+    store = ProjectStore()
+    store.load_or_create(str(tmp_path))
+    store.rename_pane(str(tmp_path), pane_id="p-stub", custom_name="named before spawn")
+    store.record_manual_pane_spawn(
+        str(tmp_path), pane_id="p-stub", agent="codex", surface="git", window_kind="git"
+    )
+    panes = ProjectStore().peek(str(tmp_path)).panes  # type: ignore[union-attr]
+    assert [(p.pane_id, p.custom_name, p.spawn_status, p.surface) for p in panes] == [
+        ("p-stub", "named before spawn", "pending", ""),
+    ]
+
+
+def test_a_pipeline_pane_spawn_beside_a_pipeline_record_is_unchanged(tmp_path: Path) -> None:
+    """Without a surface the store behaves as before: a manual spawn whose id a
+    pipeline record holds still adds its own manual record."""
+    store = ProjectStore()
+    project = store.load_or_create(str(tmp_path))
+    project.panes.append(PaneRecord(pane_id="pipe-3", origin="pipeline", agent="claude", spawn_status="spawned"))
+    store.save(project)
+    store.record_manual_pane_spawn(str(tmp_path), pane_id="pipe-3", agent="codex")
+    panes = ProjectStore().peek(str(tmp_path)).panes  # type: ignore[union-attr]
+    assert [(p.pane_id, p.origin, p.agent) for p in panes] == [
+        ("pipe-3", "pipeline", "claude"), ("pipe-3", "manual", "codex"),
+    ]
+
+
+# ── Project.to_dict: a window pane serializes exactly as before ─────────────
+
+def test_a_window_pane_record_serializes_without_the_dock_keys() -> None:
+    project = Project(id="p", name="n", workspace_path="/ws", created_at="", updated_at="")
+    project.panes.append(PaneRecord(pane_id="p1"))
+    pane = project.to_dict()["panes"][0]
+    assert "surface" not in pane
+    assert "window_kind" not in pane
+
+
+def test_a_dock_pane_record_serializes_its_keys() -> None:
+    project = Project(id="p", name="n", workspace_path="/ws", created_at="", updated_at="")
+    project.panes.append(PaneRecord(pane_id="d1", surface="pm", window_kind="main"))
+    pane = project.to_dict()["panes"][0]
+    assert (pane["surface"], pane["window_kind"]) == ("pm", "main")
+
+
 # ── delivery: a deliverable dock is accepted, a plain one still refused ─────
 
 @pytest.fixture()

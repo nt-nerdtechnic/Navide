@@ -70,6 +70,7 @@ from .skills_store import (
 from .spawn_history import (
     canonical_workspace_path,
     filter_foreign_entries,
+    MAX_ENTRIES as SPAWN_HISTORY_MAX_ENTRIES,
     read_pane_transcript,
     TRANSCRIPT_MAX_BYTES,
     TRANSCRIPT_CHUNK_CHARS,
@@ -6819,6 +6820,16 @@ def _record_dock_spawn(payload: dict, metadata: dict, agent_key: str) -> None:
     session_id = str(metadata.get("explicit_session_id") or "")
     output_log_file = str(payload.get("output_log_file") or "")
     try:
+        # A window pane's Agent History entry under this id — its history can
+        # outlive its project record — stays exactly as its window wrote it:
+        # merge() replaces by paneId. So the id is not recorded as a panel's.
+        rows, _total = app.spawn_history_store.read_page(workspace_path, limit=SPAWN_HISTORY_MAX_ENTRIES)
+        if any(
+            r.get("paneId") == pane_id and str(r.get("surface") or "main") == "main"
+            for r in rows
+        ):
+            log.warning("terminal.create: pane %s is a window pane's; not recorded as a panel", pane_id)
+            return
         project = app.project_store.record_manual_pane_spawn(
             workspace_path,
             pane_id=pane_id,

@@ -462,7 +462,7 @@ def _session_payload(entry: agent_messaging.RegisteredPane) -> dict[str, Any]:
     cross-device addressing by name. Reducing it needs a user-chosen alias,
     which is a feature rather than a redaction.
     """
-    return {
+    payload = {
         "title": entry.name,
         "agentKey": entry.agent_key,
         "status": _pane_status(entry),
@@ -473,6 +473,29 @@ def _session_payload(entry: agent_messaging.RegisteredPane) -> dict[str, Any]:
         "workspace": entry.workspace_label,
         "paneId": entry.pane_id,
     }
+    # An embedded AI panel names its window; a window pane sends exactly the
+    # keys above. Today's server keeps fixed columns and drops these, so peers
+    # do not see them yet — the local network view fills them from the registry.
+    if entry.surface:
+        payload["surface"] = entry.surface
+    if entry.window_kind:
+        payload["windowKind"] = entry.window_kind
+    return payload
+
+
+def _panel_window(
+    raw: dict[str, Any], local: agent_messaging.RegisteredPane | None
+) -> dict[str, str]:
+    """The optional window keys of a network-view pane row: present only for an
+    embedded AI panel, so a window pane's row keeps exactly its old keys."""
+    surface = local.surface if local else str(raw.get("surface") or "")
+    window_kind = local.window_kind if local else str(raw.get("windowKind") or "")
+    keys: dict[str, str] = {}
+    if surface:
+        keys["surface"] = surface
+    if window_kind:
+        keys["windowKind"] = window_kind
+    return keys
 
 
 def _reason_key(reason: str) -> str:
@@ -2136,6 +2159,11 @@ class ServerLink:
         unopened_here = {
             entry.pane_id for entry in agent_messaging.list_panes() if not entry.realized
         }
+        # Likewise which window an embedded AI panel lives in: the server drops
+        # the keys, the registry has them.
+        panels_here = {
+            entry.pane_id: entry for entry in agent_messaging.list_panes() if entry.surface
+        }
 
         def entry(device_id: str, device_name: str) -> dict[str, Any]:
             row = devices.get(device_id)
@@ -2183,6 +2211,7 @@ class ServerLink:
                     "status": status,
                     "hostOnline": bool(raw.get("hostOnline")),
                     "startedAt": str(raw.get("startedAt") or ""),
+                    **_panel_window(raw, panels_here.get(pane_id) if device_id == local else None),
                 }
             )
         for row in devices.values():
