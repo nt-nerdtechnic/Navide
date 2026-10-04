@@ -66,6 +66,8 @@ interface PlanSummary {
    *  listed regardless, so no plan ever disappears from the view. */
   reason?: string
   size?: number
+  /** Set when the entry had to drop its meta but the plan is archived. */
+  archivedAt?: string
 }
 
 interface PlanDocument {
@@ -387,7 +389,15 @@ function progressRatio(plan: PlanSummary): number {
 }
 
 function isArchived(plan: PlanSummary): boolean {
-  return typeof plan.meta?.archivedAt === 'string' && plan.meta.archivedAt.length > 0
+  const archivedAt = plan.meta?.archivedAt ?? plan.archivedAt
+  return typeof archivedAt === 'string' && archivedAt.length > 0
+}
+
+/** A plan rather than a plain document. The backend's kind decides: a plan
+ *  whose entry was too big for one list page arrives without its meta. */
+function isPlan(plan: PlanSummary | null | undefined): boolean {
+  if (!plan) return false
+  return plan.kind ? plan.kind === 'plan' : Boolean(plan.meta)
 }
 
 function matchesSearch(plan: PlanSummary): boolean {
@@ -471,12 +481,12 @@ const pinnedAndRecent = computed(() => {
 })
 
 const archivableDone = computed(() =>
-  plans.value.filter((plan) => planStage(plan) === 'done' && !isArchived(plan) && plan.meta),
+  plans.value.filter((plan) => planStage(plan) === 'done' && !isArchived(plan) && isPlan(plan)),
 )
 
 const deletablePlans = computed(() =>
   plans.value.filter(
-    (plan) => plan.meta && !isArchived(plan) && ['done', 'abandoned'].includes(planStage(plan) ?? ''),
+    (plan) => isPlan(plan) && !isArchived(plan) && ['done', 'abandoned'].includes(planStage(plan) ?? ''),
   ),
 )
 
@@ -931,7 +941,7 @@ async function deleteCompleted(): Promise<void> {
  *  context menu can invoke it without opening the document first. */
 async function promotePath(relPath: string): Promise<void> {
   const plan = plans.value.find((item) => item.rel_path === relPath)
-  if (!relPath || plan?.meta) return
+  if (!relPath || isPlan(plan)) return
   busy.value = true
   try {
     await plansBackend.call('plans.promote', { rel_path: relPath })
@@ -964,7 +974,7 @@ async function shareToGitPath(relPath: string): Promise<void> {
  *  confirmation the way the legacy pane did. */
 async function toggleArchivePath(relPath: string): Promise<void> {
   const plan = plans.value.find((item) => item.rel_path === relPath)
-  if (!plan?.meta) return
+  if (!plan || !isPlan(plan)) return
   const archiving = !isArchived(plan)
   if (archiving) {
     const ok = await confirm(t('pane.plans.archive-confirm', { name: planTitle(plan) }), {
@@ -1701,10 +1711,10 @@ onUnmounted(() => {
       <button type="button" @click="void openPlan(contextMenu.relPath); closeContextMenu()">{{ t('pane.plans.v2.select') }}</button>
       <button v-if="isHtmlPath(contextMenu.relPath)" type="button" @click="selectedPath = contextMenu!.relPath; void beginRename()">{{ t('action.rename') }}</button>
       <button v-if="isHtmlPath(contextMenu.relPath)" type="button" class="plans-ctx-share" @click="void shareToGitPath(contextMenu!.relPath); closeContextMenu()">{{ t('pane.plans.share-git') }}</button>
-      <button v-if="contextMenuPlan?.meta" type="button" class="plans-ctx-archive" @click="void toggleArchivePath(contextMenu!.relPath); closeContextMenu()">
+      <button v-if="isPlan(contextMenuPlan)" type="button" class="plans-ctx-archive" @click="void toggleArchivePath(contextMenu!.relPath); closeContextMenu()">
         {{ contextMenuPlan && isArchived(contextMenuPlan) ? t('pane.plans.unarchive') : t('pane.plans.archive') }}
       </button>
-      <button v-if="contextMenuPlan && !contextMenuPlan.meta" type="button" class="plans-ctx-promote" @click="void promotePath(contextMenu!.relPath); closeContextMenu()">{{ t('pane.plans.menu-upgrade') }}</button>
+      <button v-if="contextMenuPlan && !isPlan(contextMenuPlan)" type="button" class="plans-ctx-promote" @click="void promotePath(contextMenu!.relPath); closeContextMenu()">{{ t('pane.plans.menu-upgrade') }}</button>
       <button type="button" class="danger" @click="void deletePath(contextMenu!.relPath); closeContextMenu()">{{ t('action.delete') }}</button>
     </div>
 

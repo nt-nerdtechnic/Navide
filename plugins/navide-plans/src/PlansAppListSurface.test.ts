@@ -34,12 +34,17 @@ const state = vi.hoisted(() => ({
   loadTheme: vi.fn(),
   toast: vi.fn(),
   confirm: vi.fn(async () => true),
+  // Plans whose list entry arrives without meta (an entry too big for one
+  // page): the backend still says kind 'plan' and, if archived, archivedAt.
+  dropped: {} as Record<string, { name: string; archivedAt?: string }>,
 }))
 
 const awaitingPath = '.agent-team/plans/awaiting-me_a1b2c3.html'
 const clearPath = '.agent-team/plans/all-clear_d4e5f6.html'
 const archivedPath = '.agent-team/plans/archived-one_090909.html'
 const documentPath = '.agent-team/plans/field-notes.md'
+const droppedActivePath = '.agent-team/plans/huge-done_0a0a0a.html'
+const droppedArchivedPath = '.agent-team/plans/huge-archived_0b0b0b.html'
 
 function meta(overrides: Partial<FixtureMeta> & Pick<FixtureMeta, 'name' | 'todos'>): FixtureMeta {
   return {
@@ -133,6 +138,7 @@ beforeEach(() => {
     }),
     [documentPath]: null,
   }
+  state.dropped = {}
 
   vi.stubGlobal('nav', {
     ready: vi.fn(),
@@ -155,6 +161,19 @@ beforeEach(() => {
           reqId,
           ok: true,
           result: Object.keys(state.files).map((path) => {
+            const dropped = state.dropped[path]
+            if (dropped) {
+              return {
+                rel_path: path,
+                name: dropped.name,
+                stage: 'done',
+                overview: '',
+                mtime: 1,
+                kind: 'plan',
+                meta: null,
+                ...(dropped.archivedAt ? { archivedAt: dropped.archivedAt } : {}),
+              }
+            }
             const parsed = state.metas[path] as FixtureMeta | null
             return {
               rel_path: path,
@@ -346,6 +365,64 @@ describe('Plans list surface — restored context-menu actions', () => {
     const labels = view.findAll('.context-menu button').map((button) => button.text())
     expect(labels).not.toContain('pane.plans.menu-upgrade')
     expect(labels).toContain('pane.plans.share-git')
+  })
+})
+
+describe('Plans list surface — a plan whose list entry lost its meta', () => {
+  beforeEach(() => {
+    state.files[droppedActivePath] = '<html><body>huge done</body></html>'
+    state.files[droppedArchivedPath] = '<html><body>huge archived</body></html>'
+    state.dropped = {
+      [droppedActivePath]: { name: 'Huge done' },
+      [droppedArchivedPath]: { name: 'Huge archived', archivedAt: '2026-10-01T00:00:00.000Z' },
+    }
+  })
+
+  it('stays a plan: no promote, and the archive entry archives it', async () => {
+    const view = await mountPlans()
+    await openRowMenu(view, droppedActivePath)
+    const labels = view.findAll('.context-menu button').map((button) => button.text())
+    expect(labels).not.toContain('pane.plans.menu-upgrade')
+    await menuButton(view, 'pane.plans.archive').trigger('click')
+    await flushPromises()
+
+    const archives = callsNamed('plans.update_archive')
+    expect(archives).toHaveLength(1)
+    expect(archives[0].rel_path).toBe(droppedActivePath)
+    expect(typeof archives[0].archived_at).toBe('string')
+  })
+
+  it('counts among the completed plans the bulk actions act on', async () => {
+    const view = await mountPlans()
+    const archiveAll = view
+      .findAll('.completed-actions button')
+      .find((button) => button.text() === 'pane.plans.archive-all-done')
+    expect(archiveAll?.attributes('disabled')).toBeUndefined()
+    await archiveAll!.trigger('click')
+    await flushPromises()
+    expect(callsNamed('plans.update_archive').map((call) => call.rel_path)).toContain(droppedActivePath)
+    expect(callsNamed('plans.update_archive').map((call) => call.rel_path)).not.toContain(droppedArchivedPath)
+  })
+
+  it('keeps an archived one out of the active list and unarchives it from the menu', async () => {
+    const view = await mountPlans()
+    const listed = () => view.findAll('.plan-row').map((row) => row.find('.plan-row-path').text())
+    expect(listed()).not.toContain(droppedArchivedPath)
+
+    const archivedHead = view
+      .findAll('.plans-section-head')
+      .find((head) => head.text().includes('pane.plans.archived'))
+    await archivedHead!.trigger('click')
+    await nextTick()
+    expect(listed()).toContain(droppedArchivedPath)
+
+    await openRowMenu(view, droppedArchivedPath)
+    await menuButton(view, 'pane.plans.unarchive').trigger('click')
+    await flushPromises()
+    expect(callsNamed('plans.update_archive')).toEqual([
+      { rel_path: droppedArchivedPath, archived_at: null },
+    ])
+    expect(state.confirm).not.toHaveBeenCalled()
   })
 })
 
