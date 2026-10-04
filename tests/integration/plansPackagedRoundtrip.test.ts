@@ -775,15 +775,17 @@ describe('Plans packaged backend composition', () => {
         manager.registerDescriptor(descriptor, { builtin: true })
         manager.setBackendWsUrl('ws://plans-core-test')
         const filesystemPort = createTestPlansFilesystemPort()
-        const writeFile = filesystemPort.writeFile.bind(filesystemPort)
+        // The child writes plan files itself; the one bridge call a mutation
+        // still makes is resolve_root, so that is where a response is held.
+        const resolveRoot = filesystemPort.resolveRoot.bind(filesystemPort)
         let delayMutationResponse = false
-        let committedDelayedWrites = 0
-        filesystemPort.writeFile = async (arguments_, context) => {
-          const result = await writeFile(arguments_, context)
+        let heldRootRequests = 0
+        filesystemPort.resolveRoot = async (arguments_, context) => {
+          const result = await resolveRoot(arguments_, context)
           if (!delayMutationResponse) return result
-          committedDelayedWrites++
+          heldRootRequests++
           return await new Promise((_, reject) => {
-            const abort = () => reject(new Error('test: delay response after committed write'))
+            const abort = () => reject(new Error('test: hold the root until the Host call times out'))
             if (context.signal.aborted) {
               abort()
               return
@@ -1101,9 +1103,9 @@ describe('Plans packaged backend composition', () => {
         expect(manualResult).toMatchObject({ stage: 'done' })
         expect(readFileSync(createdDiskPath, 'utf8')).toMatch(/"stage":\s*"done"/)
 
-        // The packaged child commits one bridge write, but its parent response
-        // is deliberately lost until the Host call times out. This must never
-        // become a second legacy write or a Host recovery disposition.
+        // The packaged child's mutation is held at its root request until the
+        // Host call times out. This must never become a legacy write or a Host
+        // recovery disposition, and the child never writes without its root.
         agentFsAllowed = true
         delayMutationResponse = true
         const responseLost = await manager.executeAgentBackendCallForWorkspace(
@@ -1122,8 +1124,8 @@ describe('Plans packaged backend composition', () => {
           error: { code: 'TIMEOUT' },
         })
         expect(responseLost).not.toHaveProperty('recoveryDisposition')
-        expect(committedDelayedWrites).toBe(1)
-        expect(readFileSync(createdDiskPath, 'utf8')).toMatch(/"stage":\s*"in-progress"/)
+        expect(heldRootRequests).toBe(1)
+        expect(readFileSync(createdDiskPath, 'utf8')).toMatch(/"stage":\s*"done"/)
 
         // During revocation no mutation reaches either packaged or legacy
         // filesystem code; after the Grant is gone it remains denied.
