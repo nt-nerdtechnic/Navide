@@ -25,6 +25,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from agent_team_backend.fs_write import (
+    _WRITE_PART_MAX_BYTES,
+    write_abort,
+    write_commit,
+    write_file,
+    write_part,
+)
 from agent_team_backend.path_guard import FsError, _resolve_safe
 
 PROTOCOL_REVISION = "2026-07-28"
@@ -32,16 +39,15 @@ SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
 SUBSCRIPTION_ID_KEY = "io.modelcontextprotocol/subscriptionId"
 EVENT_FILTER_KEY = "dev.navide/pluginEvents"
 MAX_FRAME_BYTES = 1_048_576
-# One Host Bridge write part, and one step of a plan-meta head scan. The Host
-# caps a Bridge frame at 192 KiB and a part travels base64-encoded, so 96 KiB
-# of file bytes is the largest part that always fits.
+# One part of a renderer's chunked document write (it travels base64-encoded
+# inside one request frame), and one step of a plan-meta head scan.
 RANGE_CHUNK_BYTES = 96 * 1024
 # File bytes returned by one plans.read / plans.read_document call. The caller
 # pages with next_offset; this only bounds one response, never the document.
 TEXT_CHUNK_BYTES = 256 * 1024
 # JSON-encoded size a single chunk's text may take inside one response frame.
 FRAME_TEXT_BUDGET_BYTES = 900_000
-# Content up to this many UTF-8 bytes is written in one Host Bridge call (the
+# Content up to this many UTF-8 bytes is written in one write_file call (the
 # common case: a plan is a few dozen KB); a larger one is staged part by part
 # and swapped in atomically, so a document of any size can be updated.
 SINGLE_WRITE_MAX_BYTES = 256 * 1024
@@ -517,6 +523,7 @@ def _acknowledge(subscription: dict[str, Any]) -> None:
 
 
 def _start_watch(subscription: dict[str, Any]) -> None:
+    # Deliberately left on the Host bridge: the watcher is a Host primitive.
     origin = {"kind": "subscription", "requestId": subscription["id"]}
     origin_key = _origin_key(origin)
     with _state_lock:
@@ -669,64 +676,53 @@ def _read_text_chunk(origin: dict[str, Any], rel_path: str, offset: int) -> dict
     }
 
 
-def _bridge_write(origin: dict[str, Any], rel_path: str, content: str, expected_mtime: float | None = None) -> float | None:
+def _write_failure(result: Any) -> BridgeFailure:
+    """The failure the Host's filesystem service reported for a write."""
+    if _is_record(result) and result.get("conflict") is True:
+        return BridgeFailure("CONFLICT")
+    if _is_record(result) and isinstance(result.get("error"), str) and "too large" in result["error"].lower():
+        return BridgeFailure("RESULT_TOO_LARGE")
+    return BridgeFailure("BACKEND_UNAVAILABLE")
+
+
+def _write(origin: dict[str, Any], rel_path: str, content: str, expected_mtime: float | None = None) -> float | None:
+    """Write a document under the authorized root through the core write path.
+
+    The same calls the Host's filesystem service made: the mutation guard, an
+    atomic replace, and the ``expected_mtime`` conflict check. A document past
+    SINGLE_WRITE_MAX_BYTES is staged in parts and swapped in, as before.
+    """
+    root = _plan_root(origin)
     data = content.encode("utf-8")
     if len(data) > SINGLE_WRITE_MAX_BYTES:
-        result = _bridge_write_chunked(origin, rel_path, data, expected_mtime)
+        result = _write_staged(root, rel_path, data, expected_mtime)
     else:
-        arguments: dict[str, Any] = {"rel_path": rel_path, "content": content}
-        if expected_mtime is not None:
-            arguments["expected_mtime"] = expected_mtime
-        result = _bridge_call(origin, "filesystem", "write_file", arguments)
+        result = write_file(root, rel_path, content, expected_mtime=expected_mtime)
     if not _is_record(result) or result.get("ok") is not True:
-        if _is_record(result) and result.get("conflict") is True:
-            raise BridgeFailure("CONFLICT")
-        raise BridgeFailure("BACKEND_UNAVAILABLE")
+        raise _write_failure(result)
     mtime = result.get("mtime")
     return float(mtime) if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else None
 
 
-def _bridge_write_chunked(
-    origin: dict[str, Any], rel_path: str, data: bytes, expected_mtime: float | None
-) -> Any:
-    """Stage ``data`` on the Host part by part, then swap it in atomically.
+def _write_staged(root: str, rel_path: str, data: bytes, expected_mtime: float | None) -> Any:
+    """Stage ``data`` part by part, then swap it in atomically.
 
-    Same contract as one write_file call: the commit carries ``expected_mtime``
-    and is refused with a conflict if the file changed since it was read, and
-    the replace is a single rename so a reader never sees a partial document.
-    A failure part-way discards the staged bytes.
+    Same contract as one write_file call: the commit is refused with a
+    conflict if the file changed since it was read, and the replace is a
+    single rename. A failure part-way discards the staged bytes.
     """
     upload_id = uuid.uuid4().hex
-    try:
-        offset = 0
-        while True:
-            part = data[offset : offset + RANGE_CHUNK_BYTES]
-            _bridge_call(
-                origin, "filesystem", "write_part",
-                {
-                    "rel_path": rel_path,
-                    "upload_id": upload_id,
-                    "offset": offset,
-                    "data_base64": base64.b64encode(part).decode("ascii"),
-                },
-            )
-            offset += len(part)
-            if offset >= len(data):
-                break
-        commit: dict[str, Any] = {"rel_path": rel_path, "upload_id": upload_id, "total_size": len(data)}
-        if expected_mtime is not None:
-            commit["expected_mtime"] = expected_mtime
-        return _bridge_call(origin, "filesystem", "write_commit", commit)
-    except BaseException as error:
-        try:
-            _bridge_call(origin, "filesystem", "write_abort", {"rel_path": rel_path, "upload_id": upload_id})
-        except BridgeFailure:
-            pass
-        if isinstance(error, BridgeFailure) and error.code == "METHOD_NOT_FOUND":
-            # A Host that predates chunked writes cannot take a document this
-            # large in one frame; say so rather than fail obscurely.
-            raise BridgeFailure("RESOURCE_LIMIT") from None
-        raise
+    offset = 0
+    while True:
+        part = data[offset : offset + _WRITE_PART_MAX_BYTES]
+        result = write_part(root, rel_path, upload_id, offset, base64.b64encode(part).decode("ascii"))
+        if not _is_record(result) or result.get("ok") is not True:
+            write_abort(root, rel_path, upload_id)
+            return result
+        offset += len(part)
+        if offset >= len(data):
+            break
+    return write_commit(root, rel_path, upload_id, len(data), expected_mtime)
 
 
 def _plan_path(value: Any) -> str:
@@ -1387,7 +1383,7 @@ def _create_plan(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str,
         "todos": todos,
         "reviewNotes": [],
     }
-    _bridge_write(origin, rel_path, _write_meta_for_path(rel_path, content, meta, stage=stage))
+    _write(origin, rel_path, _write_meta_for_path(rel_path, content, meta, stage=stage))
     return {"rel_path": rel_path, "name": name.strip(), "stage": stage}
 
 
@@ -1399,7 +1395,7 @@ def _update_stage(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str
     meta["stage"] = stage
     if stage == "approved":
         meta["approvedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _bridge_write(origin, rel_path, _write_meta_for_path(rel_path, content, meta, stage=stage), mtime)
+    _write(origin, rel_path, _write_meta_for_path(rel_path, content, meta, stage=stage), mtime)
     return {"stage": stage, "approvedAt": meta.get("approvedAt")}
 
 
@@ -1430,7 +1426,7 @@ def _update_todo(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str,
         todo_id=todo_id,
         todo_status=status,
     )
-    _bridge_write(origin, rel_path, updated, mtime)
+    _write(origin, rel_path, updated, mtime)
     return dict(target)
 
 
@@ -1449,7 +1445,7 @@ def _add_note(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str, An
                 max_num = max(max_num, int(match.group(1)))
     note = {"id": f"n{max_num + 1}", "author": author, "text": text.strip(), "resolved": False, "reply": ""}
     notes.append(note)
-    _bridge_write(origin, rel_path, _write_meta_for_path(rel_path, content, meta), mtime)
+    _write(origin, rel_path, _write_meta_for_path(rel_path, content, meta), mtime)
     return note
 
 
@@ -1516,7 +1512,7 @@ def _manual_review_note_once(origin: dict[str, Any], arguments: dict[str, Any], 
             re.IGNORECASE,
         )
         updated = row.sub("", updated, count=1)
-    _bridge_write(origin, rel_path, updated, mtime)
+    _write(origin, rel_path, updated, mtime)
     return dict(note)
 
 
@@ -1579,7 +1575,7 @@ def _manual_document(origin: dict[str, Any], arguments: dict[str, Any], action: 
     ):
         raise BridgeFailure("INVALID_ARGUMENT")
     try:
-        _bridge_write(origin, path, content, mtime)
+        _write(origin, path, content, mtime)
     except BridgeFailure as error:
         if error.code == "CONFLICT":
             return {"ok": False, "conflict": True}
@@ -1631,13 +1627,14 @@ def _manual_upload(origin: dict[str, Any], arguments: dict[str, Any], action: st
         offset, data = arguments["offset"], arguments["data_base64"]
         if not _is_int(offset) or offset < 0 or not isinstance(data, str) or len(data) > _MAX_PART_BASE64_CHARS:
             raise BridgeFailure("INVALID_ARGUMENT")
-        result = _bridge_call(
-            origin, "filesystem", "write_part",
-            {"rel_path": path, "upload_id": upload_id, "offset": offset, "data_base64": data},
-        )
-        return {"ok": True, "size": result.get("size") if _is_record(result) else offset}
+        result = write_part(_plan_root(origin), path, upload_id, offset, data)
+        if not _is_record(result) or result.get("ok") is not True:
+            raise _write_failure(result)
+        return {"ok": True, "size": result.get("size", offset)}
     if action == "abort":
-        _bridge_call(origin, "filesystem", "write_abort", {"rel_path": path, "upload_id": upload_id})
+        result = write_abort(_plan_root(origin), path, upload_id)
+        if not _is_record(result) or result.get("ok") is not True:
+            raise _write_failure(result)
         return {"ok": True}
     total = arguments["total_size"]
     expected = arguments.get("expected_mtime")
@@ -1646,14 +1643,11 @@ def _manual_upload(origin: dict[str, Any], arguments: dict[str, Any], action: st
         and (isinstance(expected, bool) or not isinstance(expected, (int, float)) or not math.isfinite(expected))
     ):
         raise BridgeFailure("INVALID_ARGUMENT")
-    commit: dict[str, Any] = {"rel_path": path, "upload_id": upload_id, "total_size": total}
-    if expected is not None:
-        commit["expected_mtime"] = expected
-    result = _bridge_call(origin, "filesystem", "write_commit", commit)
+    result = write_commit(_plan_root(origin), path, upload_id, total, expected)
     if _is_record(result) and result.get("conflict") is True:
         return {"ok": False, "conflict": True}
     if not _is_record(result) or result.get("ok") is not True:
-        raise BridgeFailure("BACKEND_UNAVAILABLE")
+        raise _write_failure(result)
     mtime = result.get("mtime")
     return {"ok": True, **({"mtime": float(mtime)} if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else {})}
 
@@ -1699,7 +1693,7 @@ def _promote(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any
         "reviewNotes": [],
     }
     updated = _write_plan_meta(content, meta) if normalized.endswith(".html") else _write_markdown_meta(content, meta)
-    _bridge_write(origin, normalized, updated, mtime)
+    _write(origin, normalized, updated, mtime)
     return {"ok": True, "promoted": True, "rel_path": normalized, "meta": meta}
 
 
@@ -1709,19 +1703,22 @@ def _update_archive(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[s
         raise BridgeFailure("INVALID_ARGUMENT")
     rel_path, content, meta, mtime = _load_for_write(origin, arguments.get("rel_path"))
     meta["archivedAt"] = archived_at
-    _bridge_write(origin, rel_path, _write_meta_for_path(rel_path, content, meta), mtime)
+    _write(origin, rel_path, _write_meta_for_path(rel_path, content, meta), mtime)
     return {"archivedAt": archived_at}
 
 
 def _rename(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     source = _plan_path(arguments.get("from"))
     target = _plan_path(arguments.get("to"))
+    # Deliberately left on the Host bridge for now (a follow-up item).
     _bridge_call(origin, "filesystem", "rename", {"from": source, "to": target})
     return {"ok": True, "from": source, "to": target}
 
 
 def _delete(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     rel_path = _plan_path(arguments.get("rel_path"))
+    # Deliberately left on the Host bridge: deleting moves the file to the OS
+    # Trash (send2trash, not the standard library). A follow-up item.
     _bridge_call(origin, "filesystem", "delete", {"rel_path": rel_path})
     return {"ok": True, "rel_path": rel_path}
 

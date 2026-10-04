@@ -96,21 +96,6 @@ def _reply_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], val
     )
 
 
-def _error_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], code: str) -> None:
-    _send(
-        process,
-        {
-            "jsonrpc": "2.0",
-            "id": request["id"],
-            "error": {
-                "code": 1000,
-                "message": "Host bridge test error",
-                "data": {"code": code},
-            },
-        },
-    )
-
-
 def _serve_workspace(
     process: subprocess.Popen[bytes],
     root: Path,
@@ -119,10 +104,9 @@ def _serve_workspace(
 ) -> dict[str, Any]:
     """Play the Host for one call over a real workspace until it is answered.
 
-    The child reads plan files itself under the root the Host resolves, so the
-    only bridge calls it may make are resolve_root and single-call writes,
-    each on behalf of the request in flight. A write must name the mtime the
-    file has on disk, the way the Host's conflict check sees it.
+    The child reads and writes plan files itself under the root the Host
+    resolves, so the only bridge call it may make is resolve_root, on behalf
+    of the request in flight.
     """
     while True:
         frame = _read(process)
@@ -140,13 +124,6 @@ def _serve_workspace(
         if operation == "resolve_root":
             assert arguments == {}
             _reply_bridge(process, frame, {"root": str(root.resolve())})
-        elif operation == "write_file":
-            target = root / arguments["rel_path"]
-            expected = arguments.get("expected_mtime")
-            if expected is not None:
-                assert expected == target.stat().st_mtime
-            target.write_text(arguments["content"], encoding="utf-8", newline="")
-            _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
         else:
             raise AssertionError(f"unexpected filesystem operation: {operation}")
 
@@ -572,9 +549,9 @@ def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_
     )
     promoted = service_until_response("promote-document-1")
     assert promoted["result"]["value"]["promoted"] is True
-    # The promotion asked for its own root and wrote once, against the mtime
-    # the child read.
-    assert operations == ["resolve_root", "resolve_root", "write_file"]
+    # The promotion asked for its own root and wrote the file itself; a write
+    # against a stale mtime would have been refused as a conflict.
+    assert operations == ["resolve_root", "resolve_root"]
     assert stored[document_path].startswith("---\n")
     assert "\n---\n# README\n" in stored[document_path]
     assert "---# README" not in stored[document_path]
@@ -1292,33 +1269,21 @@ def test_agent_create_preserves_double_braces_in_user_text(
 
 # ── documents of any size ───────────────────────────────────────────────────
 
-HOST_RESULT_LIMIT = 192 * 1024
 HOST_RANGE_LIMIT = 96 * 1024
 
 
 class _DiskHost:
-    """A Host Bridge that serves a real directory the way the Host does.
+    """A Host Bridge that authorizes a real directory the way the Host does.
 
-    The child reads plan files itself under the root this Host resolves, so
-    any bridge read (read_file, read_range, list_dir, stat_path) fails the
-    test. It enforces the Host's own limits on writes so a test can only pass
-    if the child stays inside them: every write part fits one Bridge frame.
+    The child reads and writes plan files itself under the root this Host
+    resolves, so any bridge read or write (read_file, read_range, list_dir,
+    stat_path, write_file, write_part, write_commit, write_abort) fails the
+    test.
     """
 
-    def __init__(
-        self,
-        root: Path,
-        *,
-        no_chunked_writes: bool = False,
-        fail_part: int | None = None,
-        before_commit: Any = None,
-    ) -> None:
+    def __init__(self, root: Path) -> None:
         self.root = root
-        self.no_chunked_writes = no_chunked_writes
-        self.fail_part = fail_part
-        self.before_commit = before_commit
         self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.write_frame_bytes: list[int] = []
 
     def __call__(self, process: subprocess.Popen[bytes], frame: dict[str, Any]) -> None:
         params = frame["params"]
@@ -1326,63 +1291,13 @@ class _DiskHost:
         operation = params["operation"]
         arguments = params["arguments"]
         self.calls.append((operation, dict(arguments)))
-        rel = arguments.get("rel_path", "")
-        target = self.root / rel
         if operation == "resolve_root":
             _reply_bridge(process, frame, {"root": str(self.root.resolve())})
-        elif operation == "write_file":
-            target.write_text(arguments["content"], encoding="utf-8", newline="")
-            _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
-        elif operation in ("write_part", "write_commit", "write_abort"):
-            self._chunked_write(process, frame, operation, arguments, target)
         else:
             raise AssertionError(f"unexpected filesystem operation: {operation}")
 
     def staging_files(self) -> list[Path]:
         return sorted(self.root.rglob("*.upload"))
-
-    def _chunked_write(
-        self,
-        process: subprocess.Popen[bytes],
-        frame: dict[str, Any],
-        operation: str,
-        arguments: dict[str, Any],
-        target: Path,
-    ) -> None:
-        if self.no_chunked_writes:
-            _error_bridge(process, frame, "METHOD_NOT_FOUND")
-            return
-        staging = target.parent / f".{target.name}.{arguments['upload_id']}.upload"
-        if operation == "write_part":
-            parts_so_far = sum(1 for name, _ in self.calls if name == "write_part")
-            if self.fail_part is not None and parts_so_far == self.fail_part:
-                _error_bridge(process, frame, "BACKEND_UNAVAILABLE")
-                return
-            piece = base64.b64decode(arguments["data_base64"])
-            assert len(piece) <= HOST_RANGE_LIMIT
-            # Every part must fit a Bridge frame, whatever the document's size.
-            assert len(json.dumps(arguments)) < HOST_RESULT_LIMIT
-            if arguments["offset"] == 0:
-                staging.write_bytes(piece)
-            else:
-                assert staging.stat().st_size == arguments["offset"]
-                with staging.open("ab") as handle:
-                    handle.write(piece)
-            _reply_bridge(process, frame, {"ok": True, "size": arguments["offset"] + len(piece)})
-        elif operation == "write_commit":
-            if self.before_commit is not None:
-                self.before_commit(target)
-            assert staging.stat().st_size == arguments["total_size"]
-            expected = arguments.get("expected_mtime")
-            if expected is not None and abs(target.stat().st_mtime - expected) > 1e-4:
-                staging.unlink()
-                _reply_bridge(process, frame, {"ok": False, "conflict": True, "mtime": target.stat().st_mtime})
-                return
-            staging.replace(target)
-            _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
-        else:
-            staging.unlink(missing_ok=True)
-            _reply_bridge(process, frame, {"ok": True})
 
 
 _call_counter = 0
@@ -1677,10 +1592,11 @@ def test_a_multi_hundred_kilobyte_plan_can_be_updated_and_only_its_header_change
     assert "error" not in todo
 
     updated = path.read_bytes().decode("utf-8")
-    # The chunked path really ran (three updates → three staged swaps), and
-    # every staged part fit one Bridge frame (asserted inside the host).
-    assert [name for name, _ in host.calls].count("write_commit") == 3
-    assert [name for name, _ in host.calls].count("write_file") == 0
+    # The child wrote all three updates itself (one resolve_root per request,
+    # no bridge writes) and left no staged upload behind. That a document this
+    # size takes the staged path is pinned by
+    # test_a_small_write_still_uses_the_single_call_path.
+    assert [name for name, _ in host.calls] == ["resolve_root"] * 3
     assert host.staging_files() == []
     # Meta and visible markup were both updated ...
     read = _call_backend(backend_process, host, "plans.read", {"rel_path": rel})["result"]["value"]
@@ -1697,76 +1613,118 @@ def test_a_multi_hundred_kilobyte_plan_can_be_updated_and_only_its_header_change
     _assert_same_text(_read_all_pages(backend_process, host, rel), updated)
 
 
+def _workspace_origin(root: Path) -> dict[str, Any]:
+    """An in-process origin whose request the Host authorized for `root`."""
+    return {"kind": "call", "requestId": "in-process", "instance": "instance-1", "root": str(root.resolve())}
+
+
 def test_a_chunked_write_keeps_the_changed_on_disk_conflict_and_leaves_the_file_untouched(
-    backend_process: subprocess.Popen[bytes], tmp_path: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The child writes in its own process, so the moment between staging and
+    # the swap is only reachable in process.
+    backend = _load_backend("plans_backend_chunked_conflict")
     plans = _plans_dir(tmp_path)
     path = plans / "race_777777.html"
     original = _big_plan("Race", 700 * 1024)
     path.write_text(original, encoding="utf-8", newline="")
+    assert len(original.encode("utf-8")) > backend.SINGLE_WRITE_MAX_BYTES
+    real_write_commit = backend.write_commit
+    commits: list[str] = []
 
-    def another_writer(target: Path) -> None:
+    def another_writer_then_commit(*args: Any) -> Any:
         # Someone else saves the file after we read it but before we commit.
-        stat = target.stat()
-        os.utime(target, (stat.st_atime + 10, stat.st_mtime + 10))
+        commits.append(args[1])
+        stat = path.stat()
+        os.utime(path, (stat.st_atime + 10, stat.st_mtime + 10))
+        return real_write_commit(*args)
 
-    host = _DiskHost(tmp_path, before_commit=another_writer)
-    frame = _call_backend(
-        backend_process, host, "plans.update_stage",
-        {"rel_path": ".agent-team/plans/race_777777.html", "stage": "approved"},
-    )
-    assert frame["error"]["data"]["code"] == "CONFLICT"
+    monkeypatch.setattr(backend, "write_commit", another_writer_then_commit)
+    with pytest.raises(backend.BridgeFailure) as failure:
+        backend._update_stage(
+            _workspace_origin(tmp_path), {"rel_path": ".agent-team/plans/race_777777.html", "stage": "approved"}
+        )
+    assert failure.value.code == "CONFLICT"
+    assert commits == [".agent-team/plans/race_777777.html"]
     _assert_same_text(path.read_bytes().decode("utf-8"), original)
-    assert host.staging_files() == []
+    assert sorted(tmp_path.rglob("*.upload")) == []
 
 
 def test_a_failed_part_discards_the_staged_upload(
-    backend_process: subprocess.Popen[bytes], tmp_path: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    backend = _load_backend("plans_backend_failed_part")
     plans = _plans_dir(tmp_path)
     path = plans / "fail_888888.html"
-    original = _big_plan("Fail", 700 * 1024)
+    # Three parts, so two are staged before the third fails.
+    original = _big_plan("Fail", 2 * backend._WRITE_PART_MAX_BYTES + 100 * 1024)
     path.write_text(original, encoding="utf-8", newline="")
-    host = _DiskHost(tmp_path, fail_part=2)
-    frame = _call_backend(
-        backend_process, host, "plans.update_stage",
-        {"rel_path": ".agent-team/plans/fail_888888.html", "stage": "approved"},
-    )
-    assert "error" in frame
-    assert [name for name, _ in host.calls].count("write_abort") == 1
-    _assert_same_text(path.read_bytes().decode("utf-8"), original)
-    assert host.staging_files() == []
+    real_write_part = backend.write_part
+    real_write_abort = backend.write_abort
+    parts: list[int] = []
+    aborts: list[str] = []
+    staged_before_abort: list[list[Path]] = []
 
+    def write_part(*args: Any) -> Any:
+        parts.append(args[3])
+        if len(parts) == 3:
+            return {"ok": False, "error": "disk full"}
+        return real_write_part(*args)
 
-def test_a_host_without_chunked_writes_refuses_a_big_write_with_a_clear_code(
-    backend_process: subprocess.Popen[bytes], tmp_path: Path
-) -> None:
-    plans = _plans_dir(tmp_path)
-    path = plans / "old_999999.html"
-    original = _big_plan("Old", 700 * 1024)
-    path.write_text(original, encoding="utf-8", newline="")
-    host = _DiskHost(tmp_path, no_chunked_writes=True)
-    frame = _call_backend(
-        backend_process, host, "plans.update_stage",
-        {"rel_path": ".agent-team/plans/old_999999.html", "stage": "approved"},
-    )
-    assert frame["error"]["data"]["code"] == "RESOURCE_LIMIT"
+    def write_abort(*args: Any) -> Any:
+        aborts.append(args[2])
+        staged_before_abort.append(sorted(tmp_path.rglob("*.upload")))
+        return real_write_abort(*args)
+
+    monkeypatch.setattr(backend, "write_part", write_part)
+    monkeypatch.setattr(backend, "write_abort", write_abort)
+    with pytest.raises(backend.BridgeFailure) as failure:
+        backend._update_stage(
+            _workspace_origin(tmp_path), {"rel_path": ".agent-team/plans/fail_888888.html", "stage": "approved"}
+        )
+    assert failure.value.code == "BACKEND_UNAVAILABLE"
+    assert len(parts) == 3 and len(aborts) == 1
+    # The upload really was staged, and the abort discarded it.
+    assert len(staged_before_abort[0]) == 1
     _assert_same_text(path.read_bytes().decode("utf-8"), original)
-    assert backend_process.poll() is None
+    assert sorted(tmp_path.rglob("*.upload")) == []
 
 
 def test_a_small_write_still_uses_the_single_call_path(
-    backend_process: subprocess.Popen[bytes], tmp_path: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    backend = _load_backend("plans_backend_write_paths")
     plans = _plans_dir(tmp_path)
     (plans / "tiny_aaaaab.html").write_text(_big_plan("Tiny", 100), encoding="utf-8", newline="")
-    host = _DiskHost(tmp_path)
-    _call_backend(
-        backend_process, host, "plans.update_stage",
-        {"rel_path": ".agent-team/plans/tiny_aaaaab.html", "stage": "approved"},
-    )
-    names = [name for name, _ in host.calls]
+    (plans / "huge_aaaaac.html").write_text(_big_plan("Huge", 1_500_000), encoding="utf-8", newline="")
+    calls: list[tuple[str, Any]] = []
+
+    def spy(name: str) -> Any:
+        real = getattr(backend, name)
+
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            calls.append((name, args))
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    for name in ("write_file", "write_part", "write_commit", "write_abort"):
+        monkeypatch.setattr(backend, name, spy(name))
+
+    backend._update_stage(_workspace_origin(tmp_path), {"rel_path": ".agent-team/plans/tiny_aaaaab.html", "stage": "approved"})
+    names = [name for name, _ in calls]
     assert "write_file" in names and "write_part" not in names
+    assert '"stage": "approved"' in (plans / "tiny_aaaaab.html").read_text(encoding="utf-8")
+
+    # Past the single-write threshold the same update is staged in parts.
+    calls.clear()
+    backend._update_stage(_workspace_origin(tmp_path), {"rel_path": ".agent-team/plans/huge_aaaaac.html", "stage": "approved"})
+    names = [name for name, _ in calls]
+    assert "write_file" not in names and names.count("write_commit") == 1 and "write_abort" not in names
+    parts = [base64.b64decode(args[4]) for name, args in calls if name == "write_part"]
+    assert len(parts) >= 2 and all(len(part) <= backend._WRITE_PART_MAX_BYTES for part in parts)
+    assert '"stage": "approved"' in (plans / "huge_aaaaac.html").read_text(encoding="utf-8")
+    assert sorted(tmp_path.rglob("*.upload")) == []
 
 
 def test_plan_meta_far_down_a_huge_file_is_still_found(

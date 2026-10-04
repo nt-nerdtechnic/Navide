@@ -27,7 +27,7 @@ def test_manual_edit_preserves_v1_note_identity_and_other_fields(child, monkeypa
             "reply": "Keep reply", "anchor": "Goals", "extension": {"keep": True}}
     writes = []
     monkeypatch.setattr(child, "_read_text", lambda *args, **kwargs: (plan([note]), 10.0))
-    monkeypatch.setattr(child, "_bridge_write", lambda *args: writes.append(args))
+    monkeypatch.setattr(child, "_write", lambda *args: writes.append(args))
     result = child._manual_review_note({}, {"rel_path": ".agent-team/plans/a.html", "note_id": note["id"], "text": "After"}, "edit")
     assert result == {**note, "text": "After"}
     assert len(writes) == 1
@@ -47,7 +47,7 @@ def test_manual_note_retries_conflict_against_fresh_external_updates(child, monk
         if len(writes) == 1:
             raise child.BridgeFailure("CONFLICT")
 
-    monkeypatch.setattr(child, "_bridge_write", write)
+    monkeypatch.setattr(child, "_write", write)
     result = child._manual_review_note({}, {"rel_path": ".agent-team/plans/a.html", "text": "New", "anchor": "Goals"}, "add")
     assert result["id"] == "n3"
     assert result["anchor"] == "Goals"
@@ -64,7 +64,7 @@ def test_manual_note_second_conflict_is_reported_without_unbounded_retry(child, 
         writes.append(args)
         raise child.BridgeFailure("CONFLICT")
 
-    monkeypatch.setattr(child, "_bridge_write", write)
+    monkeypatch.setattr(child, "_write", write)
     with pytest.raises(child.BridgeFailure, match="CONFLICT"):
         child._manual_review_note({}, {"rel_path": ".agent-team/plans/a.html", "text": "New", "anchor": "Goals"}, "add")
     assert len(writes) == 2
@@ -83,19 +83,19 @@ def test_document_transport_preserves_read_mtime_and_write_conflict(child, monke
     os.utime(document, (12.0, 12.0))
     origin = _workspace(child, tmp_path)
     calls = []
-
-    def bridge(origin, port, operation, args):
-        calls.append((port, operation, args))
-        return {"ok": False, "conflict": True}
-
-    monkeypatch.setattr(child, "_bridge_call", bridge)
+    monkeypatch.setattr(child, "_bridge_call", lambda *args: calls.append(args))
     read = child._manual_document(origin, {"rel_path": path}, "read")
     assert read == {"ok": True, "content": plan([]), "mtime": 12.0}
-    # The child reads the document itself; nothing crossed the Bridge.
-    assert calls == []
+    # Someone else saves the document after it was read.
+    os.utime(document, (13.0, 13.0))
     result = child._manual_document(origin, {"rel_path": path, "content": "changed", "expected_mtime": 12.0}, "write")
     assert result == {"ok": False, "conflict": True}
-    assert calls == [("filesystem", "write_file", {"rel_path": path, "content": "changed", "expected_mtime": 12.0})]
+    assert document.read_text(encoding="utf-8") == plan([])
+    # Against the mtime on disk the same write lands.
+    assert child._manual_document(origin, {"rel_path": path, "content": "changed", "expected_mtime": 13.0}, "write") == {"ok": True}
+    assert document.read_text(encoding="utf-8") == "changed"
+    # The child reads and writes the document itself; nothing crossed the Bridge.
+    assert calls == []
 
 
 @pytest.mark.parametrize("path", ["../escape.html", "/tmp/a.html", "src/a.ts", ".agent-team/plans/../a.html", ".plans/../../a.html"])
@@ -127,7 +127,7 @@ def test_manual_notes_synchronize_existing_v1_body_markup_only(child, monkeypatc
     content = plan([note]) + markup + '<p>Unrelated body</p>'
     writes = []
     monkeypatch.setattr(child, "_read_text", lambda *args, **kwargs: (content, 1.0))
-    monkeypatch.setattr(child, "_bridge_write", lambda *args: writes.append(args[2]))
+    monkeypatch.setattr(child, "_write", lambda *args: writes.append(args[2]))
     args = {"rel_path": ".agent-team/plans/a.html", "note_id": "n1"}
     if action == "edit":
         args["text"] = "New <safe> & text"

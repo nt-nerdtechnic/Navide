@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -24,13 +26,23 @@ from tests.test_navide_plans_backend_wire import (  # noqa: F401 - backend_proce
     CLIENT_META,
     RUNTIME,
     _assert_same_text,
-    _error_bridge,
     _plan_html,
     _read,
     _reply_bridge,
     _send,
     backend_process,
 )
+
+def _error_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], code: str) -> None:
+    _send(
+        process,
+        {
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "error": {"code": 1000, "message": "Host bridge test error", "data": {"code": code}},
+        },
+    )
+
 
 BRIDGE_READS = {"read_file", "read_range", "list_dir", "stat_path"}
 
@@ -397,6 +409,165 @@ def test_a_list_caller_the_host_refuses_never_shares_another_callers_scan(tmp_pa
     assert results["user"] == [{"secret": "scanned for the user"}]
 
 
+# ── G4–G6: writes stay inside the plan documents and are atomic ──────────────
+
+
+def _write(process: subprocess.Popen[bytes], host: _RootOnlyHost, rel_path: str, content: str, **extra: Any) -> dict[str, Any]:
+    return _call(process, host, "plans.write_document", {"rel_path": rel_path, "content": content, **extra})
+
+
+@pytest.mark.parametrize(
+    "rel_path",
+    [
+        # Each ends in a plan directory, so only the core guard stands between
+        # it and the protected directory.
+        ".agent-team/state/docs/plans/a.html",
+        "pkg/.git/docs/plans/a.html",
+        ".git/docs/plans/a.html",
+    ],
+)
+def test_write_to_other_agent_team_dirs_is_refused(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path, rel_path: str
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    (mine / ".git").mkdir()
+    host = _RootOnlyHost({"instance-1": mine})
+
+    response = _write(backend_process, host, rel_path, _plan_html("Smuggled"))
+    assert _error_code(response) == "BACKEND_UNAVAILABLE"
+    assert not (mine / rel_path).exists()
+    # The user-facing subtrees stay writable, as before.
+    assert _value(_write(backend_process, host, ".agent-team/reports/kept.md", "# Kept\n")) == {"ok": True}
+    assert (mine / ".agent-team" / "reports" / "kept.md").read_text(encoding="utf-8") == "# Kept\n"
+
+
+@pytest.mark.parametrize(
+    "rel_path",
+    [
+        ".agent-team/plans/payload.js",
+        ".agent-team/plans/data.json",
+        ".agent-team/plans/image.svg",
+        ".agent-team/plans/notes.txt",
+        ".agent-team/plans/assets/image.png",
+        ".agent-team/plans/_template.html",
+        ".agent-team/plans/.hidden.html",
+    ],
+)
+def test_non_html_non_assets_extension_is_refused(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path, rel_path: str
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    host = _RootOnlyHost({"instance-1": mine})
+
+    response = _write(backend_process, host, rel_path, "<p>not a plan</p>")
+    assert _error_code(response) in {"INVALID_ARGUMENT", "WORKSPACE_SCOPE_VIOLATION"}
+    assert not (mine / rel_path).exists()
+    # Every document kind writable today still is.
+    for allowed in (".agent-team/plans/new.html", "docs/plans/n.plan.md", ".cursor/plans/n.md", ".plans/shared.html"):
+        assert _value(_write(backend_process, host, allowed, "plan ✓\n")) == {"ok": True}, allowed
+        assert (mine / allowed).read_bytes() == "plan ✓\n".encode("utf-8")
+
+
+def test_write_is_atomic_and_rejects_stale_mtime(backend_process: subprocess.Popen[bytes], tmp_path: Path) -> None:
+    mine = _workspace(tmp_path, "mine")
+    plans = mine / ".agent-team" / "plans"
+    target = plans / "doc_aaaaaa.html"
+    target.write_text(_plan_html("Original"), encoding="utf-8")
+    target.chmod(0o640)
+    os.utime(target, (1_000.0, 1_000.0))
+    before = target.stat()
+    host = _RootOnlyHost({"instance-1": mine})
+    rel_path = ".agent-team/plans/doc_aaaaaa.html"
+
+    stale = _value(_write(backend_process, host, rel_path, _plan_html("Lost update"), expected_mtime=999.0))
+    assert stale == {"ok": False, "conflict": True}
+    assert "Original" in target.read_text(encoding="utf-8")
+
+    fresh = _value(_write(backend_process, host, rel_path, _plan_html("Updated"), expected_mtime=1_000.0))
+    assert fresh == {"ok": True}
+    after = target.stat()
+    assert target.read_text(encoding="utf-8") == _plan_html("Updated")
+    # Replaced by rename, never rewritten in place, and the mode survives it.
+    assert after.st_ino != before.st_ino
+    assert after.st_mode & 0o777 == 0o640
+    assert sorted(path.name for path in plans.iterdir()) == ["doc_aaaaaa.html"]
+
+    # A document sent in parts swaps in the same way, with the same check.
+    data = _plan_html("Chunked", padding=300 * 1024).encode("utf-8")
+    upload_id = "0123456789abcdef0123456789abcdef"
+
+    def upload(expected_mtime: float) -> dict[str, Any]:
+        offset = 0
+        while offset < len(data):
+            part = data[offset : offset + 96 * 1024]
+            assert _value(_call(backend_process, host, "plans.write_document_part", {
+                "rel_path": rel_path, "upload_id": upload_id, "offset": offset,
+                "data_base64": base64.b64encode(part).decode("ascii"),
+            }))["ok"] is True
+            offset += len(part)
+        return _value(_call(backend_process, host, "plans.write_document_commit", {
+            "rel_path": rel_path, "upload_id": upload_id, "total_size": len(data), "expected_mtime": expected_mtime,
+        }))
+
+    assert upload(expected_mtime=1.0) == {"ok": False, "conflict": True}
+    assert target.read_text(encoding="utf-8") == _plan_html("Updated")
+    assert sorted(path.name for path in plans.iterdir()) == ["doc_aaaaaa.html"]
+    committed = upload(expected_mtime=target.stat().st_mtime)
+    assert committed["ok"] is True
+    assert target.read_bytes() == data
+    assert sorted(path.name for path in plans.iterdir()) == ["doc_aaaaaa.html"]
+
+
+def test_agent_changes_refuse_a_document_without_valid_plan_meta_and_leave_it_untouched(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    """Locks today's rule; there is no write-time "unsynced plan-meta" refusal."""
+    mine = _workspace(tmp_path, "mine")
+    plans = mine / ".agent-team" / "plans"
+    broken = '<html><body><script type="application/json" id="plan-meta">{not json</script></body></html>\n'
+    (plans / "broken_aaaaaa.html").write_text(broken, encoding="utf-8")
+    (plans / "plain_bbbbbb.html").write_text("<html><body><p>No meta</p></body></html>\n", encoding="utf-8")
+    host = _RootOnlyHost({"instance-1": mine})
+
+    for name in ("broken_aaaaaa.html", "plain_bbbbbb.html"):
+        before = (plans / name).read_bytes()
+        for method, arguments in (
+            ("plans.update_stage", {"stage": "approved"}),
+            ("plans.add_note", {"text": "note"}),
+            ("plans.update_archive", {"archived_at": "2026-10-04"}),
+        ):
+            response = _call(backend_process, host, method, {"rel_path": f".agent-team/plans/{name}", **arguments})
+            assert _error_code(response) == "INVALID_ARGUMENT", (name, method, response)
+            assert (plans / name).read_bytes() == before
+
+
+def test_agent_changes_keep_plan_meta_and_visible_markup_in_step(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    meta = {"schemaVersion": 1, "name": "Synced", "overview": "", "stage": "draft",
+            "todos": [{"id": "t1", "content": "First", "status": "pending"}], "reviewNotes": []}
+    document = (
+        "<!doctype html><html><body>\n"
+        f'<script type="application/json" id="plan-meta">\n{json.dumps(meta)}\n</script>\n'
+        '<span class="pill draft">draft</span>\n'
+        '<ul><li data-status="pending" data-todo-id="t1"><span class="st">pending</span> First</li></ul>\n'
+        "</body></html>\n"
+    )
+    target = mine / ".agent-team" / "plans" / "synced_cccccc.html"
+    target.write_text(document, encoding="utf-8")
+    host = _RootOnlyHost({"instance-1": mine})
+    rel_path = ".agent-team/plans/synced_cccccc.html"
+
+    assert _value(_call(backend_process, host, "plans.update_stage", {"rel_path": rel_path, "stage": "in-progress"}))["stage"] == "in-progress"
+    assert _value(_call(backend_process, host, "plans.update_todo", {"rel_path": rel_path, "todo_id": "t1", "status": "done"}))["status"] == "done"
+    text = target.read_text(encoding="utf-8")
+    island = json.loads(re.search(r'id="plan-meta">([\s\S]*?)</script>', text).group(1))
+    assert island["stage"] == "in-progress" and island["todos"][0]["status"] == "done"
+    assert '<span class="pill in-progress">in-progress</span>' in text
+    assert '<li data-status="done" data-todo-id="t1"><span class="st">done</span>' in text
+
+
 # ── the Host's per-request gates still decide every plan file access ─────────
 #
 # The Host re-checks each filesystem request against the requesting runtime:
@@ -491,6 +662,30 @@ def test_agent_plan_reads_succeed_when_the_execution_policy_allows_fs(
     assert [entry["name"] for entry in _value(_call_as(backend_process, host, "plans.list", {}, as_agent))] == ["Agent readable"]
     read = _value(_call_as(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/open_cccccc.html"}, as_agent))
     assert read["meta"]["name"] == "Agent readable"
+
+
+def test_agent_plan_writes_are_refused_when_the_execution_policy_denies_fs(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    target = mine / ".agent-team" / "plans" / "kept_dddddd.html"
+    target.write_text(_plan_html("Write guarded"), encoding="utf-8")
+    before = target.read_bytes()
+    host = _GatedHost(mine, allows=lambda runtime: runtime["initiator"]["kind"] != "agent")
+    as_user = {**RUNTIME, "initiator": USER}
+    as_agent = {**RUNTIME, "initiator": AGENT}
+    rel_path = ".agent-team/plans/kept_dddddd.html"
+
+    assert _value(_call_as(backend_process, host, "plans.read", {"rel_path": rel_path}, as_user))
+    for name, arguments in (
+        ("plans.update_stage", {"rel_path": rel_path, "stage": "approved"}),
+        ("plans.write_document", {"rel_path": rel_path, "content": "replaced"}),
+        ("plans.create", {"name": "Smuggled plan", "overview": "", "todos": []}),
+    ):
+        response = _call_as(backend_process, host, name, arguments, as_agent)
+        assert _error_code(response) == "CAPABILITY_DENIED", (name, response)
+    assert target.read_bytes() == before
+    assert sorted(p.name for p in target.parent.iterdir()) == ["kept_dddddd.html"]
 
 
 def test_plan_reads_are_refused_once_the_package_grant_no_longer_matches(
