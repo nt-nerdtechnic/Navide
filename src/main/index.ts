@@ -252,6 +252,12 @@ let quitConfirm = {
 }
 let quitConfirmed = false
 let quittingWindowsPrepared = false
+// Whether a confirmed quit is under way, for embedded AI panels only (see
+// setAppQuittingProbe). Set wherever quitConfirmed is set to begin a quit, but
+// unlike quitConfirmed — which stays true after a plugin vetoes the quit, so
+// the prompt is not shown again — it is cleared on every path that keeps the
+// app running.
+let dockQuitInProgress = false
 let quittingWindowsPreparation: Promise<boolean> | null = null
 // True while the quit confirmation dialog is on screen, so a second close
 // request cannot stack another one.
@@ -1007,8 +1013,9 @@ const installedMiniIdeDescriptorPresent = frontendPluginManager.getDescriptor(MI
 frontendPluginManager.setContributionIconResolver(contributionIcon)
 // Windows hosting embedded AI panels end them on close, but not while the app
 // quits: those panels restore next launch. Cmd+Q without the prompt sets only
-// quittingWindowsPrepared; an update install sets only quitConfirmed.
-frontendPluginManager.setAppQuittingProbe(() => quitConfirmed || quittingWindowsPrepared)
+// quittingWindowsPrepared; a confirmed quit or an update install sets
+// dockQuitInProgress, which a vetoed quit clears again.
+frontendPluginManager.setAppQuittingProbe(() => dockQuitInProgress || quittingWindowsPrepared)
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
 )
@@ -5261,12 +5268,12 @@ app.whenReady().then(async () => {
     // window, so by then each window's 'closed' has already remove()d its
     // entry and the snapshot would be frozen empty. This is the only hook the
     // update path offers that still runs while the windows are open.
-    onInstallStarting: () => { quitConfirmed = true; markCleanExitAndSettleRestores() },
+    onInstallStarting: () => { quitConfirmed = true; dockQuitInProgress = true; markCleanExitAndSettleRestores() },
     // The install did not take the app down (bad precondition, error, or
     // timeout) — restore the confirmation gate the waiver above disabled.
     // ...and the snapshot freeze above goes back with it: the app is still
     // running, so this run is not a clean exit after all.
-    onInstallAbandoned: () => { quitConfirmed = false; windowRegistry.clearCleanExit() },
+    onInstallAbandoned: () => { quitConfirmed = false; dockQuitInProgress = false; windowRegistry.clearCleanExit() },
   })
   // Detect an unclean previous exit and stash its windows for the restore
   // banner. Always reset the file (start tracking this run) — but only OFFER
@@ -5449,6 +5456,7 @@ app.on('browser-window-created', (_event, win) => {
       ask: () => askQuitConfirm(win),
       quit: () => {
         quitConfirmed = true
+        dockQuitInProgress = true
         void teardownBackendAndQuit()
       },
     })
@@ -5562,6 +5570,7 @@ app.on('before-quit', async (e) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     if (!(await askQuitConfirm(win))) return // cancelled — stay open (default already prevented)
     quitConfirmed = true
+    dockQuitInProgress = true
     // Re-enter through the normal path so receiver/provider preparation runs
     // before any backend shutdown.
     app.quit()
@@ -5581,7 +5590,12 @@ app.on('before-quit', async (e) => {
         quittingWindowsPreparation = null
       })
       const prepared = await quittingWindowsPreparation
-      if (!prepared) return
+      if (!prepared) {
+        // Vetoed: the app stays open, so closing a window ends its AI panels
+        // again. quitConfirmed is left as it was.
+        dockQuitInProgress = false
+        return
+      }
       quittingWindowsPrepared = true
       app.quit()
       return

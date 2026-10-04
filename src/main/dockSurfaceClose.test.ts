@@ -50,8 +50,10 @@ describe('a window hosting AI panels ends them when it closes', () => {
   })
 
   it('tells the manager when the app is quitting, by both quit flags', () => {
+    // dockQuitInProgress, not quitConfirmed: the latter stays set after a vetoed
+    // quit (see dockQuitProbe.test.ts, which drives the cancel paths).
     expect(indexSource).toContain(
-      'frontendPluginManager.setAppQuittingProbe(() => quitConfirmed || quittingWindowsPrepared)',
+      'frontendPluginManager.setAppQuittingProbe(() => dockQuitInProgress || quittingWindowsPrepared)',
     )
   })
 })
