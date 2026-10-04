@@ -465,3 +465,21 @@ async def test_register_dock_without_the_flag_stays_undeliverable(_clean_registr
     })
     entry = agent_messaging.get("d1")
     assert entry is not None and entry.deliverable is False
+
+
+def test_a_dock_spawn_cannot_take_over_a_record_marked_main(tmp_path: Path) -> None:
+    """surface='main' is a window pane's value, not a panel's: a panel spawn
+    naming that record's id must leave it alone like an unmarked one."""
+    store = ProjectStore()
+    project = store.load_or_create(str(tmp_path))
+    from agent_team_backend.projects import PaneRecord
+
+    project.panes.append(
+        PaneRecord(pane_id="p1", origin="manual", agent="claude", session_id="s-main", surface="main", window_kind="main")
+    )
+    store.save(project)
+    store.record_manual_pane_spawn(
+        str(tmp_path), pane_id="p1", agent="codex", session_id="s-new", surface="git", window_kind="git"
+    )
+    panes = ProjectStore().peek(str(tmp_path)).panes  # type: ignore[union-attr]
+    assert [(p.pane_id, p.surface, p.agent, p.session_id) for p in panes] == [("p1", "main", "claude", "s-main")]

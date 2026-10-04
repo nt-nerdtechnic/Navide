@@ -862,13 +862,14 @@ class ProjectStore:
     ) -> Project:
         project = self.load_or_create(workspace_path)
         pane = self._find_manual_pane(project, pane_id, previous_pane_id, session_id)
-        if surface and pane is not None and not pane.surface:
+        # "main" is a window pane's surface too (unmarked is every older record).
+        if surface and pane is not None and pane.surface in ("", "main"):
             # A panel's spawn (it reaches here from terminal.create, which a
             # plugin window's broker can send) naming a window pane's record:
             # leave that record alone. Taking it over would mark it a panel's,
             # and the main window would stop restoring the pane.
             return project
-        if surface and any(p.pane_id == pane_id and not p.surface for p in project.panes):
+        if surface and any(p.pane_id == pane_id and p.surface in ("", "main") for p in project.panes):
             # Any other record under this id is not a panel's either — a
             # pipeline pane (which _find_manual_pane skips) or a window pane's
             # pending stub. Adding a second record beside it, or folding the
