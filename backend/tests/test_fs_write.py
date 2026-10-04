@@ -27,13 +27,17 @@ def test_fs_service_reexports_the_write_path_unchanged() -> None:
 
 
 def test_the_write_path_imports_only_the_standard_library() -> None:
+    # Only what importing fs_write adds counts: site hooks may load
+    # third-party modules before any code runs (pywin32's .pth does on
+    # Windows), and those are not the write path's imports.
     probe = (
         "import sys\n"
+        "before = set(sys.modules)\n"
         "import agent_team_backend.fs_write\n"
+        "added = set(sys.modules) - before\n"
         "loaded = sorted(m for m in sys.modules if m.startswith('agent_team_backend'))\n"
-        "third = sorted({m.split('.')[0] for m in sys.modules} - set(sys.stdlib_module_names)\n"
-        "               - set(sys.builtin_module_names) - {'agent_team_backend', '__main__'}\n"
-        "               - {'_distutils_hack', '_virtualenv', 'sitecustomize', 'usercustomize'})\n"
+        "third = sorted({m.split('.')[0] for m in added} - set(sys.stdlib_module_names)\n"
+        "               - set(sys.builtin_module_names) - {'agent_team_backend'})\n"
         "print(loaded); print(third)\n"
     )
     result = subprocess.run(
