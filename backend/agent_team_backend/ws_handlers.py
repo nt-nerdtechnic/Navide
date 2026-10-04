@@ -8149,6 +8149,80 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
             await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
+@handler("terminal.kill_surface")
+async def terminal_kill_surface(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """End the embedded AI panels one window held.
+
+    Sent when a Plan / Git / Editor window closes (not on app quit, whose
+    records stay 'spawned' to restore next launch), and when the main window
+    closes a workspace (its Pipeline Manager panel). `workspace_path` scopes it
+    to one workspace; a single-instance window that cannot say which workspace
+    its panel last ran in leaves it out and ends its surface everywhere. Each
+    matching PTY goes down, its restore record is retired the way
+    manual_pane.unspawn retires one, and its roster entry is dropped. Only
+    sessions whose terminal metadata names this panel surface are reached: a
+    window pane's create carries none, so nothing a window shows is ever
+    touched. Idempotent; replies with the pane ids it ended."""
+    from . import app
+
+    surface = str(payload.get("surface") or "")
+    ended: dict[str, str] = {}  # pane id -> workspace its panel ran in
+    for term_session_id, pane_id, workspace_path in session.terminals.live_ids_for_surface(
+        surface, str(payload.get("workspace_path") or "")
+    ):
+        # Kill this session id, not every PTY under the pane id: only the
+        # session that names the surface is known to be a panel.
+        await session.terminals.kill(term_session_id, force=True)
+        app._PTY_OWNERS.pop(term_session_id, None)
+        app.attribution.unregister_pane(pane_id)
+        ended.setdefault(pane_id, workspace_path)
+    for pane_id, workspace_path in ended.items():
+        portable_credentials.forget_launch(pane_id)
+        for ws in app.dev_time_store.pane_removed(pane_id):
+            await app.broadcast(make_event("devtime.changed", {"workspace_path": ws}))
+        entry = agent_messaging.get(pane_id)
+        if entry is not None and entry.is_dock and agent_messaging.unregister(pane_id):
+            app.forget_pane_activity(pane_id)
+            server_link.roster_changed()
+        if not workspace_path:
+            continue
+        try:
+            # Only a panel's own record: the store never lets a panel take over
+            # a window pane's, and ending the panel must not retire one either.
+            project = app.project_store.load_or_create(workspace_path)
+            if any(p.pane_id == pane_id and p.surface == surface for p in project.panes):
+                app.project_store.record_manual_pane_unspawn(workspace_path, pane_id=pane_id)
+        except Exception:  # noqa: BLE001 — the PTY is down; a lost record update must not fail the close
+            log.exception("terminal.kill_surface: retiring %s in %s failed", pane_id, workspace_path)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pane_ids": list(ended)}))
+
+
+@handler("terminal.dock_record")
+async def terminal_dock_record(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """An embedded AI panel's restore record, for the panel to resume on its own
+    after an app quit: {agent, session_id} while the record is 'spawned', else
+    None. A read through the write-free peek — the Mini-IDE opens sub-folders,
+    which must not get a project written into them — and only ever a panel's
+    record, never a window pane's."""
+    from . import app
+
+    pane_id = str(payload.get("pane_id") or "")
+    project = app.project_store.peek(str(payload.get("workspace_path") or "")) if pane_id else None
+    record = next(
+        (
+            p for p in (project.panes if project else [])
+            if p.pane_id == pane_id
+            and p.spawn_status == "spawned"
+            and p.surface
+            and p.surface != "main"
+        ),
+        None,
+    )
+    await session.send_json(make_response(msg_id, msg_type, {
+        "record": {"agent": record.agent, "session_id": record.session_id} if record else None,
+    }))
+
+
 @handler("terminal.reattach")
 async def terminal_reattach(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app

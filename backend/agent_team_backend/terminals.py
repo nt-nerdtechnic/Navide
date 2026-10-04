@@ -809,6 +809,29 @@ class TerminalService:
             if session.pane_id == pane_id and not session.closed
         ]
 
+    def live_ids_for_surface(self, surface: str, workspace_path: str = "") -> list[tuple[str, str, str]]:
+        """(session id, pane id, workspace) of every running embedded AI panel
+        (AiCliDock) that `surface` hosts — in `workspace_path`, or in any
+        workspace when it is empty — read from the terminal metadata the
+        panel's create carried. A window pane's create names no surface (or
+        "main"), so it can never match."""
+        if not surface or surface == "main":
+            return []
+
+        def norm(path: str) -> str:
+            return path.rstrip("/") or path
+
+        workspace = norm(workspace_path)
+        hits: list[tuple[str, str, str]] = []
+        for session in self._sessions.values():
+            if session.closed or str(session.metadata.get("surface") or "") != surface:
+                continue
+            session_workspace = str(session.metadata.get("workspace_path") or "")
+            if workspace and norm(session_workspace) != workspace:
+                continue
+            hits.append((session.id, session.pane_id, session_workspace))
+        return hits
+
     def find_live_by_resume_id(
         self,
         agent_key: str,
