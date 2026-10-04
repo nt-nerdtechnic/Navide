@@ -73,7 +73,7 @@ Snapshots are normalized to one shape so the frontend never sees provider
 quirks (epoch seconds, used/limit ratios, cent amounts are converted here):
 
     { provider, status: ok|no-credentials|expired|rate-limited|unavailable|
-                        cli-missing|not-measured|error,
+                        cli-missing|not-measured|unverified|error,
       planType, windows: [{ kind, label, usedPercent, resetsAt }], fetchedAt,
       error }
 
@@ -102,6 +102,7 @@ from .applog import app_data_dir
 from .osplat import secret_files
 from .cli_vendors.registry import VENDORS as _CLI_VENDORS
 from .cli_vendors.registry import vendor as _cli_vendor
+from .credential_store import StoreUnverified
 from .credential_vault import vault_to_thread
 
 log = logging.getLogger(__name__)
@@ -1158,8 +1159,18 @@ class UsageService:
             vault = _get_credential_vault()
             stores = getattr(vault, "stores", None)
             if stores is not None and stores.enabled(provider) and spec.fetch_usage_from_context:
-                async def bound_fetch(key=provider, adapter=spec):
-                    return await adapter.fetch_usage_from_context(stores.context(key))
+                try:
+                    context = stores.context(provider)
+                except StoreUnverified as err:
+                    # Only a standard pane can verify the store, so there is
+                    # nothing to read until one does. Check again next cycle
+                    # rather than poll: the record appears once a pane binds.
+                    unverified = asyncio.get_running_loop().create_future()
+                    unverified.set_exception(err)
+                    tasks[provider] = unverified
+                    continue
+                async def bound_fetch(ctx=context, adapter=spec):
+                    return await adapter.fetch_usage_from_context(ctx)
                 tasks[provider] = asyncio.create_task(bound_fetch())
             else:
                 tasks[provider] = asyncio.create_task(fetch(home))
@@ -1225,6 +1236,9 @@ class UsageService:
         for provider, task in tasks.items():
             try:
                 snap = await task
+            except StoreUnverified as err:
+                log.debug("usage poll skipped for %s: %s", provider, err)
+                snap = _snapshot(provider, "unverified", error=str(err))
             except Exception as err:  # noqa: BLE001 — one provider must not sink the rest
                 log.warning("usage poll failed for %s: %s", provider, err)
                 snap = _snapshot(provider, "error", error=str(err))

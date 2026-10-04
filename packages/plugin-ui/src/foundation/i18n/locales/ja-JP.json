@@ -8537,6 +8537,8 @@
     "refresh-status-unavailable": "利用不可",
     "refresh-status-cli-missing": "Claude Code が見つかりません",
     "refresh-status-not-measured": "未計測",
+    "refresh-status-unverified": "未検証 — pane を開いてください",
+    "unverified-tooltip": "まだ検証されていません。この CLI の pane を一度開くと、次回の更新から利用枠を読み取ります。",
     "refresh-status-error": "失敗",
     "expired-tooltip": "認証情報の期限が切れています。その CLI で再ログインしてください",
     "cli-missing-tooltip": "Navide の PATH に Claude Code がないため、利用枠を読み取れません。インストールするか、設定 › CLI で再検出してください。",

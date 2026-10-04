@@ -210,6 +210,24 @@ describe('UsageBadge – badge rendering', () => {
     expect(badge.attributes('title')).toContain('PATH')
   })
 
+  it('says to open a pane, not that it failed, when the credential store is unverified', async () => {
+    usage.usageFor.mockReturnValue(
+      snapshot({
+        status: 'unverified',
+        windows: [],
+        error: 'kilo: open a standard CLI pane to verify its credential store first',
+      }),
+    )
+    wrapper = mountBadge(makeCliProfiles().fake)
+    const badge = wrapper.find('.usage-badge')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toContain('Not verified yet')
+    await openPopover(wrapper)
+    const pop = wrapper.find('.usage-pop')
+    expect(pop.text()).toContain('Not verified yet')
+    expect(pop.find('.usage-pop-reason').exists()).toBe(false)
+  })
+
   it('renders nothing when the agent has no usage snapshot', () => {
     usage.usageFor.mockReturnValue(undefined)
     wrapper = mountBadge(makeCliProfiles().fake)

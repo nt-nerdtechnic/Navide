@@ -26,6 +26,9 @@ export type UsageStatus =
   // Parked Claude accounts: the CLI's `/usage` panel only speaks for whoever is
   // signed in, so a non-active account carries no figure at all.
   | 'not-measured'
+  // A managed credential store nobody has verified yet: only opening a
+  // standard pane does that, so there is nothing to read until then.
+  | 'unverified'
   | 'error'
 
 /** Statuses with a `usage.refresh-status-*` translation. Shared so the badge
@@ -39,6 +42,7 @@ export const TRANSLATED_REFRESH_STATUSES: ReadonlySet<string> = new Set<UsageSta
   'unavailable',
   'cli-missing',
   'not-measured',
+  'unverified',
   'error'
 ])
 

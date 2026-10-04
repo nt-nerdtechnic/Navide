@@ -5480,7 +5480,9 @@ async def cli_usage(ctx: Context, agent: str = "") -> dict[str, Any]:
     than one login. `enabled` false means quota polling is switched off, so
     whatever is here is only what was read last. A vendor with no entry at all
     is one Navide cannot read a quota for — which is not the same claim as a
-    vendor with quota left.
+    vendor with quota left. A snapshot with status "unverified" is not an
+    error: no standard pane has verified that vendor's credential store yet,
+    so nothing is read until the user opens one; its quota is unknown.
     """
     try:
         _resolve_caller(ctx)

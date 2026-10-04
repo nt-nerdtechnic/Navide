@@ -8537,6 +8537,8 @@
     "refresh-status-unavailable": "無官方查詢途徑",
     "refresh-status-cli-missing": "找不到 Claude Code",
     "refresh-status-not-measured": "未量測",
+    "refresh-status-unverified": "尚未驗證，請開一個 pane",
+    "unverified-tooltip": "尚未驗證，請開一個 pane。開過一次這個 CLI 的 pane 後，下一輪就會讀取額度。",
     "refresh-status-error": "失敗",
     "expired-tooltip": "憑證已過期 — 請在該 CLI 重新登入",
     "cli-missing-tooltip": "Navide 的 PATH 上找不到 Claude Code，因此讀不到額度。請先安裝，或到設定 › CLI 重新偵測。",

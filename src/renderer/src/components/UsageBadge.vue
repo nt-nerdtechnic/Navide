@@ -55,13 +55,17 @@ const pending = computed(() => snap.value?.refreshPending === true)
 // collapses every failure into one word ("unavailable"), which reads as "the
 // account is broken" when it is usually the CLI probe timing out on a loaded
 // machine. The snapshot has carried the real sentence all along; this shows it.
-const refreshError = computed(() => (pending.value ? '' : (snap.value?.error ?? '')))
+const refreshError = computed(() => (pending.value || unverified.value ? '' : (snap.value?.error ?? '')))
 // Claude's quota needs its CLI; without the binary there is nothing to read and
 // no cached figure to fall back to either, so the badge would render nothing at
 // all and the one actionable failure would be invisible.
 const cliMissing = computed(
   () => snap.value?.status === 'cli-missing' || snap.value?.refreshStatus === 'cli-missing'
 )
+// Never read because no pane has verified the vendor's credential store yet.
+// Not a failure — the backend stops polling until a pane is opened — so it
+// says what to do instead of showing the backend's sentence as an error.
+const unverified = computed(() => snap.value?.status === 'unverified')
 // `pending` belongs here: switching onto an account with no reading of its own
 // leaves a snapshot with no percent, no staleness and no error, which would
 // unmount the badge outright — vanishing mid-switch is the very "did that do
@@ -72,6 +76,7 @@ const visible = computed(
     expired.value ||
     cached.value ||
     cliMissing.value ||
+    unverified.value ||
     pending.value
 )
 
@@ -479,9 +484,11 @@ function acctTitle(profileId: string | null): string {
                 ? 'usage.expired-tooltip'
                 : cliMissing
                   ? 'usage.cli-missing-tooltip'
-                  : cached
-                    ? 'usage.cached-tooltip'
-                    : 'usage.badge-tooltip'
+                  : unverified
+                    ? 'usage.unverified-tooltip'
+                    : cached
+                      ? 'usage.cached-tooltip'
+                      : 'usage.badge-tooltip'
           )
     "
     @mouseenter="onEnter"
@@ -524,6 +531,7 @@ function acctTitle(profileId: string | null): string {
       </div>
       <div v-if="expired" class="usage-pop-expired">{{ $t('usage.expired-tooltip') }}</div>
       <div v-if="cliMissing" class="usage-pop-missing">{{ $t('usage.cli-missing-tooltip') }}</div>
+      <div v-if="unverified" class="usage-pop-missing">{{ $t('usage.unverified-tooltip') }}</div>
       <div v-if="pending" class="usage-pop-pending">{{ $t('usage.reading-now') }}</div>
       <div v-if="exhausted" class="usage-pop-exhausted">
         {{ exhaustedReset

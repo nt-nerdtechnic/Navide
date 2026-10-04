@@ -8537,6 +8537,8 @@
     "refresh-status-unavailable": "unavailable",
     "refresh-status-cli-missing": "Claude Code not found",
     "refresh-status-not-measured": "Not measured",
+    "refresh-status-unverified": "Not verified yet — open a pane",
+    "unverified-tooltip": "Not verified yet. Open a pane for this CLI once and its quota will be read from the next refresh.",
     "refresh-status-error": "failed",
     "expired-tooltip": "Credentials expired — re-login in that CLI",
     "cli-missing-tooltip": "Claude Code is not on Navide's PATH, so its quota cannot be read. Install it, or re-detect it in Settings › CLI.",
