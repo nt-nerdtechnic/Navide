@@ -9,6 +9,7 @@ import {
   useChannels,
   type ChannelAccountState,
   type ChannelLinkInvite,
+  type ChannelManagedCreatedEvent,
   type ChannelPlatform,
 } from '../../composables/useChannels'
 import {
@@ -30,7 +31,9 @@ import ToggleSwitch from './ToggleSwitch.vue'
  * Secrets go to the backend once and are never shown again — a stored secret
  * only shows as masked. A new bot is added with "quick add": the backend keeps it
  * only once the platform accepted its credential, then the bot's link guide opens
- * the chat app with a fresh code.
+ * the chat app with a fresh code. A Telegram bot in Bot Management Mode can also
+ * create a new bot: Telegram opens a prefilled creation screen, and the bot it makes
+ * arrives through the backend's quick add, then goes to its link guide the same way.
  */
 const props = defineProps<{
   backend: Pick<ReturnType<typeof useBackend>, 'send' | 'on' | 'status'>
@@ -74,6 +77,12 @@ const quickCopied = reactive<Record<string, boolean>>({})
 // Added, but no invite reached the link guide: the row says to link from the guide.
 const quickAdded = reactive<Record<string, boolean>>({})
 const QUICK_STEPS: readonly QuickStep[] = ['verifying', 'opening', 'waiting', 'done']
+// Creating a bot through a managing Telegram bot: the row asking for the disclosure to be
+// confirmed, the request each manager row waits on, and why the last one failed.
+const BOTFATHER_APP_URL = 'https://t.me/Botfather?startapp'
+const managedAsk = ref<string | null>(null)
+const managedWaiting = reactive<Record<string, string>>({})
+const managedError = reactive<Record<string, string>>({})
 
 function botKey(platform: string, account: string): string {
   return `${platform}:${account}`
@@ -336,6 +345,63 @@ function openSetupLink(url: string): void {
   void window.agentTeam?.openExternal?.(url)
 }
 
+/** Make the t.me/newbot link (only after the disclosure was confirmed) and open it. */
+async function createManaged(bot: BotRow): Promise<void> {
+  if (busy.value) return
+  managedAsk.value = null
+  delete managedError[bot.key]
+  busy.value = true
+  try {
+    const res = await store.managedCreate(bot.account)
+    if (!res.ok || !res.data) {
+      managedError[bot.key] = res.error ?? t('channels.error.generic')
+      return
+    }
+    managedWaiting[bot.key] = res.data.request_id
+    openSetupLink(res.data.url)
+  } finally {
+    busy.value = false
+  }
+}
+
+function managedFailureText(ev: ChannelManagedCreatedEvent): string {
+  // Only a request that ran out has no bot in Telegram; a quick add can time out too.
+  if (ev.reason === 'timeout' && !ev.created) return t('channels.managed.timeout')
+  if (ev.reason === 'token_unavailable') return t('channels.managed.token-unavailable')
+  const error = ev.error || t('channels.error.generic')
+  return ev.reason === 'rejected' || ev.reason === 'timeout'
+    ? t(`channels.quick.${ev.reason}`, { platform: platformName('telegram'), error })
+    : error
+}
+
+/** The created bot is added (or failed): hand its invite to its link guide, as quick add does. */
+async function managedCreated(ev: ChannelManagedCreatedEvent): Promise<void> {
+  const managerKey = Object.keys(managedWaiting).find((k) => managedWaiting[k] === ev.request_id)
+  if (!managerKey) return
+  delete managedWaiting[managerKey]
+  if (!ev.ok || !ev.account) {
+    managedError[managerKey] = managedFailureText(ev)
+    return
+  }
+  await store.refresh()
+  const key = botKey('telegram', ev.account)
+  const added = botsOf('telegram').find((b) => b.account === ev.account)
+  if (ev.link && added && isConnected(added)) {
+    quickStep[key] = 'opening'
+    quickInvite[key] = ev.link
+  } else {
+    endQuickSteps(key)
+  }
+}
+
+watch(() => store.lastManagedCreated.value, (ev) => {
+  if (ev) void managedCreated(ev)
+})
+// The backend keeps open requests in memory only: after a dropped connection none may be left.
+watch(() => store.linkEpoch.value, () => {
+  for (const key of Object.keys(managedWaiting)) delete managedWaiting[key]
+})
+
 /** Panes connected through this bot: removing it disconnects them. */
 function boundCount(platform: ChannelPlatform, account: string): number {
   return store.bindings.value.filter((b) => b.platform === platform && (b.account || DEFAULT_ACCOUNT) === account).length
@@ -526,6 +592,37 @@ function formatTime(ts: number | null | undefined): string {
               >{{ t('channels.quick.copied-code', { platform: platformName(spec.id) }) }}</p>
             </template>
             <p v-else-if="quickAdded[bot.key]" class="ch-form-hint" data-testid="channel-quick-added">{{ t('channels.quick.added') }}</p>
+
+            <div v-if="spec.id === 'telegram' && isConnected(bot)" class="ch-managed">
+              <template v-if="bot.status.can_manage_bots">
+                <p v-if="managedWaiting[bot.key]" class="ch-form-hint" data-testid="channel-managed-waiting">{{ t('channels.managed.waiting') }}</p>
+                <template v-else-if="managedAsk === bot.key">
+                  <p class="ch-form-hint" data-testid="channel-managed-disclose">{{ t('channels.managed.disclose', { manager: bot.status.identity }) }}</p>
+                  <div class="ch-form-actions">
+                    <button type="button" class="ch-btn ghost sm" data-testid="channel-managed-cancel" @click="managedAsk = null">{{ t('channels.cancel') }}</button>
+                    <button type="button" class="ch-btn primary sm" :disabled="busy" data-testid="channel-managed-confirm" @click="createManaged(bot)">{{ t('channels.managed.create') }}</button>
+                  </div>
+                </template>
+                <button
+                  v-else
+                  type="button"
+                  class="ch-btn ghost sm"
+                  :disabled="busy"
+                  data-testid="channel-managed-create"
+                  @click="managedAsk = bot.key"
+                >{{ t('channels.managed.create') }}</button>
+              </template>
+              <p v-else class="ch-form-hint" data-testid="channel-managed-enable">
+                {{ t('channels.managed.enable-mode') }}
+                <a
+                  class="ch-setup-link"
+                  :href="BOTFATHER_APP_URL"
+                  data-testid="channel-managed-botfather"
+                  @click.prevent="openSetupLink(BOTFATHER_APP_URL)"
+                >BotFather</a>
+              </p>
+              <p v-if="managedError[bot.key]" class="ch-error" role="alert" data-testid="channel-managed-error">{{ managedError[bot.key] }}</p>
+            </div>
 
             <div
               v-if="isConnected(bot) && (chatCounts[bot.key] !== undefined || chatCountErrors[bot.key])"
@@ -770,6 +867,9 @@ function formatTime(ts: number | null | undefined): string {
 .ch-quick-steps li.past { color: var(--success-fg); }
 .ch-quick-steps li.current { color: var(--text-bright); font-weight: 600; }
 .ch-spacer { flex: 1; }
+
+/* Creating a bot through a managing Telegram bot. */
+.ch-managed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 8px 0 0; }
 
 /* Buttons: the Accounts page's button set. */
 .ch-btn {

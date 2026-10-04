@@ -23,6 +23,8 @@ export interface ChannelStatus {
   last_connected_at: number | null
   last_inbound_at: number | null
   identity: string
+  /** Telegram only: Bot Management Mode is on, so this bot can create bots (getMe). */
+  can_manage_bots?: boolean
 }
 
 export interface ChannelCapabilities {
@@ -144,6 +146,20 @@ export interface ChannelQuickAddResult {
   link: ChannelLinkInvite | null
 }
 
+/** `channels.managed_created`: the bot a `channels.managed_create` link was for, added
+ *  through quick add, or why not. `created` is set once the bot exists in Telegram. */
+export interface ChannelManagedCreatedEvent {
+  request_id: string
+  ok: boolean
+  account?: string
+  name?: string
+  link?: ChannelLinkInvite | null
+  /** "timeout" (no bot within the request's life), "token_unavailable", or quick add's reason. */
+  reason?: string
+  error?: string
+  created?: boolean
+}
+
 /** `channels.linked`: a chat was linked by an invite code. */
 export interface ChannelLinkedEvent {
   platform: ChannelPlatform
@@ -207,6 +223,7 @@ function createChannelsStore(backend: Backend) {
   const error = ref('')
   const lastLinked = ref<ChannelLinkedEvent | null>(null)
   const lastLinkFailed = ref<ChannelLinkFailedEvent | null>(null)
+  const lastManagedCreated = ref<ChannelManagedCreatedEvent | null>(null)
   // Bumped whenever the backend connection drops: invites live only in the
   // backend's memory, so a code handed out before may be gone.
   const linkEpoch = ref(0)
@@ -287,6 +304,10 @@ function createChannelsStore(backend: Backend) {
     const msg = raw as ChannelLinkFailedEvent | null
     if (msg?.platform) lastLinkFailed.value = msg
   })
+  backend.on('channels.managed_created', (raw) => {
+    const msg = raw as ChannelManagedCreatedEvent | null
+    if (msg?.request_id) lastManagedCreated.value = msg
+  })
   backend.on('channels.status', (raw) => {
     const msg = raw as { platform?: string; account?: string; status?: Partial<ChannelStatus> } | null
     if (!msg?.platform) return
@@ -324,6 +345,7 @@ function createChannelsStore(backend: Backend) {
     error,
     lastLinked,
     lastLinkFailed,
+    lastManagedCreated,
     linkEpoch,
     configuredPlatforms,
     refresh,
@@ -353,6 +375,10 @@ function createChannelsStore(backend: Backend) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
       }
     },
+    /** A t.me/newbot link for a bot `managerAccount` (Telegram) will manage; the bot it
+     *  creates arrives as `channels.managed_created` with the returned `request_id`. */
+    managedCreate: (managerAccount: string) =>
+      call<{ request_id: string; url: string }>('channels.managed_create', { manager_account: managerAccount }),
     setEnabled: (platform: ChannelPlatform, on: boolean, account?: string) =>
       mutate('channels.set_enabled', { platform, ...acct(account), enabled: on }),
     renameAccount: (platform: ChannelPlatform, account: string, name: string) =>

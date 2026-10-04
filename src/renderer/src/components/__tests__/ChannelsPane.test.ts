@@ -729,4 +729,167 @@ describe('ChannelsPane', () => {
       expect(clip.reads).toBe(0)
     })
   })
+
+  describe('create a bot with a managing Telegram bot', () => {
+    const NEWBOT_URL = 'https://t.me/newbot/navide_bot/navide_bot_ab12_bot?name=Navide%20bot'
+
+    function seedManager(canManage: boolean | undefined, connected = true): void {
+      const status: Record<string, unknown> = {
+        lifecycle: connected ? 'ready' : 'recovering', connected, identity: '@navide_bot', last_error: '',
+      }
+      if (canManage !== undefined) status.can_manage_bots = canManage
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'telegram', configured: true, enabled: true, status, config: {}, capabilities: null,
+          accounts: [{ account: 'default', name: '', configured: true, enabled: true, status, config: {}, capabilities: null }],
+        }],
+      })
+      mock.setResponse('channels.locations', { ok: true, locations: [{ chat_id: '42', title: 'neil', kind: 'private', supports_topics: false }] })
+    }
+
+    /** The manager plus the bot it created, connected and with no chat linked yet. */
+    function seedCreated(): void {
+      const ready = { lifecycle: 'ready', connected: true, last_error: '' }
+      mock.setResponse('channels.list', {
+        ok: true,
+        enabled: true,
+        platforms: [{
+          platform: 'telegram', configured: true, enabled: true, status: { ...ready, identity: '@navide_bot' }, config: {}, capabilities: null,
+          accounts: [
+            { account: 'default', name: '', configured: true, enabled: true, status: { ...ready, identity: '@navide_bot', can_manage_bots: true }, config: {}, capabilities: null },
+            { account: 'bot-abc123', name: '@made_bot', configured: true, enabled: true, status: { ...ready, identity: '@made_bot' }, config: { name: '@made_bot' }, capabilities: null },
+          ],
+        }],
+      })
+      mock.setResponse('channels.locations', { ok: true, locations: [] })
+    }
+
+    const managerRow = (w: VueWrapper) => w.get('[data-platform="telegram"] [data-account="default"]')
+
+    async function startCreate(w: VueWrapper): Promise<void> {
+      mock.setResponse('channels.managed_create', { ok: true, request_id: 'r1', url: NEWBOT_URL })
+      await managerRow(w).get('[data-testid="channel-managed-create"]').trigger('click')
+      await managerRow(w).get('[data-testid="channel-managed-confirm"]').trigger('click')
+      await flushPromises()
+    }
+
+    it('offers the button only on a connected bot that can manage bots', async () => {
+      seedManager(true)
+      const w = await render()
+      expect(managerRow(w).get('[data-testid="channel-managed-create"]').text()).toBe('Create a new bot')
+      expect(managerRow(w).find('[data-testid="channel-managed-enable"]').exists()).toBe(false)
+    })
+
+    it('explains how to turn on Bot Management Mode otherwise, with a BotFather link', async () => {
+      for (const flag of [false, undefined]) {
+        wrapper?.unmount()
+        mock = createMockBackend('connected')
+        seed()
+        seedManager(flag)
+        const w = await render()
+        const row = managerRow(w)
+        expect(row.find('[data-testid="channel-managed-create"]').exists()).toBe(false)
+        expect(row.get('[data-testid="channel-managed-enable"]').text()).toContain(
+          'To create bots with this bot, turn on "Bot Management Mode" in BotFather first.'
+        )
+        await row.get('[data-testid="channel-managed-botfather"]').trigger('click')
+        expect(openExternal).toHaveBeenLastCalledWith('https://t.me/Botfather?startapp')
+      }
+    })
+
+    it('shows neither on a bot that is not connected, nor on other platforms', async () => {
+      seedManager(true, false)
+      const w = await render()
+      expect(w.find('[data-testid="channel-managed-create"]').exists()).toBe(false)
+      expect(w.find('[data-testid="channel-managed-enable"]').exists()).toBe(false)
+    })
+
+    it('discloses what the manager can do before opening anything', async () => {
+      seedManager(true)
+      const w = await render()
+      await managerRow(w).get('[data-testid="channel-managed-create"]').trigger('click')
+      expect(managerRow(w).get('[data-testid="channel-managed-disclose"]').text()).toContain(
+        "@navide_bot can read and replace the new bot's token at any time. Whoever holds @navide_bot's token controls every bot it creates."
+      )
+      expect(mock.sent.some((m) => m.type === 'channels.managed_create')).toBe(false)
+      expect(openExternal).not.toHaveBeenCalled()
+      await managerRow(w).get('[data-testid="channel-managed-cancel"]').trigger('click')
+      expect(managerRow(w).find('[data-testid="channel-managed-disclose"]').exists()).toBe(false)
+      expect(mock.sent.some((m) => m.type === 'channels.managed_create')).toBe(false)
+    })
+
+    it('opens the prefilled link exactly as the backend made it once confirmed, then waits', async () => {
+      seedManager(true)
+      const w = await render()
+      await startCreate(w)
+      expect(mock.sent.find((m) => m.type === 'channels.managed_create')?.payload).toEqual({ manager_account: 'default' })
+      expect(openExternal).toHaveBeenCalledWith(NEWBOT_URL)
+      expect(managerRow(w).find('[data-testid="channel-managed-disclose"]').exists()).toBe(false)
+      expect(managerRow(w).get('[data-testid="channel-managed-waiting"]').text()).toBe('Tap Create in Telegram…')
+      expect(managerRow(w).find('[data-testid="channel-managed-create"]').exists()).toBe(false)
+    })
+
+    it('shows the backend error when the link cannot be made, and opens nothing', async () => {
+      seedManager(true)
+      const w = await render()
+      mock.setResponse('channels.managed_create', { ok: false, error: 'Bot Management Mode is off for @navide_bot' })
+      await managerRow(w).get('[data-testid="channel-managed-create"]').trigger('click')
+      await managerRow(w).get('[data-testid="channel-managed-confirm"]').trigger('click')
+      await flushPromises()
+      expect(openExternal).not.toHaveBeenCalled()
+      expect(managerRow(w).get('[data-testid="channel-managed-error"]').text()).toBe('Bot Management Mode is off for @navide_bot')
+      expect(managerRow(w).find('[data-testid="channel-managed-waiting"]').exists()).toBe(false)
+    })
+
+    it('hands the created bot to its link guide, as quick add does', async () => {
+      seedManager(true)
+      const w = await render()
+      await startCreate(w)
+      // Another window's request: not this one's.
+      mock.emit('channels.managed_created', { request_id: 'other', ok: false, reason: 'timeout', error: 'x' })
+      await flushPromises()
+      expect(managerRow(w).find('[data-testid="channel-managed-waiting"]').exists()).toBe(true)
+
+      seedCreated()
+      mock.emit('channels.managed_created', {
+        request_id: 'r1', ok: true, account: 'bot-abc123', name: '@made_bot',
+        link: { platform: 'telegram', code: 'MB7Q2XAB', target: 'direct', expires_at: Math.floor(Date.now() / 1000) + 600, url: 'https://t.me/made_bot?start=MB7Q2XAB' },
+      })
+      await flushPromises()
+      expect(managerRow(w).find('[data-testid="channel-managed-waiting"]').exists()).toBe(false)
+      expect(openExternal).toHaveBeenLastCalledWith('https://t.me/made_bot?start=MB7Q2XAB')
+      const made = w.get('[data-platform="telegram"] [data-account="bot-abc123"]')
+      expect(made.get('[data-testid="channel-bot-name"]').text()).toBe('@made_bot')
+      expect(made.get('[data-testid="channel-quick-steps"]').attributes('data-step')).toBe('waiting')
+      expect(made.get('[data-testid="channel-link-code"]').text()).toBe('/start MB7Q2XAB')
+    })
+
+    it.each([
+      [{ reason: 'timeout', error: 'no bot was created within 600s' }, 'No bot was created within 10 minutes. Try again.'],
+      [{ reason: 'token_unavailable', error: 'bot is not managed', created: true }, 'The bot was created in Telegram, but its token could not be read. Check it in BotFather.'],
+      [{ reason: 'rejected', error: '401 Unauthorized', created: true }, 'Telegram rejected the credential: 401 Unauthorized'],
+      [{ reason: 'timeout', error: 'no answer from telegram within 10s', created: true }, 'Telegram did not answer in time. Check the network and try again. (no answer from telegram within 10s)'],
+      [{ reason: 'invalid', error: 'chat channels are turned off', created: true }, 'chat channels are turned off'],
+    ])('shows a failure in words: %o', async (failure, text) => {
+      seedManager(true)
+      const w = await render()
+      await startCreate(w)
+      mock.emit('channels.managed_created', { request_id: 'r1', ok: false, ...failure })
+      await flushPromises()
+      expect(managerRow(w).find('[data-testid="channel-managed-waiting"]').exists()).toBe(false)
+      expect(managerRow(w).get('[data-testid="channel-managed-error"]').text()).toBe(text)
+      expect(managerRow(w).find('[data-testid="channel-managed-create"]').exists()).toBe(true)
+    })
+
+    it('stops waiting when the backend connection drops (its request lived in memory)', async () => {
+      seedManager(true)
+      const w = await render()
+      await startCreate(w)
+      mock.backend.status.value = 'disconnected'
+      await flushPromises()
+      expect(managerRow(w).find('[data-testid="channel-managed-waiting"]').exists()).toBe(false)
+    })
+  })
 })
