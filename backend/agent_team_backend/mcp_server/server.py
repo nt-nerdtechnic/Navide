@@ -459,6 +459,12 @@ def _target_view(entry: Any, same_workspace: bool) -> dict[str, Any]:
     hold_reason = _hold_reason_for(entry.qualified_name)
     if hold_reason:
         view["hold_reason"] = hold_reason
+    # Only an embedded AI panel carries these (which window hosts it); a window
+    # pane never sets them, so its view keeps exactly the keys it always had.
+    if entry.surface:
+        view["surface"] = entry.surface
+    if entry.window_kind:
+        view["window_kind"] = entry.window_kind
     return view
 
 
@@ -687,7 +693,8 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     A caller with no pane identity (host / external credential) is not a pane
     and has none of these: it gets {ok, caller} only.
     Returns {ok, caller, name, address, pane_id, workspace_path, agent_key,
-    busy, offline, delegation_hint, hold_reason?, spawned_by?, waiting_on_me?,
+    busy, offline, delegation_hint, hold_reason?, surface?, window_kind?,
+    spawned_by?, waiting_on_me?,
     cloud?} or {ok: false, error}.
     """
     from agent_team_backend import agent_messaging

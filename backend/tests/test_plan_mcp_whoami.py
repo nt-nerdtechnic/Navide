@@ -404,3 +404,40 @@ async def test_open_agent_omits_pane_id_when_the_window_named_none(
 
     assert result["ok"] is True
     assert "pane_id" not in result
+
+
+# ── D. an embedded panel names the window it lives in ───────────────────────
+@pytest.mark.asyncio
+async def test_a_panel_reports_its_surface_and_window_kind() -> None:
+    """A panel and a pane looked identical on the roster, so a reader could
+    not tell that `pm-claude` lives in the Pipeline Manager rather than a
+    window's pane pool."""
+    agent_messaging.register("pa", "lead", "/ws/alpha", agent_key="claude")
+    agent_messaging.register(
+        "dock-1", "pm-claude", "/ws/alpha", agent_key="claude",
+        surface="pm", window_kind="main", deliverable=True,
+    )
+
+    roster = await plan_mcp.cli_list_targets(_ctx(pane_id="pa"))
+    panel = next(t for t in roster["targets"] if t["pane_id"] == "dock-1")
+    assert panel["surface"] == "pm"
+    assert panel["window_kind"] == "main"
+
+    me = await plan_mcp.cli_whoami(_ctx(pane_id="dock-1"))
+    assert me["surface"] == "pm"
+    assert me["window_kind"] == "main"
+
+
+@pytest.mark.asyncio
+async def test_a_window_pane_gains_no_surface_keys() -> None:
+    """Absent, not empty: every main-window pane answers with exactly the keys
+    it always had."""
+    agent_messaging.register("pa", "lead", "/ws/alpha", agent_key="claude")
+    agent_messaging.register("pb", "peer", "/ws/alpha", agent_key="codex")
+
+    roster = await plan_mcp.cli_list_targets(_ctx(pane_id="pa"))
+    assert "surface" not in roster["targets"][0]
+    assert "window_kind" not in roster["targets"][0]
+    me = await plan_mcp.cli_whoami(_ctx(pane_id="pa"))
+    assert "surface" not in me
+    assert "window_kind" not in me
