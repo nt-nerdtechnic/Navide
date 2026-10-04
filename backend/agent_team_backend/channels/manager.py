@@ -23,10 +23,12 @@ import dataclasses
 import json
 import logging
 import re
+import secrets
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+from urllib.parse import quote
 
 from . import redact, relay
 from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summarize
@@ -86,6 +88,12 @@ MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
 QUICK_ADD_TIMEOUT_S = 10.0  # how long a quick add waits for the platform to accept the credential
 QUICK_ADD_POLL_S = 0.1
+# Telegram Managed Bots (Bot API 9.6): how long a t.me/newbot link waits for its bot.
+MANAGED_REQUEST_TTL_S = 600.0
+MANAGED_DEFAULT_NAME = "Navide bot"
+# Telegram's username limit for bots made in BotFather; unverified for managed bots.
+TELEGRAM_USERNAME_MAX = 32
+_TELEGRAM_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 # A bot is (platform, account). "default" is every bot from before several bots
@@ -184,6 +192,16 @@ class _Pending:
 
 
 @dataclass
+class _ManagedRequest:
+    """A t.me/newbot link handed out for ``manager`` (a Telegram bot account), awaiting its bot."""
+
+    request_id: str
+    manager: str
+    username: str
+    timer: asyncio.Task[None] | None = None
+
+
+@dataclass
 class _Shown:
     """The awaiting prompt a pane last showed its chat."""
 
@@ -237,6 +255,8 @@ class ChannelManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = asyncio.Lock()
         self._quick_adding: set[BotKey] = set()  # bots a quick add is storing and verifying
+        # Memory only: a backend restart forgets them, and a later managed_bot update is ignored.
+        self._managed: dict[str, _ManagedRequest] = {}  # request_id -> open t.me/newbot request
         self.relay = relay.RelayTable(clock=clock)
         self._debounce: dict[tuple[str, str], _Debounce] = {}
         # One serial worker per location: order kept within a chat, chats never block each other.
@@ -395,6 +415,11 @@ class ChannelManager:
         async def emit(msg: InboundMessage) -> None:
             await self.handle_inbound(msg)
 
+        if hasattr(adapter, "on_managed_bot"):
+            async def on_managed_bot(update: dict[str, Any]) -> None:
+                self._on_managed_bot(platform, account, adapter, update)
+
+            adapter.on_managed_bot = on_managed_bot
         await adapter.start(emit)
         return None
 
@@ -616,6 +641,97 @@ class ChannelManager:
             self.store.remove_account(platform, account)
         await self._changed()
         await self.broadcast_status_changes()
+
+    # --- Telegram Managed Bots ----------------------------------------------------------
+
+    def managed_create(self, manager: str, username: str = "", name: str = "") -> dict[str, Any]:
+        """A t.me/newbot link that creates a bot managed by Telegram bot ``manager``; once
+        Telegram reports it (``_on_managed_bot``) it is quick added as a new Navide bot."""
+        _check_account(manager)
+        adapter = self._adapters.get(("telegram", manager))
+        if adapter is None:
+            return {"ok": False, "error": f"{_bot_label(('telegram', manager))} is not connected"}
+        identity = adapter.status.identity
+        if not identity.startswith("@"):
+            return {"ok": False, "error": f"{_bot_label(('telegram', manager))} has not logged in yet"}
+        if not getattr(adapter.status, "can_manage_bots", False):
+            return {"ok": False, "error": f"Bot Management Mode is off for {identity}"}
+        manager_username = identity[1:]
+        if username and not _TELEGRAM_USERNAME_RE.match(username):
+            return {"ok": False, "error": f"invalid username {username!r}"}
+        username = username or _default_managed_username(manager_username)
+        name = name or MANAGED_DEFAULT_NAME
+        request = _ManagedRequest(secrets.token_hex(8), manager, username)
+        self._managed[request.request_id] = request
+        request.timer = self._spawn(self._expire_managed(request))
+        url = f"https://t.me/newbot/{manager_username}/{username}?name={quote(name, safe='')}"
+        return {"ok": True, "request_id": request.request_id, "url": url}
+
+    async def _expire_managed(self, request: _ManagedRequest) -> None:
+        await asyncio.sleep(MANAGED_REQUEST_TTL_S)
+        if self._managed.pop(request.request_id, None) is not None:
+            await self._seams.broadcast("channels.managed_created", {
+                "request_id": request.request_id, "ok": False, "reason": "timeout",
+                "error": f"no bot was created within {MANAGED_REQUEST_TTL_S:g}s",
+            })
+
+    def _on_managed_bot(self, platform: str, manager: str, adapter: ChannelAdapter, update: dict[str, Any]) -> None:
+        """A ManagedBotUpdated from ``manager``. It is taken only when ``manager`` has an open
+        request and the creator is a user linked to ``manager``; anything else (a stranger
+        using the link, a token or owner change of a bot already here) is only logged."""
+        creator = str((update.get("user") or {}).get("id") or "")
+        bot = update.get("bot") or {}
+        bot_id = str(bot.get("id") or "")
+        label = _bot_label((platform, manager))
+        if not bot_id:
+            log.warning("channels: %s sent a managed_bot update without a bot", label)
+            return
+        if any(p == platform and str(getattr(ad, "bot_id", "")) == bot_id for (p, _a), ad in self._adapters.items()):
+            log.info("channels: %s reported a token or owner change of bot %s, already added; ignored", label, bot_id)
+            return
+        open_requests = [r for r in self._managed.values() if r.manager == manager]
+        if not open_requests:
+            log.info("channels: %s reported bot %s with no open create request; ignored", label, bot_id)
+            return
+        if not self.gate.is_allowed(platform, creator, manager):
+            log.warning("channels: bot %s was created through %s by user %s, who is not linked to it; ignored",
+                        bot_id, label, creator)
+            return
+        username = str(bot.get("username") or "").lower()
+        request = next((r for r in open_requests if r.username.lower() == username), open_requests[0])
+        del self._managed[request.request_id]
+        if request.timer is not None:
+            request.timer.cancel()
+        self._spawn(self._managed_handoff(request, adapter, int(bot_id)))
+
+    async def _managed_handoff(self, request: _ManagedRequest, adapter: Any, bot_id: int) -> None:
+        # Past this point the bot exists in Telegram whatever happens here; Navide cannot delete it.
+        event: dict[str, Any] = {"request_id": request.request_id, "created": True}
+        try:
+            token = await adapter.managed_bot_token(bot_id)
+        except Exception as exc:  # noqa: BLE001 — reported to the window that asked
+            log.warning("channels: reading the token of managed bot %s failed: %s", bot_id, exc)
+            event.update(ok=False, reason="token_unavailable", error=redact.redact_text(str(exc)))
+        else:
+            account = self._new_account_id()
+            try:
+                result = await self.quick_add("telegram", {}, {"token": token}, account, "direct")
+            except Exception as exc:  # noqa: BLE001 — the window waiting on this request must hear back
+                log.exception("channels: adding managed bot %s failed", bot_id)
+                result = {"ok": False, "reason": "invalid", "error": f"{type(exc).__name__}: {exc}"}
+            if result.get("ok"):
+                event.update(ok=True, account=account, name=result.get("name") or "", link=result.get("link"))
+            else:
+                event.update(ok=False, reason=result.get("reason") or "invalid", error=result.get("error") or "")
+        await self._seams.broadcast("channels.managed_created", event)
+
+    def _new_account_id(self) -> str:
+        """A fresh bot id in the renderer's ``newAccountId`` shape."""
+        taken = {a for (_p, a) in self.store.accounts()} | {a for (_p, a) in self._adapters}
+        while True:
+            account = f"bot-{secrets.token_hex(3)}"
+            if account not in taken:
+                return account
 
     async def rename_account(self, platform: str, account: str, name: str) -> dict[str, Any]:
         """A bot's display name only: its id, credential and connection stay as they are."""
@@ -1610,6 +1726,12 @@ class ChannelManager:
         self._awaiting_posted.discard(pane_id)
         self._awaiting_failures.pop(pane_id, None)
         self._awaiting_shown.pop(pane_id, None)
+
+
+def _default_managed_username(manager_username: str) -> str:
+    """``{manager}_{4 random}_bot``, the manager part cut to keep it within the username limit."""
+    suffix = f"_{secrets.token_hex(2)}_bot"
+    return f"{manager_username[:TELEGRAM_USERNAME_MAX - len(suffix)]}{suffix}"
 
 
 def _check_platform(platform: str) -> None:

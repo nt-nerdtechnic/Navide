@@ -26,7 +26,8 @@ import hashlib
 import logging
 import random
 import time
-from typing import Any, Callable, Protocol
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -64,6 +65,13 @@ class OffsetStore(Protocol):
     def get_offset(self, platform: str, account: str, bot_id: str) -> int | None: ...
 
     def set_offset(self, platform: str, account: str, bot_id: str, offset: int) -> None: ...
+
+
+@dataclass
+class TelegramStatus(AdapterStatus):
+    # getMe's User.can_manage_bots (Bot API 9.6): Bot Management Mode is on in BotFather,
+    # so this bot can create bots through t.me/newbot links. False until getMe answered.
+    can_manage_bots: bool = False
 
 
 class TelegramApiError(Exception):
@@ -106,7 +114,10 @@ class TelegramAdapter:
         self._attempt = 0
         self._stall_timeout_s = stall_timeout_s
         self._poll_timeout_s = poll_timeout_s
-        self.status = AdapterStatus()
+        self.status = TelegramStatus()
+        # Receives each ManagedBotUpdated (a bot this one manages was created, re-tokened
+        # or changed owner); the manager decides what it means. None: such updates are skipped.
+        self.on_managed_bot: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self.bot_id = self._token.split(":", 1)[0]
         self._client: httpx.AsyncClient | None = None
         self._task: asyncio.Task[None] | None = None
@@ -169,6 +180,7 @@ class TelegramAdapter:
         me = await self._call("getMe")
         username = me.get("username") or ""
         self.status.identity = f"@{username}" if username else str(me.get("id", ""))
+        self.status.can_manage_bots = me.get("can_manage_bots") is True
         if me.get("id"):
             self.bot_id = str(me["id"])
         await self._call("deleteWebhook", {"drop_pending_updates": False})
@@ -180,7 +192,8 @@ class TelegramAdapter:
         while True:
             params: dict[str, Any] = {
                 "timeout": self._poll_timeout_s,
-                "allowed_updates": ["message", "callback_query"],
+                # managed_bot only ever arrives for a bot in Bot Management Mode.
+                "allowed_updates": ["message", "callback_query", "managed_bot"],
             }
             if self._offset is not None:
                 params["offset"] = self._offset
@@ -209,6 +222,11 @@ class TelegramAdapter:
     # --- inbound --------------------------------------------------------------
 
     async def _handle_update(self, update: dict[str, Any]) -> None:
+        managed = update.get("managed_bot")
+        if managed:
+            if self.on_managed_bot is not None:
+                await self.on_managed_bot(managed)
+            return
         cb = update.get("callback_query")
         if cb:
             msg = cb.get("message") or {}
@@ -275,6 +293,14 @@ class TelegramAdapter:
         if not username:
             return ""
         return f"https://t.me/{username}?{'startgroup' if target == 'group' else 'start'}={code}"
+
+    async def managed_bot_token(self, bot_user_id: int) -> str:
+        """The token of bot ``bot_user_id``, which this bot manages (getManagedBotToken)."""
+        token = str(await self._call("getManagedBotToken", {"user_id": bot_user_id}) or "")
+        if not token:
+            raise TelegramApiError(0, "getManagedBotToken returned no token")
+        redact.add_secret(token)
+        return token
 
     # --- outbound -------------------------------------------------------------
 

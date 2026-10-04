@@ -10,9 +10,12 @@ from typing import Any, Callable
 
 
 class FakeBotApi:
-    def __init__(self, token: str = "12345:SECRET", *, username: str = "navide_bot") -> None:
+    def __init__(self, token: str = "12345:SECRET", *, username: str = "navide_bot",
+                 can_manage_bots: bool | None = None) -> None:
         self.token = token
         self.username = username
+        # Left out of getMe when None, as the Bot API did before 9.6.
+        self.can_manage_bots = can_manage_bots
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.updates: list[dict[str, Any]] = []
         self._next_update_id = 100
@@ -71,6 +74,18 @@ class FakeBotApi:
             }})
             return uid
 
+    def push_managed_bot(self, *, creator_id: int, bot_id: int, bot_username: str = "made_bot",
+                         first_name: str = "Navide bot") -> int:
+        """A ManagedBotUpdated: ``creator_id`` created (or re-tokened) bot ``bot_id``."""
+        with self.lock:
+            uid = self._next_update_id
+            self._next_update_id += 1
+            self.updates.append({"update_id": uid, "managed_bot": {
+                "user": {"id": creator_id, "is_bot": False, "first_name": "neil"},
+                "bot": {"id": bot_id, "is_bot": True, "first_name": first_name, "username": bot_username},
+            }})
+            return uid
+
     def fail(self, method: str, code: int, description: str, retry_after: int | None = None,
              times: int = 1) -> None:
         body: dict[str, Any] = {"ok": False, "error_code": code, "description": description}
@@ -93,8 +108,10 @@ class FakeBotApi:
         if method in self.handlers:
             return {"ok": True, "result": self.handlers[method](params)}
         if method == "getMe":
-            return {"ok": True, "result": {"id": int(self.token.split(":")[0]), "is_bot": True,
-                                           "username": self.username}}
+            me: dict[str, Any] = {"id": int(self.token.split(":")[0]), "is_bot": True, "username": self.username}
+            if self.can_manage_bots is not None:
+                me["can_manage_bots"] = self.can_manage_bots
+            return {"ok": True, "result": me}
         if method == "getUpdates":
             offset = params.get("offset")
             deadline = time.time() + 0.2

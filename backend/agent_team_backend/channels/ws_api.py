@@ -44,6 +44,8 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
         if not isinstance(config, dict) or (secret is not None and not isinstance(secret, dict)):
             return {"ok": False, "error": "config and secret must be objects"}
         return await m.quick_add(_s(p, "platform"), config, secret or None, _account(p), _s(p, "link_target"))
+    if msg_type == "channels.managed_create":
+        return m.managed_create(_s(p, "manager_account") or DEFAULT_ACCOUNT, _s(p, "username"), _s(p, "name"))
     if msg_type == "channels.set_enabled":
         return await m.set_enabled(_s(p, "platform"), bool(p.get("enabled")), _account(p))
     if msg_type == "channels.rename_account":
@@ -82,7 +84,7 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
 
 
 MESSAGE_TYPES = (
-    "channels.list", "channels.configure", "channels.quick_add", "channels.set_enabled", "channels.rename_account",
+    "channels.list", "channels.configure", "channels.quick_add", "channels.managed_create", "channels.set_enabled", "channels.rename_account",
     "channels.set_global_enabled",
     "channels.remove", "channels.pairing.list", "channels.pairing.approve", "channels.pairing.reject",
     "channels.link.create", "channels.allow.list", "channels.allow.remove", "channels.locations", "channels.bind",

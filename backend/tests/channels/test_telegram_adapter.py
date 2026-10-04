@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 
 import pytest
@@ -340,3 +341,110 @@ async def test_stop_ends_polling_even_if_a_cancel_is_swallowed(api: FakeBotApi, 
     assert done, "stop() did not return"
     assert time.monotonic() - started < 2
     assert swallowed and ad.status.lifecycle == "stopped"
+
+
+# --- Managed Bots (Bot API 9.6) ------------------------------------------------
+
+
+def _collect() -> tuple[list[InboundMessage], object]:
+    got: list[InboundMessage] = []
+
+    async def emit(msg: InboundMessage) -> None:
+        got.append(msg)
+
+    return got, emit
+
+
+async def test_messages_and_button_presses_are_delivered_as_before(api: FakeBotApi) -> None:
+    """Locks the message and callback_query paths: exactly these inbound values, in order."""
+    got, emit = _collect()
+    api.push_message(chat_id=42, text="hello", sender_id=7, username="alice")
+    api.push_callback(chat_id=42, data="nv1:abcde:y", sender_id=7)
+    api.push_message(chat_id=42, text="", sender_id=7)  # no text: skipped
+    ad = _adapter(api)
+    await ad.start(emit)
+    try:
+        await _until(lambda: len(got) >= 2)
+        await _until(lambda: api.calls_of("answerCallbackQuery"))
+    finally:
+        await ad.stop()
+    msg, cb = got
+    assert (msg.platform, msg.account, msg.chat_id, msg.thread_id, msg.sender_id, msg.sender_name,
+            msg.text, msg.message_id, msg.is_direct, msg.callback_data, msg.reply_to_id) == (
+        "telegram", "default", "42", "", "7", "alice", "hello", "42:1", True, "", "")
+    assert (cb.chat_id, cb.sender_id, cb.text, cb.callback_data, cb.message_id.startswith("cb:q")) == (
+        "42", "7", "", "nv1:abcde:y", True)
+    assert len(got) == 2
+
+
+async def test_polling_asks_for_managed_bot_updates_too(api: FakeBotApi) -> None:
+    got, emit = _collect()
+    ad = _adapter(api)
+    await ad.start(emit)
+    try:
+        await _until(lambda: api.calls_of("getUpdates"))
+    finally:
+        await ad.stop()
+    assert api.calls_of("getUpdates")[0]["allowed_updates"] == ["message", "callback_query", "managed_bot"]
+
+
+@pytest.mark.parametrize("flag, expected", [(True, True), (False, False), (None, False)])
+async def test_get_me_says_whether_the_bot_can_manage_bots(flag, expected) -> None:
+    with FakeBotApi(TOKEN, can_manage_bots=flag) as fake:
+        got, emit = _collect()
+        ad = _adapter(fake)
+        await ad.start(emit)
+        try:
+            await _until(lambda: ad.status.lifecycle == "ready")
+        finally:
+            await ad.stop()
+    assert ad.status.can_manage_bots is expected
+    assert dataclasses.asdict(ad.status)["can_manage_bots"] is expected
+
+
+async def test_a_managed_bot_update_goes_to_the_handler_and_not_to_chats(api: FakeBotApi) -> None:
+    got, emit = _collect()
+    handled: list[dict] = []
+
+    async def on_managed_bot(update: dict) -> None:
+        handled.append(update)
+
+    ad = _adapter(api)
+    ad.on_managed_bot = on_managed_bot
+    api.push_managed_bot(creator_id=7, bot_id=999, bot_username="made_bot")
+    api.push_message(chat_id=42, text="after")
+    await ad.start(emit)
+    try:
+        await _until(lambda: handled and got)
+    finally:
+        await ad.stop()
+    assert handled == [{
+        "user": {"id": 7, "is_bot": False, "first_name": "neil"},
+        "bot": {"id": 999, "is_bot": True, "first_name": "Navide bot", "username": "made_bot"},
+    }]
+    assert [m.text for m in got] == ["after"]
+
+
+async def test_a_managed_bot_update_without_a_handler_is_skipped(api: FakeBotApi) -> None:
+    got, emit = _collect()
+    offsets = MemOffsets()
+    ad = _adapter(api, offsets)
+    uid = api.push_managed_bot(creator_id=7, bot_id=999)
+    api.push_message(chat_id=42, text="after")
+    await ad.start(emit)
+    try:
+        await _until(lambda: got)
+    finally:
+        await ad.stop()
+    assert [m.text for m in got] == ["after"]
+    assert offsets.rows[("telegram", "default")][1] > uid
+
+
+async def test_managed_bot_token_asks_for_the_new_bots_user_id(api: FakeBotApi) -> None:
+    api.handlers["getManagedBotToken"] = lambda params: f"{params['user_id']}:NEWSECRET"
+    ad = _adapter(api)
+    assert await ad.managed_bot_token(999) == "999:NEWSECRET"
+    assert api.calls_of("getManagedBotToken") == [{"user_id": 999}]
+    api.fail("getManagedBotToken", 400, "Bad Request: bot not found")
+    with pytest.raises(Exception, match="bot not found"):
+        await ad.managed_bot_token(1000)
