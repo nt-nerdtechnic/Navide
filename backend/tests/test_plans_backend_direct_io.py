@@ -10,6 +10,7 @@ other filesystem bridge read.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import subprocess
@@ -199,10 +200,10 @@ def test_dotdot_traversal_is_refused(
     assert "Outside secret" not in repr(response)
 
 
-# ── the Host-authorized root: per instance, single flight, never the payload ─
+# ── the Host-authorized root: asked per request, never the payload ──────────
 
 
-def test_plan_root_is_resolved_once_per_instance_and_never_shared(
+def test_plan_root_is_asked_of_the_host_for_every_request_and_never_shared(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     first = _workspace(tmp_path, "first")
@@ -211,12 +212,13 @@ def test_plan_root_is_resolved_once_per_instance_and_never_shared(
     (second / ".agent-team" / "plans" / "second_bbbbbb.html").write_text(_plan_html("Second"), encoding="utf-8")
     host = _RootOnlyHost({"instance-1": first, "instance-2": second})
 
-    for _ in range(2):
+    for round_ in range(2):
         one = _value(_call(backend_process, host, "plans.list", {}, "instance-1"))
         two = _value(_call(backend_process, host, "plans.list", {}, "instance-2"))
         assert [entry["name"] for entry in one] == ["First"]
         assert [entry["name"] for entry in two] == ["Second"]
-    assert host.root_calls() == 2
+        # One Host authorization per request, however many files it touches.
+        assert host.root_calls() == 2 * (round_ + 1)
 
 
 def test_plan_root_failure_fails_the_request_and_never_uses_the_payload(
@@ -244,7 +246,7 @@ def test_plan_root_failure_fails_the_request_and_never_uses_the_payload(
     assert host.root_calls() == calls_before + 1
 
 
-def test_concurrent_first_requests_resolve_the_root_once(
+def test_concurrent_requests_each_ask_the_host_for_their_own_root(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
     mine = _workspace(tmp_path, "mine")
@@ -254,12 +256,13 @@ def test_concurrent_first_requests_resolve_the_root_once(
         _request(backend_process, "plans.read", {"rel_path": ".agent-team/plans/only_ffffff.html"}, "instance-1")
         for _ in range(2)
     }
-    root_request = _read(backend_process, timeout=10)
-    assert root_request["params"]["operation"] == "resolve_root"
-    # Give the second request every chance to ask too before answering.
-    with pytest.raises(AssertionError, match="no frame"):
-        _read(backend_process, timeout=0.5)
-    host(backend_process, root_request, "instance-1")
+    # Neither borrows the other's authorization: both ask, on their own behalf,
+    # before either is answered.
+    root_requests = [_read(backend_process, timeout=10) for _ in range(2)]
+    assert [frame["params"]["operation"] for frame in root_requests] == ["resolve_root", "resolve_root"]
+    assert {frame["params"]["origin"]["requestId"] for frame in root_requests} == ids
+    for frame in root_requests:
+        host(backend_process, frame, "instance-1")
     answered: dict[str, dict[str, Any]] = {}
     while len(answered) < 2:
         frame = _read(backend_process, timeout=10)
@@ -267,7 +270,7 @@ def test_concurrent_first_requests_resolve_the_root_once(
         answered[frame["id"]] = frame
     assert set(answered) == ids
     assert all(_value(frame)["meta"]["name"] == "Only" for frame in answered.values())
-    assert host.root_calls() == 1
+    assert host.root_calls() == 2
 
 
 # ── t6: large documents list and page back byte for byte ─────────────────────
@@ -317,7 +320,6 @@ def test_list_scans_of_different_views_never_share_a_result(tmp_path: Path) -> N
     backend = _load_backend("plans_backend_view_isolation")
     first = _workspace(tmp_path, "first")
     second = _workspace(tmp_path, "second")
-    backend._plan_roots.update({"instance-1": str(first), "instance-2": str(second)})
     release_first = threading.Event()
     first_started = threading.Event()
 
@@ -331,12 +333,13 @@ def test_list_scans_of_different_views_never_share_a_result(tmp_path: Path) -> N
     results: dict[str, Any] = {}
     leader = threading.Thread(
         target=lambda: results.setdefault("first", backend._list_plans_single_flight(
-            {"kind": "call", "requestId": "a", "instance": "instance-1"})),
+            {"kind": "call", "requestId": "a", "instance": "instance-1", "root": str(first)})),
     )
     leader.start()
     assert first_started.wait(timeout=5)
     try:
-        other = backend._list_plans_single_flight({"kind": "call", "requestId": "b", "instance": "instance-2"})
+        other = backend._list_plans_single_flight(
+            {"kind": "call", "requestId": "b", "instance": "instance-2", "root": str(second)})
         # Answered while the first view's scan is still held: it never waited.
         assert leader.is_alive()
         assert other == [{"root": str(second)}]
@@ -344,3 +347,167 @@ def test_list_scans_of_different_views_never_share_a_result(tmp_path: Path) -> N
         release_first.set()
         leader.join(timeout=10)
     assert results["first"] == [{"root": str(first)}]
+
+
+def test_a_list_caller_the_host_refuses_never_shares_another_callers_scan(tmp_path: Path) -> None:
+    """Joining an in-flight scan needs the caller's own Host authorization."""
+    from tests.test_navide_plans_backend_wire import _load_backend
+
+    backend = _load_backend("plans_backend_follower_authorization")
+    mine = _workspace(tmp_path, "mine")
+    release_leader = threading.Event()
+    leader_started = threading.Event()
+
+    def bridge_call(origin: dict[str, Any], port: str, operation: str, arguments: Any) -> Any:
+        assert (port, operation) == ("filesystem", "resolve_root")
+        if origin["requestId"] == "agent":
+            raise backend.BridgeFailure("CAPABILITY_DENIED")
+        return {"root": str(mine)}
+
+    def scan(origin: dict[str, Any]) -> list[dict[str, Any]]:
+        leader_started.set()
+        release_leader.wait(timeout=10)
+        return [{"secret": "scanned for the user"}]
+
+    backend._bridge_call = bridge_call
+    backend._list_plans = scan
+    results: dict[str, Any] = {}
+    leader = threading.Thread(
+        target=lambda: results.setdefault("user", backend._list_plans_single_flight(
+            {"kind": "call", "requestId": "user", "instance": "instance-1"})),
+    )
+    leader.start()
+    assert leader_started.wait(timeout=5)
+    outcome: dict[str, Any] = {}
+
+    def follow() -> None:
+        try:
+            outcome["value"] = backend._list_plans_single_flight(
+                {"kind": "call", "requestId": "agent", "instance": "instance-1"})
+        except backend.BridgeFailure as error:
+            outcome["error"] = error.code
+
+    follower = threading.Thread(target=follow)
+    follower.start()
+    follower.join(timeout=2)
+    release_leader.set()
+    follower.join(timeout=10)
+    leader.join(timeout=10)
+    assert outcome == {"error": "CAPABILITY_DENIED"}
+    assert results["user"] == [{"secret": "scanned for the user"}]
+
+
+# ── the Host's per-request gates still decide every plan file access ─────────
+#
+# The Host re-checks each filesystem request against the requesting runtime:
+# an agent initiator needs the workspace Execution Policy to allow `fs`
+# (pluginBackendSupervisor's bridge gate and plansAgentFilesystemPolicyAllows),
+# and every request must still match the selected Plans package grant
+# (plansFilesystemGrantAllows). This fake Host applies that gate to every
+# filesystem bridge call, so a child that skips asking the Host skips the gate.
+
+USER = {"kind": "user", "id": "user-1"}
+AGENT = {"kind": "agent", "source": "mcp", "id": "agent-1"}
+
+
+class _GatedHost:
+    def __init__(self, root: Path, allows: Any) -> None:
+        self.root = root
+        self.allows = allows
+
+    def __call__(self, process: subprocess.Popen[bytes], frame: dict[str, Any], runtime: dict[str, Any]) -> None:
+        params = frame["params"]
+        assert params["port"] == "filesystem"
+        if not self.allows(runtime):
+            _error_bridge(process, frame, "CAPABILITY_DENIED")
+            return
+        operation, arguments = params["operation"], params["arguments"]
+        target = self.root / arguments.get("rel_path", "")
+        # Bridge reads are served too, so the gate holds for a child that
+        # still reads through the Host (the behaviour before direct reads).
+        if operation == "resolve_root":
+            _reply_bridge(process, frame, {"root": str(self.root.resolve())})
+        elif operation == "stat_path":
+            _reply_bridge(process, frame, {"exists": target.exists(), "isDirectory": target.is_dir()})
+        elif operation == "list_dir":
+            _reply_bridge(process, frame, {"entries": sorted(p.name for p in target.iterdir()) if target.is_dir() else []})
+        elif operation == "read_range":
+            raw = target.read_bytes()
+            piece = raw[arguments["offset"] : arguments["offset"] + arguments["length"]]
+            _reply_bridge(process, frame, {
+                "data_base64": base64.b64encode(piece).decode("ascii"), "size": len(raw),
+                "mtime": target.stat().st_mtime, "eof": arguments["offset"] + len(piece) >= len(raw),
+            })
+        else:
+            raise AssertionError(f"unexpected filesystem operation: {operation}")
+
+
+def _call_as(
+    process: subprocess.Popen[bytes], host: _GatedHost, name: str, arguments: dict[str, Any], runtime: dict[str, Any]
+) -> dict[str, Any]:
+    global _counter
+    _counter += 1
+    request_id = f"gated-{_counter}"
+    _send(process, {
+        "jsonrpc": "2.0", "id": request_id, "method": "navide/call",
+        "params": {"_meta": CLIENT_META, "name": name, "arguments": arguments, "runtime": runtime},
+    })
+    while True:
+        frame = _read(process, timeout=30)
+        if frame.get("id") == request_id:
+            return frame
+        assert frame.get("method") == "navide/host/call", frame
+        host(process, frame, runtime)
+
+
+def test_agent_plan_reads_are_refused_when_the_execution_policy_denies_fs(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    (mine / ".agent-team" / "plans" / "kept_aaaaaa.html").write_text(_plan_html("Policy guarded"), encoding="utf-8")
+    host = _GatedHost(mine, allows=lambda runtime: runtime["initiator"]["kind"] != "agent")
+    as_user = {**RUNTIME, "initiator": USER}
+    as_agent = {**RUNTIME, "initiator": AGENT}
+
+    # The user's own view opens the plans first, as it does in the app.
+    assert [entry["name"] for entry in _value(_call_as(backend_process, host, "plans.list", {}, as_user))] == ["Policy guarded"]
+    for name, arguments in (
+        ("plans.list", {}),
+        ("plans.read", {"rel_path": ".agent-team/plans/kept_aaaaaa.html"}),
+    ):
+        response = _call_as(backend_process, host, name, arguments, as_agent)
+        assert _error_code(response) == "CAPABILITY_DENIED", (name, response)
+        assert "Policy guarded" not in repr(response)
+
+
+def test_agent_plan_reads_succeed_when_the_execution_policy_allows_fs(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    (mine / ".agent-team" / "plans" / "open_cccccc.html").write_text(_plan_html("Agent readable"), encoding="utf-8")
+    host = _GatedHost(mine, allows=lambda runtime: True)
+    as_agent = {**RUNTIME, "initiator": AGENT}
+
+    assert [entry["name"] for entry in _value(_call_as(backend_process, host, "plans.list", {}, as_agent))] == ["Agent readable"]
+    read = _value(_call_as(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/open_cccccc.html"}, as_agent))
+    assert read["meta"]["name"] == "Agent readable"
+
+
+def test_plan_reads_are_refused_once_the_package_grant_no_longer_matches(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    (mine / ".agent-team" / "plans" / "kept_bbbbbb.html").write_text(_plan_html("Grant guarded"), encoding="utf-8")
+    selected = {"packageVersion": RUNTIME["packageVersion"]}
+    host = _GatedHost(mine, allows=lambda runtime: runtime["packageVersion"] == selected["packageVersion"])
+
+    assert _value(_call_as(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/kept_bbbbbb.html"}, RUNTIME))
+    # The Host switches the selected Plans package; this runtime's grant is gone.
+    selected["packageVersion"] = "0.2.0"
+    for name, arguments in (
+        ("plans.list", {}),
+        ("plans.read", {"rel_path": ".agent-team/plans/kept_bbbbbb.html"}),
+    ):
+        response = _call_as(backend_process, host, name, arguments, RUNTIME)
+        assert _error_code(response) == "CAPABILITY_DENIED", (name, response)
+        assert "Grant guarded" not in repr(response)

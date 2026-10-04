@@ -5613,12 +5613,29 @@ export class FrontendPluginManager {
   configurePlansFilesystemService(filesystemPort?: PlansFilesystemPort): void {
     this.pluginBackendHost.setBridgeDispatcher(
       createProductionPlansBridgeDispatcher({
-        filesystem: filesystemPort ?? createHostPlansFilesystemPort({
-          call: (operation, payload, context) =>
-            this.sendPlansFilesystemService(operation, payload, context),
-        }),
+        filesystem: filesystemPort ?? this.plansFilesystemPort(),
       }),
     )
+  }
+
+  /** The Plans child reads and writes its plan files itself and asks for the
+   * root before each request, so resolve_root runs the same Grant and agent
+   * Execution Policy checks as every filesystem service operation. */
+  private plansFilesystemPort(): PlansFilesystemPort {
+    const port = createHostPlansFilesystemPort({
+      call: (operation, payload, context) =>
+        this.sendPlansFilesystemService(operation, payload, context),
+    })
+    return {
+      ...port,
+      resolveRoot: async (arguments_, context) => {
+        if (context.signal.aborted) throw new PlansBridgeError('USER_CANCELLED')
+        if (!this.plansBridgeCanDispatch(context)) {
+          throw new PlansBridgeError('CAPABILITY_DENIED', 'Filesystem capability is denied.')
+        }
+        return port.resolveRoot(arguments_, context)
+      },
+    }
   }
 
   /** Provision the canonical Plans assets before a package child can create a

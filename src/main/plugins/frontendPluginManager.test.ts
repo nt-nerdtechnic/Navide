@@ -2664,6 +2664,83 @@ describe('Plans private filesystem grant revalidation', () => {
       await mgr.closeBackendPlugins()
     }
   })
+
+  // The child reads and writes its plan files itself and asks for the root
+  // before each request, so resolve_root is where the Grant and an agent's
+  // Execution Policy are enforced for those accesses.
+  it('checks the Grant and an agent Execution Policy before handing the child its plan root', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '2.0.0'
+    const workspacePath = realpathSync(process.cwd())
+    const grant = { packageVersion, system: ['fs'] as const, storage: true }
+    mgr.registerDescriptor({
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: ['fs'],
+      devUrl: '',
+      entryFile: '/plugins/navide.plans/frontend/window/index.html',
+      views: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+    }, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.list'],
+      agentMethods: ['plans.list'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    let activeGrant: typeof grant | null = grant
+    mgr.setCapabilityGrantResolver(() => activeGrant)
+    let allowedSystem: string[] = ['fs']
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: allowedSystem, shell: [] }, revision: 1, state: 'user',
+    }) as never)
+    mgr.configurePlansFilesystemService()
+    const dispatcher = (mgr as unknown as {
+      pluginBackendHost: { bridgeDispatcher: { dispatch: (request: unknown, context: PlansBridgeContext) => Promise<unknown> } }
+    }).pluginBackendHost.bridgeDispatcher
+    const user = { kind: 'user', id: 'user-1' } as const
+    const agent = { kind: 'agent', source: 'mcp', id: 'agent-1' } as const
+    const resolveRoot = (initiator: typeof user | typeof agent): Promise<unknown> => dispatcher.dispatch(
+      { id: 'bridge-root-1', origin: { kind: 'call', requestId: 'call-1' }, port: 'filesystem', operation: 'resolve_root', arguments: {} },
+      {
+        runtime: {
+          pluginId: PLANS_PLUGIN_ID,
+          packageVersion,
+          workspaceId: mgr.workspaceIdForPath(workspacePath),
+          instanceId: 'plans-view-1',
+          contributionKey: 'navide.plans.window',
+          hostWindowId: 'window-1',
+          initiator,
+        },
+        workspacePath,
+        authorizedPlanRoot: workspacePath,
+        requestId: 'bridge-root-1',
+        signal: new AbortController().signal,
+        emit: () => undefined,
+      },
+    )
+    try {
+      await expect(resolveRoot(user)).resolves.toEqual({ root: workspacePath })
+      await expect(resolveRoot(agent)).resolves.toEqual({ root: workspacePath })
+
+      allowedSystem = []
+      await expect(resolveRoot(agent)).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+      // The Execution Policy governs agents only; the user's own view is unaffected.
+      await expect(resolveRoot(user)).resolves.toEqual({ root: workspacePath })
+
+      activeGrant = null
+      await expect(resolveRoot(user)).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' })
+    } finally {
+      await mgr.closeBackendPlugins()
+    }
+  })
 })
 
 describe('devPlansPluginDescriptor', () => {

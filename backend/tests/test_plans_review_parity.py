@@ -71,9 +71,8 @@ def test_manual_note_second_conflict_is_reported_without_unbounded_retry(child, 
 
 
 def _workspace(child, root):
-    """Authorize `root` as the plan root of the origin the tests call with."""
-    child._plan_roots["instance-1"] = str(root.resolve())
-    return {"kind": "call", "requestId": "r1", "instance": "instance-1"}
+    """An origin whose request the Host already authorized for `root`."""
+    return {"kind": "call", "requestId": "r1", "instance": "instance-1", "root": str(root.resolve())}
 
 
 def test_document_transport_preserves_read_mtime_and_write_conflict(child, monkeypatch, tmp_path):

@@ -112,11 +112,6 @@ _bridge_watch_origins: set[str] = set()
 # order a caller against a scan that started beside it.
 _list_flights: dict[Any, dict[str, Any]] = {}
 _list_generation = 0
-# Host-authorized plan root per view instance (runtime.instanceId), and the
-# in-flight resolve_root call per instance: {"done": threading.Event,
-# "error": BaseException | None}.
-_plan_roots: dict[Any, str] = {}
-_plan_root_flights: dict[Any, dict[str, Any]] = {}
 
 SERVER_INFO = {"name": "navide.plans", "version": "0.1.0"}
 
@@ -551,46 +546,21 @@ def _is_int(value: Any) -> bool:
 
 
 def _plan_root(origin: dict[str, Any]) -> str:
-    """The plan root the Host authorized for the calling view.
+    """The plan root the Host authorizes for this request.
 
-    Asked of the Host through ``resolve_root``, which answers from the Host's
-    own binding of this request's origin and never from a payload, once per
-    view instance; the Host re-resolves a root only when it restarts this
-    child, so it is kept for the life of the process. Overlapping first
-    requests share one bridge call, and a failure is never remembered.
+    Asked of the Host through ``resolve_root`` once per request and never
+    reused across requests: answering it is where the Host applies the Plans
+    Grant and an agent's Execution Policy to the file access this child then
+    does itself. The Host answers from its own binding of the request's
+    origin, never from a payload.
     """
-    key = origin["instance"]
-    while True:
-        with _state_lock:
-            root = _plan_roots.get(key)
-            if root is not None:
-                return root
-            flight = _plan_root_flights.get(key)
-            leader = flight is None
-            if leader:
-                flight = _plan_root_flights[key] = {"done": threading.Event(), "error": None}
-        assert flight is not None
-        if not leader:
-            flight["done"].wait()
-            error = flight["error"]
-            # A leader cancelled by its own caller says nothing about ours.
-            if error is None or (isinstance(error, BridgeFailure) and error.code == "USER_CANCELLED"):
-                continue
-            raise error
-        try:
-            result = _bridge_call(origin, "filesystem", "resolve_root", {})
-            if not _is_record(result) or not isinstance(result.get("root"), str) or not os.path.isabs(result["root"]):
-                raise BridgeFailure("PROTOCOL_ERROR")
-            with _state_lock:
-                _plan_roots[key] = result["root"]
-            return result["root"]
-        except BaseException as error:
-            flight["error"] = error
-            raise
-        finally:
-            with _state_lock:
-                _plan_root_flights.pop(key, None)
-            flight["done"].set()
+    root = origin.get("root")
+    if root is None:
+        result = _bridge_call(origin, "filesystem", "resolve_root", {})
+        if not _is_record(result) or not isinstance(result.get("root"), str) or not os.path.isabs(result["root"]):
+            raise BridgeFailure("PROTOCOL_ERROR")
+        root = origin["root"] = result["root"]
+    return root
 
 
 def _guarded_path(origin: dict[str, Any], rel_path: str, **options: bool) -> Path:
@@ -1146,9 +1116,6 @@ def _unreadable_reason(code: str) -> str:
 
 
 def _list_plans(origin: dict[str, Any]) -> list[dict[str, Any]]:
-    # Without an authorized root there is nothing to list; say so rather than
-    # let each directory scan read the failure as "no such directory".
-    _plan_root(origin)
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -1227,6 +1194,9 @@ def _list_plans_single_flight(origin: dict[str, Any]) -> list[dict[str, Any]]:
     the caller's write landed would hand it a pre-write snapshot.
     """
     global _list_generation
+    # Every caller is authorized by the Host before it may share a scan, and
+    # a refusal fails the call rather than reading as "no such directory".
+    _plan_root(origin)
     key = origin["instance"]
     with _state_lock:
         arrived_after = _list_generation

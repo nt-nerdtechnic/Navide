@@ -541,6 +541,8 @@ def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_
         },
     )
     listed = service_until_response("list-documents-1")
+    # One resolve_root for the whole scan, and no bridge reads.
+    assert operations == ["resolve_root"]
     assert listed["result"]["value"] == [
         {
             "rel_path": document_path,
@@ -570,56 +572,22 @@ def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_
     )
     promoted = service_until_response("promote-document-1")
     assert promoted["result"]["value"]["promoted"] is True
-    # The promotion wrote once, against the mtime the child read.
-    assert operations == ["resolve_root", "write_file"]
+    # The promotion asked for its own root and wrote once, against the mtime
+    # the child read.
+    assert operations == ["resolve_root", "resolve_root", "write_file"]
     assert stored[document_path].startswith("---\n")
     assert "\n---\n# README\n" in stored[document_path]
     assert "---# README" not in stored[document_path]
 
 
-def _list_request(request_id: str) -> dict[str, Any]:
-    # Every caller is the same view instance: a plans.list scan is only ever
-    # shared within one instance.
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": "navide/call",
-        "params": {"_meta": CLIENT_META, "name": "plans.list", "arguments": {}, "runtime": RUNTIME},
-    }
-
-
-def _serve_one_empty_scan(
-    process: subprocess.Popen[bytes], root: Path, leader_ids: set[str] | str
-) -> tuple[list[dict[str, Any]], str]:
-    """Answer one full plans.list scan of the empty workspace `root` on behalf
-    of one of `leader_ids`, collecting every other frame (the responses) until
-    the scan's bridge call is served. Only a scan whose instance has no
-    authorized root yet makes one (resolve_root). Returns (other frames, the
-    id that ran the scan)."""
-    allowed = {leader_ids} if isinstance(leader_ids, str) else leader_ids
-    others: list[dict[str, Any]] = []
-    while True:
-        frame = _read(process)
-        if frame.get("method") != "navide/host/call":
-            others.append(frame)
-            continue
-        params = frame["params"]
-        assert params["origin"]["kind"] == "call"
-        scanner = params["origin"]["requestId"]
-        assert scanner in allowed, params["origin"]
-        assert params["operation"] == "resolve_root", params["operation"]
-        _reply_bridge(process, frame, {"root": str(root.resolve())})
-        return others, scanner
-
-
 def test_overlapping_list_calls_share_one_follow_up_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Callers of one view share its root, which is cached after the first
-    # scan, so a follow-up scan makes no bridge call and cannot be counted on
-    # the wire. Drive the child's single-flight in process and count scans.
+    # Every caller asks the Host for its root before it joins a flight, and a
+    # scan makes no bridge call after that, so the wire has no point inside a
+    # scan to hold the leader at, and a follow-up scan is invisible on it.
+    # Drive the child's single-flight in process and count scans.
     backend = _load_backend("plans_backend_overlap")
-    backend._plan_roots["instance-1"] = str(tmp_path.resolve())
     scans: list[str] = []
     leader_scanning = threading.Event()
     release_leader = threading.Event()
@@ -636,7 +604,7 @@ def test_overlapping_list_calls_share_one_follow_up_scan(
     results: dict[str, Any] = {}
 
     def call(request_id: str) -> None:
-        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1"}
+        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1", "root": str(tmp_path.resolve())}
         results[request_id] = backend._list_plans_single_flight(origin)
 
     # The first call becomes the scan leader and is held mid-scan.
@@ -693,13 +661,12 @@ def _load_backend(name: str) -> Any:
 def test_list_caller_arriving_mid_scan_sees_the_write_the_scan_missed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A scan no longer makes a bridge call after resolve_root, so the wire has
-    # no point mid-scan to hold it at. Drive the child's single-flight in
+    # A scan makes no bridge call after its caller's resolve_root, so the wire
+    # has no point mid-scan to hold it at. Drive the child's single-flight in
     # process instead and hold the leader right after it has consumed
     # `.agent-team/plans`.
     backend = _load_backend("plans_backend_mid_scan")
     plans = _plans_dir(tmp_path)
-    backend._plan_roots["instance-1"] = str(tmp_path.resolve())
     plan_html = (
         '<script id="plan-meta" type="application/json">'
         '{"name":"new","stage":"draft","todos":[]}</script>'
@@ -719,7 +686,7 @@ def test_list_caller_arriving_mid_scan_sees_the_write_the_scan_missed(
     results: dict[str, Any] = {}
 
     def call(request_id: str) -> None:
-        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1"}
+        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1", "root": str(tmp_path.resolve())}
         results[request_id] = backend._list_plans_single_flight(origin)
 
     leader = threading.Thread(target=call, args=("list-leader",), daemon=True)
@@ -756,33 +723,75 @@ def test_list_caller_arriving_mid_scan_sees_the_write_the_scan_missed(
 
 
 def test_cancelled_leader_does_not_cancel_the_followers_list_call(
-    backend_process: subprocess.Popen[bytes], tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The first list of a fresh process holds on its instance's resolve_root.
-    _send(backend_process, _list_request("list-leader"))
-    first = _read(backend_process)
-    assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
-    assert first["params"]["operation"] == "resolve_root"
-    _send(backend_process, _list_request("list-follower"))
-    time.sleep(0.2)
-    _send(
-        backend_process,
-        {
-            "jsonrpc": "2.0",
-            "method": "notifications/cancelled",
-            "params": {"requestId": first["id"], "reason": "timeout"},
-        },
-    )
-    leader_response = _read(backend_process)
-    assert leader_response["id"] == "list-leader"
-    assert leader_response["error"]["data"] == {"code": "USER_CANCELLED"}
+    # A cancellation reaches a scan through a bridge call it is waiting on.
+    # Over the wire a list's only bridge call is resolve_root, made before the
+    # caller joins a flight, so a leader can no longer be cancelled mid-scan
+    # there. Cancel the leader's scan in process, the way a cancelled bridge
+    # call surfaces inside it (BridgeFailure USER_CANCELLED), while a
+    # follower is waiting on its flight.
+    backend = _load_backend("plans_backend_cancelled_leader")
+    _plans_dir(tmp_path)
+    leader_scanning = threading.Event()
+    cancel_leader = threading.Event()
+    scans: list[str] = []
+    real_list_names = backend._list_names
 
-    # The follower takes the next flight instead of inheriting the cancellation;
-    # a cancelled resolve_root is not remembered, so its scan asks again.
-    responses, _ = _serve_one_empty_scan(backend_process, tmp_path, "list-follower")
-    if not responses:
-        responses.append(_read(backend_process))
-    assert [(frame["id"], frame["result"]["value"]) for frame in responses] == [("list-follower", [])]
+    def list_names(origin: dict[str, Any], rel_path: str, *, discovery: bool = False) -> list[str]:
+        if origin["requestId"] == "list-leader" and rel_path == ".agent-team/plans":
+            leader_scanning.set()
+            assert cancel_leader.wait(5)
+            raise backend.BridgeFailure("USER_CANCELLED")
+        return real_list_names(origin, rel_path, discovery=discovery)
+
+    real_list_plans = backend._list_plans
+
+    def list_plans(origin: dict[str, Any]) -> list[dict[str, Any]]:
+        scans.append(origin["requestId"])
+        return real_list_plans(origin)
+
+    monkeypatch.setattr(backend, "_list_names", list_names)
+    monkeypatch.setattr(backend, "_list_plans", list_plans)
+    outcomes: dict[str, Any] = {}
+
+    def call(request_id: str) -> None:
+        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1", "root": str(tmp_path.resolve())}
+        try:
+            outcomes[request_id] = ("result", backend._list_plans_single_flight(origin))
+        except backend.BridgeFailure as error:
+            outcomes[request_id] = ("error", error.code)
+
+    leader = threading.Thread(target=call, args=("list-leader",), daemon=True)
+    leader.start()
+    assert leader_scanning.wait(5)
+    flight = backend._list_flights["instance-1"]
+    done = flight["done"]
+    follower_waiting = threading.Event()
+
+    class _ObservedDone:
+        """The leader's flight event, reporting when a follower waits on it."""
+
+        def wait(self, timeout: float | None = None) -> bool:
+            follower_waiting.set()
+            return done.wait(timeout)
+
+        def set(self) -> None:
+            done.set()
+
+    flight["done"] = _ObservedDone()
+    follower = threading.Thread(target=call, args=("list-follower",), daemon=True)
+    follower.start()
+    assert follower_waiting.wait(5)
+    cancel_leader.set()
+    for thread in (leader, follower):
+        thread.join(5)
+        assert not thread.is_alive()
+
+    assert outcomes["list-leader"] == ("error", "USER_CANCELLED")
+    # The follower takes the next flight instead of inheriting the cancellation.
+    assert outcomes["list-follower"] == ("result", [])
+    assert scans == ["list-leader", "list-follower"]
 
 
 def test_host_bridge_cancellation_settles_the_child_call(
@@ -1453,7 +1462,6 @@ def _head_reads(root: Path, name: str) -> list[int]:
     over the same workspace and count what `_read_bytes` returns.
     """
     backend = _load_backend("plans_backend_head_reads")
-    backend._plan_roots["instance-1"] = str(root.resolve())
     real_read_bytes = backend._read_bytes
     reads: list[int] = []
 
@@ -1464,7 +1472,9 @@ def _head_reads(root: Path, name: str) -> list[int]:
         return result
 
     backend._read_bytes = read_bytes
-    backend._list_plans({"kind": "call", "requestId": "head-scan", "instance": "instance-1"})
+    backend._list_plans(
+        {"kind": "call", "requestId": "head-scan", "instance": "instance-1", "root": str(root.resolve())}
+    )
     return reads
 
 
@@ -1775,8 +1785,8 @@ def test_plan_meta_far_down_a_huge_file_is_still_found(
     host.calls.clear()
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
     assert next(e for e in listed if e["rel_path"].endswith("top_cccccd.html"))["name"] == "Top"
-    # The root is already authorized and the child reads the file itself.
-    assert host.calls == []
+    # Every request asks for its root once; the child reads the file itself.
+    assert [operation for operation, _ in host.calls] == ["resolve_root"]
     assert _head_reads(tmp_path, "top_cccccd.html") == [HOST_RANGE_LIMIT]
 
 
