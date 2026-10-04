@@ -293,6 +293,9 @@ class GitWatcher:
         self._dirty_paths: dict[str, set[tuple[str, str]]] = {}
         # ws_path -> loop time the open window started
         self._window_started: dict[str, float] = {}
+        # Running change sinks, held so they are not collected mid-flight and
+        # so their failures reach the log.
+        self._change_tasks: set[asyncio.Task] = set()
         self._pending_plans: dict[str, asyncio.TimerHandle] = {}
         self._started = False
 
@@ -385,7 +388,14 @@ class GitWatcher:
         self._pending.pop(ws_path, None)
         self._window_started.pop(ws_path, None)
         paths = sorted(self._dirty_paths.pop(ws_path, set()))
-        asyncio.create_task(self._on_change(ws_path, paths))
+        task = asyncio.create_task(self._on_change(ws_path, paths))
+        self._change_tasks.add(task)
+        task.add_done_callback(self._change_done)
+
+    def _change_done(self, task: asyncio.Task) -> None:
+        self._change_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.warning("handling a workspace change failed: %s", task.exception())
 
     # ─────────────────── plans channel (same debounce model) ──────────────
 

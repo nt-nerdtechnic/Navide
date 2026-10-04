@@ -552,3 +552,108 @@ async def test_live_fingerprint_raises_while_the_identity_is_unreadable(
         live_identity_fingerprint("claude")
     (home / ".claude.json").unlink()
     assert live_identity_fingerprint("claude") == (None, None)
+
+
+# ---- a failure never stops the watcher or goes unseen (#144) ----------------
+
+
+def _unretrieved_task_errors() -> list[dict[str, Any]]:
+    """Collect what asyncio reports about task exceptions nobody retrieved."""
+    seen: list[dict[str, Any]] = []
+    asyncio.get_running_loop().set_exception_handler(lambda _loop, ctx: seen.append(ctx))
+    return seen
+
+
+async def _collect_garbage() -> None:
+    import gc
+
+    await asyncio.sleep(0)
+    gc.collect()
+    await asyncio.sleep(0)
+
+
+async def test_the_poll_survives_a_failed_round(tmp_path: Path, monkeypatch) -> None:
+    from agent_team_backend import credential_watcher
+
+    identity = {"codex": ("a@example.com", True)}
+    fired: list[str] = []
+    watcher, live = _codex_watcher(tmp_path, lambda key: identity[key], fired)
+    watcher.start()
+    try:
+        await asyncio.sleep(0.2)
+        real_stamp = credential_watcher._stamp
+        failures = {"left": 1}
+
+        def flaky_stamp(path: Path):
+            if failures["left"]:
+                failures["left"] -= 1
+                raise RuntimeError("stat round failed")
+            return real_stamp(path)
+
+        monkeypatch.setattr(credential_watcher, "_stamp", flaky_stamp)
+        await asyncio.sleep(0.2)
+        identity["codex"] = ("b@example.com", True)
+        live.write_text(_codex_auth("b@example.com"), encoding="utf-8")
+        await _wait_for(fired)
+        assert failures["left"] == 0
+        assert fired == ["codex"]
+    finally:
+        watcher.stop()
+
+
+async def test_stopping_still_cancels_the_poll(tmp_path: Path) -> None:
+    watcher, _ = _codex_watcher(tmp_path, lambda key: ("a@example.com", True), [])
+    watcher.start()
+    poll = watcher._poll_task
+    await asyncio.sleep(0.1)
+    watcher.stop()
+    with pytest.raises(asyncio.CancelledError):
+        await poll
+
+
+async def test_a_failing_identity_sink_is_logged_not_lost(tmp_path: Path, caplog) -> None:
+    seen = _unretrieved_task_errors()
+    identity = {"codex": ("a@example.com", True)}
+    calls: list[str] = []
+
+    async def sink(agent_key: str) -> None:
+        calls.append(agent_key)
+        raise RuntimeError("broadcast failed")
+
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    live = home / ".codex" / "auth.json"
+    live.write_text("{}", encoding="utf-8")
+    watcher = CredentialWatcher(
+        sink, real_home=home, agent_keys=("codex",),
+        fingerprint=lambda key: identity[key], debounce_s=0.1, poll_s=0.05,
+    )
+    watcher.start()
+    try:
+        await asyncio.sleep(0.2)
+        identity["codex"] = ("b@example.com", True)
+        live.write_text(_codex_auth("b@example.com"), encoding="utf-8")
+        await _wait_for(calls)
+        await asyncio.sleep(0.1)
+        await _collect_garbage()
+    finally:
+        watcher.stop()
+    assert calls == ["codex"]
+    assert seen == []
+    assert "broadcast failed" in caplog.text
+
+
+async def test_reconcile_survives_a_failed_broadcast(
+    store: CliProfilesStore,
+    codex_live,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    codex_live("solo@example.com")
+
+    async def failing_broadcast(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("socket gone")
+
+    monkeypatch.setattr(ws_handlers, "_broadcast_profiles_changed", failing_broadcast)
+    await reconcile_live_account("codex")
+    assert "socket gone" in caplog.text

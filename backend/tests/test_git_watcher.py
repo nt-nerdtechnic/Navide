@@ -165,6 +165,27 @@ async def test_sustained_churn_still_fires_and_keeps_the_window_bounded() -> Non
     assert watcher._dirty_paths == {}
 
 
+
+async def test_a_failing_change_sink_is_logged_not_lost(caplog) -> None:
+    # The sink runs as a fire-and-forget task; an exception in it must reach
+    # the log, not asyncio's "Task exception was never retrieved" (#144).
+    import gc
+
+    seen: list[dict] = []
+    asyncio.get_running_loop().set_exception_handler(lambda _loop, ctx: seen.append(ctx))
+
+    async def sink(ws: str, paths: list[tuple[str, str]]) -> None:
+        raise RuntimeError("broadcast failed")
+
+    watcher = GitWatcher(sink, debounce_s=0.05)
+    watcher._loop = asyncio.get_running_loop()
+    watcher._schedule_fire("/ws", [("a.txt", "modified")])
+    await asyncio.sleep(0.2)
+    gc.collect()
+    await asyncio.sleep(0)
+    assert seen == []
+    assert "broadcast failed" in caplog.text
+
 # ── .gitignore layer ──────────────────────────────────────────────────────────
 #
 # The fixed segment list compares whole names, so `dist-release` never matched

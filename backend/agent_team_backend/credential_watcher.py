@@ -259,14 +259,20 @@ async def reconcile_live_account(agent_key: str) -> None:
     except Exception as err:  # noqa: BLE001 — a watcher must never crash the loop
         log.warning("reconciling the active %s account failed: %s", agent_key, err)
         return
-    await _broadcast_profiles_changed(
-        "live_credentials", agent_key=agent_key, forced=False
-    )
+    try:
+        await _broadcast_profiles_changed(
+            "live_credentials", agent_key=agent_key, forced=False
+        )
+    except Exception as err:  # noqa: BLE001 — the ledger already moved; say so
+        log.warning("announcing the realigned %s account failed: %s", agent_key, err)
     # The usage badges read the active account's credentials — pull them now so
     # the badge follows the account the user just signed into.
     from .usage_service import service
 
-    service.request_refresh()
+    try:
+        service.request_refresh()
+    except Exception as err:  # noqa: BLE001
+        log.warning("refreshing usage after the %s account change failed: %s", agent_key, err)
 
 
 def _stamp(path: Path) -> tuple[int, int, int] | None:
@@ -310,6 +316,9 @@ class CredentialWatcher:
         self._check_locks: dict[str, asyncio.Lock] = {}
         # agent_key -> checks still allowed before giving up until the next change
         self._retries_left: dict[str, int] = {}
+        # Running checks, held so they are not collected mid-flight and so
+        # their failures reach the log.
+        self._check_tasks: set[asyncio.Task] = set()
         self._started = False
         self._resolver = resolver
         # path -> (agent_key, last stamp)
@@ -382,15 +391,20 @@ class CredentialWatcher:
     async def _poll(self) -> None:
         while True:
             await asyncio.sleep(self._poll_s)
-            paths = list(self._watched)
-            # Off the loop: a home directory on a network mount stats slowly.
-            stamps = await asyncio.to_thread(lambda: [_stamp(p) for p in paths])
-            for path, stamp in zip(paths, stamps):
-                agent_key, last = self._watched[path]
-                if stamp != last:
-                    self._watched[path] = (agent_key, stamp)
-                    self._retries_left[agent_key] = CHECK_RETRIES
-                    self._schedule_fire(agent_key)
+            # One failed round must not end the watch for the rest of the
+            # process (#144); cancellation is not an Exception and still stops it.
+            try:
+                paths = list(self._watched)
+                # Off the loop: a home directory on a network mount stats slowly.
+                stamps = await asyncio.to_thread(lambda: [_stamp(p) for p in paths])
+                for path, stamp in zip(paths, stamps):
+                    agent_key, last = self._watched[path]
+                    if stamp != last:
+                        self._watched[path] = (agent_key, stamp)
+                        self._retries_left[agent_key] = CHECK_RETRIES
+                        self._schedule_fire(agent_key)
+            except Exception as err:  # noqa: BLE001
+                log.warning("polling the credential files failed: %s", err)
 
     def _schedule_fire(self, agent_key: str) -> None:
         loop = self._loop
@@ -405,7 +419,14 @@ class CredentialWatcher:
 
     def _fire(self, agent_key: str) -> None:
         self._pending.pop(agent_key, None)
-        asyncio.ensure_future(self._check(agent_key))
+        task = asyncio.ensure_future(self._check(agent_key))
+        self._check_tasks.add(task)
+        task.add_done_callback(self._check_done)
+
+    def _check_done(self, task: asyncio.Task) -> None:
+        self._check_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.warning("checking a live identity failed: %s", task.exception())
 
     async def _check(self, agent_key: str) -> None:
         """The de-noising gate: read who the live credentials belong to and do
@@ -431,7 +452,10 @@ class CredentialWatcher:
                 self._retry(agent_key)
                 return
             self._fingerprints[agent_key] = fp
-            await self._on_identity_change(agent_key)
+            try:
+                await self._on_identity_change(agent_key)
+            except Exception as err:  # noqa: BLE001
+                log.warning("handling the %s identity change failed: %s", agent_key, err)
 
     def _retry(self, agent_key: str) -> None:
         left = self._retries_left.get(agent_key, CHECK_RETRIES)
