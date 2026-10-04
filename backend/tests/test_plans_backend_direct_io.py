@@ -706,3 +706,76 @@ def test_plan_reads_are_refused_once_the_package_grant_no_longer_matches(
         response = _call_as(backend_process, host, name, arguments, RUNTIME)
         assert _error_code(response) == "CAPABILITY_DENIED", (name, response)
         assert "Grant guarded" not in repr(response)
+
+
+# ── t7: the paged list (the Plans view's) carries only the meta it reads ─────
+
+_RICH_META = {
+    "schemaVersion": 1,
+    "name": "Rich plan",
+    "title": "Rich title",
+    "overview": "Rich overview",
+    "stage": "approved",
+    "approvedAt": "2026-10-04T00:00:00Z",
+    "archivedAt": "2026-10-05T00:00:00Z",
+    "isProject": True,
+    "executions": [{"id": "e1", "status": "done"}],
+    "todos": [
+        {"id": "t1", "content": "Mine", "status": "pending", "owner": "user", "note": "extra"},
+        {"id": "t2", "content": "Agent's", "status": "done"},
+    ],
+    "reviewNotes": [{"id": "n1", "author": "user", "text": "Long review text", "resolved": False, "reply": ""}],
+}
+
+
+def _rich_workspace(tmp_path: Path) -> Path:
+    mine = _workspace(tmp_path, "mine")
+    document = (
+        '<!doctype html><html><body>\n<script type="application/json" id="plan-meta">\n'
+        f"{json.dumps(_RICH_META)}\n</script>\n</body></html>\n"
+    )
+    (mine / ".agent-team" / "plans" / "rich_aaaaaa.html").write_text(document, encoding="utf-8")
+    return mine
+
+
+def test_paged_list_entries_carry_only_the_meta_the_plans_view_reads(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    host = _RootOnlyHost({"instance-1": _rich_workspace(tmp_path)})
+
+    page = _value(_call(backend_process, host, "plans.list", {"offset": 0}))
+    [entry] = page["entries"]
+    assert entry["meta"] == {
+        "name": "Rich plan",
+        "stage": "approved",
+        "overview": "Rich overview",
+        "archivedAt": "2026-10-05T00:00:00Z",
+        "todos": [
+            {"id": "t1", "content": "Mine", "status": "pending", "owner": "user"},
+            {"id": "t2", "content": "Agent's", "status": "done"},
+        ],
+        "reviewNotes": [],
+    }
+    # The entry's own fields are untouched.
+    assert entry["name"] == "Rich plan" and entry["kind"] == "plan" and entry["stage"] == "approved"
+    assert entry["todos"] == {"total": 2, "by_status": {"pending": 1, "done": 1}}
+
+
+def test_paged_list_meta_keeps_an_empty_review_notes_list(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _rich_workspace(tmp_path)
+    (mine / ".agent-team" / "plans" / "bare_bbbbbb.html").write_text(_plan_html("Bare plan"), encoding="utf-8")
+    host = _RootOnlyHost({"instance-1": mine})
+
+    entries = _value(_call(backend_process, host, "plans.list", {"offset": 0}))["entries"]
+    assert [entry["meta"]["reviewNotes"] for entry in entries] == [[], []]
+
+
+def test_unpaged_list_keeps_the_full_meta_agents_receive(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    host = _RootOnlyHost({"instance-1": _rich_workspace(tmp_path)})
+
+    [entry] = _value(_call(backend_process, host, "plans.list", {}))
+    assert entry["meta"] == _RICH_META

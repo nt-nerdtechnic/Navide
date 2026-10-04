@@ -1237,6 +1237,27 @@ def _encoded_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
+_PAGED_META_KEYS = ("name", "stage", "overview", "archivedAt")
+_PAGED_TODO_KEYS = ("id", "content", "status", "owner")
+
+
+def _paged_meta(meta: Any) -> Any:
+    """The part of a plan's meta the Plans view reads from a list entry.
+
+    reviewNotes stays an empty list: the view appends to and filters the
+    listed meta's notes, while it shows the notes of the document it reads.
+    """
+    if not _is_record(meta):
+        return meta
+    slim: dict[str, Any] = {key: meta[key] for key in _PAGED_META_KEYS if key in meta}
+    slim["todos"] = [
+        {key: todo[key] for key in _PAGED_TODO_KEYS if key in todo} if _is_record(todo) else todo
+        for todo in meta.get("todos", [])
+    ]
+    slim["reviewNotes"] = []
+    return slim
+
+
 def _list_result(entries: list[dict[str, Any]], arguments: dict[str, Any]) -> Any:
     """Shape a scan into a response that always fits one frame.
 
@@ -1244,7 +1265,9 @@ def _list_result(entries: list[dict[str, Any]], arguments: dict[str, Any]) -> An
     it would not fit a frame each entry's full meta is dropped rather than the
     entry. ``{"offset": n}`` pages instead: entries from n on that fit one
     frame, plus ``next_offset`` (null after the last one), so no plan is ever
-    left out however many there are.
+    left out however many there are. Paging is the Plans view's form, so a
+    paged entry carries only the meta the view reads (see _paged_meta); the
+    plain array agents receive keeps the full meta.
     """
     if not arguments:
         if _encoded_size(entries) <= LIST_INLINE_BUDGET_BYTES:
@@ -1258,7 +1281,7 @@ def _list_result(entries: list[dict[str, Any]], arguments: dict[str, Any]) -> An
     used = 0
     index = offset
     while index < len(entries):
-        entry = entries[index]
+        entry = {**entries[index], "meta": _paged_meta(entries[index]["meta"])}
         cost = _encoded_size(entry) + 1
         if page and used + cost > LIST_PAGE_BUDGET_BYTES:
             break

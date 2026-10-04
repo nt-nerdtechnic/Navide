@@ -1510,7 +1510,9 @@ def test_an_oversized_list_is_paged_and_never_kills_the_child(
     for index in range(count):
         meta = {
             "schemaVersion": 1, "name": f"Plan {index:04d}", "overview": "o", "stage": "draft",
-            "todos": [], "reviewNotes": notes,
+            # A todo the paged list keeps, so paging still needs several pages
+            # once review notes are left out of it.
+            "todos": [{"id": "t1", "content": "todo " * 800, "status": "pending"}], "reviewNotes": notes,
         }
         html = f'<script type="application/json" id="plan-meta">{json.dumps(meta)}</script>'
         (plans / f"plan-{index:04d}_abcdef.html").write_text(html, encoding="utf-8", newline="")
