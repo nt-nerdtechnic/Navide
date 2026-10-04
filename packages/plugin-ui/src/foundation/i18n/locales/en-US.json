@@ -247,6 +247,7 @@
     "ws-title": "Close workspace?",
     "ws-body": "Return to the welcome screen and close the current workspace?",
     "ws-running-extra": "This aborts the running pipeline (its record is kept on disk and can be resumed later).",
+    "ws-pm-panel-extra": "The Pipeline Manager's AI panel for this workspace ends too.",
     "sidebar-ws-title": "Close \u201c{name}\u201d?",
     "sidebar-ws-body": "This ends the {count} CLI pane(s) in this workspace. Their records are kept, so reopening it brings each one back as a card you click to resume.",
     "sidebar-ws-body-pipeline-only": "This ends the {count} CLI pane(s) in this workspace. They all belong to a pipeline run, so reopening it will not bring them back.",
@@ -8098,6 +8099,16 @@
     "group-recent": "Recent",
     "group-local": "This window",
     "broadcast-hint": "everyone"
+  },
+  "dockWindow": {
+    "pm": "Pipeline Manager",
+    "plans": "Plans",
+    "git": "Git",
+    "editor": "Editor",
+    "open-in": "Open in {window}",
+    "resumes-in": "Resumes in {window}",
+    "resumes-in-window": "This AI panel lives in {window}. It resumes there, not as a pane in this window.",
+    "address-title": "Other panes reach this panel at {'@'}{address}"
   },
   "paneStatus": {
     "running": "running",

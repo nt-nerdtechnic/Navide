@@ -922,3 +922,41 @@ describe('AiCliDock — restore from the panel record', () => {
     expect(termSpies.spawn).not.toHaveBeenCalled()
   })
 })
+
+describe('AiCliDock — the header names the address other panes reach it by', () => {
+  function rosterPort() {
+    return {
+      ...makeTerminalPort(),
+      listAgentPanes: vi.fn(async () => ({ ok: true, payload: { panes: [] } })),
+      registerAgentPane: vi.fn(async () => ({ ok: true })),
+      unregisterAgentPane: vi.fn(async () => ({ ok: true })),
+    } as unknown as TerminalDockPort
+  }
+  // `<!--v-if-->` is Vue's invisible placeholder for an untaken branch.
+  const head = (w: VueWrapper): string => w.find('.ai-cli-head').element.outerHTML.replace(/<!--v-if-->/g, '')
+
+  it('shows the roster name once the panel is registered', async () => {
+    const wrapper = mountDock({ terminalPort: rosterPort(), origin: 'pipeline-manager' })
+    termState.status.value = 'running'
+    await flushPromises()
+    const address = wrapper.find('.ai-cli-head .ai-cli-address')
+    expect(address.exists()).toBe(true)
+    expect(address.text()).toBe('@pm-claude')
+    expect(address.attributes('title')).toContain('pm-claude')
+  })
+
+  it('draws the header exactly as before while nothing is registered', async () => {
+    const wrapper = mountDock({ terminalPort: rosterPort(), origin: 'pipeline-manager' })
+    await flushPromises()
+    expect(wrapper.find('.ai-cli-address').exists()).toBe(false)
+    expect(head(wrapper)).toMatchSnapshot()
+
+    // And again once the CLI has ended and the panel left the roster.
+    termState.status.value = 'running'
+    await flushPromises()
+    termState.status.value = 'exited'
+    await flushPromises()
+    expect(wrapper.find('.ai-cli-address').exists()).toBe(false)
+    expect(head(wrapper)).toMatchSnapshot()
+  })
+})

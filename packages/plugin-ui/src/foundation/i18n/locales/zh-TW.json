@@ -247,6 +247,7 @@
     "ws-title": "關閉工作區？",
     "ws-body": "確定要關閉目前工作區並返回歡迎頁嗎？",
     "ws-running-extra": "這會中止進行中的 pipeline（紀錄會保留在磁碟，稍後可以接續）。",
+    "ws-pm-panel-extra": "這個工作區的流程管理 AI 面板也會一併結束。",
     "sidebar-ws-title": "關閉「{name}」？",
     "sidebar-ws-body": "這會結束這個工作區的 {count} 個 CLI pane；紀錄會保留，重新開啟這個工作區時它們會留成可點擊接續的卡片。",
     "sidebar-ws-body-pipeline-only": "這會結束這個工作區的 {count} 個 CLI pane。它們都屬於 pipeline 執行，重新開啟這個工作區時不會回來。",
@@ -8098,6 +8099,16 @@
     "group-recent": "最近",
     "group-local": "本視窗",
     "broadcast-hint": "全部"
+  },
+  "dockWindow": {
+    "pm": "流程管理",
+    "plans": "計畫",
+    "git": "Git",
+    "editor": "編輯器",
+    "open-in": "在{window}中開啟",
+    "resumes-in": "接續位置：{window}",
+    "resumes-in-window": "這個 AI 面板屬於「{window}」，要回到那裡接續，不會在這個視窗開成 Pane。",
+    "address-title": "其他 Pane 以 {'@'}{address} 傳訊給這個面板"
   },
   "paneStatus": {
     "running": "執行中",

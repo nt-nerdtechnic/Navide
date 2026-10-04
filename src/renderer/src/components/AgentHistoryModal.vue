@@ -23,6 +23,8 @@ import {
   type HistoryStatusFilter,
   type SpawnHistoryEntry,
 } from '../lib/spawnHistory'
+import { dockWindowLabelKey } from '../lib/dockWindow'
+import { AI_PANEL_ICON_PATH } from '@navide/plugin-ui'
 import BrandLoader from './BrandLoader.vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 
@@ -62,6 +64,8 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'kill-all'): void
   (e: 'resume', entry: SpawnHistoryEntry): void
+  /** An embedded AI panel's entry: open the window it lives in. */
+  (e: 'open-in-window', entry: SpawnHistoryEntry): void
   (e: 'focus-pane', entry: SpawnHistoryEntry): void
   (e: 'preview', entry: SpawnHistoryEntry): void
   (e: 'close-preview'): void
@@ -306,6 +310,18 @@ watch([() => props.show, browseOrder], ([open, entries]) => {
     selectedPaneId.value = entries[0]?.paneId ?? ''
   }
 }, { immediate: true })
+
+// An embedded AI panel's entry (AiCliDock) belongs to its window, not to this
+// window's pane pool: it is named by that window, and its primary action opens
+// the window rather than resuming or focusing a pane here. Only the Pipeline
+// Manager is a window of this one, and only for the project on screen; every
+// other panel resumes inside its own window, which the disabled action says.
+const panelWindowKey = computed(() =>
+  selectedEntry.value ? dockWindowLabelKey(selectedEntry.value.surface) : null
+)
+const canOpenPanelWindow = computed(() =>
+  selectedEntry.value?.surface === 'pm' && !props.viewingWorkspace
+)
 
 function agentLabelFor(entry: SpawnHistoryEntry): string {
   if (!entry.agentKey) return ''
@@ -726,10 +742,15 @@ async function copyLogText(): Promise<void> {
                     class="agent-history-row"
                     :class="{ selected: entry.paneId === selectedPaneId }"
                     @click="selectedPaneId = entry.paneId"
-                    @dblclick="!isHistoryEntryRemoved(entry) && emit('focus-pane', entry)"
+                    @dblclick="!isHistoryEntryRemoved(entry) && !dockWindowLabelKey(entry.surface) && emit('focus-pane', entry)"
                   >
                     <span class="ah-dot" :class="isHistoryEntryRemoved(entry) ? 'removed' : 'active'"></span>
                     <span class="ah-badge">{{ historyEntryLabel(entry) }}</span>
+                    <span
+                      v-if="dockWindowLabelKey(entry.surface)"
+                      class="ah-window ah-window--mark"
+                      :title="$t(dockWindowLabelKey(entry.surface)!)"
+                    ><svg class="ah-window-icon" viewBox="0 0 16 16" aria-hidden="true"><path :d="AI_PANEL_ICON_PATH" /></svg></span>
                     <span class="ah-time">{{ listTime(entry, group.key) }}</span>
                     <!-- span, not button: rows are <button> and nesting
                          interactive elements is invalid HTML. -->
@@ -760,6 +781,7 @@ async function copyLogText(): Promise<void> {
               <div class="detail-title-row">
                 <template v-if="!renameEditing">
                   <span class="ah-badge detail-name">{{ historyEntryLabel(selectedEntry) }}</span>
+                  <span v-if="panelWindowKey" class="ah-window"><svg class="ah-window-icon" viewBox="0 0 16 16" aria-hidden="true"><path :d="AI_PANEL_ICON_PATH" /></svg>{{ $t(panelWindowKey) }}</span>
                   <button
                     class="ah-icon-btn"
                     :title="$t('action.rename')"
@@ -826,7 +848,14 @@ async function copyLogText(): Promise<void> {
                 </template>
               </div>
               <div class="agent-history-actions">
-                <template v-if="isHistoryEntryRemoved(selectedEntry)">
+                <button
+                  v-if="panelWindowKey"
+                  class="ah-revive ah-open-window"
+                  :disabled="!canOpenPanelWindow"
+                  :title="canOpenPanelWindow ? undefined : $t('dockWindow.resumes-in-window', { window: $t(panelWindowKey) })"
+                  @click="emit('open-in-window', selectedEntry)"
+                ><svg class="ah-window-icon" viewBox="0 0 16 16" aria-hidden="true"><path :d="AI_PANEL_ICON_PATH" /></svg>{{ $t(canOpenPanelWindow ? 'dockWindow.open-in' : 'dockWindow.resumes-in', { window: $t(panelWindowKey) }) }}</button>
+                <template v-else-if="isHistoryEntryRemoved(selectedEntry)">
                   <span
                     v-if="unavailablePaneIds.has(selectedEntry.paneId)"
                     class="ah-session-unavailable"
@@ -1257,6 +1286,45 @@ async function copyLogText(): Promise<void> {
   font-size: var(--font-3xs);
   color: var(--text-muted);
 }
+/* The window an embedded AI panel lives in. In the detail header it is a
+   quiet pill, sized to the header's icon buttons (20px) so their centres and
+   baselines line up; in a list row it is the mark alone (--mark), its name
+   the tooltip, so a long window name never crowds the row's own name off the
+   320px list column. */
+.ah-window {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  box-sizing: border-box;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  font-size: var(--font-3xs);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.ah-window--mark {
+  height: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+}
+.agent-history-row.selected .ah-window--mark {
+  color: var(--accent-fg);
+}
+/* The AI panel mark (AI_PANEL_ICON_PATH), drawn in the text colour. */
+.ah-window-icon {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
 .ah-row-star {
   flex-shrink: 0;
   font-size: var(--font-2xs);
@@ -1457,6 +1525,22 @@ async function copyLogText(): Promise<void> {
 .ah-revive:disabled {
   cursor: wait;
   opacity: 0.55;
+}
+/* Not busy, just not here: this panel resumes inside its own window. Set as
+   a note rather than a dimmed button — a greyed pill reads as "loading" or
+   invites a click that does nothing; the tooltip carries the full reason. */
+.ah-open-window .ah-window-icon {
+  width: 11px;
+  height: 11px;
+}
+.ah-revive.ah-open-window:disabled,
+.ah-revive.ah-open-window:disabled:hover {
+  cursor: help;
+  opacity: 1;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  padding-left: 2px;
 }
 .ah-revive.ah-delete {
   border-color: var(--danger-muted);

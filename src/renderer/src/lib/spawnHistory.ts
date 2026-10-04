@@ -58,6 +58,12 @@ export interface SpawnHistoryEntry extends HistoryTitleEntry {
   /** User favorite. Persisted across restarts; bulk cleanup skips starred
    *  entries (explicit single delete still removes them). */
   starred?: boolean
+  /** Host surface of an embedded AI panel (AiCliDock) — 'pm' / 'plans' / 'git'
+   *  / 'editor' — filed by the backend with the panel's entry. Absent (or
+   *  'main') on every window pane's entry. */
+  surface?: string
+  /** The window that surface lives in ('main' for the Pipeline Manager). */
+  windowKind?: string
 }
 
 export interface HistoryTitleIdentity {

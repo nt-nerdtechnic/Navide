@@ -17,6 +17,11 @@ export const MENTION_BROADCAST_ADDRESS = 'all'
  *  host resolves every word and the menu only lays them out — which also keeps
  *  the menu's own logic (filtering, keys) free of locale concerns.
  */
+/** The mark of an embedded AI panel (16×16 viewBox): the same four-point star
+ *  its own rail button shows (AiCliDock). Wherever a panel is listed next to
+ *  panes it is drawn from this one path, never from a text glyph. */
+export const AI_PANEL_ICON_PATH = 'M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z'
+
 export interface MentionCandidate {
   /** What gets typed into the prompt, e.g. "codex-1", "myproj/claude-2", "all". */
   address: string
@@ -41,6 +46,10 @@ export interface MentionCandidate {
   status?: string
   /** Pre-translated word shown beside the dot, e.g. "執行中". */
   statusLabel?: string
+  /** Pre-translated name of the window an embedded AI panel lives in, e.g.
+   *  "Pipeline Manager". Only a panel carries it — an ordinary pane row is
+   *  drawn without the chip, exactly as before. */
+  windowLabel?: string
 }
 
 /** The comparison form of mention text: case-folded and NFKC-normalised, so a

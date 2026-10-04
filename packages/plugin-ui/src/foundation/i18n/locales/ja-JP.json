@@ -247,6 +247,7 @@
     "ws-title": "ワークスペースを閉じますか？",
     "ws-body": "現在のワークスペースを閉じて、ようこそ画面に戻りますか？",
     "ws-running-extra": "実行中のパイプラインは中止されます（記録はディスクに保存され、後で再開できます）。",
+    "ws-pm-panel-extra": "このワークスペースのパイプライン管理 AI パネルも終了します。",
     "sidebar-ws-title": "「{name}」を閉じますか？",
     "sidebar-ws-body": "このワークスペースの CLI ペイン {count} 個を終了します。記録は保持され、ワークスペースを開き直すと、クリックして再開できるカードとして表示されます。",
     "sidebar-ws-body-pipeline-only": "このワークスペースの CLI ペイン {count} 個を終了します。すべてパイプライン実行に属しているため、ワークスペースを開き直しても復元されません。",
@@ -8098,6 +8099,16 @@
     "group-recent": "最近使った項目",
     "group-local": "このウィンドウ",
     "broadcast-hint": "全員"
+  },
+  "dockWindow": {
+    "pm": "パイプライン管理",
+    "plans": "プラン",
+    "git": "Git",
+    "editor": "エディタ",
+    "open-in": "{window}で開く",
+    "resumes-in": "{window}で再開",
+    "resumes-in-window": "この AI パネルは「{window}」にあります。再開はそちらで行われ、このウィンドウの Pane にはなりません。",
+    "address-title": "他の Pane からは {'@'}{address} でこのパネルに届きます"
   },
   "paneStatus": {
     "running": "実行中",

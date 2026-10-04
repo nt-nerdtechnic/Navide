@@ -120,6 +120,7 @@ import { deriveGlobalManager, type GlobalManagerRef } from './lib/globalManager'
 import { registerStage, completeSlot, releaseSlot, type StageSlotTracker } from './lib/stageTracker'
 import { evaluateManagerStage, fullAutoStallAction, type ManagerStageVerdict } from './lib/managerStageWatchdog'
 import { closeDialogBodyKey, closeEndsTheRun, restoreBlockedByRun } from './lib/workspaceCloseRun'
+import { dockWindowLabelKey, historyEntryIsLive, workspaceHasPmPanel } from './lib/dockWindow'
 import { droppedPrefix, remapCursor, type BufferObservation } from './lib/bufferCursor'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
@@ -1572,9 +1573,12 @@ let spawnHistoryLoadingMore = false
 function reconcileSpawnHistoryLiveness(entries: SpawnHistoryEntry[]): void {
   if (isDetachedWindow) return
   const livePaneIds = new Set(panes.value.map((p) => p.id))
+  // An embedded AI panel's entry is never one of this window's panes; the
+  // messaging roster is where a running panel lives (historyEntryIsLive).
+  const rosterPaneIds = new Set(remoteTargetByPane.keys())
   const reconciledAt = new Date().toISOString()
   for (const e of entries) {
-    if (!e.removedAt && !livePaneIds.has(e.paneId)) e.removedAt = reconciledAt
+    if (!e.removedAt && !historyEntryIsLive(e, livePaneIds, rosterPaneIds)) e.removedAt = reconciledAt
   }
 }
 
@@ -4060,7 +4064,7 @@ function readPaneShareText(ref: NonNullable<(typeof paneRefs)[string]>, maxLines
 /** `<folder>/<pane>` addresses of panes in other windows, each with the
  *  workspace folder the menu groups it under. */
 const remoteMessagingTargets = ref<
-  Array<{ address: string; workspacePath: string; workspaceLabel: string }>
+  Array<{ address: string; workspacePath: string; workspaceLabel: string; surface?: string }>
 >([])
 /** paneId → `<folder>/<pane>`, so a pane dragged in from another window can be
  *  turned into an address without a second round trip. */
@@ -4074,6 +4078,7 @@ async function refreshRemoteMessagingTargets(timeoutMs?: number): Promise<void> 
         qualified_name?: string
         workspace_label?: string
         workspace_path?: string
+        surface?: string
       }>
     }>('agent_msg.list', {}, timeoutMs)
     const localIds = new Set(panes.value.map((p) => p.id))
@@ -4089,6 +4094,8 @@ async function refreshRemoteMessagingTargets(timeoutMs?: number): Promise<void> 
       // behaviour rather than one unnamed section swallowing every window.
       workspacePath: p.workspace_path ?? '',
       workspaceLabel: p.workspace_label || (p.qualified_name as string).split('/')[0],
+      // Only an embedded AI panel's entry carries it (see dockWindowLabelKey).
+      ...(p.surface ? { surface: p.surface } : {}),
     }))
   } catch {
     remoteMessagingTargets.value = []
@@ -4185,11 +4192,16 @@ function mentionCandidatesFor(paneId: string): MentionCandidate[] {
         statusLabel: i18n.global.t('mention.broadcast-hint'),
       }]
     : []
-  const remote: MentionCandidate[] = remoteMessagingTargets.value.map((t) => ({
-    address: t.address,
-    group: t.workspacePath ? workspaceAliasKey(t.workspacePath) : t.workspaceLabel,
-    groupLabel: t.workspacePath ? wsDisplayName(t.workspacePath) : undefined,
-  }))
+  const remote: MentionCandidate[] = remoteMessagingTargets.value.map((t) => {
+    // An embedded AI panel names the window it lives in; a pane has no label.
+    const windowKey = dockWindowLabelKey(t.surface)
+    return {
+      address: t.address,
+      group: t.workspacePath ? workspaceAliasKey(t.workspacePath) : t.workspaceLabel,
+      groupLabel: t.workspacePath ? wsDisplayName(t.workspacePath) : undefined,
+      ...(windowKey ? { windowLabel: i18n.global.t(windowKey) } : {}),
+    }
+  })
   return rankMentionCandidates(
     clusterMentionCandidates([...broadcast, ...others, ...remote], ownGroup),
     loadMentionRecents(),
@@ -9828,6 +9840,16 @@ async function onFocusHistoryPane(entry: SpawnHistoryEntry): Promise<void> {
   }
 }
 
+/** Agent History → an embedded AI panel's entry. It belongs to its window, so
+ *  rather than resume it here as a window pane, open the window it lives in.
+ *  Only the Pipeline Manager is a window of this one; the modal offers the
+ *  action for nothing else. */
+function onOpenHistoryPanelWindow(entry: SpawnHistoryEntry): void {
+  if (entry.surface !== 'pm') return
+  showHistory.value = false
+  openPipelineManager()
+}
+
 async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   if (revivingHistoryPaneId.value) return
   const sessionId = entry.sessionId?.trim()
@@ -12562,6 +12584,11 @@ async function onPipelineReset(paneIds?: readonly string[]): Promise<void> {
 // abort it (record kept on disk → resumable) and kill all panes. Idle /
 // completed / aborted close immediately.
 const confirmCloseWorkspace = ref<boolean>(false)
+// doCloseWorkspace ends this workspace's Pipeline Manager panel too (it is no
+// pane of this window), so the dialog says so — only when the roster has one.
+const closingWorkspaceHasPmPanel = computed(() =>
+  workspaceHasPmPanel(remoteMessagingTargets.value, currentWorkspace.value, normWs)
+)
 
 function onSwitchWorkspace(): void {
   if (confirmBeforeClose.value || pipeline.state === 'running') {
@@ -19925,6 +19952,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @refresh="onRefreshHistory"
       @kill-all="onKillAll"
       @resume="onResumeHistoryAgent"
+      @open-in-window="onOpenHistoryPanelWindow"
       @focus-pane="onFocusHistoryPane"
       @preview="onPreviewHistoryAgent"
       @close-preview="previewLogOpen = false"
@@ -20575,6 +20603,7 @@ function paneIsCommander(p: ActivePane): boolean {
               {{ $t('confirm-close.ws-body') }}
               <template v-if="pipeline.state === 'running'"> {{ $t('confirm-close.ws-running-extra') }}</template>
             </p>
+            <p v-if="closingWorkspaceHasPmPanel" class="stall-hint">{{ $t('confirm-close.ws-pm-panel-extra') }}</p>
             <label class="check-row confirm-dont-show">
               <input type="checkbox" v-model="dontConfirmCloseAgain" />
               <span>{{ $t('confirm-close.dont-show-again') }}</span>

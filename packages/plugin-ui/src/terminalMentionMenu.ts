@@ -1,6 +1,7 @@
 import type { Terminal } from '@xterm/xterm'
 
 import {
+  AI_PANEL_ICON_PATH,
   filterMentionCandidates,
   foldMentionText,
   MENTION_BROADCAST_ADDRESS,
@@ -92,6 +93,12 @@ export function createTerminalMentionMenu(
       borderRadius: 'var(--radius-md)', boxShadow: '0 8px 28px rgba(0, 0, 0, 0.6)',
       outline: 'none', padding: '4px', boxSizing: 'border-box',
     })
+    // A panel row adds a window chip after its address. Rather than squeeze
+    // the address into an ellipsis, the card grows to fit — but only when a
+    // panel is listed, so a pane-only menu keeps its fixed width.
+    if (candidates.some((c) => c.windowLabel)) {
+      Object.assign(card.style, { width: 'max-content', minWidth: '248px', maxWidth: '360px' })
+    }
 
     // The query line only appears once there is something to report, so an
     // untouched menu looks exactly like the one that shipped before.
@@ -208,6 +215,28 @@ export function createTerminalMentionMenu(
         appendHighlighted(name, cand.address)
 
         row.append(box, dot, name)
+        if (cand.windowLabel) {
+          // Which window the panel lives in: the AI panel mark and the
+          // window's name, at the weight of the status word — a property of
+          // the row, never a second address.
+          const chip = document.createElement('span')
+          chip.className = 'term-mention-window'
+          Object.assign(chip.style, {
+            flex: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px',
+            color: 'var(--gray-4)', fontSize: '11px',
+          })
+          const glyph = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+          glyph.setAttribute('viewBox', '0 0 16 16')
+          glyph.setAttribute('width', '11')
+          glyph.setAttribute('height', '11')
+          glyph.setAttribute('aria-hidden', 'true')
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+          path.setAttribute('fill', 'currentColor')
+          path.setAttribute('d', AI_PANEL_ICON_PATH)
+          glyph.appendChild(path)
+          chip.append(glyph, cand.windowLabel)
+          row.appendChild(chip)
+        }
         if (cand.statusLabel) {
           const tag = document.createElement('span')
           tag.className = 'term-mention-status'

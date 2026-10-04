@@ -271,6 +271,9 @@ onUnmounted(() => clearInterval(mentionPollTimer))
 // re-mirrors its panes; dropped when the CLI ends or the panel unmounts.
 const dockSurface = computed(() => dockSurfaceForOrigin(props.origin))
 let registeredAs: { paneId: string; name: string } | null = null
+/** The roster name while registered, shown in the header: it is the address
+ *  every other pane reaches this panel by. Empty while unregistered. */
+const rosterAddress = ref('')
 // Bumped by every unregister, so a register still in flight when the CLI ends
 // knows to undo itself instead of leaving a dead panel in the roster.
 let registerSeq = 0
@@ -311,12 +314,14 @@ async function registerInRoster(): Promise<void> {
     return
   }
   registeredAs = { paneId, name }
+  rosterAddress.value = name
 }
 
 function unregisterFromRoster(): void {
   registerSeq++
   const previous = registeredAs
   registeredAs = null
+  rosterAddress.value = ''
   if (previous) dropRegistration(previous.paneId)
 }
 
@@ -569,6 +574,11 @@ defineExpose({ start, stop, interrupt, pasteText, injectNow, toggle, terminal: t
   <div v-show="open" ref="panelRef" class="ai-dock-panel" :style="{ width: width + 'px' }">
     <div class="ai-cli-head">
       <span class="ai-cli-title">{{ t(titleKey) }}</span>
+      <span
+        v-if="rosterAddress"
+        class="ai-cli-address"
+        :title="t('dockWindow.address-title', { address: rosterAddress })"
+      >@{{ rosterAddress }}</span>
       <span v-if="workspacePath" class="ai-cli-ws" :title="workspacePath">{{ workspaceName }}</span>
     </div>
     <div v-if="!active" class="ai-cli-controls">
@@ -671,6 +681,31 @@ defineExpose({ start, stop, interrupt, pasteText, injectNow, toggle, terminal: t
 .ai-cli-title {
   font-size: var(--font-xs);
   font-weight: 600;
+}
+
+.ai-cli-address {
+  animation: ai-cli-address-in var(--motion-fast) var(--ease-out);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-3xs);
+  line-height: 15px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 5px;
+  text-overflow: ellipsis;
+  user-select: all;
+  white-space: nowrap;
+}
+
+/* Appearing is the state change — the panel just became reachable. */
+@keyframes ai-cli-address-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-cli-address { animation: none; }
 }
 
 .ai-cli-ws {
