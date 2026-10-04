@@ -1370,7 +1370,7 @@
       "sensitive": "敏感權限",
       "empty": "尚未安裝任何擴充功能。",
       "permissionDetails": "權限與授予",
-      "plansRiskNote": "此插件有自己的後端程式，以您的使用者權限執行，沒有沙盒。它處理目前專案的計畫文件：從往上找到的 Git 儲存庫根目錄起（含其下的巢狀儲存庫），任何深度的 .agent-team、.claude、.cursor 與 docs 底下的 plans／reports 類資料夾、根目錄的 .plans，以及這些資料夾的 .history（只讀）。讀取由後端直接進行，寫入、更名與刪除目前經由 Navide 進行。",
+      "plansRiskNote": "此插件有自己的後端程式，以您的使用者權限執行，沒有沙盒。它處理目前專案的計畫文件：從往上找到的 Git 儲存庫根目錄起（含其下的巢狀儲存庫），任何深度的 .agent-team、.claude、.cursor 與 docs 底下的 plans／reports 類資料夾、根目錄的 .plans，以及這些資料夾的 .history（只讀）。讀取與寫入計畫文件都由此插件的後端直接進行；刪除與改名仍經由 Navide 進行。",
       "searchPlaceholder": "搜尋擴充功能",
       "search": "搜尋",
       "install": "安裝",

@@ -318,6 +318,11 @@ describe('ExtensionsPane', () => {
     expect(risk).toContain('no sandbox')
     expect(risk).toContain('Git repository root')
     expect(risk).toContain('.history')
+    // Since the backend writes plan files itself, only deletes and renames
+    // still go through Navide.
+    expect(risk).toContain('Its backend reads and writes them directly')
+    expect(risk).toContain('deletes and renames still go through Navide')
+    expect(risk).not.toContain('writes, renames and deletes')
     // The third-party sandbox wording never describes this package.
     expect(risk).not.toContain('sandboxed')
     expect(wrapper.find('[data-id="navide.plans"]').exists()).toBe(false)
@@ -611,6 +616,8 @@ describe('ExtensionsPane', () => {
       )
       expect(row.get('.ext-risk-note').text()).toContain('沒有沙盒')
       expect(row.get('.ext-risk-note').text()).toContain('使用者權限')
+      expect(row.get('.ext-risk-note').text()).toContain('讀取與寫入計畫文件都由此插件的後端直接進行')
+      expect(row.get('.ext-risk-note').text()).toContain('刪除與改名仍經由 Navide 進行')
     })
 
     it('shows a known Host refusal translated and an unknown one as written', async () => {
@@ -641,6 +648,28 @@ describe('ExtensionsPane', () => {
       expect(await attempt()).toBe('acme.demo 正在安裝、更新或回復中，請等它完成後再試。')
       expect(await attempt()).toBe('無法載入內建版本。 (bundle unreadable)')
       expect(await attempt()).toBe('something unforeseen')
+    })
+  })
+
+  describe('in ja-JP', () => {
+    const original = i18n.global.locale.value
+    beforeEach(() => {
+      i18n.global.locale.value = 'ja-JP'
+    })
+    afterEach(() => {
+      i18n.global.locale.value = original
+    })
+
+    it('discloses that the Plans backend reads and writes directly without a sandbox', async () => {
+      mockBundledPlansAndGit()
+      wrapper = mountExtensions()
+      await flushPromises()
+
+      const risk = wrapper.get('[data-factory-id="navide.plans"] .ext-risk-note').text()
+      expect(risk).toContain('サンドボックスはありません')
+      expect(risk).toContain('ユーザー権限')
+      expect(risk).toContain('読み取りと書き込みはどちらもこのプラグインのバックエンドが直接行い')
+      expect(risk).toContain('削除と名前変更は引き続き Navide を経由します')
     })
   })
 

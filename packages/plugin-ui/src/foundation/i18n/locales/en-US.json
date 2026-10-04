@@ -1370,7 +1370,7 @@
       "sensitive": "sensitive",
       "empty": "No extensions installed.",
       "permissionDetails": "Permissions and grants",
-      "plansRiskNote": "This plugin has its own backend program, which runs with your user permissions and has no sandbox. It works on plan documents in the current project, starting from the Git repository root found above it (including repositories nested inside): the plan and report folders under .agent-team, .claude, .cursor and docs at any depth, .plans at the root, and their .history (read only). It reads them directly; writes, renames and deletes currently go through Navide.",
+      "plansRiskNote": "This plugin has its own backend program, which runs with your user permissions and has no sandbox. It works on plan documents in the current project, starting from the Git repository root found above it (including repositories nested inside): the plan and report folders under .agent-team, .claude, .cursor and docs at any depth, .plans at the root, and their .history (read only). Its backend reads and writes them directly; deletes and renames still go through Navide.",
       "searchPlaceholder": "Search extensions",
       "search": "Search",
       "install": "Install",
