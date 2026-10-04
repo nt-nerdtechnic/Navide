@@ -9359,6 +9359,16 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
 
     manual_pin = _profile_pin_for_bookkeeping(
         payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id"))
+    # A rebuild re-keys the old record onto the new id; read the session the old
+    # record held before that overwrites it, so a scheduled job can follow the
+    # hop only when the rebuild resumed that very session.
+    previous_pane_id = str(payload.get("previous_pane_id") or "")
+    previous_session_id = ""
+    if previous_pane_id:
+        before = app.project_store.load_or_create(payload["workspace_path"])
+        previous = next((p for p in before.panes
+                         if p.origin != "pipeline" and p.pane_id == previous_pane_id), None)
+        previous_session_id = previous.session_id if previous is not None else ""
     project = app.project_store.record_manual_pane_spawn(
         payload["workspace_path"],
         pane_id=payload["pane_id"],
@@ -9380,6 +9390,16 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
+    if previous_session_id:
+        from . import scheduler
+
+        try:
+            await scheduler.get_service().rebind_after_rebuild(
+                previous_pane_id, str(payload["pane_id"]),
+                previous_session_id, str(payload.get("session_id") or ""),
+            )
+        except Exception:  # noqa: BLE001 — the spawn is recorded either way
+            log.exception("manual_pane.spawn: scheduler rebind failed")
 
 
 @handler("manual_pane.unspawn")

@@ -91,6 +91,10 @@ SKIP_INTERRUPTED = "interrupted"
 SKIP_BUDGET_GLOBAL = "budget_global"
 #: An agent-owned periodic job disabled because it expired.
 SKIP_EXPIRED = "expired"
+#: A pane-id target that is gone (unknown-pane-id, never target-offline) this
+#: many runs in a row disables the job and tells its owner — or the user — once.
+#: A skip is still not an error; this is the one skip that stops a job.
+TARGET_GONE_DISABLE_AFTER = 3
 
 AGENT_ENABLED_PER_OWNER = 10
 AGENT_ENABLED_TOTAL = 100
@@ -302,7 +306,15 @@ def _initial_state() -> dict[str, Any]:
         "consecutive_errors": 0,
         "backoff_until": None,
         "last_msg_key": None,
+        "consecutive_target_gone": 0,
+        "disabled_reason": None,
     }
+
+
+def _clear_target_gone(state: dict[str, Any]) -> None:
+    """Forget a gone-target streak: the job was re-enabled or now aims elsewhere."""
+    state["consecutive_target_gone"] = 0
+    state["disabled_reason"] = None
 
 
 def _once_rearm(schedule: dict[str, Any], now_ms: int) -> int:
@@ -358,6 +370,8 @@ def normalize_job(raw: Any, existing: dict[str, Any] | None, now_ms: int) -> dic
             state["next_run_at"] = _once_rearm(schedule, now_ms)
     elif changed or reenabled or state.get("next_run_at") is None:
         state["next_run_at"] = next_run_after(schedule, now_ms)
+    if reenabled or (existing is not None and action != existing["action"]):
+        _clear_target_gone(state)
     return {
         "id": existing["id"] if existing else str(uuid.uuid4()),
         "name": name,
@@ -548,6 +562,39 @@ class LiveBridge:
             taint_detail=action.get(TAINT_KEY) or "",
         )
         return outcome_of_send(answer)
+
+    async def notify_disabled(self, job: dict[str, Any]) -> None:
+        """Tell whoever should know that ``job`` stopped because its target is gone.
+
+        The owner pane hears it as a message, through the same path; when the
+        owner is the user, or a pane that is gone too, every window gets a
+        ``scheduler.job_disabled`` event to show the user instead.
+        """
+        from . import app
+        from .ipc import make_event
+        from .mcp_server import server as mcp
+
+        owner = job.get("owner") or USER
+        name = job.get("name") or job.get("id")
+        target = (job.get("action") or {}).get("pane_id") or ""
+        count = (job.get("state") or {}).get("consecutive_target_gone") or TARGET_GONE_DISABLE_AFTER
+        pane = _owner_pane(owner) if owner.get("kind") == "pane" else None
+        if pane is not None:
+            text = (
+                f'[Navide scheduler] Your job "{name}" (id {job.get("id")}) was disabled: '
+                f"its target pane {target} was gone {count} runs in a row. Point it at a live "
+                "pane with scheduler_upsert and enable it again, or remove it."
+            )
+            answer = await mcp._send(
+                mcp._Caller(kind="host"), "", text, pane_id=pane, open_target=False,
+            )
+            if answer.get("ok"):
+                return
+            log.warning("scheduler: could not tell owner pane %s: %s", pane, answer.get("error"))
+        await app.broadcast(make_event("scheduler.job_disabled", {
+            "id": job.get("id"), "name": name, "reason": SKIP_TARGET_GONE,
+            "pane_id": target, "count": count,
+        }))
 
 
 #: Carries "scheduled by <agent>" from a job to LiveBridge.deliver; never stored.
@@ -880,21 +927,29 @@ class SchedulerService:
     async def _finish(
         self, job_id: str, started: int, outcome: dict[str, Any], manual: bool
     ) -> None:
+        disabled = None
         try:
-            await self._settle(job_id, started, outcome, manual)
+            disabled = await self._settle(job_id, started, outcome, manual)
         finally:
             entry = self._runs.get(job_id)
             if entry is not None and entry[0] is asyncio.current_task():
                 self._runs.pop(job_id, None)
         await self._changed()
+        if disabled is not None:
+            try:
+                await self.bridge.notify_disabled(disabled)
+            except Exception as err:  # noqa: BLE001 — the job is disabled either way
+                log.warning("scheduler: disabled-job notice failed: %s", err)
 
     async def _settle(
         self, job_id: str, started: int, outcome: dict[str, Any], manual: bool
-    ) -> None:
+    ) -> dict[str, Any] | None:
+        """Record a finished run. Returns the job when this run disabled it
+        because its target stayed gone — the caller notifies, outside the lock."""
         async with self._lock:
             job = await self.store.get_job(job_id)
             if job is None or job["state"].get("running_at") != started:
-                return  # removed, or already settled by the stuck sweep
+                return None  # removed, or already settled by the stuck sweep
             now = self.now_ms()
             state = job["state"]
             status = outcome["status"]
@@ -914,9 +969,21 @@ class SchedulerService:
                 state["consecutive_errors"] = errors
                 state["backoff_until"] = now + BACKOFF_S[min(errors, len(BACKOFF_S)) - 1] * 1000
                 state["last_error"] = outcome.get("detail") or outcome.get("reason") or "error"
+            if status == "skipped" and outcome.get("reason") == SKIP_TARGET_GONE:
+                state["consecutive_target_gone"] = int(state.get("consecutive_target_gone") or 0) + 1
+            elif status != "skipped":
+                state["consecutive_target_gone"] = 0
+            # Only an enabled job can be stopped by this run, so a manual run of
+            # one already stopped never notifies a second time.
+            gone_out = (
+                job["enabled"]
+                and state["consecutive_target_gone"] >= TARGET_GONE_DISABLE_AFTER
+            )
+            if gone_out:
+                state["disabled_reason"] = SKIP_TARGET_GONE
             if not manual:
                 state["next_run_at"] = next_run_after(job["schedule"], now)
-            if not manual and job["schedule"]["kind"] == "once":
+            if gone_out or (not manual and job["schedule"]["kind"] == "once"):
                 await self.store.set_enabled(job_id, False, state, now)
             else:
                 await self.store.set_state(job_id, state)
@@ -924,6 +991,7 @@ class SchedulerService:
                 "started_at": started, "ended_at": now, "status": status,
                 "reason": outcome.get("reason"), "detail": outcome.get("detail"),
             })
+            return {**job, "enabled": False, "state": state} if gone_out else None
 
     async def _fail_stuck(self, job_id: str, now: int) -> None:
         entry = self._runs.pop(job_id, None)
@@ -1081,6 +1149,7 @@ class SchedulerService:
                         return {"ok": False, "error": str(err)}
                 else:
                     state["next_run_at"] = next_run_after(job["schedule"], self.now_ms())
+                _clear_target_gone(state)
             await self.store.set_enabled(
                 job_id, enabled, state, self.now_ms(), updated_by=owner_of(actor), owner=owner
             )
@@ -1118,6 +1187,39 @@ class SchedulerService:
         if task is None:
             return {"ok": False, "error": "that job is already running"}
         return {"ok": True, "enqueued": True}
+
+    async def rebind_after_rebuild(
+        self, previous_pane_id: str, pane_id: str, previous_session_id: str, session_id: str
+    ) -> list[str]:
+        """Move jobs aimed at a rebuilt pane's old id onto its new id.
+
+        Only along the session lineage: the rebuild must have resumed exactly
+        the session the old pane held. A different or unknown session is a
+        different conversation, and a pane name is never evidence at all — the
+        same rule outcome_of_send keeps for a gone id. The job's owner and
+        updated_by stay as they were (this is not an edit by anyone, and must
+        not mark a user's job as agent-written); ``state.rebound_from`` records
+        the hop. Returns the ids of the jobs moved.
+        """
+        if not (previous_pane_id and pane_id and session_id) or previous_pane_id == pane_id:
+            return []
+        if previous_session_id != session_id:
+            return []
+        moved: list[str] = []
+        async with self._lock:
+            for job in await self.store.list_jobs():
+                if job["action"].get("pane_id") != previous_pane_id:
+                    continue
+                job["action"] = {**job["action"], "pane_id": pane_id}
+                job["state"]["rebound_from"] = previous_pane_id
+                job["state"]["consecutive_target_gone"] = 0
+                await self.store.put_job(job)
+                moved.append(job["id"])
+        if moved:
+            log.info("scheduler: rebound %s from pane %s to %s", moved, previous_pane_id, pane_id)
+            await self._changed()
+            self.wake()
+        return moved
 
     async def runs(self, job_id: str, limit: int = 20) -> dict[str, Any]:
         if await self.store.get_job(job_id) is None:

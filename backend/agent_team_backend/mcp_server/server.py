@@ -7291,6 +7291,9 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
         pane_id / pane_name. pane_id pins one exact pane (read it from
         cli_list_targets or cli_whoami); if that pane is gone the run is skipped as
         "target_gone" — it never falls back to another pane of the same name.
+        A pane rebuilt by resuming the same session keeps its jobs: they move
+        to the new pane id. Three "target_gone" runs in a row disable the job
+        (state.disabled_reason "target_gone") and tell its creator once.
       policy — optional {catch_up: "once" | "skip", max_runs_per_day, timeout_s};
         defaults {"once", 24, 1800}.
       state — owned by Navide (next_run_at, running_at, last_status, last_error,
