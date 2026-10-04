@@ -1286,7 +1286,11 @@ def _list_result(entries: list[dict[str, Any]], arguments: dict[str, Any]) -> An
         if page and used + cost > LIST_PAGE_BUDGET_BYTES:
             break
         if not page and cost > LIST_PAGE_BUDGET_BYTES:
+            # The view still needs to know an archived plan is archived.
+            archived_at = entry["meta"].get("archivedAt") if _is_record(entry["meta"]) else None
             entry = {**entry, "meta": None}
+            if archived_at is not None:
+                entry["archivedAt"] = archived_at
             cost = _encoded_size(entry) + 1
         page.append(entry)
         used += cost

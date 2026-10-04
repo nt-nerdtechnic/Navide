@@ -787,3 +787,44 @@ def test_unpaged_list_keeps_the_full_meta_agents_receive(
 
     [entry] = _value(_call(backend_process, host, "plans.list", {}))
     assert entry["meta"] == _RICH_META
+
+
+# ── t17: a page entry whose meta had to be dropped still says if it is archived
+
+def _oversized_plan(name: str, archived_at: str | None) -> str:
+    meta: dict[str, Any] = {
+        "schemaVersion": 1, "name": name, "overview": "", "stage": "done",
+        # Past one page even after the page leaves out review notes.
+        "todos": [{"id": "t1", "content": "x" * 700_000, "status": "done"}],
+        "reviewNotes": [],
+    }
+    if archived_at is not None:
+        meta["archivedAt"] = archived_at
+    return f'<script type="application/json" id="plan-meta">{json.dumps(meta)}</script>\n'
+
+
+def test_a_paged_entry_without_its_meta_still_carries_its_archived_at(
+    backend_process: subprocess.Popen[bytes], tmp_path: Path
+) -> None:
+    mine = _workspace(tmp_path, "mine")
+    plans = mine / ".agent-team" / "plans"
+    (plans / "archived_aaaaaa.html").write_text(_oversized_plan("Archived big", "2026-10-01T00:00:00Z"), encoding="utf-8")
+    (plans / "active_bbbbbb.html").write_text(_oversized_plan("Active big", None), encoding="utf-8")
+    host = _RootOnlyHost({"instance-1": mine})
+
+    paged: dict[str, dict[str, Any]] = {}
+    offset: int | None = 0
+    while offset is not None:
+        page = _value(_call(backend_process, host, "plans.list", {"offset": offset}))
+        paged.update({entry["rel_path"]: entry for entry in page["entries"]})
+        offset = page["next_offset"]
+    archived = paged[".agent-team/plans/archived_aaaaaa.html"]
+    active = paged[".agent-team/plans/active_bbbbbb.html"]
+    assert archived["meta"] is None and archived["kind"] == "plan"
+    assert archived["archivedAt"] == "2026-10-01T00:00:00Z"
+    assert active["meta"] is None and active["kind"] == "plan"
+    assert "archivedAt" not in active
+
+    # Agents' un-paged list is unchanged: no such key on any entry.
+    for entry in _value(_call(backend_process, host, "plans.list", {})):
+        assert "archivedAt" not in entry
