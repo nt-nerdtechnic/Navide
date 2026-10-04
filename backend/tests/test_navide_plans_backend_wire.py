@@ -96,29 +96,6 @@ def _reply_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], val
     )
 
 
-def _reply_range(
-    process: subprocess.Popen[bytes],
-    request: dict[str, Any],
-    content: str,
-    mtime: float,
-) -> None:
-    """Answer a Host `read_range` call from an in-memory document."""
-    arguments = request["params"]["arguments"]
-    raw = content.encode("utf-8")
-    offset, length = arguments["offset"], arguments["length"]
-    piece = raw[offset : offset + length]
-    _reply_bridge(
-        process,
-        request,
-        {
-            "data_base64": base64.b64encode(piece).decode("ascii"),
-            "size": len(raw),
-            "mtime": mtime,
-            "eof": offset + len(piece) >= len(raw),
-        },
-    )
-
-
 def _error_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], code: str) -> None:
     _send(
         process,
@@ -132,6 +109,71 @@ def _error_bridge(process: subprocess.Popen[bytes], request: dict[str, Any], cod
             },
         },
     )
+
+
+def _serve_workspace(
+    process: subprocess.Popen[bytes],
+    root: Path,
+    request_id: str,
+    operations: list[str] | None = None,
+) -> dict[str, Any]:
+    """Play the Host for one call over a real workspace until it is answered.
+
+    The child reads plan files itself under the root the Host resolves, so the
+    only bridge calls it may make are resolve_root and single-call writes,
+    each on behalf of the request in flight. A write must name the mtime the
+    file has on disk, the way the Host's conflict check sees it.
+    """
+    while True:
+        frame = _read(process)
+        if frame.get("id") == request_id:
+            return frame
+        assert frame.get("method") == "navide/host/call"
+        params = frame["params"]
+        assert params["port"] == "filesystem"
+        assert params["origin"] == {"kind": "call", "requestId": request_id}
+        operation = params["operation"]
+        arguments = params["arguments"]
+        assert "workspace_path" not in arguments
+        if operations is not None:
+            operations.append(operation)
+        if operation == "resolve_root":
+            assert arguments == {}
+            _reply_bridge(process, frame, {"root": str(root.resolve())})
+        elif operation == "write_file":
+            target = root / arguments["rel_path"]
+            expected = arguments.get("expected_mtime")
+            if expected is not None:
+                assert expected == target.stat().st_mtime
+            target.write_text(arguments["content"], encoding="utf-8", newline="")
+            _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
+        else:
+            raise AssertionError(f"unexpected filesystem operation: {operation}")
+
+
+class _WorkspaceFiles:
+    """The workspace's files by relative path, read from disk."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def __contains__(self, rel_path: str) -> bool:
+        return (self.root / rel_path).is_file()
+
+    def __getitem__(self, rel_path: str) -> str:
+        return (self.root / rel_path).read_text(encoding="utf-8")
+
+
+def _template_workspace(root: Path) -> Path:
+    """A workspace with the Host-provisioned plan template in place."""
+    template = root / ".agent-team" / "plans" / "_template.html"
+    template.parent.mkdir(parents=True)
+    template.write_text(
+        (REPOSITORY_ROOT / "backend" / "agent_team_backend" / "plan_assets" / "_template.html").read_text(encoding="utf-8"),
+        encoding="utf-8",
+        newline="",
+    )
+    return root
 
 
 @pytest.fixture
@@ -155,7 +197,7 @@ def backend_process() -> subprocess.Popen[bytes]:
 
 
 def test_health_and_agent_create_update_read_round_trip(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
     _send(
         backend_process,
@@ -174,43 +216,11 @@ def test_health_and_agent_create_update_read_round_trip(
         "clientCapabilities": {},
     }
 
-    stored: dict[str, str] = {
-        ".agent-team/plans/_template.html": (
-            REPOSITORY_ROOT / "backend" / "agent_team_backend" / "plan_assets" / "_template.html"
-        ).read_text(encoding="utf-8")
-    }
-    mtime = 100.0
+    root = _template_workspace(tmp_path)
+    stored = _WorkspaceFiles(root)
 
     def service_until_response(request_id: str) -> dict[str, Any]:
-        nonlocal mtime
-        while True:
-            frame = _read(backend_process)
-            if frame.get("id") == request_id:
-                return frame
-            assert frame.get("method") == "navide/host/call"
-            params = frame["params"]
-            assert params["port"] == "filesystem"
-            assert params["origin"] == {"kind": "call", "requestId": request_id}
-            operation = params["operation"]
-            arguments = params["arguments"]
-            assert "workspace_path" not in arguments
-            if operation in ("read_file", "read_range"):
-                rel_path = arguments["rel_path"]
-                if rel_path in stored and operation == "read_range":
-                    _reply_range(backend_process, frame, stored[rel_path], mtime)
-                elif rel_path in stored:
-                    _reply_bridge(backend_process, frame, {"content": stored[rel_path], "mtime": mtime})
-                else:
-                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
-            elif operation == "write_file":
-                stored[arguments["rel_path"]] = arguments["content"]
-                expected = arguments.get("expected_mtime")
-                if expected is not None:
-                    assert expected == mtime
-                mtime += 1
-                _reply_bridge(backend_process, frame, {"ok": True, "mtime": mtime})
-            else:
-                raise AssertionError(f"unexpected filesystem operation: {operation}")
+        return _serve_workspace(backend_process, root, request_id)
 
     _send(
         backend_process,
@@ -393,8 +403,9 @@ def test_health_and_agent_create_update_read_round_trip(
 
 
 def test_create_rejects_a_missing_host_provisioned_template(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
+    (tmp_path / ".agent-team" / "plans").mkdir(parents=True)
     _send(
         backend_process,
         {
@@ -411,18 +422,13 @@ def test_create_rejects_a_missing_host_provisioned_template(
     )
 
     operations: list[str] = []
-    while True:
-        frame = _read(backend_process)
-        if frame.get("id") == "create-missing-template-1":
-            response = frame
-            break
-        assert frame.get("method") == "navide/host/call"
-        operations.append(frame["params"]["operation"])
-        assert frame["params"]["operation"] == "read_file"
-        _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
+    response = _serve_workspace(backend_process, tmp_path, "create-missing-template-1", operations)
 
     assert response["error"]["data"] == {"code": "BACKEND_UNAVAILABLE"}
-    assert operations.count("read_file") == 2
+    # The name probe and the template read happen in the child against the
+    # authorized root; nothing is written when the template is missing.
+    assert operations == ["resolve_root"]
+    assert sorted(path.name for path in (tmp_path / ".agent-team" / "plans").iterdir()) == []
 
 
 def test_filesystem_bridge_event_becomes_plans_changed(
@@ -507,60 +513,18 @@ def test_rejects_absolute_plan_path_before_host_bridge(
 
 
 def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_body(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
     document_path = ".agent-team/plans/README.md"
-    stored = {document_path: "# README\n\nA workspace document.\n"}
-    mtimes = {document_path: 100.0}
+    document = tmp_path / document_path
+    document.parent.mkdir(parents=True)
+    document.write_text("# README\n\nA workspace document.\n", encoding="utf-8", newline="")
+    os.utime(document, (100.0, 100.0))
+    stored = _WorkspaceFiles(tmp_path)
+    operations: list[str] = []
 
     def service_until_response(request_id: str) -> dict[str, Any]:
-        while True:
-            frame = _read(backend_process)
-            if frame.get("id") == request_id:
-                return frame
-            assert frame.get("method") == "navide/host/call"
-            params = frame["params"]
-            assert params["port"] == "filesystem"
-            assert params["origin"] == {"kind": "call", "requestId": request_id}
-            operation = params["operation"]
-            arguments = params["arguments"]
-            assert "workspace_path" not in arguments
-            if operation == "stat_path":
-                _reply_bridge(
-                    backend_process,
-                    frame,
-                    {"exists": arguments.get("rel_path") == ".agent-team/plans"},
-                )
-            elif operation == "list_dir":
-                if arguments.get("rel_path") == "":
-                    _reply_bridge(backend_process, frame, {"entries": []})
-                else:
-                    assert arguments == {"rel_path": ".agent-team/plans"}
-                    _reply_bridge(backend_process, frame, {"entries": ["README.md"]})
-            elif operation == "read_range":
-                rel_path = arguments["rel_path"]
-                if rel_path not in stored:
-                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
-                else:
-                    _reply_range(backend_process, frame, stored[rel_path], mtimes[rel_path])
-            elif operation == "read_file":
-                rel_path = arguments["rel_path"]
-                if rel_path not in stored:
-                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
-                else:
-                    _reply_bridge(
-                        backend_process,
-                        frame,
-                        {"content": stored[rel_path], "mtime": mtimes[rel_path]},
-                    )
-            elif operation == "write_file":
-                rel_path = arguments["rel_path"]
-                assert arguments["expected_mtime"] == mtimes[rel_path]
-                stored[rel_path] = arguments["content"]
-                mtimes[rel_path] += 1
-                _reply_bridge(backend_process, frame, {"ok": True, "mtime": mtimes[rel_path]})
-            else:
-                raise AssertionError(f"unexpected filesystem operation: {operation}")
+        return _serve_workspace(backend_process, tmp_path, request_id, operations)
 
     _send(
         backend_process,
@@ -606,12 +570,16 @@ def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_
     )
     promoted = service_until_response("promote-document-1")
     assert promoted["result"]["value"]["promoted"] is True
+    # The promotion wrote once, against the mtime the child read.
+    assert operations == ["resolve_root", "write_file"]
     assert stored[document_path].startswith("---\n")
     assert "\n---\n# README\n" in stored[document_path]
     assert "---# README" not in stored[document_path]
 
 
 def _list_request(request_id: str) -> dict[str, Any]:
+    # Every caller is the same view instance: a plans.list scan is only ever
+    # shared within one instance.
     return {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -621,122 +589,180 @@ def _list_request(request_id: str) -> dict[str, Any]:
 
 
 def _serve_one_empty_scan(
-    process: subprocess.Popen[bytes], leader_ids: set[str] | str
+    process: subprocess.Popen[bytes], root: Path, leader_ids: set[str] | str
 ) -> tuple[list[dict[str, Any]], str]:
-    """Answer one full plans.list scan on behalf of one of `leader_ids`,
-    collecting every other frame (the responses) until the scan's last bridge
-    call is served. Returns (other frames, the id that ran the scan)."""
+    """Answer one full plans.list scan of the empty workspace `root` on behalf
+    of one of `leader_ids`, collecting every other frame (the responses) until
+    the scan's bridge call is served. Only a scan whose instance has no
+    authorized root yet makes one (resolve_root). Returns (other frames, the
+    id that ran the scan)."""
     allowed = {leader_ids} if isinstance(leader_ids, str) else leader_ids
     others: list[dict[str, Any]] = []
-    served_root_listing = False
-    scanner = ""
-    while not served_root_listing:
+    while True:
         frame = _read(process)
         if frame.get("method") != "navide/host/call":
             others.append(frame)
             continue
         params = frame["params"]
         assert params["origin"]["kind"] == "call"
-        assert params["origin"]["requestId"] in allowed, params["origin"]
-        scanner = scanner or params["origin"]["requestId"]
-        assert params["origin"]["requestId"] == scanner, (scanner, params["origin"])
-        if params["operation"] == "stat_path":
-            _reply_bridge(process, frame, {"exists": False})
-        elif params["operation"] == "list_dir":
-            assert params["arguments"] == {"rel_path": "", "mode": "discovery"}
-            _reply_bridge(process, frame, {"entries": []})
-            served_root_listing = True
-        else:
-            raise AssertionError(f"unexpected filesystem operation: {params['operation']}")
-    return others, scanner
+        scanner = params["origin"]["requestId"]
+        assert scanner in allowed, params["origin"]
+        assert params["operation"] == "resolve_root", params["operation"]
+        _reply_bridge(process, frame, {"root": str(root.resolve())})
+        return others, scanner
 
 
 def test_overlapping_list_calls_share_one_follow_up_scan(
-    backend_process: subprocess.Popen[bytes],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The first call becomes the scan leader; its first bridge call proves the
-    # scan is running before the followers arrive.
-    _send(backend_process, _list_request("list-leader"))
-    first = _read(backend_process)
-    assert first["method"] == "navide/host/call"
-    assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
-    for follower in ("list-follower-1", "list-follower-2"):
-        _send(backend_process, _list_request(follower))
-    time.sleep(0.2)
-    _reply_bridge(backend_process, first, {"exists": False})
+    # Callers of one view share its root, which is cached after the first
+    # scan, so a follow-up scan makes no bridge call and cannot be counted on
+    # the wire. Drive the child's single-flight in process and count scans.
+    backend = _load_backend("plans_backend_overlap")
+    backend._plan_roots["instance-1"] = str(tmp_path.resolve())
+    scans: list[str] = []
+    leader_scanning = threading.Event()
+    release_leader = threading.Event()
+    real_list_plans = backend._list_plans
 
-    responses, _ = _serve_one_empty_scan(backend_process, "list-leader")
+    def list_plans(origin: dict[str, Any]) -> list[dict[str, Any]]:
+        scans.append(origin["requestId"])
+        if origin["requestId"] == "list-leader":
+            leader_scanning.set()
+            assert release_leader.wait(5)
+        return real_list_plans(origin)
+
+    monkeypatch.setattr(backend, "_list_plans", list_plans)
+    results: dict[str, Any] = {}
+
+    def call(request_id: str) -> None:
+        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1"}
+        results[request_id] = backend._list_plans_single_flight(origin)
+
+    # The first call becomes the scan leader and is held mid-scan.
+    leader = threading.Thread(target=call, args=("list-leader",), daemon=True)
+    leader.start()
+    assert leader_scanning.wait(5)
+    flight = backend._list_flights["instance-1"]
+    done = flight["done"]
+    waiting: list[str] = []
+    both_waiting = threading.Event()
+
+    class _ObservedDone:
+        """The leader's flight event, reporting each follower that waits on it."""
+
+        def wait(self, timeout: float | None = None) -> bool:
+            waiting.append(threading.current_thread().name)
+            if len(waiting) == 2:
+                both_waiting.set()
+            return done.wait(timeout)
+
+        def set(self) -> None:
+            done.set()
+
+    flight["done"] = _ObservedDone()
+    followers = [
+        threading.Thread(target=call, args=(name,), name=name, daemon=True)
+        for name in ("list-follower-1", "list-follower-2")
+    ]
+    for follower in followers:
+        follower.start()
+    assert both_waiting.wait(5)
+    release_leader.set()
+    for thread in (leader, *followers):
+        thread.join(5)
+        assert not thread.is_alive()
+
     # Both followers arrived while the leader's scan was running, so neither
     # may take its snapshot; they share exactly one scan started after them.
-    more, scanner = _serve_one_empty_scan(backend_process, {"list-follower-1", "list-follower-2"})
-    responses += more
-    deadline = time.monotonic() + 2
-    while len(responses) < 3:
-        assert time.monotonic() < deadline
-        frame = _read(backend_process, max(0.01, deadline - time.monotonic()))
-        # Every bridge call the child makes after the second scan belongs to
-        # nobody: a third scan would show up here.
-        assert frame.get("method") != "navide/host/call", frame
-        responses.append(frame)
-    assert scanner in {"list-follower-1", "list-follower-2"}
-    assert sorted(frame["id"] for frame in responses) == ["list-follower-1", "list-follower-2", "list-leader"]
-    assert all(frame["result"]["value"] == [] for frame in responses)
+    assert scans[0] == "list-leader"
+    assert len(scans) == 2, scans
+    assert scans[1] in {"list-follower-1", "list-follower-2"}
+    assert sorted(results) == ["list-follower-1", "list-follower-2", "list-leader"]
+    assert all(value == [] for value in results.values())
+
+
+def _load_backend(name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(name, BACKEND_ENTRY)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_list_caller_arriving_mid_scan_sees_the_write_the_scan_missed(
-    backend_process: subprocess.Popen[bytes],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A scan no longer makes a bridge call after resolve_root, so the wire has
+    # no point mid-scan to hold it at. Drive the child's single-flight in
+    # process instead and hold the leader right after it has consumed
+    # `.agent-team/plans`.
+    backend = _load_backend("plans_backend_mid_scan")
+    plans = _plans_dir(tmp_path)
+    backend._plan_roots["instance-1"] = str(tmp_path.resolve())
     plan_html = (
         '<script id="plan-meta" type="application/json">'
         '{"name":"new","stage":"draft","todos":[]}</script>'
     )
-    _send(backend_process, _list_request("list-leader"))
-    first = _read(backend_process)
-    assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
-    assert first["params"]["operation"] == "stat_path"
-    assert first["params"]["arguments"] == {"rel_path": ".agent-team/plans"}
-    _reply_bridge(backend_process, first, {"exists": True})
-    listing = _read(backend_process)
-    assert listing["params"]["operation"] == "list_dir"
-    assert listing["params"]["arguments"] == {"rel_path": ".agent-team/plans"}
+    consumed = threading.Event()
+    resume = threading.Event()
+    real_list_names = backend._list_names
+
+    def list_names(origin: dict[str, Any], rel_path: str, *, discovery: bool = False) -> list[str]:
+        names = real_list_names(origin, rel_path, discovery=discovery)
+        if origin["requestId"] == "list-leader" and rel_path == ".agent-team/plans":
+            consumed.set()
+            assert resume.wait(5)
+        return names
+
+    monkeypatch.setattr(backend, "_list_names", list_names)
+    results: dict[str, Any] = {}
+
+    def call(request_id: str) -> None:
+        origin = {"kind": "call", "requestId": request_id, "instance": "instance-1"}
+        results[request_id] = backend._list_plans_single_flight(origin)
+
+    leader = threading.Thread(target=call, args=("list-leader",), daemon=True)
+    leader.start()
+    assert consumed.wait(5)
     # The leader has consumed `.agent-team/plans` as empty; a document is
     # written right after, and a caller arriving from here on must see it.
-    _reply_bridge(backend_process, listing, {"entries": []})
-    disk = {".agent-team/plans": ["new.html"]}
-    _send(backend_process, _list_request("list-follower"))
+    (plans / "new.html").write_text(plan_html, encoding="utf-8", newline="")
+    flight = backend._list_flights["instance-1"]
+    done = flight["done"]
+    follower_waiting = threading.Event()
 
-    responses: list[dict[str, Any]] = []
-    deadline = time.monotonic() + 4
-    while len(responses) < 2:
-        assert time.monotonic() < deadline
-        frame = _read(backend_process, max(0.01, deadline - time.monotonic()))
-        if frame.get("method") != "navide/host/call":
-            responses.append(frame)
-            continue
-        params = frame["params"]
-        rel = params["arguments"].get("rel_path", "")
-        if params["operation"] == "stat_path":
-            _reply_bridge(backend_process, frame, {"exists": rel in disk or rel.startswith(".agent-team/plans/")})
-        elif params["operation"] == "list_dir":
-            _reply_bridge(backend_process, frame, {"entries": disk.get(rel, [])})
-        elif params["operation"] == "read_range":
-            _reply_range(backend_process, frame, plan_html, 1.0)
-        elif params["operation"] == "read_file":
-            _reply_bridge(backend_process, frame, {"content": plan_html, "mtime": 1.0})
-        else:
-            raise AssertionError(params["operation"])
+    class _ObservedDone:
+        """The leader's flight event, reporting when a follower waits on it."""
 
-    by_id = {frame["id"]: frame for frame in responses}
-    assert [entry["rel_path"] for entry in by_id["list-leader"]["result"]["value"]] == []
-    assert [entry["rel_path"] for entry in by_id["list-follower"]["result"]["value"]] == [".agent-team/plans/new.html"]
+        def wait(self, timeout: float | None = None) -> bool:
+            follower_waiting.set()
+            return done.wait(timeout)
+
+        def set(self) -> None:
+            done.set()
+
+    flight["done"] = _ObservedDone()
+    follower = threading.Thread(target=call, args=("list-follower",), daemon=True)
+    follower.start()
+    assert follower_waiting.wait(5)
+    resume.set()
+    leader.join(5)
+    follower.join(5)
+    assert not leader.is_alive() and not follower.is_alive()
+
+    assert [entry["rel_path"] for entry in results["list-leader"]] == []
+    assert [entry["rel_path"] for entry in results["list-follower"]] == [".agent-team/plans/new.html"]
 
 
 def test_cancelled_leader_does_not_cancel_the_followers_list_call(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
+    # The first list of a fresh process holds on its instance's resolve_root.
     _send(backend_process, _list_request("list-leader"))
     first = _read(backend_process)
     assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
+    assert first["params"]["operation"] == "resolve_root"
     _send(backend_process, _list_request("list-follower"))
     time.sleep(0.2)
     _send(
@@ -751,8 +777,9 @@ def test_cancelled_leader_does_not_cancel_the_followers_list_call(
     assert leader_response["id"] == "list-leader"
     assert leader_response["error"]["data"] == {"code": "USER_CANCELLED"}
 
-    # The follower takes the next flight instead of inheriting the cancellation.
-    responses, _ = _serve_one_empty_scan(backend_process, "list-follower")
+    # The follower takes the next flight instead of inheriting the cancellation;
+    # a cancelled resolve_root is not remembered, so its scan asks again.
+    responses, _ = _serve_one_empty_scan(backend_process, tmp_path, "list-follower")
     if not responses:
         responses.append(_read(backend_process))
     assert [(frame["id"], frame["result"]["value"]) for frame in responses] == [("list-follower", [])]
@@ -807,29 +834,27 @@ def test_manual_history_listing_uses_host_bridge_name_entries(
             "runtime": {**RUNTIME, "initiator": {"kind": "user", "id": "window-1"}},
         },
     })
+    operations: list[str] = []
     while True:
         frame = _read(backend_process)
         if frame.get("id") == "history-list":
             break
         assert frame["method"] == "navide/host/call"
-        params = frame["params"]
-        path = tmp_path / params["arguments"]["rel_path"]
-        if params["operation"] == "list_dir":
-            assert path == directory
-            _reply_bridge(backend_process, frame, {"entries": sorted(p.name for p in path.iterdir())})
-        elif params["operation"] == "stat_path":
-            _reply_bridge(backend_process, frame, {"exists": path.exists(), "isDirectory": path.is_dir()})
-        else:
-            raise AssertionError(f"unexpected history operation: {params['operation']}")
+        operations.append(frame["params"]["operation"])
+        assert frame["params"]["operation"] == "resolve_root"
+        _reply_bridge(backend_process, frame, {"root": str(tmp_path.resolve())})
+    # The child lists the directory itself; the Host only authorizes the root.
+    assert operations == ["resolve_root"]
     assert "result" in frame, frame
+    # Directories first, then files: the order the Host's own list_dir gives.
     assert frame["result"]["value"] == {"ok": True, "entries": [
-        {"name": "2026-09-08.html", "is_dir": False},
         {"name": "nested", "is_dir": True},
+        {"name": "2026-09-08.html", "is_dir": False},
     ]}
 
 
 def test_lists_and_reads_legacy_plans_across_doc_dirs(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
     legacy_path = ".cursor/plans/feature.plan.md"
     legacy_content = (
@@ -844,44 +869,13 @@ def test_lists_and_reads_legacy_plans_across_doc_dirs(
         "# Legacy Cursor Feature\n\n"
         "Details here.\n"
     )
-    stored = {legacy_path: legacy_content}
-    mtimes = {legacy_path: 200.0}
+    legacy = tmp_path / legacy_path
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(legacy_content, encoding="utf-8", newline="")
+    os.utime(legacy, (200.0, 200.0))
 
     def service_until_response(request_id: str) -> dict[str, Any]:
-        while True:
-            frame = _read(backend_process)
-            if frame.get("id") == request_id:
-                return frame
-            assert frame.get("method") == "navide/host/call"
-            params = frame["params"]
-            operation = params["operation"]
-            arguments = params["arguments"]
-            if operation == "stat_path":
-                _reply_bridge(
-                    backend_process,
-                    frame,
-                    {"exists": arguments.get("rel_path") == ".cursor/plans"},
-                )
-            elif operation == "list_dir":
-                if arguments.get("rel_path") == "":
-                    _reply_bridge(backend_process, frame, {"entries": []})
-                else:
-                    assert arguments == {"rel_path": ".cursor/plans"}
-                    _reply_bridge(backend_process, frame, {"entries": ["feature.plan.md"]})
-            elif operation == "read_range":
-                rel_path = arguments["rel_path"]
-                assert rel_path in stored
-                _reply_range(backend_process, frame, stored[rel_path], mtimes[rel_path])
-            elif operation == "read_file":
-                rel_path = arguments["rel_path"]
-                assert rel_path in stored
-                _reply_bridge(
-                    backend_process,
-                    frame,
-                    {"content": stored[rel_path], "mtime": mtimes[rel_path]},
-                )
-            else:
-                raise AssertionError(f"unexpected operation: {operation}")
+        return _serve_workspace(backend_process, tmp_path, request_id)
 
     _send(
         backend_process,
@@ -943,7 +937,7 @@ def test_lists_and_reads_legacy_plans_across_doc_dirs(
 
 
 def test_lists_nested_plan_roots_accepts_git_directory_and_rejects_git_file(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
     stored = {
         ".agent-team/plans/top.html": "<html><head><script id='plan-meta' type='application/json'>{\"schemaVersion\":1,\"name\":\"Top Plan\",\"overview\":\"Top\",\"stage\":\"draft\",\"approvedAt\":null,\"todos\":[],\"reviewNotes\":[]}</script></head><body></body></html>",
@@ -951,60 +945,18 @@ def test_lists_nested_plan_roots_accepts_git_directory_and_rejects_git_file(
         "submodule_dir/.agent-team/plans/sub.html": "<html><head><script id='plan-meta' type='application/json'>{\"schemaVersion\":1,\"name\":\"Sub Plan\",\"overview\":\"Sub\",\"stage\":\"draft\",\"approvedAt\":null,\"todos\":[],\"reviewNotes\":[]}</script></head><body></body></html>",
         "submodule_dir/inner_repo/.agent-team/plans/inner.html": "<html><head><script id='plan-meta' type='application/json'>{\"schemaVersion\":1,\"name\":\"Inner Plan\",\"overview\":\"Inner\",\"stage\":\"done\",\"approvedAt\":\"2026-09-04T00:00:00Z\",\"todos\":[],\"reviewNotes\":[]}</script></head><body></body></html>",
     }
-    mtime = 300.0
+    for rel, content in stored.items():
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8", newline="")
+    # nested_repo and submodule_dir/inner_repo are repositories (a .git
+    # directory); submodule_dir is a submodule checkout (a .git file).
+    (tmp_path / "nested_repo" / ".git").mkdir()
+    (tmp_path / "submodule_dir" / "inner_repo" / ".git").mkdir()
+    (tmp_path / "submodule_dir" / ".git").write_text("gitdir: ../.git/modules/submodule_dir\n", encoding="utf-8")
 
     def service_until_response(request_id: str) -> dict[str, Any]:
-        while True:
-            frame = _read(backend_process)
-            if frame.get("id") == request_id:
-                return frame
-            assert frame.get("method") == "navide/host/call"
-            params = frame["params"]
-            operation = params["operation"]
-            arguments = params["arguments"]
-            if operation == "stat_path":
-                rel = arguments.get("rel_path", "")
-                if rel in stored:
-                    _reply_bridge(backend_process, frame, {"exists": True, "isDirectory": False})
-                elif rel in {
-                    ".agent-team/plans",
-                    "nested_repo",
-                    "nested_repo/.git",
-                    "nested_repo/.agent-team/plans",
-                    "submodule_dir",
-                    "submodule_dir/inner_repo",
-                    "submodule_dir/inner_repo/.git",
-                    "submodule_dir/inner_repo/.agent-team/plans",
-                }:
-                    _reply_bridge(backend_process, frame, {"exists": True, "isDirectory": True})
-                elif rel == "submodule_dir/.git":
-                    _reply_bridge(backend_process, frame, {"exists": True, "isDirectory": False})
-                else:
-                    _reply_bridge(backend_process, frame, {"exists": False, "isDirectory": False})
-            elif operation == "list_dir":
-                rel = arguments.get("rel_path", "")
-                if rel == "":
-                    _reply_bridge(backend_process, frame, {"entries": ["nested_repo", "submodule_dir"]})
-                elif rel == "submodule_dir":
-                    _reply_bridge(backend_process, frame, {"entries": ["inner_repo"]})
-                elif rel == ".agent-team/plans":
-                    _reply_bridge(backend_process, frame, {"entries": ["top.html"]})
-                elif rel == "nested_repo/.agent-team/plans":
-                    _reply_bridge(backend_process, frame, {"entries": ["nested.html"]})
-                elif rel == "submodule_dir/inner_repo/.agent-team/plans":
-                    _reply_bridge(backend_process, frame, {"entries": ["inner.html"]})
-                else:
-                    _reply_bridge(backend_process, frame, {"entries": []})
-            elif operation in ("read_file", "read_range"):
-                rel = arguments["rel_path"]
-                if rel in stored and operation == "read_range":
-                    _reply_range(backend_process, frame, stored[rel], mtime)
-                elif rel in stored:
-                    _reply_bridge(backend_process, frame, {"content": stored[rel], "mtime": mtime})
-                else:
-                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
-            else:
-                raise AssertionError(f"unexpected operation: {operation}")
+        return _serve_workspace(backend_process, tmp_path, request_id)
 
     _send(
         backend_process,
@@ -1084,14 +1036,11 @@ def test_packaged_plans_backend_nested_roots_deterministic_50_cap(monkeypatch: p
     entries = [f"R{i:02d}" for i in range(49)] + ["Repo-Alpha", "repo-alpha"]
     shuffled_entries = list(reversed(entries))
 
-    def fake_bridge_call(origin: dict, service: str, op: str, args: dict) -> dict:
-        if op == "list_dir" and args.get("rel_path") == "":
-            return {"entries": shuffled_entries}
-        if op == "stat_path":
-            return {"exists": True, "isDirectory": True}
-        return {}
+    def fake_list_names(origin: dict, rel_path: str, *, discovery: bool = False) -> list[str]:
+        return shuffled_entries if rel_path == "" else []
 
-    monkeypatch.setattr(backend_module, "_bridge_call", fake_bridge_call)
+    monkeypatch.setattr(backend_module, "_list_names", fake_list_names)
+    monkeypatch.setattr(backend_module, "_stat", lambda origin, rel_path: (True, True))
     roots = backend_module._find_nested_plan_roots({"token": "fake"})
     assert len(roots) == 50
     assert "Repo-Alpha" in roots
@@ -1105,17 +1054,18 @@ def test_packaged_nested_roots_have_a_global_candidate_budget(monkeypatch: pytes
     spec.loader.exec_module(backend_module)
     probes = 0
 
-    def bridge(origin: dict, service: str, operation: str, arguments: dict) -> dict:
-        nonlocal probes
-        if operation == "list_dir":
-            return {"entries": [f"directory-{i}" for i in range(50)]}
-        assert operation == "stat_path"
-        if arguments["rel_path"].endswith("/.git"):
-            probes += 1
-            return {"exists": False}
-        return {"exists": True, "isDirectory": True}
+    def list_names(origin: dict, rel_path: str, *, discovery: bool = False) -> list[str]:
+        return [f"directory-{i}" for i in range(50)]
 
-    monkeypatch.setattr(backend_module, "_bridge_call", bridge)
+    def stat(origin: dict, rel_path: str) -> tuple[bool, bool]:
+        nonlocal probes
+        if rel_path.endswith("/.git"):
+            probes += 1
+            return False, False
+        return True, True
+
+    monkeypatch.setattr(backend_module, "_list_names", list_names)
+    monkeypatch.setattr(backend_module, "_stat", stat)
     assert backend_module._find_nested_plan_roots({}) == []
     assert 50 < probes <= 2000
 
@@ -1123,73 +1073,69 @@ def test_packaged_nested_roots_have_a_global_candidate_budget(monkeypatch: pytes
 def test_packaged_plans_backend_nested_roots_2000_entry_wire_truncation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Production-shaped wire test: bridge returns 2,000 entries (capped) with truncated: True."""
+    """Production-shaped test: a discovery listing returns 2,000 entries (already capped)."""
     spec = importlib.util.spec_from_file_location("plans_backend_test_cap_wire", BACKEND_ENTRY)
     assert spec is not None and spec.loader is not None
     backend_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(backend_module)
 
-    requested_modes: list[str | None] = []
+    requested_modes: list[bool] = []
     # 1,999 non-repo directories + 1 repo at 2,000th slot
     entries = [f"d{i:04d}" for i in range(1999)] + ["r0000-within"]
     shuffled_entries = list(reversed(entries))
 
-    def fake_bridge_call(origin: dict, service: str, op: str, args: dict) -> dict:
-        if op == "list_dir":
-            requested_modes.append(args.get("mode"))
-            if args.get("rel_path") == "":
-                return {"entries": shuffled_entries, "truncated": True}
-            return {"entries": []}
-        if op == "stat_path":
-            rel = args.get("rel_path", "")
-            if rel in ("r0000-within", "r0000-within/.git"):
-                return {"exists": True, "isDirectory": True}
-            if rel.endswith("/.git"):
-                return {"exists": False, "isDirectory": False}
-            return {"exists": True, "isDirectory": True}
-        return {}
+    def fake_list_names(origin: dict, rel_path: str, *, discovery: bool = False) -> list[str]:
+        requested_modes.append(discovery)
+        # A listing already at the 2,000-entry cap.
+        return shuffled_entries if rel_path == "" else []
 
-    monkeypatch.setattr(backend_module, "_bridge_call", fake_bridge_call)
+    def fake_stat(origin: dict, rel: str) -> tuple[bool, bool]:
+        if rel in ("r0000-within", "r0000-within/.git"):
+            return True, True
+        if rel.endswith("/.git"):
+            return False, False
+        return True, True
+
+    monkeypatch.setattr(backend_module, "_list_names", fake_list_names)
+    monkeypatch.setattr(backend_module, "_stat", fake_stat)
     roots = backend_module._find_nested_plan_roots({"token": "fake"})
     assert roots == ["r0000-within"]
     assert len(requested_modes) == 1  # The root listing exhausts the global candidate budget.
-    assert all(m == "discovery" for m in requested_modes)
+    assert all(requested_modes)  # every listing is a discovery listing
 
 
 def test_packaged_plans_backend_nested_roots_defensive_2000_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Defensive fallback test: abnormal bridge returns 2,001 entries; plans_backend caps internally."""
+    """Defensive fallback test: an abnormal listing returns 2,001 entries; the scan caps internally."""
     spec = importlib.util.spec_from_file_location("plans_backend_test_defensive_cap", BACKEND_ENTRY)
     assert spec is not None and spec.loader is not None
     backend_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(backend_module)
 
-    requested_modes: list[str | None] = []
+    requested_modes: list[bool] = []
     # 1,999 non-repo + r0000-within + z0000-beyond = 2,001 entries
     entries = [f"d{i:04d}" for i in range(1999)] + ["r0000-within", "z0000-beyond"]
     shuffled_entries = list(reversed(entries))
 
-    def fake_bridge_call(origin: dict, service: str, op: str, args: dict) -> dict:
-        if op == "list_dir":
-            requested_modes.append(args.get("mode"))
-            if args.get("rel_path") == "":
-                return {"entries": shuffled_entries, "truncated": False}
-            return {"entries": []}
-        if op == "stat_path":
-            rel = args.get("rel_path", "")
-            if rel in ("r0000-within", "r0000-within/.git", "z0000-beyond", "z0000-beyond/.git"):
-                return {"exists": True, "isDirectory": True}
-            if rel.endswith("/.git"):
-                return {"exists": False, "isDirectory": False}
-            return {"exists": True, "isDirectory": True}
-        return {}
+    def fake_list_names(origin: dict, rel_path: str, *, discovery: bool = False) -> list[str]:
+        requested_modes.append(discovery)
+        # An abnormal listing past the 2,000-entry cap.
+        return shuffled_entries if rel_path == "" else []
 
-    monkeypatch.setattr(backend_module, "_bridge_call", fake_bridge_call)
+    def fake_stat(origin: dict, rel: str) -> tuple[bool, bool]:
+        if rel in ("r0000-within", "r0000-within/.git", "z0000-beyond", "z0000-beyond/.git"):
+            return True, True
+        if rel.endswith("/.git"):
+            return False, False
+        return True, True
+
+    monkeypatch.setattr(backend_module, "_list_names", fake_list_names)
+    monkeypatch.setattr(backend_module, "_stat", fake_stat)
     roots = backend_module._find_nested_plan_roots({"token": "fake"})
     assert roots == ["r0000-within"]
     assert len(requested_modes) == 1  # The root listing exhausts the global candidate budget.
-    assert all(m == "discovery" for m in requested_modes)
+    assert all(requested_modes)  # every listing is a discovery listing
 
 
 # Regression: plans.create must not treat user todo text as an re.sub
@@ -1207,44 +1153,19 @@ HOSTILE_TODOS = [
 
 def _create_plan_over_wire(
     backend_process: subprocess.Popen[bytes],
+    workspace: Path,
     request_id: str,
     todos: list[str],
     name: str = "Backslash plan",
     overview: str = "Backslashes survive",
 ) -> tuple[str, str]:
     """Drive one plans.create through the real child, returning (rel_path, document)."""
-    stored: dict[str, str] = {
-        ".agent-team/plans/_template.html": (
-            REPOSITORY_ROOT / "backend" / "agent_team_backend" / "plan_assets" / "_template.html"
-        ).read_text(encoding="utf-8")
-    }
-    mtime = 100.0
+    root = _template_workspace(workspace)
+    stored = _WorkspaceFiles(root)
 
     def service_until_response(request_id: str) -> dict[str, Any]:
-        nonlocal mtime
-        while True:
-            # A dead worker thread writes no frame at all; _read raises here.
-            frame = _read(backend_process)
-            if frame.get("id") == request_id:
-                return frame
-            assert frame.get("method") == "navide/host/call"
-            params = frame["params"]
-            operation = params["operation"]
-            arguments = params["arguments"]
-            if operation in ("read_file", "read_range"):
-                rel_path = arguments["rel_path"]
-                if rel_path in stored and operation == "read_range":
-                    _reply_range(backend_process, frame, stored[rel_path], mtime)
-                elif rel_path in stored:
-                    _reply_bridge(backend_process, frame, {"content": stored[rel_path], "mtime": mtime})
-                else:
-                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
-            elif operation == "write_file":
-                stored[arguments["rel_path"]] = arguments["content"]
-                mtime += 1
-                _reply_bridge(backend_process, frame, {"ok": True, "mtime": mtime})
-            else:
-                raise AssertionError(f"unexpected filesystem operation: {operation}")
+        # A dead worker thread writes no frame at all; _read raises here.
+        return _serve_workspace(backend_process, root, request_id)
 
     _send(
         backend_process,
@@ -1269,9 +1190,9 @@ def _create_plan_over_wire(
 
 
 def test_agent_create_preserves_backslashes_in_todo_text(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
-    _, document = _create_plan_over_wire(backend_process, "create-backslash", HOSTILE_TODOS)
+    _, document = _create_plan_over_wire(backend_process, tmp_path, "create-backslash", HOSTILE_TODOS)
 
     # Visible markup keeps every todo verbatim (HTML-escaped, backslashes intact).
     for todo in HOSTILE_TODOS:
@@ -1290,11 +1211,11 @@ def test_agent_create_preserves_backslashes_in_todo_text(
 
 
 def test_agent_create_does_not_silently_rewrite_a_valid_escape(
-    backend_process: subprocess.Popen[bytes],
+    backend_process: subprocess.Popen[bytes], tmp_path: Path,
 ) -> None:
     """The quiet half of the same bug: `C:\temp` is a *valid* re template, so the
     old code raised nothing and wrote a literal TAB into the plan instead."""
-    _, document = _create_plan_over_wire(backend_process, "create-tab", [r"C:\temp"])
+    _, document = _create_plan_over_wire(backend_process, tmp_path, "create-tab", [r"C:\temp"])
 
     rows = re.findall(r"<span>([^<]*)</span></li>", document)
     assert rows == [r"C:\temp"]
@@ -1333,13 +1254,14 @@ def _plan_meta_of(document: str) -> dict[str, Any]:
 ])
 def test_agent_create_preserves_double_braces_in_user_text(
     backend_process: subprocess.Popen[bytes],
+    tmp_path: Path,
     field: str,
     name: str,
     overview: str,
     todos: list[str],
 ) -> None:
     _, document = _create_plan_over_wire(
-        backend_process, f"create-braces-{field}", todos, name=name, overview=overview
+        backend_process, tmp_path, f"create-braces-{field}", todos, name=name, overview=overview
     )
 
     # Visible markup keeps all three verbatim (HTML-escaped, braces intact)...
@@ -1368,24 +1290,21 @@ HOST_RANGE_LIMIT = 96 * 1024
 class _DiskHost:
     """A Host Bridge that serves a real directory the way the Host does.
 
-    It enforces the Host's own limits so a test can only pass if the child
-    stays inside them: a `read_file` result over the 192 KiB Bridge cap fails
-    with RESULT_TOO_LARGE, and a `read_range` may not ask for more than 96 KiB.
+    The child reads plan files itself under the root this Host resolves, so
+    any bridge read (read_file, read_range, list_dir, stat_path) fails the
+    test. It enforces the Host's own limits on writes so a test can only pass
+    if the child stays inside them: every write part fits one Bridge frame.
     """
 
     def __init__(
         self,
         root: Path,
         *,
-        legacy: bool = False,
-        unreadable: tuple[str, ...] = (),
         no_chunked_writes: bool = False,
         fail_part: int | None = None,
         before_commit: Any = None,
     ) -> None:
         self.root = root
-        self.legacy = legacy
-        self.unreadable = unreadable
         self.no_chunked_writes = no_chunked_writes
         self.fail_part = fail_part
         self.before_commit = before_commit
@@ -1400,40 +1319,8 @@ class _DiskHost:
         self.calls.append((operation, dict(arguments)))
         rel = arguments.get("rel_path", "")
         target = self.root / rel
-        if operation == "stat_path":
-            _reply_bridge(process, frame, {"exists": target.exists(), "isDirectory": target.is_dir()})
-        elif operation == "list_dir":
-            names = sorted(child.name for child in target.iterdir()) if target.is_dir() else []
-            _reply_bridge(process, frame, {"entries": names})
-        elif operation == "read_range":
-            if self.legacy:
-                _error_bridge(process, frame, "METHOD_NOT_FOUND")
-            elif rel in self.unreadable or not target.is_file():
-                _error_bridge(process, frame, "BACKEND_UNAVAILABLE")
-            else:
-                assert 0 < arguments["length"] <= HOST_RANGE_LIMIT
-                raw = target.read_bytes()
-                offset = arguments["offset"]
-                piece = raw[offset : offset + arguments["length"]]
-                _reply_bridge(
-                    process,
-                    frame,
-                    {
-                        "data_base64": base64.b64encode(piece).decode("ascii"),
-                        "size": len(raw),
-                        "mtime": target.stat().st_mtime,
-                        "eof": offset + len(piece) >= len(raw),
-                    },
-                )
-        elif operation == "read_file":
-            if rel in self.unreadable or not target.is_file():
-                _error_bridge(process, frame, "BACKEND_UNAVAILABLE")
-            elif target.stat().st_size > HOST_RESULT_LIMIT - 1024:
-                _error_bridge(process, frame, "RESULT_TOO_LARGE")
-            else:
-                _reply_bridge(
-                    process, frame, {"content": target.read_text(encoding="utf-8"), "mtime": target.stat().st_mtime}
-                )
+        if operation == "resolve_root":
+            _reply_bridge(process, frame, {"root": str(self.root.resolve())})
         elif operation == "write_file":
             target.write_text(arguments["content"], encoding="utf-8", newline="")
             _reply_bridge(process, frame, {"ok": True, "mtime": target.stat().st_mtime})
@@ -1558,6 +1445,29 @@ def _plans_dir(tmp_path: Path) -> Path:
     return plans
 
 
+def _head_reads(root: Path, name: str) -> list[int]:
+    """Bytes of each read one plans.list scan makes of the document `name`.
+
+    The child reads plan files in its own process, so the Bridge no longer
+    shows how much of a file a listing pulls. Run the same scan in process
+    over the same workspace and count what `_read_bytes` returns.
+    """
+    backend = _load_backend("plans_backend_head_reads")
+    backend._plan_roots["instance-1"] = str(root.resolve())
+    real_read_bytes = backend._read_bytes
+    reads: list[int] = []
+
+    def read_bytes(origin: dict[str, Any], rel_path: str, *args: Any) -> Any:
+        result = real_read_bytes(origin, rel_path, *args)
+        if rel_path.endswith(f"/{name}"):
+            reads.append(len(result[0]))
+        return result
+
+    backend._read_bytes = read_bytes
+    backend._list_plans({"kind": "call", "requestId": "head-scan", "instance": "instance-1"})
+    return reads
+
+
 def test_plans_larger_than_every_bridge_limit_are_listed_and_read_in_full(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
@@ -1581,9 +1491,10 @@ def test_plans_larger_than_every_bridge_limit_are_listed_and_read_in_full(
     assert by_path[".agent-team/plans/huge_cccccc.html"]["name"] == "Huge report"
     assert by_path[".agent-team/plans/huge_cccccc.html"]["kind"] == "plan"
     assert "reason" not in by_path[".agent-team/plans/huge_cccccc.html"]
+    # The child read every file itself; the Host only authorized the root.
+    assert [operation for operation, _ in host.calls] == ["resolve_root"]
     # Listing reads the head only: one range for the multi-MB file, no full read.
-    huge_reads = [call for call in host.calls if call[1].get("rel_path", "").endswith("huge_cccccc.html")]
-    assert [operation for operation, _ in huge_reads] == ["read_range"]
+    assert _head_reads(tmp_path, "huge_cccccc.html") == [HOST_RANGE_LIMIT]
 
     for name, expected in (("medium_bbbbbb.html", None), ("huge_cccccc.html", huge)):
         rel = f".agent-team/plans/{name}"
@@ -1646,10 +1557,14 @@ def test_a_document_with_broken_plan_meta_is_listed_with_the_reason(
 def test_an_unreadable_document_is_listed_not_dropped(
     backend_process: subprocess.Popen[bytes], tmp_path: Path
 ) -> None:
-    plans = _plans_dir(tmp_path)
-    (plans / "locked_111111.html").write_text(_plan_html("Locked"), encoding="utf-8", newline="")
+    workspace = tmp_path / "workspace"
+    plans = _plans_dir(workspace)
+    # A symlink out of the workspace: the core path guard refuses to read it.
+    outside = tmp_path / "outside.html"
+    outside.write_text(_plan_html("Locked"), encoding="utf-8", newline="")
+    (plans / "locked_111111.html").symlink_to(outside)
     (plans / "open_222222.html").write_text(_plan_html("Open"), encoding="utf-8", newline="")
-    host = _DiskHost(tmp_path, unreadable=(".agent-team/plans/locked_111111.html",))
+    host = _DiskHost(workspace)
 
     listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
     by_path = {entry["rel_path"]: entry for entry in listed}
@@ -1658,6 +1573,7 @@ def test_an_unreadable_document_is_listed_not_dropped(
     assert locked["kind"] == "unreadable"
     assert locked["reason"] == "could not be read (BACKEND_UNAVAILABLE)"
     assert locked["meta"] is None and locked["name"] == "locked_111111.html"
+    assert by_path[".agent-team/plans/open_222222.html"]["kind"] == "plan"
 
 
 def test_an_oversized_list_is_paged_and_never_kills_the_child(
@@ -1708,23 +1624,6 @@ def test_an_oversized_list_is_paged_and_never_kills_the_child(
     assert pages > 1
     assert len(seen) == count == len(set(seen))
     assert _call_backend(backend_process, host, "plans.list", {"offset": -1})["error"]["data"]["code"] == "INVALID_ARGUMENT"
-
-
-def test_a_host_without_ranged_reads_still_lists_and_flags_the_big_file(
-    backend_process: subprocess.Popen[bytes], tmp_path: Path
-) -> None:
-    plans = _plans_dir(tmp_path)
-    (plans / "small_333333.html").write_text(_plan_html("Small"), encoding="utf-8", newline="")
-    (plans / "big_444444.html").write_text(_plan_html("Big", padding=400 * 1024), encoding="utf-8", newline="")
-    host = _DiskHost(tmp_path, legacy=True)
-
-    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
-    by_path = {entry["rel_path"]: entry for entry in listed}
-    assert by_path[".agent-team/plans/small_333333.html"]["kind"] == "plan"
-    big = by_path[".agent-team/plans/big_444444.html"]
-    assert big["kind"] == "unreadable" and "RESULT_TOO_LARGE" in big["reason"]
-    small = _call_backend(backend_process, host, "plans.read", {"rel_path": ".agent-team/plans/small_333333.html"})
-    assert small["result"]["value"]["meta"]["name"] == "Small"
 
 
 def _big_plan(name: str, padding: int) -> str:
@@ -1874,9 +1773,11 @@ def test_plan_meta_far_down_a_huge_file_is_still_found(
     # The common case is unchanged: an island at the top costs one range read.
     (plans / "top_cccccd.html").write_text(_plan_html("Top", padding=2_000_000), encoding="utf-8", newline="")
     host.calls.clear()
-    _call_backend(backend_process, host, "plans.list", {})
-    top_reads = [op for op, args in host.calls if args.get("rel_path", "").endswith("top_cccccd.html")]
-    assert top_reads == ["read_range"]
+    listed = _call_backend(backend_process, host, "plans.list", {})["result"]["value"]
+    assert next(e for e in listed if e["rel_path"].endswith("top_cccccd.html"))["name"] == "Top"
+    # The root is already authorized and the child reads the file itself.
+    assert host.calls == []
+    assert _head_reads(tmp_path, "top_cccccd.html") == [HOST_RANGE_LIMIT]
 
 
 def _upload(process: subprocess.Popen[bytes], host: _DiskHost, rel: str, data: bytes, upload_id: str) -> None:
@@ -1965,7 +1866,10 @@ def test_a_huge_file_without_plan_meta_is_scanned_in_linear_time(
 
     entry = next(e for e in listed if e["rel_path"].endswith("noisy_eeeeef.html"))
     assert entry["kind"] == "document" and "reason" not in entry  # never skipped, not a problem
-    reads = [op for op, args in host.calls if args.get("rel_path", "").endswith("noisy_eeeeef.html")]
+    assert [op for op, _ in host.calls] == ["resolve_root"]
+    # Scanned once, range by range, to the end: never re-read from the start.
+    reads = _head_reads(tmp_path, "noisy_eeeeef.html")
     expected = -(-actual // (96 * 1024))
-    assert reads == ["read_range"] * len(reads) and expected <= len(reads) <= expected + 1
+    assert expected <= len(reads) <= expected + 1
+    assert sum(reads) == actual and all(length <= 96 * 1024 for length in reads)
     assert elapsed < 30  # 20 MB took ~23 s (quadratic) before the incremental scan

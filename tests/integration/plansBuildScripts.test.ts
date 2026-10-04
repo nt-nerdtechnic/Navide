@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -22,6 +22,8 @@ function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'navide-plans-build-'))
   roots.push(root)
   file(root, 'plugins/navide-plans/backend/plans_backend.py', '# production source\n')
+  file(root, 'backend/agent_team_backend/__init__.py', '# package marker\n')
+  file(root, 'backend/agent_team_backend/path_guard.py', '# shared path guard\n')
   file(root, 'backend/pyproject.toml', '# build dependencies\n')
   file(root, 'backend/uv.lock', '# pinned toolchain\n')
   file(root, 'dist-plugins/navide-plans/manifest.json', JSON.stringify({ backend: { entry: 'backend/navide-plans' } }))
@@ -31,6 +33,7 @@ function fixture(): string {
 const fs = require('node:fs');
 const path = require('node:path');
 fs.appendFileSync('build-calls', 'build\\n');
+fs.writeFileSync('build-args', process.argv.slice(2).join('\\n'));
 if (process.env.NAVIDE_TEST_FAIL_BUILD) process.exit(1);
 const destination = process.argv[process.argv.indexOf('--distpath') + 1];
 fs.mkdirSync(destination, { recursive: true });
@@ -70,6 +73,27 @@ describe.skipIf(isWindows())('Plans backend build cache', () => {
     rmSync(join(root, 'dist-plugins/navide-plans/backend'), { recursive: true })
     build(root)
     expect(buildCount(root)).toBe(4)
+  })
+
+  it('rebuilds when the shared path guard the backend bundles changes', () => {
+    const root = fixture()
+    build(root)
+    build(root)
+    expect(buildCount(root)).toBe(1)
+    file(root, 'backend/agent_team_backend/path_guard.py', '# changed shared path guard\n')
+    build(root)
+    expect(buildCount(root)).toBe(2)
+    file(root, 'backend/agent_team_backend/__init__.py', '# changed package marker\n')
+    build(root)
+    expect(buildCount(root)).toBe(3)
+  })
+
+  it('lets PyInstaller import the shared path guard from the backend source tree', () => {
+    const root = fixture()
+    build(root)
+    const args = readFileSync(join(root, 'build-args'), 'utf8').trim().split('\n')
+    expect(args).toContain('--paths')
+    expect(args[args.indexOf('--paths') + 1]).toBe(join(realpathSync(root), 'backend'))
   })
 
   it('rebuilds altered output and never caches a failed build; release builds remain unconditional', () => {

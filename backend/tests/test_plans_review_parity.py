@@ -1,8 +1,8 @@
 """Exercise manual Plans mutations at the packaged child's real write seam."""
 
-import base64
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,7 @@ def test_manual_edit_preserves_v1_note_identity_and_other_fields(child, monkeypa
     note = {"id": "existing-note", "author": "user", "text": "Before", "resolved": True,
             "reply": "Keep reply", "anchor": "Goals", "extension": {"keep": True}}
     writes = []
-    monkeypatch.setattr(child, "_bridge_read", lambda *args, **kwargs: (plan([note]), 10.0))
+    monkeypatch.setattr(child, "_read_text", lambda *args, **kwargs: (plan([note]), 10.0))
     monkeypatch.setattr(child, "_bridge_write", lambda *args: writes.append(args))
     result = child._manual_review_note({}, {"rel_path": ".agent-team/plans/a.html", "note_id": note["id"], "text": "After"}, "edit")
     assert result == {**note, "text": "After"}
@@ -40,7 +40,7 @@ def test_manual_note_retries_conflict_against_fresh_external_updates(child, monk
     external = {"id": "n2", "author": "ai", "text": "External", "resolved": False, "reply": "Agent reply", "anchor": "Scope"}
     reads = iter([(plan([first]), 1.0), (plan([first, external]), 2.0)])
     writes = []
-    monkeypatch.setattr(child, "_bridge_read", lambda *args, **kwargs: next(reads))
+    monkeypatch.setattr(child, "_read_text", lambda *args, **kwargs: next(reads))
 
     def write(origin, path, content, mtime):
         writes.append((path, content, mtime))
@@ -58,7 +58,7 @@ def test_manual_note_retries_conflict_against_fresh_external_updates(child, monk
 
 def test_manual_note_second_conflict_is_reported_without_unbounded_retry(child, monkeypatch):
     writes = []
-    monkeypatch.setattr(child, "_bridge_read", lambda *args, **kwargs: (plan([]), 1.0))
+    monkeypatch.setattr(child, "_read_text", lambda *args, **kwargs: (plan([]), 1.0))
 
     def write(*args):
         writes.append(args)
@@ -70,29 +70,33 @@ def test_manual_note_second_conflict_is_reported_without_unbounded_retry(child, 
     assert len(writes) == 2
 
 
-def test_document_transport_preserves_read_mtime_and_write_conflict(child, monkeypatch):
+def _workspace(child, root):
+    """Authorize `root` as the plan root of the origin the tests call with."""
+    child._plan_roots["instance-1"] = str(root.resolve())
+    return {"kind": "call", "requestId": "r1", "instance": "instance-1"}
+
+
+def test_document_transport_preserves_read_mtime_and_write_conflict(child, monkeypatch, tmp_path):
+    path = ".agent-team/plans/a.html"
+    document = tmp_path / path
+    document.parent.mkdir(parents=True)
+    document.write_text(plan([]), encoding="utf-8", newline="")
+    os.utime(document, (12.0, 12.0))
+    origin = _workspace(child, tmp_path)
     calls = []
 
     def bridge(origin, port, operation, args):
         calls.append((port, operation, args))
-        if operation == "read_range":
-            raw = plan([]).encode("utf-8")
-            piece = raw[args["offset"] : args["offset"] + args["length"]]
-            return {
-                "data_base64": base64.b64encode(piece).decode("ascii"),
-                "size": len(raw),
-                "mtime": 12.0,
-                "eof": args["offset"] + len(piece) >= len(raw),
-            }
         return {"ok": False, "conflict": True}
 
     monkeypatch.setattr(child, "_bridge_call", bridge)
-    path = ".agent-team/plans/a.html"
-    read = child._manual_document({}, {"rel_path": path}, "read")
+    read = child._manual_document(origin, {"rel_path": path}, "read")
     assert read == {"ok": True, "content": plan([]), "mtime": 12.0}
-    result = child._manual_document({}, {"rel_path": path, "content": "changed", "expected_mtime": 12.0}, "write")
+    # The child reads the document itself; nothing crossed the Bridge.
+    assert calls == []
+    result = child._manual_document(origin, {"rel_path": path, "content": "changed", "expected_mtime": 12.0}, "write")
     assert result == {"ok": False, "conflict": True}
-    assert calls[-1] == ("filesystem", "write_file", {"rel_path": path, "content": "changed", "expected_mtime": 12.0})
+    assert calls == [("filesystem", "write_file", {"rel_path": path, "content": "changed", "expected_mtime": 12.0})]
 
 
 @pytest.mark.parametrize("path", ["../escape.html", "/tmp/a.html", "src/a.ts", ".agent-team/plans/../a.html", ".plans/../../a.html"])
@@ -104,23 +108,17 @@ def test_document_transport_rejects_non_plan_paths_before_bridge(child, monkeypa
     assert calls == []
 
 
-def test_document_transport_lists_history_in_retained_shape(child, monkeypatch):
+def test_document_transport_lists_history_in_retained_shape(child, monkeypatch, tmp_path):
+    history = tmp_path / ".agent-team/plans/.history/a"
+    history.mkdir(parents=True)
+    (history / "20260901T100000_approved.html").write_text("<h2>Before</h2>", encoding="utf-8")
+    origin = _workspace(child, tmp_path)
     calls = []
-
-    def bridge(origin, capability, method, arguments):
-        calls.append((capability, method, arguments))
-        if method == "list_dir":
-            return {"entries": ["20260901T100000_approved.html"]}
-        assert method == "stat_path"
-        return {"exists": True, "isDirectory": False}
-
-    monkeypatch.setattr(child, "_bridge_call", bridge)
-    result = child._manual_document({}, {"rel_path": ".agent-team/plans/.history/a"}, "list")
+    monkeypatch.setattr(child, "_bridge_call", lambda *args: calls.append(args))
+    result = child._manual_document(origin, {"rel_path": ".agent-team/plans/.history/a"}, "list")
     assert result == {"ok": True, "entries": [{"name": "20260901T100000_approved.html", "is_dir": False}]}
-    assert calls == [
-        ("filesystem", "list_dir", {"rel_path": ".agent-team/plans/.history/a"}),
-        ("filesystem", "stat_path", {"rel_path": ".agent-team/plans/.history/a/20260901T100000_approved.html"}),
-    ]
+    # Listing is local to the child; it no longer asks the Host for list_dir/stat_path.
+    assert calls == []
 
 
 @pytest.mark.parametrize("action", ["edit", "delete"])
@@ -129,7 +127,7 @@ def test_manual_notes_synchronize_existing_v1_body_markup_only(child, monkeypatc
     markup = '<ul class="notes">\n  <li data-note-id="n1"><span class="who">user</span>Old body text<div class="reply">Keep reply</div></li>\n</ul>'
     content = plan([note]) + markup + '<p>Unrelated body</p>'
     writes = []
-    monkeypatch.setattr(child, "_bridge_read", lambda *args, **kwargs: (content, 1.0))
+    monkeypatch.setattr(child, "_read_text", lambda *args, **kwargs: (content, 1.0))
     monkeypatch.setattr(child, "_bridge_write", lambda *args: writes.append(args[2]))
     args = {"rel_path": ".agent-team/plans/a.html", "note_id": "n1"}
     if action == "edit":

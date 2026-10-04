@@ -16,6 +16,13 @@ import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sourceDirectory = resolve(repositoryRoot, 'plugins/navide-plans/backend')
+// The backend imports the core path guard (agent_team_backend.path_guard,
+// standard library only) from the core backend's source tree.
+const sharedSourceRoot = resolve(repositoryRoot, 'backend')
+const sharedSourceFiles = [
+  resolve(sharedSourceRoot, 'agent_team_backend/__init__.py'),
+  resolve(sharedSourceRoot, 'agent_team_backend/path_guard.py'),
+]
 const source = join(sourceDirectory, 'plans_backend.py')
 const backendDirectory = resolve(repositoryRoot, 'dist-plugins/navide-plans/backend')
 const executableName = process.platform === 'win32' ? 'navide-plans.exe' : 'navide-plans'
@@ -78,6 +85,7 @@ const fingerprint = createHash('sha256')
   .update(`${process.platform}\0${process.arch}\0`)
 for (const input of [
   ...backendSourceFiles(),
+  ...sharedSourceFiles,
   fileURLToPath(import.meta.url),
   resolve(repositoryRoot, 'backend/pyproject.toml'),
   resolve(repositoryRoot, 'backend/uv.lock'),
@@ -150,6 +158,8 @@ try {
         '--onefile',
         '--name',
         'navide-plans',
+        '--paths',
+        sharedSourceRoot,
         '--distpath',
         backendDirectory,
         '--workpath',

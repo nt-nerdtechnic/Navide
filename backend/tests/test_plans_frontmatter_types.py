@@ -7,7 +7,6 @@ Host waits out its 30 s call timeout and withdraws Plans for the session.
 
 from __future__ import annotations
 
-import base64
 import json
 import queue
 import subprocess
@@ -115,9 +114,21 @@ def _fail(process: Any, request: dict[str, Any], code: str) -> None:
     )
 
 
-def _serve_host(process: Any, request_id: str, timeout: float = 4.0) -> dict[str, Any]:
-    """Play the Host filesystem bridge until the call `request_id` is answered."""
-    raw = DOCUMENT.encode("utf-8")
+@pytest.fixture
+def workspace(tmp_path: Path) -> Path:
+    """A workspace holding the dated document, the root the Host authorizes."""
+    document = tmp_path / DOCUMENT_PATH
+    document.parent.mkdir(parents=True)
+    document.write_text(DOCUMENT, encoding="utf-8", newline="")
+    return tmp_path.resolve()
+
+
+def _serve_host(process: Any, request_id: str, root: Path, timeout: float = 4.0) -> dict[str, Any]:
+    """Play the Host filesystem bridge until the call `request_id` is answered.
+
+    The child reads plan documents itself under the root the Host resolves;
+    resolve_root is the only bridge call a read or list may make.
+    """
     while True:
         try:
             line = process.frames.get(timeout=timeout)
@@ -131,29 +142,11 @@ def _serve_host(process: Any, request_id: str, timeout: float = 4.0) -> dict[str
             return frame
         assert frame.get("method") == "navide/host/call"
         operation = frame["params"]["operation"]
-        arguments = frame["params"]["arguments"]
-        rel_path = arguments.get("rel_path")
-        if operation == "stat_path":
-            _reply(process, frame, {"exists": rel_path == DOCUMENT_DIR, "isDirectory": rel_path == DOCUMENT_DIR})
-        elif operation == "list_dir":
-            _reply(process, frame, {"entries": ["dated.plan.md"] if rel_path == DOCUMENT_DIR else []})
-        elif operation == "read_range" and rel_path == DOCUMENT_PATH:
-            offset, length = arguments["offset"], arguments["length"]
-            piece = raw[offset : offset + length]
-            _reply(
-                process,
-                frame,
-                {
-                    "data_base64": base64.b64encode(piece).decode("ascii"),
-                    "size": len(raw),
-                    "mtime": 100.0,
-                    "eof": offset + len(piece) >= len(raw),
-                },
-            )
-        elif operation == "read_file" and rel_path == DOCUMENT_PATH:
-            _reply(process, frame, {"content": DOCUMENT, "mtime": 100.0})
+        if operation == "resolve_root":
+            _reply(process, frame, {"root": str(root)})
         else:
             _fail(process, frame, "BACKEND_UNAVAILABLE")
+            raise AssertionError(f"unexpected filesystem operation: {operation}")
 
 
 def _call(process: Any, request_id: str, name: str, arguments: dict[str, Any]) -> None:
@@ -168,9 +161,9 @@ def _call(process: Any, request_id: str, name: str, arguments: dict[str, Any]) -
     )
 
 
-def test_list_answers_for_front_matter_with_dates(child: Any) -> None:
+def test_list_answers_for_front_matter_with_dates(child: Any, workspace: Path) -> None:
     _call(child, "list-1", "plans.list", {})
-    response = _serve_host(child, "list-1")
+    response = _serve_host(child, "list-1", workspace)
 
     assert "result" in response, response
     entries = response["result"]["value"]
@@ -180,9 +173,9 @@ def test_list_answers_for_front_matter_with_dates(child: Any) -> None:
     json.dumps(entry)
 
 
-def test_read_answers_for_front_matter_with_dates(child: Any) -> None:
+def test_read_answers_for_front_matter_with_dates(child: Any, workspace: Path) -> None:
     _call(child, "read-1", "plans.read", {"rel_path": DOCUMENT_PATH})
-    response = _serve_host(child, "read-1")
+    response = _serve_host(child, "read-1", workspace)
 
     assert "result" in response, response
     value = response["result"]["value"]
@@ -190,12 +183,12 @@ def test_read_answers_for_front_matter_with_dates(child: Any) -> None:
     assert "# Dated plan" in value["html"]
 
 
-def test_child_survives_an_unserialisable_request(child: Any) -> None:
+def test_child_survives_an_unserialisable_request(child: Any, workspace: Path) -> None:
     _call(child, "list-2", "plans.list", {})
-    first = _serve_host(child, "list-2")
+    first = _serve_host(child, "list-2", workspace)
     assert "result" in first or "error" in first
 
     _call(child, "list-3", "plans.list", {})
-    second = _serve_host(child, "list-3")
+    second = _serve_host(child, "list-3", workspace)
     assert "result" in second or "error" in second
     assert child.poll() is None
