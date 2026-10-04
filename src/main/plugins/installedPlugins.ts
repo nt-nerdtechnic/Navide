@@ -36,7 +36,7 @@ import {
   PLUGIN_STAGING_DIR,
 } from './pluginInstallPaths'
 import { PluginActivationSelector } from './pluginActivationSelector'
-import type { ManifestPermissionsSummary } from '../../shared/executionPolicy'
+import { copyManifestPermissionsSummary, type ManifestPermissionsSummary } from '../../shared/executionPolicy'
 
 export {
   assertManifestFiles,
@@ -362,10 +362,11 @@ export function manifestToInstalledPackageSummary(
     ...(isManifestV2(manifest)
       ? {
           packageVersion: manifest.version,
-          manifestPermissions: {
-            system: [...(manifest.permissions.system ?? [])],
+          manifestPermissions: copyManifestPermissionsSummary({
+            system: manifest.permissions.system ?? [],
             ...(manifest.permissions.shell ? { shell: manifest.permissions.shell } : {}),
-          },
+            ...(manifest.permissions.scopes ? { scopes: manifest.permissions.scopes } : {}),
+          }),
           ...(manifest.engines ? { enginesNavide: manifest.engines.navide } : {}),
         }
       : {}),

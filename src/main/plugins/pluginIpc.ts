@@ -69,9 +69,10 @@ import type { ContributionIcon } from './pluginContributionIcon'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
 import { PluginActivationSelector, type PluginPackageSelection } from './pluginActivationSelector'
 import type { HostCapabilityGrant } from './pluginCapabilityBroker'
-import type {
-  ManifestPermissionsSummary,
-  PackageVersionGrantSummary,
+import {
+  copyManifestPermissionsSummary,
+  type ManifestPermissionsSummary,
+  type PackageVersionGrantSummary,
 } from '../../shared/executionPolicy'
 
 /** Development-only endpoint. It is intentionally not the official Registry
@@ -527,14 +528,7 @@ export function registerPluginIpc(
       sensitive: sensitiveCapabilities(summary.requires),
       ...(summary.packageVersion ? { packageVersion: summary.packageVersion } : {}),
       ...(summary.manifestPermissions
-        ? {
-            manifestPermissions: {
-              system: [...summary.manifestPermissions.system],
-              ...(summary.manifestPermissions.shell
-                ? { shell: summary.manifestPermissions.shell }
-                : {}),
-            },
-          }
+        ? { manifestPermissions: copyManifestPermissionsSummary(summary.manifestPermissions) }
         : {}),
       ...(summary.packageVersion
         ? {

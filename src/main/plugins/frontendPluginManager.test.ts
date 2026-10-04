@@ -14200,3 +14200,24 @@ describe('agent capability requests the Host cannot serve', () => {
     }
   })
 })
+
+describe('installed package inventory scope disclosure', () => {
+  it('keeps declared filesystem scopes in the listed inventory as a copy', () => {
+    const mgr = new FrontendPluginManager()
+    const scopes = { fs: { read: ['.acme/notes'], write: ['.acme/notes'] } }
+    mgr.registerInstalledPackage({
+      id: 'acme.notes',
+      requires: ['fs'],
+      packageVersion: '1.0.0',
+      manifestPermissions: { system: ['fs'], scopes },
+    })
+
+    const [listed] = mgr.listInstalledPackages()
+    expect(listed.manifestPermissions).toEqual({ system: ['fs'], scopes })
+    listed.manifestPermissions!.scopes!.fs!.write!.push('mutated')
+    scopes.fs.read.push('mutated')
+    expect(mgr.listInstalledPackages()[0].manifestPermissions?.scopes).toEqual({
+      fs: { read: ['.acme/notes'], write: ['.acme/notes'] },
+    })
+  })
+})

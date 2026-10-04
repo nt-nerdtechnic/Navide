@@ -51,9 +51,29 @@ export interface ExecutionPolicy {
   shell: string[]
 }
 
+export const V2_FS_SCOPE_ROOTS = ['workspace', 'repository'] as const
+export type PluginFsScopeRoot = (typeof V2_FS_SCOPE_ROOTS)[number]
+
+/** Path patterns a package declares it reads or writes, relative to `root`
+ *  (`workspace` by default; `repository` is the nearest enclosing Git root).
+ *  `*` matches within one segment and `**` matches zero or more segments; a
+ *  pattern covers only the paths it matches. A disclosure for the user: the
+ *  Host grants and enforces nothing from it. */
+export type PluginManifestV2FsScopes = {
+  root?: PluginFsScopeRoot
+  read?: string[]
+  write?: string[]
+}
+
+export type PluginManifestV2Scopes = {
+  fs: PluginManifestV2FsScopes
+}
+
 export type PluginManifestV2Permissions = {
   system?: PluginSystemNamespace[]
   shell?: PluginShellMode
+  /** Optional declared resource scopes; disclosure only, never a grant. */
+  scopes?: PluginManifestV2Scopes
 }
 
 export type PluginManifestV2Receiver = {
@@ -400,9 +420,53 @@ export function compareSemver(left: string, right: string): number | null {
   return 0
 }
 
+const MAX_SCOPE_PATHS = 16
+
+function isScopePattern(pattern: string): boolean {
+  // Wildcards aside, a pattern obeys the package safe-path rule; `**` must be
+  // a whole segment.
+  return (
+    canonicalPackagePath(pattern.replace(/\*/g, '_')) !== null &&
+    pattern.split('/').every((segment) => segment === '**' || !segment.includes('**'))
+  )
+}
+
+function scopePaths(value: unknown, label: string): string[] {
+  const paths = uniqueStringArray(value, label, 1, MAX_SCOPE_PATHS)
+  paths.forEach((path, index) => {
+    if (!isScopePattern(path)) {
+      fail(`${label}[${index}] is not a safe relative path pattern`)
+    }
+  })
+  return paths
+}
+
+function parseScopes(value: unknown): PluginManifestV2Scopes {
+  const scopes = assertObject(value, 'manifest permissions.scopes')
+  assertOnlyKeys(scopes, ['fs'], 'manifest permissions.scopes')
+  const fs = assertObject(
+    required(scopes, 'fs', 'manifest permissions.scopes'),
+    'manifest permissions.scopes.fs'
+  )
+  assertOnlyKeys(fs, ['root', 'read', 'write'], 'manifest permissions.scopes.fs')
+  if (fs.root !== undefined && !V2_FS_SCOPE_ROOTS.includes(fs.root as PluginFsScopeRoot)) {
+    fail('manifest permissions.scopes.fs.root must be workspace or repository')
+  }
+  if (fs.read === undefined && fs.write === undefined) {
+    fail('manifest permissions.scopes.fs must declare read or write')
+  }
+  return {
+    fs: {
+      ...(fs.root !== undefined ? { root: fs.root as PluginFsScopeRoot } : {}),
+      ...(fs.read !== undefined ? { read: scopePaths(fs.read, 'manifest permissions.scopes.fs.read') } : {}),
+      ...(fs.write !== undefined ? { write: scopePaths(fs.write, 'manifest permissions.scopes.fs.write') } : {}),
+    },
+  }
+}
+
 function parsePermissions(value: unknown): PluginManifestV2Permissions {
   const permissions = assertObject(value, 'manifest permissions')
-  assertOnlyKeys(permissions, ['system', 'shell'], 'manifest permissions')
+  assertOnlyKeys(permissions, ['system', 'shell', 'scopes'], 'manifest permissions')
   let system: PluginSystemNamespace[] | undefined
   if (Object.prototype.hasOwnProperty.call(permissions, 'system')) {
     const values = uniqueStringArray(permissions.system, 'manifest permissions.system', 1, 3)
@@ -418,7 +482,10 @@ function parsePermissions(value: unknown): PluginManifestV2Permissions {
     }
     shell = permissions.shell as PluginShellMode
   }
-  return { ...(system ? { system } : {}), ...(shell ? { shell } : {}) }
+  const scopes = Object.prototype.hasOwnProperty.call(permissions, 'scopes')
+    ? parseScopes(permissions.scopes)
+    : undefined
+  return { ...(system ? { system } : {}), ...(shell ? { shell } : {}), ...(scopes ? { scopes } : {}) }
 }
 
 function parseMarketplace(value: unknown): PluginManifestV2['marketplace'] {
@@ -603,7 +670,7 @@ export function parseManifestV2(raw: unknown): PluginManifestV2 {
     if (manifest.contributes !== undefined || manifest.backend !== undefined) {
       fail('an extension pack must not declare contributes or backend')
     }
-    if (permissions.system !== undefined || permissions.shell !== undefined) {
+    if (permissions.system !== undefined || permissions.shell !== undefined || permissions.scopes !== undefined) {
       fail('an extension pack must not request permissions')
     }
   } else if (manifest.contributes === undefined && manifest.backend === undefined) {

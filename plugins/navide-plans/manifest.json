@@ -7,7 +7,39 @@
   "publisher": "navide",
   "engines": { "navide": "^0.1.0" },
   "permissions": {
-    "system": ["fs", "ui", "aiCli"]
+    "system": ["fs", "ui", "aiCli"],
+    "scopes": {
+      "fs": {
+        "root": "repository",
+        "read": [
+          "**/.agent-team/plans/*",
+          "**/.agent-team/reports/*",
+          "**/.claude/loop-reports/*",
+          "**/.claude/plans/*",
+          "**/.cursor/plans/*",
+          "**/docs/plans/*",
+          "**/docs/reports/*",
+          "**/.agent-team/plans/.history/**",
+          "**/.agent-team/reports/.history/**",
+          "**/.claude/loop-reports/.history/**",
+          "**/.claude/plans/.history/**",
+          "**/.cursor/plans/.history/**",
+          "**/docs/plans/.history/**",
+          "**/docs/reports/.history/**",
+          ".plans/*"
+        ],
+        "write": [
+          "**/.agent-team/plans/*",
+          "**/.agent-team/reports/*",
+          "**/.claude/loop-reports/*",
+          "**/.claude/plans/*",
+          "**/.cursor/plans/*",
+          "**/docs/plans/*",
+          "**/docs/reports/*",
+          ".plans/*"
+        ]
+      }
+    }
   },
   "marketplace": {
     "description": "Review and update workspace plans.",

@@ -220,6 +220,43 @@ class ManifestV2Backend(ManifestV2Model):
         return value
 
 
+_SCOPE_PATTERN_RE = re.compile(
+    r"(?!/)(?!.*//)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?!.*\\)(?!.*/$)"
+    r"(?!.*(?:[^/]\*\*|\*\*[^/]))[A-Za-z0-9._*/-]+"
+)
+
+
+class ManifestV2FsScopes(ManifestV2Model):
+    """Path patterns a package declares it reads or writes, relative to root."""
+
+    root: Literal["workspace", "repository"] | None = None
+    read: list[str] | None = Field(default=None, min_length=1, max_length=16)
+    write: list[str] | None = Field(default=None, min_length=1, max_length=16)
+
+    @field_validator("read", "write")
+    @classmethod
+    def _check_paths(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        if len(set(value)) != len(value):
+            raise ValueError("must contain unique paths")
+        if any(_SCOPE_PATTERN_RE.fullmatch(path) is None for path in value):
+            raise ValueError("must contain safe relative path patterns")
+        return value
+
+    @model_validator(mode="after")
+    def _check_declared(self) -> ManifestV2FsScopes:
+        if self.read is None and self.write is None:
+            raise ValueError("must declare read or write")
+        return self
+
+
+class ManifestV2Scopes(ManifestV2Model):
+    """Declared resource scopes: a disclosure, never a grant."""
+
+    fs: ManifestV2FsScopes
+
+
 class ManifestV2Permissions(ManifestV2Model):
     """Coarse Manifest v2 grants; method access remains Host-catalog-owned."""
 
@@ -227,6 +264,7 @@ class ManifestV2Permissions(ManifestV2Model):
         default=None, min_length=1, max_length=3
     )
     shell: Literal["allowlist", "full"] | None = None
+    scopes: ManifestV2Scopes | None = None
 
     @field_validator("system")
     @classmethod
@@ -275,7 +313,11 @@ class ManifestV2(ManifestV2Model):
                 raise ValueError("extensionPack must not list the pack itself")
             if self.contributes is not None or self.backend is not None:
                 raise ValueError("an extension pack must not declare contributes or backend")
-            if self.permissions.system is not None or self.permissions.shell is not None:
+            if (
+                self.permissions.system is not None
+                or self.permissions.shell is not None
+                or self.permissions.scopes is not None
+            ):
                 raise ValueError("an extension pack must not request permissions")
         elif self.contributes is None and self.backend is None:
             raise ValueError("manifest must declare contributes or backend")

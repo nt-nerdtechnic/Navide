@@ -4560,3 +4560,33 @@ describe('Extension Pack (Phase 5)', () => {
     ).rejects.toThrow('invalid extension pack members')
   })
 })
+
+describe('plugins:listInstalled scope disclosure', () => {
+  it('passes declared filesystem scopes through to the renderer inventory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-scope-inventory-'))
+    try {
+      const manager = new FrontendPluginManager()
+      register(root, manager)
+      manager.registerInstalledPackage({
+        id: 'acme.notes',
+        requires: ['fs'],
+        packageVersion: '1.0.0',
+        manifestPermissions: {
+          system: ['fs'],
+          scopes: { fs: { read: ['.acme/notes'], write: ['.acme/notes'] } },
+        },
+      })
+      const listHandler = handlers.get('plugins:listInstalled')
+      if (!listHandler) throw new Error('installed inventory handler not registered')
+      expect(listHandler(null)).toMatchObject([{
+        id: 'acme.notes',
+        manifestPermissions: {
+          system: ['fs'],
+          scopes: { fs: { read: ['.acme/notes'], write: ['.acme/notes'] } },
+        },
+      }])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

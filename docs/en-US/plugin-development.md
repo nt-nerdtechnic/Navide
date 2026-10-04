@@ -274,6 +274,16 @@ promise a lifecycle nothing implements.
 A plugin may only call namespaces it declares in `requires`. Anything else is
 rejected with `CAP_DENIED` before it reaches the backend.
 
+A Manifest v2 package can additionally declare the workspace paths it reads and
+writes in `permissions.scopes.fs`. That field is a disclosure shown to the user,
+never a grant or a restriction; see
+[Declared filesystem scopes](plugin-development-v2.md#declared-filesystem-scopes-disclosure-only).
+The bundled `navide.plans` package declares, relative to the repository root,
+the documents directly inside `.agent-team/plans`, `.agent-team/reports`,
+`.claude/loop-reports`, `.claude/plans`, `.cursor/plans`, `docs/plans` and
+`docs/reports` at any depth, plus `.plans/<document>`, for reading and writing,
+and the `.history` beneath those directories for reading only.
+
 ### Namespaces
 
 | Namespace | Grants |

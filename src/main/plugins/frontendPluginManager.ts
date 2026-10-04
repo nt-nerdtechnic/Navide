@@ -149,6 +149,7 @@ import { buildAgentPaneCommand, quoteCommandWord } from './agentPaneCommand'
 import { executeAiTerminalResource } from './aiTerminalResources'
 import { AiTerminalOutputDecoder } from './aiTerminalOutput'
 import { MINI_IDE_STORAGE_KEYS } from '../../shared/miniIdePreferences'
+import { copyManifestPermissionsSummary } from '../../shared/executionPolicy'
 import type { MiniIdeLegacyPreferences } from './miniIdeLegacyPreferences'
 import type { FilePickerHost, FilePickerInvocation } from '../filePicker'
 import { PluginActivationSelector } from './pluginActivationSelector'
@@ -9965,14 +9966,7 @@ export class FrontendPluginManager {
       requires: [...summary.requires],
       ...(summary.packageVersion ? { packageVersion: summary.packageVersion } : {}),
       ...(summary.manifestPermissions
-        ? {
-            manifestPermissions: {
-              system: [...summary.manifestPermissions.system],
-              ...(summary.manifestPermissions.shell
-                ? { shell: summary.manifestPermissions.shell }
-                : {}),
-            },
-          }
+        ? { manifestPermissions: copyManifestPermissionsSummary(summary.manifestPermissions) }
         : {}),
       ...(summary.provenance ? { provenance: summary.provenance } : {}),
       ...(summary.warning ? { warning: summary.warning } : {}),
@@ -10128,14 +10122,7 @@ export class FrontendPluginManager {
       requires: [...summary.requires],
       ...(summary.packageVersion ? { packageVersion: summary.packageVersion } : {}),
       ...(summary.manifestPermissions
-        ? {
-            manifestPermissions: {
-              system: [...summary.manifestPermissions.system],
-              ...(summary.manifestPermissions.shell
-                ? { shell: summary.manifestPermissions.shell }
-                : {}),
-            },
-          }
+        ? { manifestPermissions: copyManifestPermissionsSummary(summary.manifestPermissions) }
         : {}),
       ...(summary.provenance ? { provenance: summary.provenance } : {}),
       ...(summary.warning ? { warning: summary.warning } : {}),

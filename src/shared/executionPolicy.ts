@@ -1,5 +1,6 @@
 import type {
   ExecutionPolicy,
+  PluginManifestV2Scopes,
   PluginShellMode,
   PluginSystemNamespace,
 } from '../../packages/plugin-contracts/src/index'
@@ -145,6 +146,30 @@ export interface ExecutionPolicyApi {
 export interface ManifestPermissionsSummary {
   system: PluginSystemNamespace[]
   shell?: PluginShellMode
+  /** Declared resource scopes, shown to the user; never an authorization input. */
+  scopes?: PluginManifestV2Scopes
+}
+
+/** Deep-copy a manifest permissions summary across a process or store boundary. */
+export function copyManifestPermissionsSummary(
+  summary: ManifestPermissionsSummary
+): ManifestPermissionsSummary {
+  const fs = summary.scopes?.fs
+  return {
+    system: [...summary.system],
+    ...(summary.shell ? { shell: summary.shell } : {}),
+    ...(fs
+      ? {
+          scopes: {
+            fs: {
+              ...(fs.root ? { root: fs.root } : {}),
+              ...(fs.read ? { read: [...fs.read] } : {}),
+              ...(fs.write ? { write: [...fs.write] } : {}),
+            },
+          },
+        }
+      : {}),
+  }
 }
 
 export interface PackageVersionGrantSummary {

@@ -99,6 +99,7 @@ Extension Pack and declares neither.
 |---|---|---|
 | `system` | string[] | 1-3 unique namespaces from `fs`, `ui`, `aiCli`. |
 | `shell` | string | `allowlist` or `full`. |
+| `scopes` | object | Optional. `{"fs": {"root": ..., "read": [...], "write": [...]}}`: path patterns the package declares it reads or writes. `root` is `workspace` (default) or `repository` (the nearest enclosing Git root). At least one of `read`/`write`, each 1-16 unique safe relative patterns; `*` matches within one segment, a whole-segment `**` matches zero or more segments, and a pattern covers only what it matches. Shown to the user as a disclosure; it grants and restricts nothing. |
 
 ### `marketplace`
 

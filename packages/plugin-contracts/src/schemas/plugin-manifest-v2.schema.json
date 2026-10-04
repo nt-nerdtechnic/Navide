@@ -35,7 +35,28 @@
           "uniqueItems": true,
           "items": { "enum": ["fs", "ui", "aiCli"] }
         },
-        "shell": { "enum": ["allowlist", "full"] }
+        "shell": { "enum": ["allowlist", "full"] },
+        "scopes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fs"],
+          "description": "Declared resource scopes. Disclosure only: the Host shows them to the user and neither grants nor enforces anything from them.",
+          "properties": {
+            "fs": {
+              "type": "object",
+              "additionalProperties": false,
+              "anyOf": [{ "required": ["read"] }, { "required": ["write"] }],
+              "properties": {
+                "root": {
+                  "enum": ["workspace", "repository"],
+                  "description": "What the patterns are relative to: the workspace (default) or the nearest enclosing Git repository root."
+                },
+                "read": { "$ref": "#/$defs/scopePaths" },
+                "write": { "$ref": "#/$defs/scopePaths" }
+              }
+            }
+          }
+        }
       }
     },
     "marketplace": { "$ref": "#/$defs/marketplace" },
@@ -174,6 +195,18 @@
     "viewId": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "scopePaths": {
+      "description": "Relative path patterns. * matches within one segment, ** (a whole segment) matches zero or more segments; a pattern covers only the paths it matches.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\/$)(?!.*(?:[^/]\\*\\*|\\*\\*[^/]))[A-Za-z0-9._*/-]+$"
+      }
     },
     "safePath": {
       "type": "string",

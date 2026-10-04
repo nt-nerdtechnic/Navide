@@ -377,3 +377,37 @@ describe('B0 capability and Backend Wire contract gate', () => {
     )
   })
 })
+
+describe('Manifest v2 filesystem scopes are disclosure only', () => {
+  it('changes no capability policy or broker decision', () => {
+    const scoped = parsePublicManifestV2(
+      parsePublicManifestJson(readFixture('valid', 'fs-scopes-declared.json'))
+    )
+    const unscopedSource = parsePublicManifestJson(readFixture('valid', 'fs-scopes-declared.json')) as Record<string, any>
+    delete unscopedSource.permissions.scopes
+    const unscoped = parsePublicManifestV2(unscopedSource)
+    expect(scoped.permissions.scopes).toBeDefined()
+
+    const scopedPolicy = manifestV2CapabilityPolicy(scoped.permissions)
+    const unscopedPolicy = manifestV2CapabilityPolicy(unscoped.permissions)
+    expect(scopedPolicy).toEqual(unscopedPolicy)
+
+    const context = {
+      ...runtimeContext(),
+      runtimeBinding: { ...runtimeContext().runtimeBinding, pluginId: scoped.id },
+    }
+    const calls = [
+      { ns: 'fs', method: 'readFile', args: { path: '.acme/notes/today.md' } },
+      { ns: 'fs', method: 'readFile', args: { path: 'outside-the-scope.md' } },
+      { ns: 'fs', method: 'listDirectory', args: { path: '' } },
+      { ns: 'ui', method: 'openInEditor', args: { path: 'docs/readme.md' } },
+      { ns: 'shell', method: 'run', args: { command: 'git status' } },
+    ]
+    for (const [index, call] of calls.entries()) {
+      const request = { pluginId: scoped.id, reqId: `scope-${index}`, ...call }
+      expect(planPublicCapabilityCall(request, scopedPolicy, context)).toEqual(
+        planPublicCapabilityCall(request, unscopedPolicy, context)
+      )
+    }
+  })
+})

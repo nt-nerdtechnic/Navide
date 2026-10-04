@@ -1112,6 +1112,46 @@ Host derives `workspaceId` from authenticated runtime binding. There is no
 public `runtime` scope. Workspace events also require a Host-authenticated
 event source for the same workspace; an unbound shared event is dropped.
 
+### Declared filesystem scopes (disclosure only)
+
+A package may also declare which paths it reads or writes:
+
+```json
+{
+  "permissions": {
+    "system": ["fs"],
+    "scopes": {
+      "fs": {
+        "root": "repository",
+        "read": ["**/.acme/notes/*", "**/.acme/notes/.history/**"],
+        "write": ["**/.acme/notes/*"]
+      }
+    }
+  }
+}
+```
+
+`scopes` is optional and additive. Its only member is `fs`:
+
+- `root` says what the patterns are relative to: `workspace` (the default) or
+  `repository`, the nearest ancestor of the workspace that contains `.git`
+  (never above the user's home directory), falling back to the workspace.
+- `read` and `write` (at least one) each hold 1-16 unique path patterns.
+  Apart from wildcards a pattern follows the package safe-path rule (no leading
+  `/`, no `.` or `..` segments, no backslashes, no trailing `/`). `*` matches
+  any characters within one segment; `**`, which must be a whole segment,
+  matches zero or more segments. A pattern covers only the paths it matches:
+  `docs/*` is the entries directly in `docs`, `docs/**` is everything beneath
+  it. A path that appears under `read` but not under `write` is read-only.
+- An Extension Pack may not declare it.
+
+The declaration is a disclosure, not a grant and not a sandbox. The Host shows
+it to the user in Settings → Extensions; it does not change any grant, Bridge
+port, broker decision, or `system` namespace check, and nothing confines the
+package to the paths it lists. Declare it truthfully and never narrower than
+what the package can reach — a package with its own backend can reach anything
+its process can.
+
 ### Host-managed storage partitions
 
 Manifest v2 exposes durable JSON key/value storage through the public
