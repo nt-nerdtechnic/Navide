@@ -12105,6 +12105,30 @@ export function plansBackendActivation(
 }
 
 /**
+ * The Settings → Extensions Bundled row for Plans. It is live only while the
+ * App-bundled v2 package serves Plans; legacy recovery serves the old bundle
+ * instead. Plans is not a removable factory package, so it is never opted out.
+ */
+export function plansFactoryPackageSummary(
+  manager: FrontendPluginManager,
+  recoveryEnabled: boolean,
+): { id: string; version: string | null; active: boolean; optedOut: boolean } {
+  const descriptor = manager.getDescriptor(PLANS_PLUGIN_ID)
+  const active =
+    manager
+      .listInstalledPackages()
+      .some((pkg) => pkg.id === PLANS_PLUGIN_ID && pkg.provenance === 'factory-bundled') &&
+    descriptor?.capabilityPolicy?.kind === 'manifest-v2' &&
+    !recoveryEnabled
+  return {
+    id: PLANS_PLUGIN_ID,
+    version: active ? descriptor?.packageVersion ?? null : null,
+    active,
+    optedOut: false,
+  }
+}
+
+/**
  * Register the app-bundled combined Plans package at startup. The v2 package
  * is selected as one descriptor/backend tuple; the old frontend-only bundle
  * is retained only as an explicit fallback while the migration is available.

@@ -18,7 +18,7 @@ import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from 
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
 import { createWorkspaceFolder } from './workspace-create'
 import type { NewWorkspaceResult } from '../shared/workspaceCreate'
-import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
+import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, plansFactoryPackageSummary, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
 import { createWindowCloseCoordinator } from './plugins/windowCloseCoordinator'
 import {
   handlePluginFrameAssetRequest,
@@ -1552,7 +1552,7 @@ const pluginTrustRefresh = registerPluginIpc(
         version: miniFactoryActive ? miniDescriptor?.packageVersion ?? null : null,
         active: miniFactoryActive,
         optedOut: pluginFactoryOptOuts.has(MINI_IDE_PLUGIN_ID),
-      }]
+      }, plansFactoryPackageSummary(frontendPluginManager, plansRecoveryEnabled)]
     },
     restoreFactoryPackage: (pluginId) => {
       if (pluginId === MINI_IDE_PLUGIN_ID) {

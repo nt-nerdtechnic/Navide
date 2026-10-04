@@ -346,6 +346,7 @@ import {
   officialPluginArtifactPackageDir,
   registerBundledMiniIde,
   registerBundledPlans,
+  plansFactoryPackageSummary,
   createPluginBackendChildEnvironment,
   sanitizeDiagnosticLines,
   MAX_DIAGNOSTIC_LINE_CHARS,
@@ -5737,6 +5738,33 @@ describe('loadInstalledPlugins official receipt gate', () => {
         provenance: 'factory-bundled',
       },
     ])
+  })
+
+  it('lists the App-bundled Plans package for the Bundled section only while its factory v2 package is live', () => {
+    const empty = new FrontendPluginManager()
+    expect(plansFactoryPackageSummary(empty, false)).toEqual({
+      id: 'navide.plans',
+      version: null,
+      active: false,
+      optedOut: false,
+    })
+
+    writeV2Plugin('factory-plans', { id: 'navide.plans', frontend: true })
+    const mgr = new FrontendPluginManager()
+    expect(mgr.loadFactoryPlugin(join(root, 'factory-plans'), 'navide.plans').loaded).toBe(true)
+    expect(plansFactoryPackageSummary(mgr, false)).toEqual({
+      id: 'navide.plans',
+      version: '1.0.0',
+      active: true,
+      optedOut: false,
+    })
+    // Legacy recovery serves Plans from the old bundle, not this package.
+    expect(plansFactoryPackageSummary(mgr, true)).toEqual({
+      id: 'navide.plans',
+      version: null,
+      active: false,
+      optedOut: false,
+    })
   })
 
   it('treats the App-bundled Git package as publisher-eligible only after an exact grant', async () => {

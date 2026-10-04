@@ -65,6 +65,29 @@ function formatManifestPermissions(permissions: ManifestPermissionsSummary): str
   return parts.join('; ')
 }
 
+// A declared scope is what the package says it reaches, shown as written; the
+// Host neither grants nor enforces it.
+function formatManifestScopes(permissions: ManifestPermissionsSummary): string {
+  const fs = permissions.scopes?.fs
+  const read = fs?.read ?? []
+  const write = fs?.write ?? []
+  const groups: Array<[string, string[]]> = [
+    ['scopeReadWrite', write.filter((pattern) => read.includes(pattern))],
+    ['scopeReadOnly', read.filter((pattern) => !write.includes(pattern))],
+    ['scopeWriteOnly', write.filter((pattern) => !read.includes(pattern))],
+  ]
+  return groups
+    .filter(([, patterns]) => patterns.length > 0)
+    .map(([key, patterns]) => `${t(`settings.extensionsPolicy.${key}`)} ${patterns.join(', ')}`)
+    .join('; ')
+}
+
+function manifestScopesLabel(permissions: ManifestPermissionsSummary): string {
+  return permissions.scopes?.fs.root === 'repository'
+    ? t('settings.extensionsPolicy.fileScopesRepository')
+    : t('settings.extensionsPolicy.fileScopes')
+}
+
 function formatPackageGrant(grant: PackageVersionGrantSummary | null | undefined): string {
   if (!grant) return t('settings.extensionsPolicy.noMatchingGrant')
   const parts = [
@@ -286,10 +309,18 @@ watch(installed, () => void refreshPacks())
           <span v-if="p.installed?.pendingCandidateVersion" class="ext-badge ext-candidate">
             {{ $t('settings.extensions.candidateReady', { version: p.installed.pendingCandidateVersion }) }}
           </span>
+          <!-- First-party code with no sandbox: say so plainly. The third-party
+               sandbox wording does not apply to it. -->
+          <p v-if="p.id === 'navide.plans'" class="ext-risk-note">
+            {{ $t('settings.extensions.plansRiskNote') }}
+          </p>
           <details v-if="p.installed?.manifestPermissions || p.installed?.packageVersion" class="ext-permission-details">
             <summary>{{ $t('settings.extensions.permissionDetails') }}</summary>
             <span v-if="p.installed?.manifestPermissions" class="ext-manifest-permissions">
               {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.manifestPermissions'), value: formatManifestPermissions(p.installed.manifestPermissions) }) }}
+            </span>
+            <span v-if="p.installed?.manifestPermissions?.scopes" class="ext-manifest-scopes">
+              {{ $t('settings.extensionsPolicy.labeledValue', { label: manifestScopesLabel(p.installed.manifestPermissions), value: formatManifestScopes(p.installed.manifestPermissions) }) }}
             </span>
             <span
               v-if="p.installed?.packageVersion"
@@ -403,6 +434,9 @@ watch(installed, () => void refreshPacks())
               <summary>{{ $t('settings.extensions.permissionDetails') }}</summary>
               <span v-if="p.manifestPermissions" class="ext-manifest-permissions">
                 {{ $t('settings.extensionsPolicy.labeledValue', { label: $t('settings.extensionsPolicy.manifestPermissions'), value: formatManifestPermissions(p.manifestPermissions) }) }}
+              </span>
+              <span v-if="p.manifestPermissions?.scopes" class="ext-manifest-scopes">
+                {{ $t('settings.extensionsPolicy.labeledValue', { label: manifestScopesLabel(p.manifestPermissions), value: formatManifestScopes(p.manifestPermissions) }) }}
               </span>
               <span
                 v-if="p.packageVersion"
@@ -776,6 +810,14 @@ watch(installed, () => void refreshPacks())
 .ext-updates-summary {
   margin: -4px 0 var(--space-3);
   color: var(--accent-fg);
+  font-size: var(--font-xs);
+}
+.ext-manifest-scopes {
+  overflow-wrap: anywhere;
+}
+.ext-risk-note {
+  margin: 0;
+  color: var(--risk-fg);
   font-size: var(--font-xs);
 }
 .ext-incompatible-reason {

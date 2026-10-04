@@ -267,6 +267,92 @@ describe('ExtensionsPane', () => {
     expect(wrapper.find('[data-id="navide.git"]').exists()).toBe(false)
   })
 
+  function mockBundledPlansAndGit() {
+    return mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        {
+          id: 'navide.plans',
+          requires: ['fs', 'ui', 'aiCli'],
+          sensitive: ['fs'],
+          packageVersion: '0.1.0',
+          manifestPermissions: {
+            system: ['fs', 'ui', 'aiCli'],
+            scopes: {
+              fs: {
+                root: 'repository',
+                read: ['**/docs/plans/*', '**/docs/plans/.history/**', '.plans/*'],
+                write: ['**/docs/plans/*', '.plans/*'],
+              },
+            },
+          },
+          provenance: 'factory-bundled',
+        },
+        {
+          id: 'navide.git',
+          requires: ['fs', 'shell'],
+          sensitive: ['fs', 'shell'],
+          packageVersion: '2.0.0',
+          manifestPermissions: { system: ['fs'], shell: 'allowlist' },
+          provenance: 'factory-bundled',
+        },
+      ]),
+      listFactoryPackages: vi.fn().mockResolvedValue([
+        { id: 'navide.git', version: '2.0.0', active: true, optedOut: false },
+        { id: 'navide.plans', version: '0.1.0', active: true, optedOut: false },
+      ]),
+    })
+  }
+
+  it('discloses the bundled Plans file scope and that its backend runs unsandboxed', async () => {
+    mockBundledPlansAndGit()
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    const row = wrapper.get('[data-factory-id="navide.plans"]')
+    expect(row.get('.ext-manifest-scopes').text()).toBe(
+      'File scope (from the Git repository root): read and write **/docs/plans/*, .plans/*; read only **/docs/plans/.history/**'
+    )
+    const risk = row.get('.ext-risk-note').text()
+    expect(risk).toContain('own backend')
+    expect(risk).toContain('user permissions')
+    expect(risk).toContain('no sandbox')
+    expect(risk).toContain('Git repository root')
+    expect(risk).toContain('.history')
+    // The third-party sandbox wording never describes this package.
+    expect(risk).not.toContain('sandboxed')
+    expect(wrapper.find('[data-id="navide.plans"]').exists()).toBe(false)
+  })
+
+  it('keeps a bundled row without declared scopes as it was', async () => {
+    mockBundledPlansAndGit()
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    const row = wrapper.get('[data-factory-id="navide.git"]')
+    expect(row.find('.ext-manifest-scopes').exists()).toBe(false)
+    expect(row.find('.ext-risk-note').exists()).toBe(false)
+    expect(row.get('.ext-manifest-permissions').text()).toContain('allowlist')
+  })
+
+  it('discloses declared file scopes of an installed third-party package', async () => {
+    mockPlugins({
+      listInstalled: vi.fn().mockResolvedValue([
+        {
+          id: 'acme.notes',
+          requires: ['fs'],
+          sensitive: ['fs'],
+          packageVersion: '1.0.0',
+          manifestPermissions: { system: ['fs'], scopes: { fs: { read: ['docs'] } } },
+          provenance: 'official-registry',
+        },
+      ]),
+    })
+    wrapper = mountExtensions()
+    await flushPromises()
+
+    expect(wrapper.get('[data-id="acme.notes"] .ext-manifest-scopes').text()).toBe('File scope: read only docs')
+  })
+
   it('shows no matching Grant for a Bundled package version without a grant', async () => {
     mockPlugins({
       listInstalled: vi.fn().mockResolvedValue([
@@ -512,6 +598,19 @@ describe('ExtensionsPane', () => {
       expect(dialog.message).toContain('要將 acme.prev 回復到 1.0.0 嗎')
       useNotify().resolveDialog(false)
       await flushPromises()
+    })
+
+    it('discloses the bundled Plans scope and risk from the locale', async () => {
+      mockBundledPlansAndGit()
+      wrapper = mountExtensions()
+      await flushPromises()
+
+      const row = wrapper.get('[data-factory-id="navide.plans"]')
+      expect(row.get('.ext-manifest-scopes').text()).toBe(
+        '檔案範圍（從 Git 儲存庫根目錄起）：讀寫 **/docs/plans/*, .plans/*; 只讀 **/docs/plans/.history/**'
+      )
+      expect(row.get('.ext-risk-note').text()).toContain('沒有沙盒')
+      expect(row.get('.ext-risk-note').text()).toContain('使用者權限')
     })
 
     it('shows a known Host refusal translated and an unknown one as written', async () => {
