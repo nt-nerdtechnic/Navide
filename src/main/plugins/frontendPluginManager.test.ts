@@ -646,6 +646,104 @@ describe('backend Host session registration', () => {
     expect(mgr.isPlansBackendAvailable()).toBe(false)
   })
 
+  function plansManagerWithHostObservers(packageVersion = '1.0.0'): {
+    mgr: FrontendPluginManager
+    childFailed: (instanceId: string) => void
+    childRestarted: (instanceId: string, version?: string) => void
+  } {
+    const mgr = new FrontendPluginManager()
+    mgr.registerDescriptor({
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: ['fs'],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+      devUrl: '',
+      entryFile: '/plugins/navide.plans/index.html',
+      views: [],
+    }, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.list'],
+      agentMethods: ['plans.list'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    const host = (mgr as unknown as { pluginBackendHost: PluginBackendHost }).pluginBackendHost
+    const observers = host as unknown as {
+      onBackendFailure?: (runtime: unknown, error: BackendPluginError) => void
+      onBackendRestarted?: (runtime: unknown) => void
+    }
+    return {
+      mgr,
+      childFailed: (instanceId) => observers.onBackendFailure?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId },
+        new BackendPluginError('BACKEND_UNAVAILABLE'),
+      ),
+      childRestarted: (instanceId, version = packageVersion) => observers.onBackendRestarted?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion: version, instanceId },
+      ),
+    }
+  }
+
+  it('restores Plans support when a failed child comes back after an automatic restart', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, childFailed, childRestarted } = plansManagerWithHostObservers()
+
+      childFailed('headless-1')
+      expect(mgr.isPlansBackendAvailable()).toBe(false)
+      childRestarted('headless-1')
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+      expect(mgr.plansBackendFallbackAllowed()).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('keeps Plans withdrawn when a child comes back during legacy recovery', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // The child dies, then the Host enters legacy recovery (enterPlansRecovery
+      // withdraws v2 with its own reason): the recovered session stays legacy.
+      const failedFirst = plansManagerWithHostObservers()
+      failedFirst.childFailed('headless-1')
+      failedFirst.mgr.markPlansBackendUnavailable('Backend plugin is unavailable.')
+      failedFirst.childRestarted('headless-1')
+      expect(failedFirst.mgr.isPlansBackendAvailable()).toBe(false)
+      expect(failedFirst.mgr.plansBackendFallbackAllowed()).toBe(true)
+
+      // Recovery first, then a child failure while in it.
+      const recoveredFirst = plansManagerWithHostObservers()
+      recoveredFirst.mgr.markPlansBackendUnavailable('package-recovery')
+      recoveredFirst.childFailed('headless-1')
+      recoveredFirst.childRestarted('headless-1')
+      expect(recoveredFirst.mgr.isPlansBackendAvailable()).toBe(false)
+      expect(recoveredFirst.mgr.plansBackendFallbackAllowed()).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('keeps Plans withdrawn when the child that came back is another package version', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, childFailed, childRestarted } = plansManagerWithHostObservers()
+
+      childFailed('headless-1')
+      childRestarted('headless-1', '0.9.0')
+      expect(mgr.isPlansBackendAvailable()).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
   it('rejects an unadmitted iframe while preserving the exact Host frame admission seam', async () => {
     const packageDir = mkdtempSync(join(tmpdir(), 'navide-frame-manager-'))
     try {

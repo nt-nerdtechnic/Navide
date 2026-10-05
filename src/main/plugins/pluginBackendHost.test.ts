@@ -781,7 +781,7 @@ describe('first-party backend restart after a child failure', () => {
 
   async function bindFailingViews(
     instanceIds: string[],
-    options: Pick<PluginBackendHostOptions, 'onBackendFailure'> = {},
+    options: Pick<PluginBackendHostOptions, 'onBackendFailure' | 'onBackendRestarted'> = {},
   ): Promise<{
     host: PluginBackendHost
     views: Map<string, { restart: ReturnType<typeof vi.fn>; fail: (error?: BackendPluginError) => void }>
@@ -838,6 +838,61 @@ describe('first-party backend restart after a child failure', () => {
     second.fail()
     await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
     expect(second.restart).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a child that came back after an automatic restart', async () => {
+    vi.useFakeTimers()
+    const onBackendRestarted = vi.fn()
+    const { views } = await bindFailingViews(['view-1'], { onBackendRestarted })
+
+    views.get('view-1')!.fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+
+    expect(onBackendRestarted).toHaveBeenCalledTimes(1)
+    expect(onBackendRestarted).toHaveBeenCalledWith(expect.objectContaining({
+      pluginId: runtime.pluginId,
+      packageVersion: runtime.packageVersion,
+      instanceId: 'view-1',
+    }))
+  })
+
+  it('does not report a restart that failed', async () => {
+    vi.useFakeTimers()
+    const onBackendRestarted = vi.fn()
+    const { views } = await bindFailingViews(['view-1'], { onBackendRestarted })
+    const view = views.get('view-1')!
+    view.restart.mockRejectedValueOnce(new BackendPluginError('BACKEND_UNAVAILABLE'))
+
+    view.fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+
+    expect(view.restart).toHaveBeenCalledTimes(1)
+    expect(onBackendRestarted).not.toHaveBeenCalled()
+  })
+
+  it('does not report a restart that finished after the view was unbound or the Host closed', async () => {
+    vi.useFakeTimers()
+    const onBackendRestarted = vi.fn()
+    const { host, views } = await bindFailingViews(['view-1', 'view-2'], { onBackendRestarted })
+    const finish: Array<() => void> = []
+    for (const view of views.values()) {
+      view.restart.mockImplementationOnce(() => new Promise((resolve) => {
+        finish.push(() => resolve({ serverInfo: { name: 'controlled', version: '1.0.0' } }))
+      }))
+      view.fail()
+    }
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+    expect(finish).toHaveLength(2)
+
+    await host.unbindView('view-1')
+    finish[0]()
+    await vi.advanceTimersByTimeAsync(0)
+    const closing = host.close()
+    finish[1]()
+    await closing
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(onBackendRestarted).not.toHaveBeenCalled()
   })
 
   it('forgets a view\'s failures once the view is unbound', async () => {

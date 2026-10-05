@@ -1288,6 +1288,16 @@ export class FrontendPluginManager {
         }
       }
     },
+    onBackendRestarted: (runtime) => {
+      if (runtime.pluginId !== PLANS_PLUGIN_ID) return
+      const identity = this.plansBackendHealthIdentity
+      if (
+        this.plansBackendHealth !== 'unavailable' ||
+        !this.plansUnavailableByChildDeath ||
+        identity?.packageVersion !== runtime.packageVersion
+      ) return
+      this.markPlansBackendReady(identity.packageVersion, identity.packageDir)
+    },
   })
   private readonly pendingBackendCalls = new Map<string, Map<string, AbortController>>()
   private readonly pendingBackendSubscriptions = new Map<
@@ -1474,6 +1484,11 @@ export class FrontendPluginManager {
    *  succeeds; otherwise MCP keeps selecting the broken v2 adapter. */
   private plansBackendHealth: PlansBackendHealth = 'unknown'
   private plansBackendHealthIdentity: { packageVersion: string; packageDir: string } | null = null
+  /** Whether the current unavailable mark comes only from child deaths, which
+   *  a child coming back through an automatic restart may undo. Any other
+   *  cause (legacy recovery, storage, a failed bind or view) keeps the mark
+   *  until its own path clears it. */
+  private plansUnavailableByChildDeath = false
   private readonly pendingActivations = new Map<
     string,
     ReturnType<typeof setTimeout> | null
@@ -2043,6 +2058,8 @@ export class FrontendPluginManager {
     if (this.plansBackendHealth !== 'unavailable') {
       warnMain(`[plugin-backend] ${PLANS_PLUGIN_ID} v2 backend withdrawn (${reason})`)
     }
+    this.plansUnavailableByChildDeath = reason === 'child-unavailable' &&
+      (this.plansBackendHealth !== 'unavailable' || this.plansUnavailableByChildDeath)
     this.plansBackendHealth = 'unavailable'
     this.plansBackendHealthIdentity = {
       packageVersion: descriptor.packageVersion,

@@ -61,6 +61,9 @@ export interface PluginBackendHostOptions {
   ) => ExecutionPolicySnapshot | undefined
   /** Observe a bound child becoming unavailable before the next call. */
   onBackendFailure?: (runtime: BackendRuntimeContext, error: BackendPluginError) => void
+  /** Observe a failed first-party child that an automatic restart brought
+   * back, while its view is still bound. */
+  onBackendRestarted?: (runtime: BackendRuntimeContext) => void
   /** Observe child diagnostic output (stderr / startup failure diagnostics). */
   onStderr?: (chunk: string) => void
   /** Re-check Host-owned trust immediately before every backend child spawn. */
@@ -214,6 +217,7 @@ export class PluginBackendHost {
   private readonly resolvePlanRoot?: PlanRootResolver
   private readonly resolveExecutionPolicy?: PluginBackendHostOptions['resolveExecutionPolicy']
   private readonly onBackendFailure?: PluginBackendHostOptions['onBackendFailure']
+  private readonly onBackendRestarted?: PluginBackendHostOptions['onBackendRestarted']
   private readonly onStderr?: PluginBackendHostOptions['onStderr']
   private reverifyBeforeSpawn?: PluginBackendHostOptions['reverifyBeforeSpawn']
   private admitThirdParty?: ThirdPartyAdmitter
@@ -239,6 +243,7 @@ export class PluginBackendHost {
     this.resolvePlanRoot = options.resolvePlanRoot
     this.resolveExecutionPolicy = options.resolveExecutionPolicy
     this.onBackendFailure = options.onBackendFailure
+    this.onBackendRestarted = options.onBackendRestarted
     this.onStderr = options.onStderr
     this.reverifyBeforeSpawn = options.reverifyBeforeSpawn
     this.admitThirdParty = options.admitThirdParty
@@ -496,13 +501,20 @@ export class PluginBackendHost {
             console.warn(`[plugin-backend] ${view.runtime.pluginId} failed too often; leaving it stopped`)
             return
           }
+          const stillBound = (): boolean =>
+            this.views.get(view.runtime.instanceId ?? '') === view &&
+            !view.closing &&
+            view.supervisor === supervisor
           const timer = setTimeout(() => {
-            if (
-              this.views.get(view.runtime.instanceId ?? '') !== view ||
-              view.closing ||
-              view.supervisor !== supervisor
-            ) return
-            supervisor.restart().catch(() => {
+            if (!stillBound()) return
+            supervisor.restart().then(() => {
+              if (!stillBound()) return
+              try {
+                this.onBackendRestarted?.(view.runtime)
+              } catch {
+                // A liveness observer must not change the restart result.
+              }
+            }, () => {
               // The next failure is reported through onFailure again.
             })
           }, delay)
