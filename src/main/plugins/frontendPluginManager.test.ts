@@ -14534,4 +14534,18 @@ describe('FrontendPluginManager — ending a closed window\'s AI panels', () => 
     const mgr = new FrontendPluginManager()
     expect(() => mgr.endDockSurface('plans', '/ws/a')).not.toThrow()
   })
+
+  it('warns when the backend refuses the kill', async () => {
+    const mgr = new FrontendPluginManager()
+    const send = vi.fn(() => Promise.reject(new Error('backend down')))
+    ;(mgr as unknown as { ensureBackend: () => unknown }).ensureBackend = () => ({ send })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      mgr.endDockSurface('plans', '/ws/a')
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('terminal.kill_surface'), expect.any(Error)))
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })

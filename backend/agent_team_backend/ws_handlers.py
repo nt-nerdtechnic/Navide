@@ -8183,7 +8183,11 @@ async def terminal_kill_surface(session: "Session", msg_id: str, msg_type: str, 
     ):
         # Kill this session id, not every PTY under the pane id: only the
         # session that names the surface is known to be a panel.
-        await session.terminals.kill(term_session_id, force=True)
+        try:
+            await session.terminals.kill(term_session_id, force=True)
+        except Exception:  # noqa: BLE001 — one panel's failed kill must not leave the rest running
+            log.exception("terminal.kill_surface: killing %s (%s) failed", term_session_id, pane_id)
+            continue
         app._PTY_OWNERS.pop(term_session_id, None)
         app.attribution.unregister_pane(pane_id)
         ended.setdefault(pane_id, workspace_path)

@@ -7582,8 +7582,9 @@ export class FrontendPluginManager {
     if (this.appQuitting()) return
     const client = this.ensureBackend()
     if (!client) return
-    void client.send('terminal.kill_surface', { surface, workspace_path: workspacePath }).catch(() => {
+    void client.send('terminal.kill_surface', { surface, workspace_path: workspacePath }).catch((error) => {
       // Nothing to undo: the panels linger until the backend's ownerless sweep.
+      console.warn(`[plugins] terminal.kill_surface for ${surface} failed`, error)
     })
   }
 
