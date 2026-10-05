@@ -42,6 +42,8 @@ class FakeAdapter:
         self.typing = 0
         self.fail_edits = False
         self.emit = None
+        self.menus: list[tuple[Location, str, list]] = []
+        self.menu_edits: list[tuple[str, str, list]] = []
 
     async def start(self, emit) -> None:
         self.emit = emit
@@ -61,6 +63,15 @@ class FakeAdapter:
             self.edits.append((message_id, "FAILED"))
             raise RuntimeError("edit failed")
         self.edits.append((message_id, text))
+
+    async def send_menu(self, loc: Location, text: str, rows: list) -> str:
+        self.menus.append((loc, text, rows))
+        return f"menu{len(self.menus)}"
+
+    async def edit_menu(self, loc: Location, message_id: str, text: str, rows: list) -> None:
+        if self.fail_edits:
+            raise RuntimeError("edit failed")
+        self.menu_edits.append((message_id, text, rows))
 
     async def send_typing(self, loc: Location) -> None:
         self.typing += 1
@@ -90,6 +101,9 @@ class FakeSeams:
         self.gone: set[str] = set()
         self.answers: list[tuple[str, dict[str, Any]]] = []
         self.answer_result: dict[str, Any] = {"ok": True}
+        self.settings: dict[str, Any] = {}
+        self.agents: dict[str, str] = {}
+        self.skills: dict[str, list[str]] = {}
         self._n = 0
 
     async def deliver(self, pane_id: str, text: str, from_display: str) -> dict[str, Any]:
@@ -131,7 +145,9 @@ class FakeSeams:
         return Seams(deliver=self.deliver, await_verdict=self.await_verdict, interrupt=self.interrupt,
                      pane_state=self.pane_state, awaiting_info=self.awaiting_info, answer=self.answer,
                      resolve_pane=self.resolve_pane, broadcast=self.broadcast,
-                     read_secret=self.read_secret, write_secret=self.write_secret)
+                     read_secret=self.read_secret, write_secret=self.write_secret,
+                     ui_settings=lambda: self.settings, pane_agent=lambda p: self.agents.get(p, ""),
+                     agent_skills=lambda a: self.skills.get(a, []))
 
 
 def _said(env: "Env", needle: str) -> bool:

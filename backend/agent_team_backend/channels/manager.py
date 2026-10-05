@@ -30,7 +30,8 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
-from . import redact, relay
+from . import quick_menu, redact, relay
+from .. import prompt_skills
 from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summarize
 from .base import ChannelAdapter, InboundMessage, Location
 from .pairing import LinkInvites, SenderGate, parse_link_code
@@ -140,6 +141,12 @@ class Seams:
     pane_directory: Callable[[], list[dict[str, Any]]] = lambda: []
     # (child_pane_id, parent_pane_id): a child of a tainted pane is tainted too
     inherit_taint: Callable[[str, str], None] = lambda _child, _parent: None
+    # () -> the renderer's ui settings (prompt skills, language); blocking, run off the loop
+    ui_settings: Callable[[], dict[str, Any]] = lambda: {}
+    # pane_id -> its CLI vendor key ("" if unknown)
+    pane_agent: Callable[[str], str] = lambda _pane_id: ""
+    # agent_key -> skill names that CLI can run (quick_menu.agent_skills); blocking
+    agent_skills: Callable[[str], list[str]] = lambda _agent_key: []
 
 
 AdapterFactory = Callable[[dict[str, Any], dict[str, Any], ChannelStore], ChannelAdapter]
@@ -263,6 +270,7 @@ class ChannelManager:
         # Memory only: a backend restart forgets them, and a later managed_bot update is ignored.
         self._managed: dict[str, _ManagedRequest] = {}  # request_id -> open t.me/newbot request
         self.relay = relay.RelayTable(clock=clock, on_expired=self._relay_expired)
+        self.quick = quick_menu.QuickMenus(clock=clock)
         self._debounce: dict[tuple[str, str], _Debounce] = {}
         # One serial worker per location: order kept within a chat, chats never block each other.
         self._workers: dict[str, _Worker] = {}
@@ -1259,8 +1267,14 @@ class ChannelManager:
             if answer is not None:
                 await self._handle_relay_answer(msg, answer)
                 return
+        if msg.callback_data.startswith(quick_menu.CALLBACK_PREFIX):
+            await self._quick_press(msg)
+            return
         if msg.callback_data and not msg.text:
             return  # a button press with the relay off, or not ours
+        if quick_menu.is_menu_command(msg.text, self._identity(msg)):
+            await self._quick_menu(msg)
+            return
         binding = self._binding_for(msg)
         if binding is None:
             # One bot answers for its unbound chats and topics, as it always has; with
@@ -1474,13 +1488,14 @@ class ChannelManager:
         else:
             await self._reply(msg, f"⚠️ 中斷失敗：{result.get('error') or 'not sent'}")
 
-    async def _deliver(self, msg: InboundMessage, binding: Binding, pane_id: str) -> None:
+    async def _deliver(self, msg: InboundMessage, binding: Binding, pane_id: str) -> bool:
+        """True when the text went to the pane; every refusal has already been replied to."""
         if await self._held_by_prompt(msg, pane_id):
-            return
+            return False
         queued = self._queued.setdefault(pane_id, set())
         if len(queued) >= MAX_QUEUED_PER_PANE:
             await self._reply(msg, MSG_QUEUE_FULL)
-            return
+            return False
         state = self._seams.pane_state(pane_id)
         try:
             result = await self._seams.deliver(pane_id, msg.text, f"{msg.platform}:{msg.sender_name}")
@@ -1488,7 +1503,7 @@ class ChannelManager:
             result = {"ok": False, "error": str(exc)}
         if not result.get("ok"):
             await self._reply(msg, f"⚠️ 無法送達 pane：{result.get('error') or 'unknown'}")
-            return
+            return False
         msg_key = str(result.get("msg_key") or "")
         pane_id = str(result.get("pane_id") or pane_id)
         loc = binding.location()
@@ -1507,6 +1522,110 @@ class ChannelManager:
             pending.status_id = await self._reply(msg, MSG_RECEIVED_BUSY)
         queued.add(msg_key)
         self._spawn(self._watch_delivery(pane_id, msg_key, pending))
+        return True
+
+    # --- quick menu ------------------------------------------------------------
+
+    def _identity(self, msg: InboundMessage) -> str:
+        adapter = self._adapters.get((msg.platform, msg.account))
+        return adapter.status.identity if adapter is not None else ""
+
+    async def _ui_settings(self) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(self._seams.ui_settings)
+        except Exception as exc:  # noqa: BLE001 — the builtin prompt still works without them
+            log.warning("channels: reading ui settings failed: %s", exc)
+            return {}
+
+    async def _agent_skills(self, agent_key: str) -> list[str]:
+        if agent_key not in quick_menu.SKILL_INVOCATION:
+            return []
+        try:
+            return await asyncio.to_thread(self._seams.agent_skills, agent_key)
+        except Exception as exc:  # noqa: BLE001 — a broken skills root leaves the prompts
+            log.warning("channels: listing skills for %s failed: %s", agent_key, exc)
+            return []
+
+    async def _quick_menu(self, msg: InboundMessage) -> None:
+        """``/menu``: buttons for the bound pane's prompt skills and skills."""
+        settings = await self._ui_settings()
+        lang = prompt_skills.language(settings)
+        binding = self._binding_for(msg)
+        if binding is None:
+            # Like any unbound message, a bot sharing a group with others stays quiet.
+            if msg.is_direct or self._sole_bot(msg.platform):
+                await self._reply(msg, quick_menu.text(lang, "not_bound"))
+            return
+        pane_id = self._seams.resolve_pane(binding.pane_id)
+        if not pane_id:
+            await self._reply(msg, MSG_OFFLINE)
+            return
+        adapter = self._adapters.get((msg.platform, msg.account))
+        if adapter is None:
+            return
+        if not adapter.capabilities.buttons or not hasattr(adapter, "send_menu"):
+            await self._reply(msg, quick_menu.text(lang, "no_buttons"))
+            return
+        agent_key = self._seams.pane_agent(pane_id)
+        menu = self.quick.create(
+            platform=msg.platform, location_key=msg.location_key(), pane_id=pane_id,
+            pane_title=binding.title or pane_id, agent_key=agent_key, lang=lang,
+            prompts=prompt_skills.castable(prompt_skills.effective(settings)),
+            skills=await self._agent_skills(agent_key),
+        )
+        if menu is None:
+            await self._reply(msg, quick_menu.text(lang, "empty"))
+            return
+        body, rows = self.quick.render(menu, 0)
+        try:
+            menu.message_id = await adapter.send_menu(binding.location(), redact.redact_text(body), rows)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("channels: sending the quick menu on %s failed: %s", msg.platform, exc)
+
+    async def _quick_press(self, msg: InboundMessage) -> None:
+        settings = await self._ui_settings()
+        parsed = quick_menu.parse_callback(msg.callback_data)
+        press = self.quick.press(*parsed, msg.location_key()) if parsed else None
+        lang = press.menu.lang if press is not None else prompt_skills.language(settings)
+        binding = self._binding_for(msg)
+        pane_id = self._seams.resolve_pane(binding.pane_id) if binding is not None else ""
+        # A menu made for a pane the chat no longer drives is as dead as an expired one.
+        if press is None or not pane_id or pane_id != self._seams.resolve_pane(press.menu.pane_id):
+            await self._reply(msg, quick_menu.text(lang, "expired"))
+            return
+        if press.kind == "g":
+            await self._quick_page(msg, press.menu, int(press.key))
+            return
+        if press.kind == "p":
+            prompt = next((p for p in prompt_skills.castable(prompt_skills.effective(settings))
+                           if p["id"] == press.key), None)
+            text = prompt["prompt"] if prompt is not None else ""
+        else:
+            agent_key = self._seams.pane_agent(pane_id)
+            available = press.key in await self._agent_skills(agent_key)
+            text = quick_menu.skill_command(agent_key, press.key) if available else ""
+        if not text:
+            await self._reply(msg, quick_menu.text(lang, "gone", name=press.label))
+            return
+        # Sent once, as if typed: the default prompt skill starts no loop from chat.
+        if await self._deliver(dataclasses.replace(msg, text=text, callback_data=""), binding, pane_id):
+            await self._reply(msg, quick_menu.text(lang, "sent", name=press.label))
+
+    async def _quick_page(self, msg: InboundMessage, menu: quick_menu.Menu, page: int) -> None:
+        adapter = self._adapters.get((msg.platform, msg.account))
+        if adapter is None or not hasattr(adapter, "edit_menu"):
+            return
+        loc = Location(msg.platform, msg.account, msg.chat_id, msg.thread_id)
+        body, rows = self.quick.render(menu, page)
+        body = redact.redact_text(body)
+        try:
+            await adapter.edit_menu(loc, menu.message_id, body, rows)
+        except Exception as exc:  # noqa: BLE001 — too old to edit, or deleted: post the page anew
+            log.info("channels: editing the quick menu failed (%s); sending it again", exc)
+            try:
+                menu.message_id = await adapter.send_menu(loc, body, rows)
+            except Exception as exc2:  # noqa: BLE001
+                log.warning("channels: sending the quick menu on %s failed: %s", msg.platform, exc2)
 
     async def _watch_delivery(self, pane_id: str, msg_key: str, pending: _Pending) -> None:
         adapter = self._adapters.get((pending.loc.platform, pending.loc.account))
