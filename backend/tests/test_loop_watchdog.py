@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 
@@ -198,18 +199,59 @@ async def test_rearms_after_recovery(
     assert _episodes(caplog) == [True, True]
 
 
+class _StallTimes(logging.Handler):
+    """When each stall was reported, on the monotonic clock the probe uses."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reports: list[tuple[float, float]] = []  # (reported at, stalled for)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        found = re.search(r"stalled for ([\d.]+)s", record.getMessage())
+        if found:
+            self.reports.append((time.monotonic(), float(found.group(1))))
+
+
+async def _probe_turns(turns: list[float]) -> None:
+    """Record when the loop runs, every few ms, independently of the
+    watchdog's own stamp: a gap between two turns is how long the loop
+    really did not turn."""
+    while True:
+        turns.append(time.monotonic())
+        await asyncio.sleep(0.005)
+
+
 @pytest.mark.asyncio
-async def test_healthy_loop_stays_silent(
-    fast_watchdog, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.WARNING, logger="agent_team_backend.loop_watchdog")
+async def test_healthy_loop_stays_silent(fast_watchdog) -> None:
+    # A loaded machine can really keep the loop from turning for 0.1 s, and
+    # the watchdog is right to say so. What must never happen is a stall
+    # reported while the loop was turning: every report must fall on a gap
+    # the probe measured of at least the threshold, less the watchdog's tick
+    # interval (the stamp is up to one tick old when the loop stops).
+    stall_times = _StallTimes()
+    logger = logging.getLogger("agent_team_backend.loop_watchdog")
+    logger.addHandler(stall_times)
+    turns: list[float] = []
+    probe = asyncio.create_task(_probe_turns(turns))
+    await asyncio.sleep(0)
     fast_watchdog.start(asyncio.get_running_loop())
     try:
         await asyncio.sleep(0.3)
     finally:
         await fast_watchdog.stop()
+        turns.append(time.monotonic())
+        probe.cancel()
+        logger.removeHandler(stall_times)
 
-    assert _messages(caplog) == []
+    least = fast_watchdog.STALL_THRESHOLD_S - fast_watchdog.TICK_INTERVAL_S
+    gaps = [(a, b) for a, b in zip(turns, turns[1:]) if b - a >= least]
+    for reported_at, stalled_for in stall_times.reports:
+        # One decimal in the message: widen the window by its rounding.
+        since = reported_at - stalled_for - 0.05
+        assert any(a < reported_at and b > since for a, b in gaps), (
+            f"stall reported at {reported_at:.3f} (for {stalled_for}s) while the "
+            f"loop was turning; gaps >= {least:.2f}s: {gaps}"
+        )
 
 
 @pytest.mark.asyncio
