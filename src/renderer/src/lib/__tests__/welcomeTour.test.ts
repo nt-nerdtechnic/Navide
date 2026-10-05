@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   WELCOME_STEPS,
+  nextWelcomeTourMove,
   welcomeActionAlreadyDone,
   welcomeActionDone,
   type WelcomeFacts,
@@ -144,5 +145,48 @@ describe('welcomeActionDone / welcomeActionAlreadyDone', () => {
       // Everyone should try these once: never passed over as already done.
       expect(welcomeActionAlreadyDone(action, { ...none, [field]: since + 1 }), action).toBe(false)
     }
+  })
+})
+
+// 21:59: the tour came up for one bubble and was gone. The first-install check
+// waited behind the CLI health guide; the person picked a folder meanwhile, and
+// the check then read that folder as a workspace record and called the tour
+// off. The check now runs first, once, and its answer is kept.
+describe('nextWelcomeTourMove', () => {
+  const base = {
+    pending: true,
+    active: false,
+    settled: true,
+    eligible: false,
+    workspaceOpen: false,
+    recordsEmpty: null as boolean | null,
+    blocked: false,
+  }
+
+  it('stops once nothing is pending, and waits while running or unsettled', () => {
+    expect(nextWelcomeTourMove({ ...base, pending: false })).toBe('stop')
+    expect(nextWelcomeTourMove({ ...base, active: true })).toBe('wait')
+    expect(nextWelcomeTourMove({ ...base, settled: false })).toBe('wait')
+  })
+
+  it('decides "first install" before anything on screen can hold it up', () => {
+    expect(nextWelcomeTourMove({ ...base, blocked: true })).toBe('check-records')
+    expect(nextWelcomeTourMove({ ...base, blocked: true, recordsEmpty: true })).toBe('mark-eligible')
+  })
+
+  it('calls the tour off for a workspace record found while deciding', () => {
+    expect(nextWelcomeTourMove({ ...base, workspaceOpen: true })).toBe('cancel')
+    expect(nextWelcomeTourMove({ ...base, recordsEmpty: false })).toBe('cancel')
+  })
+
+  it('keeps going after a folder is picked once it has decided — the picked folder is no record against it', () => {
+    const decided = { ...base, eligible: true }
+    // The health guide is still up: wait, but never cancel.
+    expect(nextWelcomeTourMove({ ...decided, workspaceOpen: true, blocked: true })).toBe('wait')
+    expect(nextWelcomeTourMove({ ...decided, workspaceOpen: true, recordsEmpty: false })).toBe('start')
+  })
+
+  it('starts on a clear screen', () => {
+    expect(nextWelcomeTourMove({ ...base, eligible: true })).toBe('start')
   })
 })

@@ -29,32 +29,25 @@ describe('first-run welcome tour', () => {
     expect(functionBody('evaluateWhatsNew')).not.toContain('welcomeTour')
   })
 
-  it('waits for onboarding to settle for real and for nothing modal on screen', () => {
+  it('lets nextWelcomeTourMove decide, from onboarding, the screen and the first-install answer', () => {
     const poll = functionBody('pollWelcomeTour')
-    expect(poll).toContain('onboardingComplete.value !== true')
-    expect(poll).toContain('onboardingCheckFailed.value')
-    expect(poll).toMatch(/if \(mainModalOpen\(\) \|\| cliHealthGuide\.value\) return/)
-    expect(poll.indexOf('mainModalOpen()')).toBeLessThan(poll.indexOf('welcomeTour.start()'))
+    expect(poll).toContain('nextWelcomeTourMove({')
+    expect(poll).toContain('settled: onboardingComplete.value === true && !onboardingCheckFailed.value')
+    expect(poll).toContain('eligible: welcomeTour.eligible()')
+    expect(poll).toContain('blocked: mainModalOpen() || !!cliHealthGuide.value')
+    expect(poll).toMatch(/case 'cancel':\s+welcomeTour\.cancel\(\)/)
+    expect(poll).toMatch(/case 'mark-eligible':\s+welcomeTour\.markEligible\(\)/)
+    expect(poll).toMatch(/case 'start':\s+welcomeTour\.start\(\)/)
+    expect(poll).toMatch(/case 'stop':\s+stopWelcomeTourPoll\(\)/)
   })
 
-  // 20:44: "the tour only ever appears on a first install; a workspace record
-  // means it is not one" — and then the whole tour is off.
-  it('calls the tour off before its first bubble when a workspace is already open', () => {
-    const poll = functionBody('pollWelcomeTour')
-    const first = poll.slice(poll.indexOf('if (welcomeTour.savedStep() === 0) {'))
-    expect(first).toMatch(/^if \(welcomeTour\.savedStep\(\) === 0\) \{\s+if \(workspaceSelected\.value\) \{\s+welcomeTour\.cancel\(\)/)
-    expect(first.indexOf('welcomeTourRecordsChecked')).toBeLessThan(first.indexOf('welcomeTour.start()'))
-  })
-
-  it('checks the recent-workspace list once before the first bubble, and starts only when it is empty', () => {
+  it('checks the recent-workspace list once, recording whether it was empty', () => {
     const check = functionBody('checkWelcomeTourRecords')
     expect(check).toContain("backend.send<{ recent?: unknown[] }>('workspace.list_recent', {})")
-    expect(check).toMatch(/if \(!resp\.ok \|\| \(resp\.payload\?\.recent\?\.length \?\? 0\) > 0\) welcomeTour\.cancel\(\)/)
-    expect(check).toMatch(/catch \{\s+welcomeTour\.cancel\(\)/)
-  })
-
-  it('stops polling once the tour is off', () => {
-    expect(functionBody('pollWelcomeTour')).toMatch(/if \(!welcomeTour\.pending\(\)\) \{\s+stopWelcomeTourPoll\(\)/)
+    // A failed answer counts as a record: the tour stays off rather than
+    // greet a returning user.
+    expect(check).toMatch(/welcomeTourRecordsEmpty = resp\.ok && \(resp\.payload\?\.recent\?\.length \?\? 0\) === 0/)
+    expect(check).toMatch(/catch \{\s+welcomeTourRecordsEmpty = false/)
   })
 
   it('routes Help → First-Run Tour… to the replay', () => {

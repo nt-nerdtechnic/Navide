@@ -101,4 +101,17 @@ describe('useWelcomeTour', () => {
     expect(welcomeActionTimes.dropAt).toBeGreaterThan(0)
     expect(welcomeActionTimes.usageAt).toBeGreaterThan(0)
   })
+
+  it('keeps its "first install" answer, so a reload or another window does not ask again', async () => {
+    const { useWelcomeTour } = await load()
+    const welcome = useWelcomeTour()
+    welcome.markFirstRun()
+    expect(welcome.eligible()).toBe(false)
+    welcome.markEligible()
+    expect(welcome.eligible()).toBe(true)
+    expect(useWelcomeTour().eligible()).toBe(true)
+    // A new first run asks again.
+    welcome.markFirstRun()
+    expect(welcome.eligible()).toBe(false)
+  })
 })

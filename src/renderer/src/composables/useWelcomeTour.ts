@@ -17,6 +17,8 @@ import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 // records nothing unless the tour is running.
 const PENDING_KEY = 'agentTeam.tour.welcome.pending'
 const STEP_KEY = 'agentTeam.tour.welcome.step'
+// This really is a first install (decided once; see nextWelcomeTourMove).
+const ELIGIBLE_KEY = 'agentTeam.tour.welcome.eligible'
 
 export type WelcomeMoment = 'mention' | 'drop' | 'usage'
 
@@ -40,6 +42,16 @@ export function useWelcomeTour() {
   function markFirstRun(): void {
     settingsSet(PENDING_KEY, true)
     settingsSet(STEP_KEY, 0)
+    settingsSet(ELIGIBLE_KEY, false)
+  }
+
+  function eligible(): boolean {
+    return settingsGet<boolean>(ELIGIBLE_KEY, false) === true
+  }
+
+  /** No workspace record was found: this is a first install, for good. */
+  function markEligible(): void {
+    settingsSet(ELIGIBLE_KEY, true)
   }
 
   /** Not a first install after all: the tour is off. */
@@ -72,5 +84,5 @@ export function useWelcomeTour() {
     welcomeActionTimes[`${what}At`] = Date.now()
   }
 
-  return { active, pending, savedStep, markFirstRun, cancel, start, replay, progress, finish, notify }
+  return { active, pending, savedStep, eligible, markFirstRun, markEligible, cancel, start, replay, progress, finish, notify }
 }

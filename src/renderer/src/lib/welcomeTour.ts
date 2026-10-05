@@ -123,3 +123,33 @@ export function welcomeActionAlreadyDone(action: WelcomeAction, f: WelcomeFacts)
       return false
   }
 }
+
+export type WelcomeTourMove = 'stop' | 'wait' | 'cancel' | 'check-records' | 'mark-eligible' | 'start'
+
+/**
+ * What App's poll does next for the first-run tour. "First install" (no
+ * workspace open, an empty recent list) is decided first and once — before
+ * anything on screen can hold the tour up — and the answer is kept
+ * (`eligible`). Deciding it later read the folder the person picked while a
+ * modal held the tour back as a record against them, and called it off.
+ */
+export function nextWelcomeTourMove(s: {
+  pending: boolean
+  active: boolean
+  /** Onboarding has really finished (not a fail-open guess). */
+  settled: boolean
+  eligible: boolean
+  workspaceOpen: boolean
+  /** The recent-workspace list was empty; null = not checked yet. */
+  recordsEmpty: boolean | null
+  /** A modal or the CLI health guide is up. */
+  blocked: boolean
+}): WelcomeTourMove {
+  if (!s.pending) return 'stop'
+  if (s.active || !s.settled) return 'wait'
+  if (!s.eligible) {
+    if (s.workspaceOpen || s.recordsEmpty === false) return 'cancel'
+    return s.recordsEmpty === null ? 'check-records' : 'mark-eligible'
+  }
+  return s.blocked ? 'wait' : 'start'
+}

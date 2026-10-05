@@ -267,7 +267,7 @@ import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/wh
 import type { TourPrepare } from './lib/tours'
 import { useReleaseTour } from './composables/useReleaseTour'
 import { useWelcomeTour, welcomeActionTimes } from './composables/useWelcomeTour'
-import { WELCOME_STEPS, type WelcomeFacts } from './lib/welcomeTour'
+import { WELCOME_STEPS, nextWelcomeTourMove, type WelcomeFacts } from './lib/welcomeTour'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -687,48 +687,54 @@ function stopWelcomeTourPoll(): void {
   if (welcomeTourPoll) clearInterval(welcomeTourPoll)
   welcomeTourPoll = null
 }
-// Whether the recent-workspace list was found empty this session.
-let welcomeTourRecordsChecked = false
+// Whether the recent-workspace list was empty (null = not checked yet).
+let welcomeTourRecordsEmpty: boolean | null = null
 let welcomeTourRecordsChecking = false
 async function checkWelcomeTourRecords(): Promise<void> {
   if (welcomeTourRecordsChecking) return
   welcomeTourRecordsChecking = true
   try {
     const resp = await backend.send<{ recent?: unknown[] }>('workspace.list_recent', {})
-    if (!resp.ok || (resp.payload?.recent?.length ?? 0) > 0) welcomeTour.cancel()
-    else welcomeTourRecordsChecked = true
+    welcomeTourRecordsEmpty = resp.ok && (resp.payload?.recent?.length ?? 0) === 0
   } catch {
-    welcomeTour.cancel()
+    welcomeTourRecordsEmpty = false
   } finally {
     welcomeTourRecordsChecking = false
   }
 }
+// The tour is for a first install only, and any workspace record means this
+// is not one: one open already (a restored window), or one in the recent
+// list. That is decided first and once (see nextWelcomeTourMove) — waiting
+// for the CLI health guide first let a folder picked meanwhile count against
+// the person.
 function pollWelcomeTour(): void {
-  if (!welcomeTour.pending()) {
-    stopWelcomeTourPoll()
-    return
-  }
-  if (welcomeTourActive.value) return
-  // A fail-open onboarding answer is a guess, not a settled shell.
-  if (onboardingComplete.value !== true || onboardingCheckFailed.value) return
-  // The CLI health guide can open right after onboarding; it is not a modal
-  // to the keybinding context, but the tour waits for it all the same.
-  if (mainModalOpen() || cliHealthGuide.value) return
-  // The tour is for a first install only, and any workspace record means this
-  // is not one: one open already (a restored window), or one in the recent
-  // list. Checked once, before the first bubble — the folder picked at that
-  // bubble is a record too, and a restart part-way through must not count it.
-  if (welcomeTour.savedStep() === 0) {
-    if (workspaceSelected.value) {
+  switch (nextWelcomeTourMove({
+    pending: welcomeTour.pending(),
+    active: !!welcomeTourActive.value,
+    settled: onboardingComplete.value === true && !onboardingCheckFailed.value,
+    eligible: welcomeTour.eligible(),
+    workspaceOpen: workspaceSelected.value,
+    recordsEmpty: welcomeTourRecordsEmpty,
+    blocked: mainModalOpen() || !!cliHealthGuide.value,
+  })) {
+    case 'stop':
+      stopWelcomeTourPoll()
+      return
+    case 'cancel':
       welcomeTour.cancel()
       return
-    }
-    if (!welcomeTourRecordsChecked) {
+    case 'check-records':
       void checkWelcomeTourRecords()
       return
-    }
+    case 'mark-eligible':
+      welcomeTour.markEligible()
+      return
+    case 'start':
+      welcomeTour.start()
+      return
+    case 'wait':
+      return
   }
-  welcomeTour.start()
 }
 watch(onboardingComplete, (value) => {
   if (value === true) armWelcomeTourPoll()
