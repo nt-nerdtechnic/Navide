@@ -8,15 +8,21 @@ import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 // set up before this tour existed never sees it; App.vue also calls it off
 // when a workspace record turns up as it comes due. Ending it, finished or
 // skipped, turns it off for good: it was pushed at the user, who may well
-// not be new to Navide. How far it got is kept, so a restart picks up there.
-// A replay from the Help menu records nothing.
+// not be new to Navide. Every start begins at the first bubble and passes over
+// what is already done, so there is no saved step to go stale or for two
+// windows to overwrite. A replay from the Help menu records nothing.
+//
+// The settings are shared by every main window, so one window owns the tour
+// (`claim`): it alone judges, starts and runs it, keeping its claim fresh; a
+// window that closed mid-tour is taken over once that goes stale. A window
+// that sees the tour end elsewhere takes its own bubbles down (`release`).
 //
 // Most of what a step waits for is read off the window (App.vue's
 // welcomeFacts); the three momentary actions — an @ pick, a pane dropped on
 // another, the quota badge opened — are reported through `notify`, which
 // records nothing unless the tour is running.
 const PENDING_KEY = 'agentTeam.tour.welcome.pending'
-const STEP_KEY = 'agentTeam.tour.welcome.step'
+const OWNER_KEY = 'agentTeam.tour.welcome.owner'
 // This really is a first install (decided once; see nextWelcomeTourMove).
 const ELIGIBLE_KEY = 'agentTeam.tour.welcome.eligible'
 
@@ -25,23 +31,24 @@ export type WelcomeMoment = 'mention' | 'drop' | 'usage'
 /** When each momentary action last happened while the tour ran. */
 export const welcomeActionTimes = reactive({ mentionAt: 0, dropAt: 0, usageAt: 0 })
 
-/** Which tour is on screen: the first-run one, a replay, or none. */
+/** Which tour is on screen in this window: the first-run one, a replay, or none. */
 const active = ref<'first-run' | 'replay' | null>(null)
+
+/** This window, for the owner claim. */
+const WINDOW_ID = globalThis.crypto?.randomUUID?.() ?? `w-${Math.random().toString(36).slice(2)}`
+/** An owner silent this long has gone (its window closed mid-tour). */
+const OWNER_STALE_MS = 15_000
+/** How often the owner refreshes its claim. */
+const OWNER_HEARTBEAT_MS = 5_000
 
 export function useWelcomeTour() {
   function pending(): boolean {
     return settingsGet<boolean>(PENDING_KEY, false) === true
   }
 
-  function savedStep(): number {
-    const step = settingsGet<number>(STEP_KEY, 0)
-    return Number.isInteger(step) && step > 0 ? step : 0
-  }
-
   /** The first-run wizard was just completed: the tour is due. */
   function markFirstRun(): void {
     settingsSet(PENDING_KEY, true)
-    settingsSet(STEP_KEY, 0)
     settingsSet(ELIGIBLE_KEY, false)
   }
 
@@ -57,6 +64,25 @@ export function useWelcomeTour() {
   /** Not a first install after all: the tour is off. */
   function cancel(): void {
     settingsSet(PENDING_KEY, false)
+    settingsSet(OWNER_KEY, null)
+    if (active.value === 'first-run') active.value = null
+  }
+
+  /** Own the tour, or keep owning it: false while another window holds a
+   *  fresh claim. */
+  function claim(now = Date.now()): boolean {
+    const owner = settingsGet<{ id?: string; at?: number } | null>(OWNER_KEY, null)
+    const at = typeof owner?.at === 'number' ? owner.at : 0
+    if (owner?.id && owner.id !== WINDOW_ID && now - at < OWNER_STALE_MS) return false
+    if (owner?.id !== WINDOW_ID || now - at >= OWNER_HEARTBEAT_MS) {
+      settingsSet(OWNER_KEY, { id: WINDOW_ID, at: now })
+    }
+    return true
+  }
+
+  /** The tour is no longer this window's to show (it ended elsewhere, or
+   *  another window took it over): take its bubbles down. A replay stays. */
+  function release(): void {
     if (active.value === 'first-run') active.value = null
   }
 
@@ -70,12 +96,11 @@ export function useWelcomeTour() {
     active.value = 'replay'
   }
 
-  function progress(step: number): void {
-    if (active.value === 'first-run') settingsSet(STEP_KEY, step)
-  }
-
   function finish(_completed: boolean): void {
-    if (active.value === 'first-run') settingsSet(PENDING_KEY, false)
+    if (active.value === 'first-run') {
+      settingsSet(PENDING_KEY, false)
+      settingsSet(OWNER_KEY, null)
+    }
     active.value = null
   }
 
@@ -84,5 +109,5 @@ export function useWelcomeTour() {
     welcomeActionTimes[`${what}At`] = Date.now()
   }
 
-  return { active, pending, savedStep, eligible, markFirstRun, markEligible, cancel, start, replay, progress, finish, notify }
+  return { active, pending, eligible, markFirstRun, markEligible, cancel, claim, release, start, replay, finish, notify }
 }

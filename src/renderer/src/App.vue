@@ -717,16 +717,23 @@ async function checkWelcomeTourRecords(): Promise<void> {
 // (see nextWelcomeTourMove, isFirstInstall) — deciding later let a folder
 // picked meanwhile count against the person.
 function pollWelcomeTour(): void {
+  const settled = onboardingComplete.value === true && !onboardingCheckFailed.value
   switch (nextWelcomeTourMove({
     pending: welcomeTour.pending(),
     active: !!welcomeTourActive.value,
-    settled: onboardingComplete.value === true && !onboardingCheckFailed.value,
+    settled,
+    // Several main windows share these settings: only the owner runs the tour.
+    owned: settled && welcomeTour.claim(),
     eligible: welcomeTour.eligible(),
     decision: welcomeTourDecision,
     blocked: mainModalOpen() || !!cliHealthGuide.value,
   })) {
     case 'stop':
+      welcomeTour.release()
       stopWelcomeTourPoll()
+      return
+    case 'release':
+      welcomeTour.release()
       return
     case 'cancel':
       welcomeTour.cancel()
@@ -774,10 +781,6 @@ function welcomeFacts(): WelcomeFacts {
     usageAt: welcomeActionTimes.usageAt,
   }
 }
-// Read when CoachMark mounts: a first run resumes where it got to.
-const welcomeTourStartIndex = computed(() =>
-  welcomeTourActive.value === 'first-run' ? welcomeTour.savedStep() : 0
-)
 // The install dialog after +, Settings, a release note or tour, the CLI health
 // guide: the bubbles step aside until it is gone.
 const welcomeTourSuspended = computed(() => mainModalOpen() || !!cliHealthGuide.value)
@@ -20907,10 +20910,8 @@ function paneIsCommander(p: ActivePane): boolean {
       :key="welcomeTourActive"
       :steps="WELCOME_STEPS"
       :facts="welcomeFacts"
-      :start-index="welcomeTourStartIndex"
       :replay="welcomeTourActive === 'replay'"
       :suspended="welcomeTourSuspended"
-      @progress="welcomeTour.progress"
       @finish="onWelcomeTourFinish"
     />
     <!-- Status bar -->

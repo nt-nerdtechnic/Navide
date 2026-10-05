@@ -32,15 +32,18 @@ describe('first-run welcome tour', () => {
   it('lets nextWelcomeTourMove decide, from onboarding, the screen and the first-install answer', () => {
     const poll = functionBody('pollWelcomeTour')
     expect(poll).toContain('nextWelcomeTourMove({')
-    expect(poll).toContain('settled: onboardingComplete.value === true && !onboardingCheckFailed.value')
+    expect(poll).toContain('const settled = onboardingComplete.value === true && !onboardingCheckFailed.value')
     expect(poll).toContain('eligible: welcomeTour.eligible()')
+    // M14: only the window that owns the tour runs it.
+    expect(poll).toContain('owned: settled && welcomeTour.claim()')
+    expect(poll).toMatch(/case 'release':\s+welcomeTour\.release\(\)/)
+    expect(poll).toMatch(/case 'stop':\s+welcomeTour\.release\(\)\s+stopWelcomeTourPoll\(\)/)
     expect(poll).toContain('decision: welcomeTourDecision')
     expect(poll).toContain('blocked: mainModalOpen() || !!cliHealthGuide.value')
     expect(poll).toMatch(/case 'check':\s+void checkWelcomeTourRecords\(\)/)
     expect(poll).toMatch(/case 'cancel':\s+welcomeTour\.cancel\(\)/)
     expect(poll).toMatch(/case 'mark-eligible':\s+welcomeTour\.markEligible\(\)/)
     expect(poll).toMatch(/case 'start':\s+welcomeTour\.start\(\)/)
-    expect(poll).toMatch(/case 'stop':\s+stopWelcomeTourPoll\(\)/)
   })
 
   it('judges "first install" by the window as the check began, retrying a failed answer', () => {
@@ -57,9 +60,12 @@ describe('first-run welcome tour', () => {
     expect(functionBody('replayWelcomeTour')).toContain('welcomeTour.replay()')
   })
 
-  it('mounts the coach marks with the steps, the facts, where to start and when to step aside', () => {
+  // M14/M15: no saved step — every start begins at the first bubble and passes
+  // over what is done, so two windows have no progress to overwrite.
+  it('mounts the coach marks with the steps, the facts and when to step aside, always from the first bubble', () => {
+    expect(appSource).not.toContain('savedStep')
     expect(appSource).toMatch(
-      /<CoachMark\s+v-if="welcomeTourActive"\s+:key="welcomeTourActive"\s+:steps="WELCOME_STEPS"\s+:facts="welcomeFacts"\s+:start-index="welcomeTourStartIndex"\s+:replay="welcomeTourActive === 'replay'"\s+:suspended="welcomeTourSuspended"\s+@progress="welcomeTour\.progress"\s+@finish="onWelcomeTourFinish"/,
+      /<CoachMark\s+v-if="welcomeTourActive"\s+:key="welcomeTourActive"\s+:steps="WELCOME_STEPS"\s+:facts="welcomeFacts"\s+:replay="welcomeTourActive === 'replay'"\s+:suspended="welcomeTourSuspended"\s+@finish="onWelcomeTourFinish"/,
     )
     const start = appSource.indexOf('const welcomeTourSuspended = computed(')
     expect(start).toBeGreaterThan(-1)

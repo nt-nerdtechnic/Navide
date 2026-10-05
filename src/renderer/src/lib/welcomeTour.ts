@@ -130,7 +130,7 @@ export function welcomeActionAlreadyDone(action: WelcomeAction, f: WelcomeFacts)
   }
 }
 
-export type WelcomeTourMove = 'stop' | 'wait' | 'cancel' | 'check' | 'mark-eligible' | 'start'
+export type WelcomeTourMove = 'stop' | 'wait' | 'release' | 'cancel' | 'check' | 'mark-eligible' | 'start'
 
 /** Where the first-install check stands this session. */
 export type WelcomeTourDecision = 'unchecked' | 'checking' | 'first-install' | 'not-first-install'
@@ -197,23 +197,28 @@ export async function decideFirstInstall(s: {
 }
 
 /**
- * What App's poll does next for the first-run tour. "First install" is
- * decided first and once — before anything on screen can hold the tour up —
- * and the answer is kept (`eligible`); after that only a clear screen is
- * waited for.
+ * What App's poll does next for the first-run tour. Only the window that owns
+ * the tour (useWelcomeTour's claim) judges, starts or runs it; one that lost it
+ * lets its bubbles go. "First install" is decided first and once — before
+ * anything on screen can hold the tour up — and the answer is kept
+ * (`eligible`); after that only a clear screen is waited for.
  */
 export function nextWelcomeTourMove(s: {
   pending: boolean
   active: boolean
   /** Onboarding has really finished (not a fail-open guess). */
   settled: boolean
+  /** This window owns the tour. */
+  owned: boolean
   eligible: boolean
   decision: WelcomeTourDecision
   /** A modal or the CLI health guide is up. */
   blocked: boolean
 }): WelcomeTourMove {
   if (!s.pending) return 'stop'
-  if (s.active || !s.settled) return 'wait'
+  if (!s.settled) return 'wait'
+  if (!s.owned) return s.active ? 'release' : 'wait'
+  if (s.active) return 'wait'
   if (!s.eligible) {
     switch (s.decision) {
       case 'unchecked':

@@ -190,10 +190,21 @@ describe('nextWelcomeTourMove', () => {
     pending: true,
     active: false,
     settled: true,
+    owned: true,
     eligible: false,
     decision: 'unchecked' as const,
     blocked: false,
   }
+
+  // M14: each main window ran its own tour off the shared settings. Only the
+  // window that owns the tour judges, starts or runs it.
+  it('leaves the tour to the window that owns it, and lets go of one it lost', () => {
+    expect(nextWelcomeTourMove({ ...base, owned: false })).toBe('wait')
+    expect(nextWelcomeTourMove({ ...base, owned: false, eligible: true })).toBe('wait')
+    expect(nextWelcomeTourMove({ ...base, owned: false, active: true })).toBe('release')
+    // Nothing pending any more (another window ended it): stop, whoever owned it.
+    expect(nextWelcomeTourMove({ ...base, owned: false, pending: false })).toBe('stop')
+  })
 
   it('stops once nothing is pending, and waits while running or unsettled', () => {
     expect(nextWelcomeTourMove({ ...base, pending: false })).toBe('stop')
