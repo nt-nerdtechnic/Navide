@@ -997,6 +997,52 @@ class TestScripts:
         )
         assert "-o NUL" not in command
 
+    def test_windows_kept_body_reaches_stdout_as_the_raw_bytes(self):
+        """The Stop hook's decision carries an inter-CLI message as UTF-8, and
+        PowerShell's native-output capture re-coded it through the console
+        code page (cp950 on zh-TW) -- the #147 garbling on the Stop path. curl
+        writes to a temp file whose bytes go to the raw stdout stream."""
+        from agent_team_backend.osplat import _windows
+
+        command = _windows.scripts.hook_post_json(
+            port_file="p",
+            header_file="h",
+            url_path="/hooks/claude",
+            event="stop",
+            timeout_s=4,
+            keep_body=True,
+        )
+        assert "\n" not in command
+        assert "if (-not $TMP) { exit 0 }" in command
+        assert "& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 4 -o $TMP -X POST" in command
+        assert "[IO.File]::ReadAllBytes($TMP)" in command
+        assert "Remove-Item -LiteralPath $TMP" in command
+        assert "[Console]::OpenStandardOutput()" in command
+        assert "OutputEncoding" not in command
+        assert command.endswith("exit 0")
+
+    def test_windows_discarded_body_keeps_the_exact_command_text(self):
+        # Only the kept-body branch changed for the Stop-path garbling; every
+        # installed settings.json holds this text for the other events.
+        from agent_team_backend.osplat import _windows
+
+        command = _windows.scripts.hook_post_json(
+            port_file="p",
+            header_file="h",
+            url_path="/hooks/claude",
+            event="pre_tool_use",
+            timeout_s=2,
+        )
+        assert command == (
+            "$PORT = Get-Content -ErrorAction SilentlyContinue 'p'; "
+            "if ($PORT) { & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 2 -o NUL -X POST "
+            "-H 'Content-Type: application/json' "
+            "-H 'X-Agent-Team-Event: pre_tool_use' "
+            "-H '@h' "
+            "--data-binary '@-' "
+            '"http://127.0.0.1:$PORT/hooks/claude" }; exit 0'
+        )
+
     def test_windows_rewake_writes_the_body_to_stderr_and_exits_two(self):
         from agent_team_backend.osplat import _windows
 

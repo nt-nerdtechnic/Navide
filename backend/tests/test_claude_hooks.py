@@ -115,6 +115,17 @@ def test_stop_hook_puts_the_response_on_stdout_where_the_cli_reads_decisions(tmp
     assert stdout == decision.decode()
 
 
+def test_stop_hook_hands_a_non_ascii_decision_over_byte_for_byte(tmp_path) -> None:
+    """The backend answers with raw UTF-8 (JSONResponse), and on Windows
+    PowerShell re-coded it through the console code page on its way to stdout,
+    so a message in Chinese reached the agent garbled -- #147 on the Stop path."""
+    decision = '{"decision":"block","reason":"[Navide MSG] from: 指揮\\n請修正：日本語、한국어 🚀"}'.encode()
+
+    _received, stdout = _run_hook(tmp_path, "stop", decision)
+
+    assert stdout == decision.decode()
+
+
 def test_other_events_still_discard_the_response(tmp_path) -> None:
     # Their replies are acks, and an unrecognized object on a hook's stdout is
     # reported to the user as a hook error.

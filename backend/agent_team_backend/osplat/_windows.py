@@ -1537,16 +1537,34 @@ class WindowsScripts:
         # `'@file'` are quoted because `@` starts a splat or an array here.
         # `exit_zero` costs nothing to honour -- the line already ends that
         # way, because a PowerShell failure otherwise surfaces as a hook error.
-        sink = "" if keep_body else "-o NUL "
+        # A kept body goes through a temp file and leaves as its raw bytes:
+        # PowerShell's native-output capture re-codes curl's UTF-8 through the
+        # console code page, which garbled a Stop decision carrying a message
+        # in Chinese (the #147 garbling on the Stop path). The console encoding
+        # is left alone for the reason hook_rewake gives.
+        sink = "-o $TMP " if keep_body else "-o NUL "
         extra = f"-H ('{env_header[0]}: ' + $env:{env_header[1]}) " if env_header else ""
-        return (
-            f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
-            f"if ($PORT) {{ & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} {sink}-X POST "
+        post = (
+            f"& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} {sink}-X POST "
             f"-H 'Content-Type: application/json' "
             f"-H 'X-Agent-Team-Event: {event}' "
             f"-H {_ps_quote('@' + header_file)} {extra}"
             f"--data-binary '@-' "
-            f'"http://127.0.0.1:$PORT{url_path}" }}; exit 0'
+            f'"http://127.0.0.1:$PORT{url_path}"'
+        )
+        if keep_body:
+            post = (
+                f"$TMP = $null; try {{ $TMP = [IO.Path]::GetTempFileName() }} catch {{}}; "
+                f"if (-not $TMP) {{ exit 0 }}; "
+                f"{post}; "
+                f"$OUTB = $null; try {{ $OUTB = [IO.File]::ReadAllBytes($TMP) }} catch {{}}; "
+                f"Remove-Item -LiteralPath $TMP -Force -ErrorAction SilentlyContinue; "
+                f"if ($OUTB) {{ $OUTS = [Console]::OpenStandardOutput(); "
+                f"$OUTS.Write($OUTB, 0, $OUTB.Length); $OUTS.Flush() }}"
+            )
+        return (
+            f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
+            f"if ($PORT) {{ {post} }}; exit 0"
         )
 
     def hook_rewake(
