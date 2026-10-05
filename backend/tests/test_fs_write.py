@@ -225,6 +225,26 @@ def test_a_writer_woken_on_a_removed_lock_file_waits_for_the_current_one(
     assert not lock_path.exists()
 
 
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot remove a lock file that is still open")
+def test_the_lock_file_is_removed_before_its_lock_is_released(tmp_path: Path, monkeypatch) -> None:
+    # Removing it only after the release would let a waiter that wakes up on
+    # it enter while a newcomer takes a fresh lock file: two writers at once.
+    lock_path = tmp_path / ".doc.html.lock"
+    present_at_close: list[bool] = []
+    real_close = os.close
+
+    def close(fd: int) -> None:
+        present_at_close.append(lock_path.exists())
+        real_close(fd)
+
+    with fs_write._target_lock(tmp_path / "doc.html"):
+        monkeypatch.setattr(os, "close", close)
+    monkeypatch.undo()
+
+    assert present_at_close == [False]
+
+
 def test_a_write_fails_instead_of_hanging_while_another_process_holds_the_lock(
     tmp_path: Path, monkeypatch
 ) -> None:

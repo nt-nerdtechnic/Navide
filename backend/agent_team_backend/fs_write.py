@@ -58,8 +58,22 @@ _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool
 # longer (a hung or hostile process) fails the write instead of hanging it.
 _LOCK_TIMEOUT_S = 10.0
 
-if os.name == "nt":
+# Chosen by which lock module exists rather than by asking for the platform:
+# flock where fcntl is available, msvcrt.locking (Windows) otherwise.
+try:
+    import fcntl
+except ImportError:
     import msvcrt
+
+    _HAVE_FLOCK = False
+else:
+    _HAVE_FLOCK = True
+
+# Windows cannot remove a file that is open, so there the lock file is closed
+# first and removed after; elsewhere it is removed while still held.
+_UNLINK_BEFORE_CLOSE = _HAVE_FLOCK
+
+if not _HAVE_FLOCK:
 
     def _try_lock_fd(fd: int) -> bool:
         os.lseek(fd, 0, os.SEEK_SET)
@@ -73,7 +87,6 @@ if os.name == "nt":
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 else:
-    import fcntl
 
     def _try_lock_fd(fd: int) -> bool:
         try:
@@ -126,21 +139,21 @@ def _target_lock(target: Path) -> Iterator[None]:
     try:
         yield
     finally:
-        if os.name == "nt":
-            # Windows cannot remove a file that is open; once closed, the
-            # removal fails harmlessly while another writer has it open.
+        if _UNLINK_BEFORE_CLOSE:
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+            os.close(fd)
+        else:
+            # Once closed, the removal fails harmlessly while another writer
+            # has the file open.
             _unlock_fd(fd)
             os.close(fd)
             try:
                 os.unlink(lock_path)
             except OSError:
                 pass
-        else:
-            try:
-                os.unlink(lock_path)
-            except OSError:
-                pass
-            os.close(fd)
 
 
 def write_file(
