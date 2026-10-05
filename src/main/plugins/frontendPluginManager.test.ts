@@ -3072,6 +3072,125 @@ describe('Plans private filesystem grant revalidation', () => {
     }
   })
 
+  // Opening Plans for the workspace is how the user brings a given-up child
+  // back: the next agent call binds a fresh one, once per open.
+  it('replaces a given-up headless child when Plans is opened for its workspace', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '2.0.0'
+    const spentWorkspace = process.cwd()
+    const otherWorkspace = mkdtempSync(join(tmpdir(), 'navide-plans-other-'))
+    const view: NonNullable<PluginLaunchDescriptor['views']>[number] = {
+      id: 'window',
+      contributionKey: `${PLANS_PLUGIN_ID}.window`,
+      kind: 'custom',
+      location: 'window',
+      title: 'Plans',
+      entryFile: '/plugins/navide.plans/index.html',
+    }
+    const descriptor: PluginLaunchDescriptor = {
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: ['fs'],
+      devUrl: '',
+      entryFile: view.entryFile,
+      views: [view],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+    }
+    mgr.registerDescriptor(descriptor, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.list'],
+      agentMethods: ['plans.list'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: ['fs'], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+    let spentBinds = 0
+    const bindWorkspace = vi.spyOn(PluginBackendHost.prototype, 'bindWorkspace')
+      .mockImplementation(async (_runtime, _packageDir, workspacePath) =>
+        workspacePath === spentWorkspace ? `headless-spent-${++spentBinds}` : 'headless-other')
+    const bindView = vi.spyOn(PluginBackendHost.prototype, 'bindView').mockResolvedValue()
+    const unbind = vi.spyOn(PluginBackendHost.prototype, 'unbindView').mockResolvedValue(undefined)
+    const call = vi.spyOn(PluginBackendHost.prototype, 'call').mockResolvedValue([] as never)
+    const host = (mgr as unknown as { pluginBackendHost: PluginBackendHost }).pluginBackendHost
+    const observers = host as unknown as {
+      onBackendFailure?: (runtime: unknown, error: BackendPluginError) => void
+    }
+    const agentList = (workspacePath: string, reqId: string) =>
+      mgr.executeAgentBackendCallForWorkspace(
+        PLANS_PLUGIN_ID, workspacePath, { reqId, name: 'plans.list', args: {} },
+      )
+    const openPlans = async (workspacePath: string): Promise<void> => {
+      const handle = await mgr.openView(descriptor, view, {
+        hostWindow: asHost(new FakeBrowserWindow()),
+        bounds: 'fill',
+        workspacePath,
+        capabilityContext: {
+          publisherEligible: false,
+          userGrant: { packageVersion, system: ['fs'], storage: true },
+          runtimeBinding: {
+            pluginId: PLANS_PLUGIN_ID,
+            packageVersion,
+            workspaceId: mgr.workspaceIdForPath(workspacePath),
+            instanceId: null,
+            audience: view.contributionKey,
+          },
+        },
+      })
+      await mgr.waitForBackendBinding(handle.instanceId)
+    }
+    try {
+      await expect(agentList(spentWorkspace, 'spent-1')).resolves.toMatchObject({ ok: true })
+      await expect(agentList(otherWorkspace, 'other-1')).resolves.toMatchObject({ ok: true })
+      observers.onBackendFailure?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId: 'headless-spent-1' },
+        new BackendPluginError('BACKEND_UNAVAILABLE', BACKEND_RESTART_BUDGET_SPENT_MESSAGE),
+      )
+      await expect(agentList(spentWorkspace, 'spent-2')).resolves.toMatchObject({ ok: false })
+
+      // Opening Plans for another workspace leaves both children alone.
+      await openPlans(otherWorkspace)
+      expect(bindView).toHaveBeenCalledTimes(1)
+      expect(unbind).not.toHaveBeenCalled()
+      await expect(agentList(spentWorkspace, 'spent-3')).resolves.toMatchObject({ ok: false })
+
+      // Opening it for the given-up workspace replaces that child once.
+      await openPlans(spentWorkspace)
+      expect(unbind).toHaveBeenCalledTimes(1)
+      expect(unbind).toHaveBeenCalledWith('headless-spent-1')
+      call.mockClear()
+      await expect(agentList(spentWorkspace, 'spent-4')).resolves.toMatchObject({ ok: true })
+      expect(call).toHaveBeenLastCalledWith('headless-spent-2', 'plans.list', {}, expect.anything())
+
+      // Opening it again does not replace the fresh child.
+      await openPlans(spentWorkspace)
+      expect(unbind).toHaveBeenCalledTimes(1)
+      expect(spentBinds).toBe(2)
+      await expect(agentList(otherWorkspace, 'other-2')).resolves.toMatchObject({ ok: true })
+      expect(call).toHaveBeenLastCalledWith('headless-other', 'plans.list', {}, expect.anything())
+    } finally {
+      call.mockRestore()
+      unbind.mockRestore()
+      bindView.mockRestore()
+      bindWorkspace.mockRestore()
+      warnSpy.mockRestore()
+      await mgr.closeBackendPlugins()
+      rmSync(otherWorkspace, { recursive: true, force: true })
+    }
+  })
+
   // The child reads and writes its plan files itself and asks for the root
   // before each request, so resolve_root is where the Grant and an agent's
   // Execution Policy are enforced for those accesses.

@@ -2122,6 +2122,24 @@ export class FrontendPluginManager {
     }
   }
 
+  /** Opening Plans for a workspace is how the user brings back its given-up
+   *  headless child: drop it so the next agent call binds a fresh one. Only a
+   *  given-up child is replaced, so each open replaces at most one. */
+  private replaceAbandonedHeadlessPlansBackend(packageVersion: string, workspacePath: string): void {
+    const key = this.headlessPlansKey(packageVersion, workspacePath)
+    const instanceId = this.headlessBackendInstances.get(key)
+    if (!instanceId || !this.plansAbandonedBackendInstances.has(instanceId)) return
+    this.headlessBackendInstances.delete(key)
+    this.plansAbandonedBackendInstances.delete(instanceId)
+    void this.pluginBackendHost.unbindView(instanceId).catch((error: unknown) => {
+      warnMain(
+        `[plugin-backend] unbind for ${instanceId} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    })
+  }
+
   /** Undo a mark that came only from child deaths once every dead child has
    *  come back or stopped counting, for the same package version. */
   private markPlansBackendReadyIfChildrenRecovered(packageVersion: string): void {
@@ -9233,6 +9251,7 @@ export class FrontendPluginManager {
         record.backendBindingTask = binding.then(() => {
             if (this.running.get(instanceId) === record) record.backendWorkspaceId = workspaceId
             this.markPlansBackendReady(activation.packageVersion, descriptor.packageDir!)
+            this.replaceAbandonedHeadlessPlansBackend(activation.packageVersion, workspacePath)
           }).catch((error: unknown) => {
             if (this.isPlansBackendAvailabilityError(error)) {
               this.markPlansBackendUnavailable('bind-failure')
