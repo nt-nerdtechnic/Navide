@@ -205,6 +205,9 @@ function vendorOf(agentKey: string | undefined, handle: string): string | null {
         <div v-else-if="msg.hold" class="msg-hold">
           {{ $t(`msg.hold-${msg.hold.key}`, { n: msg.hold.n ?? 0 }) }}
         </div>
+        <div v-else-if="msg.deliveredWhileBusy" class="msg-hold">
+          {{ $t('msg.delivered-while-busy') }}
+        </div>
         <div v-if="expandedId === msg.id" class="msg-detail">
           <pre>{{ msg.content }}</pre>
         </div>

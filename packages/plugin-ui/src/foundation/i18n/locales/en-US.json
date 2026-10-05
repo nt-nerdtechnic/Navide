@@ -230,6 +230,7 @@
     "reply-badge": "reply",
     "notice-badge": "system notice",
     "ack-badge": "ack only",
+    "delivered-while-busy": "Recipient was busy; delivered anyway",
     "hook-badge": "via hook",
     "hook-badge-title": "Handed to the agent as its next instruction when its turn ended, instead of being typed into the pane",
     "push-badge": "via {kind}",

@@ -230,6 +230,7 @@
     "reply-badge": "返信",
     "notice-badge": "システム通知",
     "ack-badge": "確認のみ",
+    "delivered-while-busy": "相手は処理中でしたが、送達済みです",
     "hook-badge": "フック経由",
     "hook-badge-title": "ペインに入力せず、ターン終了時に次の指示としてエージェントに渡しました",
     "push-badge": "{kind} 経由",

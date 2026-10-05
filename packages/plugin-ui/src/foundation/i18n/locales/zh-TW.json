@@ -230,6 +230,7 @@
     "reply-badge": "回覆",
     "notice-badge": "系統通知",
     "ack-badge": "僅記錄",
+    "delivered-while-busy": "對方忙碌中，仍已送達",
     "hook-badge": "經由 hook",
     "hook-badge-title": "在該 pane 的回合結束時直接交給代理當成下一步指令，沒有寫進輸入框",
     "push-badge": "經由 {kind}",

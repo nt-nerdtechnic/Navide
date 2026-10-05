@@ -126,6 +126,10 @@ export interface AgentMessage {
    *  ever logged — so this says how it was settled, not how it was typed in.
    *  'channel' is a reply to a chat sender, left for the backend to post. */
   route?: 'hook' | 'read' | 'ack' | 'channel' | `push:${string}`
+  /** Set when the receiving panel typed the message in after giving up waiting
+   *  for its CLI to go quiet (the 'delivered-while-busy' delivery reason): it
+   *  arrived, but mid-turn. In-memory only, like `route`. */
+  deliveredWhileBusy?: true
   /** `uid` of the message this one answers, set when the sender echoed back the
    *  correlation id carried in that message's envelope. Persisted (`reply_to`):
    *  a recipient reading its own mail over MCP has to be able to see what a
@@ -1205,6 +1209,7 @@ function resolveRemoteDelivery(msgKey: string, ok: boolean, reason: string): voi
     msg.status = 'delivered'
     msg.deliveredAt = deps ? deps.now() : msg.createdAt
     delete msg.hold
+    if (reason === 'delivered-while-busy') msg.deliveredWhileBusy = true
     deps?.persistUpdate?.([{ uid: msg.uid, status: 'delivered', delivered_at: msg.deliveredAt }])
   } else {
     const decoded = decodeReason(reason) ?? { key: 'delivery-failed' }
