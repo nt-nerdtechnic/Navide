@@ -20,6 +20,14 @@ describe('GuidedTour is the release tour’s card walker only', () => {
     expect(read('src/renderer/src/composables/useReleaseTour.ts')).not.toContain('interactive')
   })
 
+  // Named tours, a part that keeps Skip on its last step, a step that names
+  // its own button: all of it existed only for the first-run tour's cards.
+  it('has nothing left from the first-run tour riding it', () => {
+    expect(read('src/renderer/src/components/GuidedTour.vue')).not.toMatch(/skipOnLast|primaryKey/)
+    expect(read('src/renderer/src/lib/tours.ts')).not.toContain('primaryKey')
+    expect(read('src/renderer/src/composables/useReleaseTour.ts')).not.toMatch(/startNamed|skipOnLast/)
+  })
+
   it('leaves no strings behind for it', () => {
     for (const code of ['en-US', 'zh-TW', 'ja-JP']) {
       const tour = JSON.parse(read(`packages/plugin-ui/src/foundation/i18n/locales/${code}.json`)).tour

@@ -18,11 +18,8 @@ const props = withDefaults(
     runPrepare?: (prepare: TourPrepare) => void | Promise<void>
     /** How long a step waits for its anchor to be laid out before giving up. */
     anchorTimeoutMs?: number
-    /** Keep Skip on the last step: the tour is one part of a longer one, so
-     *  its last step is not the end and Skip still has something to skip. */
-    skipOnLast?: boolean
   }>(),
-  { runPrepare: undefined, anchorTimeoutMs: 2000, skipOnLast: false },
+  { runPrepare: undefined, anchorTimeoutMs: 2000 },
 )
 /** `completed` is true only when the last step's Done was used. */
 const emit = defineEmits<{ close: [completed: boolean] }>()
@@ -272,7 +269,7 @@ const cardStyle = computed((): Record<string, string> => {
           {{ t(shownStep.missingKey) }}
         </p>
         <div class="tour-actions">
-          <button v-if="!shownIsLast || skipOnLast" type="button" class="tour-skip" data-testid="tour-skip" @click="leave">
+          <button v-if="!shownIsLast" type="button" class="tour-skip" data-testid="tour-skip" @click="leave">
             {{ t('tour.skip') }}
           </button>
           <span class="tour-spacer"></span>
@@ -289,7 +286,7 @@ const cardStyle = computed((): Record<string, string> => {
             data-tour-primary
             data-testid="tour-next"
             @click="next"
-          >{{ shownStep.primaryKey ? t(shownStep.primaryKey) : shownIsLast ? t('tour.done') : t('tour.next') }}</button>
+          >{{ shownIsLast ? t('tour.done') : t('tour.next') }}</button>
         </div>
       </div>
     </div>
