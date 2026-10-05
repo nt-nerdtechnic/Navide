@@ -902,6 +902,7 @@ async def _active_emit(event: dict[str, Any] | bytes) -> None:
             # stops, so the count would stay above zero for a pane id that no
             # longer has a CLI behind it.
             subagent_tracker.reset(str(exit_pane_id))
+        ws_handlers.note_terminal_exit(payload)
     session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
     if session_id and event.get("type") == "terminal.exit":
         sess = _PTY_OWNERS.pop(session_id, None)

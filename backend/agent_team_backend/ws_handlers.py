@@ -6797,7 +6797,68 @@ async def _rollback_terminal_create(
     await asyncio.shield(cleanup_task)
 
 
-def _record_dock_spawn(payload: dict, metadata: dict, agent_key: str) -> None:
+# A panel CLI that exits non-zero this soon after its spawn never got going —
+# typically a restore resuming a session its vendor no longer has. Left
+# 'spawned', its record would make every window open retry the same launch.
+_DOCK_FAILED_START_MS = 15_000
+# Live panel PTYs whose launch outcome is still open:
+# terminal session id -> (workspace, pane id, surface, session id).
+_DOCK_PTYS: dict[str, tuple[str, str, str, str]] = {}
+
+
+def _note_dock_pty(term_id: str, workspace_path: str, pane_id: str, surface: str, session_id: str) -> None:
+    _DOCK_PTYS[term_id] = (workspace_path, pane_id, surface, session_id)
+
+
+def _dock_target(metadata: dict, cwd: str = "") -> tuple[str, str] | None:
+    """(workspace, surface) when terminal metadata names a panel surface."""
+    surface = str(metadata.get("surface") or "")
+    workspace_path = str(metadata.get("workspace_path") or cwd or "")
+    if not surface or surface == "main" or not workspace_path:
+        return None
+    return workspace_path, surface
+
+
+def _retire_dock_record(workspace_path: str, pane_id: str, surface: str, session_id: str = "") -> None:
+    """Retire a panel's restore record, as manual_pane.unspawn retires one.
+
+    Only the panel's own record — never a window pane's under the same id — and,
+    given a session id, only while the record still names that session (a newer
+    Start in the same panel keeps its own)."""
+    from . import app
+
+    try:
+        project = app.project_store.load_or_create(workspace_path)
+        if any(
+            p.pane_id == pane_id
+            and p.surface == surface
+            and (not session_id or not p.session_id or p.session_id == session_id)
+            for p in project.panes
+        ):
+            app.project_store.record_manual_pane_unspawn(workspace_path, pane_id=pane_id)
+    except Exception:  # noqa: BLE001 — the PTY is already gone; a lost record update must not fail its caller
+        log.exception("retiring panel record %s in %s failed", pane_id, workspace_path)
+
+
+def note_terminal_exit(payload: dict) -> None:
+    """A PTY ended: retire its panel's record when the CLI failed at launch.
+
+    A clean exit (the user ended it from inside), a shutdown (the app quit — the
+    panel restores next launch) and a kill (Stop and window close retire on
+    their own paths) leave the record as it is."""
+    entry = _DOCK_PTYS.pop(str(payload.get("terminal_session_id") or ""), None)
+    if entry is None or payload.get("reason") not in ("exit", "error"):
+        return
+    exit_code = payload.get("exit_code")
+    uptime_ms = payload.get("uptime_ms")
+    if not isinstance(exit_code, int) or exit_code <= 0:
+        return
+    if not isinstance(uptime_ms, int) or uptime_ms > _DOCK_FAILED_START_MS:
+        return
+    _retire_dock_record(*entry)
+
+
+def _record_dock_spawn(payload: dict, metadata: dict, agent_key: str, term_id: str = "") -> None:
     """File an embedded AI panel's restore record and Agent History entry.
 
     A window pane is recorded by its own window (manual_pane.spawn plus the
@@ -6865,6 +6926,8 @@ def _record_dock_spawn(payload: dict, metadata: dict, agent_key: str) -> None:
         if agent_label:
             entry["agentLabel"] = agent_label
         app.spawn_history_store.merge(workspace_path, [entry])
+        if term_id:
+            _note_dock_pty(term_id, workspace_path, pane_id, surface, session_id)
     except Exception:  # noqa: BLE001 — the PTY is up; a lost record must not fail the create
         log.exception("terminal.create: recording dock pane %s failed", pane_id)
 
@@ -7667,6 +7730,11 @@ async def _terminal_create_impl(
         raise _TerminalCreateCancelled
     if getattr(term, "closed", False):
         app._PTY_OWNERS.pop(term.id, None)
+        # A panel's restore launch that died on the spot would otherwise stay
+        # 'spawned' from its last run and be retried on every window open.
+        dock = _dock_target(metadata, str(payload.get("cwd") or ""))
+        if dock and isinstance(getattr(term, "exit_code", None), int) and term.exit_code > 0:
+            _retire_dock_record(dock[0], str(payload["pane_id"]), dock[1])
         details = {
             "agent_key": agent_key,
             "binary_path": (startup_probe or {}).get("binary_path", ""),
@@ -7703,7 +7771,7 @@ async def _terminal_create_impl(
         raise _TerminalCreateCancelled
     transaction["response_payload"] = response_payload
     transaction["committed"] = True
-    _record_dock_spawn(payload, metadata, agent_key)
+    _record_dock_spawn(payload, metadata, agent_key, term.id)
 
 
 @handler("terminal.create.cancel")
@@ -8141,9 +8209,11 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
         )
         return
     pane_id_for_unreg = ""
+    dock: tuple[str, str] | None = None
     for sess in session.terminals._sessions.values():  # noqa: SLF001
         if sess.id == term_session_id:
             pane_id_for_unreg = sess.pane_id
+            dock = _dock_target(getattr(sess, "metadata", None) or {})
             break
     try:
         await session.terminals.kill(term_session_id, force=force)
@@ -8152,6 +8222,11 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
     finally:
         if app._PTY_OWNERS.get(term_session_id) is session:
             app._PTY_OWNERS.pop(term_session_id, None)
+    # A panel's CLI the user stopped is not one to bring back on the next
+    # window open (the panel's Stop is the only kill it sends).
+    if dock and pane_id_for_unreg:
+        _DOCK_PTYS.pop(term_session_id, None)
+        _retire_dock_record(dock[0], pane_id_for_unreg, dock[1])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
     # The process behind the pane is gone (idle reclaim comes through here
     # too): nothing can beat for it until a respawn, so close its intervals.
