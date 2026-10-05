@@ -22,6 +22,7 @@ import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, plansFactoryPackageSummary, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
 import { createWindowCloseCoordinator } from './plugins/windowCloseCoordinator'
 import { createQuitCancelWatch } from './quit-cancel-watch'
+import { dockSurfaceProvided } from './dockSurfaceProvider'
 import {
   handlePluginFrameAssetRequest,
   PLUGIN_FRAME_SCHEME,
@@ -3752,6 +3753,14 @@ ipcMain.handle('plugins:openContributionWindow', async (event, args: Record<stri
   if (!contributionKey || !workspacePath) return { ok: false }
   return openCatalogContributionWindow(contributionKey, workspacePath)
 })
+
+// Whether a restored AI panel still has a plugin behind its surface; one
+// without retires its record instead of resuming (see dockSurfaceProvider).
+ipcMain.handle('plugins:dockSurfaceProvided', (_event, surface: unknown) =>
+  dockSurfaceProvided(
+    typeof surface === 'string' ? surface : '',
+    (pluginId) => frontendPluginManager.getDescriptor(pluginId) !== undefined,
+  ))
 
 ipcMain.handle('plugins:closeContribution', (event, args: Record<string, unknown>) => {
   const hostWindow = trustedPluginRegionHost(event)

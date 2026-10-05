@@ -167,6 +167,11 @@ export interface TerminalDockPort {
    *  closing the panel's window retires it); null otherwise. Optional: without
    *  it the panel never resumes on its own and shows Start, as before. */
   readDockRestore?(workspacePath: string, paneId: string): Promise<{ agentKey: string; sessionId: string } | null>
+  /** Retire the panel's restore record when no plugin provides its surface any
+   *  more (a built-in panel whose plugin was removed), resolving true; false
+   *  while one does. Optional: a plugin's own port never needs it — its window
+   *  exists only while the plugin does. */
+  dockSurfaceRetired?(workspacePath: string, paneId: string, surface: string): Promise<boolean>
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
   /** `false` means the host could not open the file; `void` (older ports)

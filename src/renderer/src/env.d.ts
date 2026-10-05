@@ -94,6 +94,7 @@ declare global {
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
       newWorkspace: () => Promise<NewWorkspaceResult>
       getHomeDir: () => Promise<string>
+      dockSurfaceProvided?: (surface: string) => Promise<boolean>
       listOpenWorkspaces: () => Promise<string[]>
       focusWorkspaceWindow: (workspacePath: string) => Promise<boolean>
       reportAdoptedWorkspaces: (paths: string[]) => void

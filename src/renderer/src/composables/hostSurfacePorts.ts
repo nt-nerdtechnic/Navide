@@ -366,6 +366,12 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
         'terminal.dock_record', { workspace_path: workspacePath, pane_id: paneId },
       ))
     },
+    async dockSurfaceRetired(workspacePath, paneId, surface) {
+      const provided = await window.agentTeam?.dockSurfaceProvided?.(surface)
+      if (provided !== false) return false
+      await send('terminal.dock_retire', { workspace_path: workspacePath, pane_id: paneId, surface })
+      return true
+    },
     statPath: (path, timeoutMs) => send('fs.stat_path', { path }, timeoutMs),
     async getHomeDirectory(): Promise<string> {
       return (await window.agentTeam?.getHomeDir?.()) || ''

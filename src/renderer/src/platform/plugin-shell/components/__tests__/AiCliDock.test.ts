@@ -986,6 +986,27 @@ describe('AiCliDock — restore from the panel record', () => {
     expect(pin).not.toHaveBeenCalled()
   })
 
+  it('retires instead of resuming when the plugin providing its surface is gone', async () => {
+    const terminalPort = {
+      ...restorePort({ agentKey: 'claude', sessionId: 'sess-123' }),
+      dockSurfaceRetired: vi.fn(async () => true),
+    } as unknown as TerminalDockPort
+    mountDock({ terminalPort, origin: 'git-window' })
+    await flushPromises()
+    expect(terminalPort.dockSurfaceRetired).toHaveBeenCalledWith('/tmp/ws', 'ab12cd34-test-cli-dock', 'git')
+    expect(termSpies.spawn).not.toHaveBeenCalled()
+  })
+
+  it('resumes when the plugin providing its surface is still there', async () => {
+    const terminalPort = {
+      ...restorePort({ agentKey: 'claude', sessionId: 'sess-123' }),
+      dockSurfaceRetired: vi.fn(async () => false),
+    } as unknown as TerminalDockPort
+    mountDock({ terminalPort, origin: 'plan-window' })
+    await flushPromises()
+    expect(termSpies.spawn).toHaveBeenCalledTimes(1)
+  })
+
   it('injects no context into a resumed conversation', async () => {
     const buildContext = vi.fn(() => 'CTX')
     termSpies.spawn.mockImplementation(async () => { termState.status.value = 'running' })

@@ -206,6 +206,11 @@ async function maybeResume(): Promise<void> {
   }
   if (!record?.sessionId || !isShellSafeSessionId(record.sessionId)) return
   if (!agentSpecs.value.some((s) => s.agentKey === record.agentKey)) return
+  // The plugin behind this surface was removed: retire the record, not resume.
+  const retired = await props.terminalPort.dockSurfaceRetired?.(
+    props.workspacePath, props.paneId, dockSurface.value.surface,
+  ).catch(() => false)
+  if (retired) return
   agentKey.value = record.agentKey
   await launch(record.sessionId)
 }

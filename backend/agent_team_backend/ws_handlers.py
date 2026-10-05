@@ -8320,6 +8320,19 @@ async def terminal_dock_record(session: "Session", msg_id: str, msg_type: str, p
     }))
 
 
+@handler("terminal.dock_retire")
+async def terminal_dock_retire(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Retire one panel's restore record instead of resuming it — the panel asks
+    when the plugin that provides its surface is gone. Same rule as a Stop: only
+    that pane's record under that panel surface, never a window pane's."""
+    pane_id = str(payload.get("pane_id") or "")
+    surface = str(payload.get("surface") or "")
+    workspace_path = str(payload.get("workspace_path") or "")
+    if pane_id and workspace_path and surface and surface != "main":
+        _retire_dock_record(workspace_path, pane_id, surface)
+    await session.send_json(make_response(msg_id, msg_type, {}))
+
+
 @handler("terminal.reattach")
 async def terminal_reattach(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app

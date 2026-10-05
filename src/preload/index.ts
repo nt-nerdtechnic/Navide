@@ -410,6 +410,7 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('workspace:pick', defaultPath),
   newWorkspace: (): Promise<NewWorkspaceResult> => ipcRenderer.invoke('workspace:new'),
   getHomeDir: (): Promise<string> => ipcRenderer.invoke('app:home-dir'),
+  dockSurfaceProvided: (surface: string): Promise<boolean> => ipcRenderer.invoke('plugins:dockSurfaceProvided', surface),
   listOpenWorkspaces: (): Promise<string[]> => ipcRenderer.invoke('workspace:listOpen'),
   focusWorkspaceWindow: (workspacePath: string): Promise<boolean> =>
     ipcRenderer.invoke('workspace:focusExisting', workspacePath),
