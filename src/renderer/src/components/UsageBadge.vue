@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useWelcomeTour } from '../composables/useWelcomeTour'
 import {
   accountUsageFor,
   formatRemaining,
@@ -167,6 +168,8 @@ function onEnter(): void {
       popStyle.value = { top: `${rect.bottom + POP_GAP}px`, left: `${left}px` }
     }
     open.value = true
+    // The first-run tour's quota card waits for exactly this.
+    useWelcomeTour().notify('usage')
     void nextTick(flipIfOffscreen)
   }, 150)
 }

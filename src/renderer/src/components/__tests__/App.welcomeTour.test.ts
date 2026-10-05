@@ -77,4 +77,35 @@ describe('first-run welcome tour', () => {
     expect(appSource).toContain('const activeTourSkipOnLast = releaseTour.skipOnLast')
     expect(appSource).toMatch(/<GuidedTour[^>]*@close="endTour"\s+:skip-on-last="activeTourSkipOnLast"/)
   })
+
+  it('hands GuidedTour the interactive mode, the done and skip checks, and when to step aside', () => {
+    expect(appSource).toMatch(
+      /<GuidedTour[^>]*:interactive="activeTourInteractive"\s+:is-complete="welcomeStepComplete"\s+:should-skip="welcomeStepSkip"\s+:suspended="welcomeTourSuspended"/,
+    )
+    expect(functionBody('welcomeStepComplete')).toContain('welcomeActionDone(step.waitFor, welcomeFacts(), enteredAt)')
+    expect(functionBody('welcomeStepSkip')).toContain('welcomeActionAlreadyDone(step.waitFor, welcomeFacts())')
+    // Answering a CLI's trust prompt is a keystroke, not a first instruction:
+    // only a finished turn counts as having given one.
+    expect(functionBody('welcomeFacts')).toContain('paneTurnCompleteAt.get(id)')
+  })
+
+  it('steps the first-run tour aside for the install dialog, a release note, Settings or the CLI health guide', () => {
+    const start = appSource.indexOf('const welcomeTourSuspended = computed(')
+    expect(start).toBeGreaterThan(-1)
+    const body = appSource.slice(start, appSource.indexOf('\n})', start))
+    for (const what of ['cliInstallRequest.value', 'whatsNewEntry.value', 'showSettings.value', 'cliHealthGuide.value']) {
+      expect(body, what).toContain(what)
+    }
+    expect(body).toContain('activeTourInteractive.value')
+  })
+
+  it('tells the tour about an @ pick and a pane drop where they already happen', () => {
+    expect(functionBody('rememberMentionPick')).toContain("welcomeTour.notify('mention')")
+    expect(functionBody('injectPaneContextSources')).toContain("welcomeTour.notify('drop')")
+  })
+
+  it('has the quota badge tell the tour when it opens', () => {
+    const badge = readFileSync(resolve(process.cwd(), 'src/renderer/src/components/UsageBadge.vue'), 'utf8')
+    expect(badge).toContain("useWelcomeTour().notify('usage')")
+  })
 })

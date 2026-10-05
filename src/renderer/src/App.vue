@@ -264,10 +264,10 @@ const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/whatsNew'
-import type { TourPrepare } from './lib/tours'
+import type { TourPrepare, TourStep } from './lib/tours'
 import { useReleaseTour } from './composables/useReleaseTour'
-import { useWelcomeTour } from './composables/useWelcomeTour'
-import { paneTourReady } from './lib/welcomeTour'
+import { useWelcomeTour, welcomeActionTimes } from './composables/useWelcomeTour'
+import { paneTourReady, welcomeActionAlreadyDone, welcomeActionDone, type WelcomeFacts } from './lib/welcomeTour'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -633,6 +633,7 @@ const releaseTour = useReleaseTour()
 const activeTourVersion = releaseTour.activeVersion
 const activeTourSteps = releaseTour.steps
 const activeTourSkipOnLast = releaseTour.skipOnLast
+const activeTourInteractive = releaseTour.interactive
 const whatsNewTourDone = computed(() => {
   const entry = whatsNewEntry.value
   return !!entry?.tour?.length && releaseTour.isDone(entry.version)
@@ -731,8 +732,48 @@ function pollWelcomeTour(): void {
 watch(onboardingComplete, (value) => {
   if (value === true) armWelcomeTourPoll()
 })
-// Help → First-Run Tour…: both parts, whatever was recorded. Settings would
-// cover every anchor, so it closes first.
+// What the first-run tour's action cards read off the window (see
+// lib/welcomeTour.ts). A plain function, not a computed: `paneTurnCompleteAt`
+// is not reactive, and GuidedTour calls this from its own reactive watch.
+function welcomeFacts(): WelcomeFacts {
+  const loginPaneIds = new Set([...pendingLoginPanes.values()].map((entry) => entry.paneId))
+  const ids = panesOnStage.value
+    .filter((pane) => pane.agentKey !== 'terminal' && pane.realized && !loginPaneIds.has(pane.id))
+    .map((pane) => pane.id)
+  let commandAt = 0
+  let everCommanded = false
+  for (const id of ids) {
+    const ref = paneRefs[id]
+    const lastKey = (ref?.lastUserKeyAt as number | undefined) ?? 0
+    if (lastKey > commandAt && ref?.displayStatus === 'running') commandAt = lastKey
+    // Answering a CLI's trust prompt is a keystroke too; a finished turn is not.
+    if ((paneTurnCompleteAt.get(id) ?? 0) > 0) everCommanded = true
+  }
+  return {
+    workspaceOpen: workspaceSelected.value,
+    agentPanes: ids.length,
+    commandAt,
+    everCommanded,
+    mentionAt: welcomeActionTimes.mentionAt,
+    dropAt: welcomeActionTimes.dropAt,
+    usageAt: welcomeActionTimes.usageAt,
+  }
+}
+function welcomeStepComplete(step: TourStep, enteredAt: number): boolean {
+  return !!step.waitFor && welcomeActionDone(step.waitFor, welcomeFacts(), enteredAt)
+}
+function welcomeStepSkip(step: TourStep): boolean {
+  return !!step.waitFor && welcomeActionAlreadyDone(step.waitFor, welcomeFacts())
+}
+// An action card can send the person somewhere that needs the whole screen —
+// the install dialog after +, Settings, a release note, the CLI health guide.
+// The tour steps aside until it is gone; a release tour never does.
+const welcomeTourSuspended = computed(() =>
+  activeTourInteractive.value &&
+  (!!cliInstallRequest.value || !!whatsNewEntry.value || showSettings.value || !!cliHealthGuide.value)
+)
+// Help → First-Run Tour…: all three parts as a plain walk-through, whatever
+// was recorded. Settings would cover every anchor, so it closes first.
 function replayWelcomeTour(): void {
   showSettings.value = false
   welcomeTour.replay()
@@ -4211,6 +4252,7 @@ function loadMentionRecents(): string[] {
 }
 
 function rememberMentionPick(addresses: string[]): void {
+  welcomeTour.notify('mention')
   const next = recordMentionRecents(loadMentionRecents(), addresses, MENTION_RECENTS_CAP)
   try { localStorage.setItem(MENTION_RECENTS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
 }
@@ -4376,6 +4418,7 @@ async function injectPaneContextSources(
   sourcePaneIds: string[],
   targetPaneId: string
 ): Promise<void> {
+  welcomeTour.notify('drop')
   for (const id of sourcePaneIds) {
     if (id === targetPaneId) continue
     await injectPaneContext(id, targetPaneId)
@@ -20138,7 +20181,7 @@ function paneIsCommander(p: ActivePane): boolean {
           <p class="muted">{{ $t('label.set-workspace-pipeline') }}</p>
         </div>
       </div>
-      <div v-else class="grid" ref="gridRef" :style="gridStyle">
+      <div v-else class="grid" ref="gridRef" data-tour="pane-stage" :style="gridStyle">
         <!-- Column splitter handles (grid mode only) -->
         <div
           v-for="(pos, i) in colHandlePositions"
@@ -20846,6 +20889,10 @@ function paneIsCommander(p: ActivePane): boolean {
       :run-prepare="runTourPrepare"
       @close="endTour"
       :skip-on-last="activeTourSkipOnLast"
+      :interactive="activeTourInteractive"
+      :is-complete="welcomeStepComplete"
+      :should-skip="welcomeStepSkip"
+      :suspended="welcomeTourSuspended"
     />
     <!-- Status bar -->
     <div v-if="shellLayout.chrome.statusbar" class="statusbar">

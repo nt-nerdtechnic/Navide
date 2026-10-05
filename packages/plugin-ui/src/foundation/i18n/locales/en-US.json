@@ -9707,9 +9707,14 @@
         "body": "Click into the pane and type a sentence as you would in a terminal — for example, “Explain how this project is structured” — then press Enter. Once it starts answering, you know how to use it.",
         "missing": "Open a pane first with the ＋ next to the workspace, then click into its terminal to type."
       },
+      "openSecond": {
+        "title": "Open one more pane",
+        "body": "Agents need a partner to work with. Click the ＋ next to the workspace again and pick a CLI to open a second pane.",
+        "missing": "＋ is at the right end of the workspace row in the left sidebar."
+      },
       "talkMention": {
         "title": "Type @ to get another agent working",
-        "body": "Click the ＋ next to the workspace again for a second pane. Back in this pane, type @, pick its name from the list, write what you want it to do and press Enter: this agent passes the message on, and the other one gets it once it is free.",
+        "body": "In one pane, type @ and pick the other pane’s name from the list, then write what you want it to do and press Enter: this agent passes the message on, and the other one gets it once it is free.",
         "missing": "Open two panes first, then type @ in either one’s terminal."
       },
       "talkDrag": {

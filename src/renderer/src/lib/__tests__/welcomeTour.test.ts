@@ -11,7 +11,10 @@ import {
   WELCOME_REPLAY_STEPS,
   WELCOME_START_STEPS,
   paneTourReady,
+  welcomeActionAlreadyDone,
+  welcomeActionDone,
   welcomeStage,
+  type WelcomeFacts,
   type WelcomePaneProbe,
 } from '../welcomeTour'
 
@@ -46,10 +49,10 @@ function keysOf(step: (typeof WELCOME_REPLAY_STEPS)[number]): string[] {
 describe('welcome tour steps', () => {
   // One path: pick a workspace → open the first agent → give it a first
   // instruction. A card off that path does not get its own step.
-  it('is two cards on Welcome, one on the main screen, five on the first pane', () => {
+  it('is two cards on Welcome, one on the main screen, six on the first pane', () => {
     expect(WELCOME_START_STEPS.map((s) => s.id)).toEqual(['why-folder', 'pick-folder'])
     expect(WELCOME_MAIN_STEPS.map((s) => s.id)).toEqual(['open-agent'])
-    expect(WELCOME_PANE_STEPS.map((s) => s.id)).toEqual(['first-command', 'talk-mention', 'talk-drag', 'usage-account', 'more'])
+    expect(WELCOME_PANE_STEPS.map((s) => s.id)).toEqual(['first-command', 'open-second', 'talk-mention', 'talk-drag', 'usage-account', 'more'])
   })
 
   it('replays all three parts in order, as one tour', () => {
@@ -115,7 +118,7 @@ describe('welcome tour steps', () => {
       'welcome-open': 'src/renderer/src/components/Welcome.vue',
       'welcome-open-buttons': 'src/renderer/src/components/Welcome.vue',
       'open-agent': 'src/renderer/src/components/ControlPane.vue',
-      'pane-header': 'src/renderer/src/components/TerminalPane.vue',
+      'pane-stage': 'src/renderer/src/App.vue',
       'usage-badge': 'src/renderer/src/components/TerminalPane.vue',
     }
     const used = new Set<string>()
@@ -196,5 +199,82 @@ describe('paneTourReady', () => {
   it('falls back to a pane that has stayed busy for a long time, so a CLI that never rests still gets the tour', () => {
     expect(paneTourReady({ ...idle, status: 'running', msSinceSeen: PANE_TOUR_RUNNING_FALLBACK_MS - 1 })).toBe(false)
     expect(paneTourReady({ ...idle, status: 'running', msSinceSeen: PANE_TOUR_RUNNING_FALLBACK_MS })).toBe(true)
+  })
+})
+
+describe('interactive cards', () => {
+  it('waits for an action on every card but the concept card and the last one', () => {
+    const waits = Object.fromEntries(WELCOME_REPLAY_STEPS.map((s) => [s.id, s.waitFor ?? null]))
+    expect(waits).toEqual({
+      'why-folder': null,
+      'pick-folder': 'workspace-open',
+      'open-agent': 'agent-pane',
+      'first-command': 'first-command',
+      'open-second': 'second-pane',
+      'talk-mention': 'mention',
+      'talk-drag': 'drop',
+      'usage-account': 'usage',
+      more: null,
+    })
+  })
+
+  it('passes over the quota card when this CLI shows no quota badge', () => {
+    expect(WELCOME_REPLAY_STEPS.find((s) => s.id === 'usage-account')!.skipIfMissing).toBe(true)
+    expect(WELCOME_REPLAY_STEPS.filter((s) => s.skipIfMissing).map((s) => s.id)).toEqual(['usage-account'])
+  })
+})
+
+describe('welcomeActionDone / welcomeActionAlreadyDone', () => {
+  const none: WelcomeFacts = {
+    workspaceOpen: false,
+    agentPanes: 0,
+    commandAt: 0,
+    everCommanded: false,
+    mentionAt: 0,
+    dropAt: 0,
+    usageAt: 0,
+  }
+  const since = 1_000
+
+  it('a workspace being open is both done and already done', () => {
+    expect(welcomeActionDone('workspace-open', { ...none, workspaceOpen: true }, since)).toBe(true)
+    expect(welcomeActionAlreadyDone('workspace-open', { ...none, workspaceOpen: true })).toBe(true)
+    expect(welcomeActionDone('workspace-open', none, since)).toBe(false)
+  })
+
+  it('counts agent panes for the first and the second pane', () => {
+    expect(welcomeActionDone('agent-pane', { ...none, agentPanes: 1 }, since)).toBe(true)
+    expect(welcomeActionDone('second-pane', { ...none, agentPanes: 1 }, since)).toBe(false)
+    expect(welcomeActionDone('second-pane', { ...none, agentPanes: 2 }, since)).toBe(true)
+    expect(welcomeActionAlreadyDone('second-pane', { ...none, agentPanes: 2 })).toBe(true)
+  })
+
+  it('takes a first command only once it was typed after the card came up', () => {
+    expect(welcomeActionDone('first-command', { ...none, commandAt: since - 1 }, since)).toBe(false)
+    expect(welcomeActionDone('first-command', { ...none, commandAt: since + 1 }, since)).toBe(true)
+    expect(welcomeActionAlreadyDone('first-command', { ...none, everCommanded: true })).toBe(true)
+  })
+
+  it('takes @, a drop and the quota badge only when they happen while the card is up', () => {
+    for (const [action, field] of [['mention', 'mentionAt'], ['drop', 'dropAt'], ['usage', 'usageAt']] as const) {
+      expect(welcomeActionDone(action, { ...none, [field]: since - 1 }, since), action).toBe(false)
+      expect(welcomeActionDone(action, { ...none, [field]: since + 1 }, since), action).toBe(true)
+      // Everyone should try these once: never passed over as already done.
+      expect(welcomeActionAlreadyDone(action, { ...none, [field]: since + 1 }), action).toBe(false)
+    }
+  })
+
+  it('knows nothing of an action it does not name', () => {
+    expect(welcomeActionDone('nope', { ...none, workspaceOpen: true }, since)).toBe(false)
+    expect(welcomeActionAlreadyDone('nope', { ...none, workspaceOpen: true })).toBe(false)
+  })
+})
+
+describe('the drag card', () => {
+  // A drag starts on one pane's title bar and ends on another pane's terminal:
+  // with only one pane spotlit, both ends would sit outside the hole, where an
+  // action card's blockers take the click.
+  it('spotlights the whole pane stage for the drag card, so both panes take the drag', () => {
+    expect(WELCOME_REPLAY_STEPS.find((s) => s.id === 'talk-drag')!.anchor).toBe('[data-tour="pane-stage"]')
   })
 })

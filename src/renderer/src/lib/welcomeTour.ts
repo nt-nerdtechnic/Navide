@@ -32,6 +32,7 @@ export const WELCOME_START_STEPS: TourStep[] = [
   {
     id: 'pick-folder',
     anchor: '[data-tour="welcome-open-buttons"]',
+    waitFor: 'workspace-open',
     titleKey: `${T}.pickFolder.title`,
     bodyKey: `${T}.pickFolder.body`,
     missingKey: `${T}.pickFolder.missing`,
@@ -44,6 +45,7 @@ export const WELCOME_MAIN_STEPS: TourStep[] = [
   {
     id: 'open-agent',
     anchor: '[data-tour="open-agent"]',
+    waitFor: 'agent-pane',
     titleKey: `${T}.openAgent.title`,
     bodyKey: `${T}.openAgent.body`,
     missingKey: `${T}.openAgent.missing`,
@@ -58,20 +60,33 @@ export const WELCOME_PANE_STEPS: TourStep[] = [
   {
     id: 'first-command',
     anchor: '.xterm-host[data-pane-id]',
+    waitFor: 'first-command',
     titleKey: `${T}.firstCommand.title`,
     bodyKey: `${T}.firstCommand.body`,
     missingKey: `${T}.firstCommand.missing`,
   },
   {
+    id: 'open-second',
+    anchor: '[data-tour="open-agent"]',
+    waitFor: 'second-pane',
+    titleKey: `${T}.openSecond.title`,
+    bodyKey: `${T}.openSecond.body`,
+    missingKey: `${T}.openSecond.missing`,
+  },
+  {
     id: 'talk-mention',
     anchor: '.xterm-host[data-pane-id]',
+    waitFor: 'mention',
     titleKey: `${T}.talkMention.title`,
     bodyKey: `${T}.talkMention.body`,
     missingKey: `${T}.talkMention.missing`,
   },
   {
     id: 'talk-drag',
-    anchor: '[data-tour="pane-header"]',
+    // The whole stage: the drag starts on one pane's title bar and ends on
+    // another's terminal, and both have to be inside the spotlight to take it.
+    anchor: '[data-tour="pane-stage"]',
+    waitFor: 'drop',
     titleKey: `${T}.talkDrag.title`,
     bodyKey: `${T}.talkDrag.body`,
     missingKey: `${T}.talkDrag.missing`,
@@ -79,6 +94,8 @@ export const WELCOME_PANE_STEPS: TourStep[] = [
   {
     id: 'usage-account',
     anchor: '[data-tour="usage-badge"]',
+    waitFor: 'usage',
+    skipIfMissing: true,
     titleKey: `${T}.usageAccount.title`,
     bodyKey: `${T}.usageAccount.body`,
     missingKey: `${T}.usageAccount.missing`,
@@ -135,4 +152,60 @@ export function paneTourReady(p: WelcomePaneProbe): boolean {
   if (p.hasDraft || p.msSinceLastKey < PANE_TOUR_TYPING_QUIET_MS) return false
   if (p.status === 'idle') return true
   return p.status === 'running' && p.msSinceSeen >= PANE_TOUR_RUNNING_FALLBACK_MS
+}
+
+/** What the first-run tour knows about the window, for its action cards. */
+export interface WelcomeFacts {
+  workspaceOpen: boolean
+  /** Agent panes on stage: no plain terminals, placeholders or login panes. */
+  agentPanes: number
+  /** Last keystroke on an agent pane whose CLI is now working (0 = none). */
+  commandAt: number
+  /** Someone has typed into an agent pane before. */
+  everCommanded: boolean
+  /** When the person last picked an @ address, dropped a pane on another,
+   *  or opened the quota badge (0 = never). */
+  mentionAt: number
+  dropAt: number
+  usageAt: number
+}
+
+/** Whether a card's action (its `waitFor`) happened since `since`. */
+export function welcomeActionDone(action: string, f: WelcomeFacts, since: number): boolean {
+  switch (action) {
+    case 'workspace-open':
+      return f.workspaceOpen
+    case 'agent-pane':
+      return f.agentPanes >= 1
+    case 'second-pane':
+      return f.agentPanes >= 2
+    case 'first-command':
+      return f.commandAt > since
+    case 'mention':
+      return f.mentionAt > since
+    case 'drop':
+      return f.dropAt > since
+    case 'usage':
+      return f.usageAt > since
+    default:
+      return false
+  }
+}
+
+/** Whether a card's action was done before the card came up, so the card is
+ *  passed over. The two ways agents talk to each other are never passed
+ *  over: everyone should try them once. */
+export function welcomeActionAlreadyDone(action: string, f: WelcomeFacts): boolean {
+  switch (action) {
+    case 'workspace-open':
+      return f.workspaceOpen
+    case 'agent-pane':
+      return f.agentPanes >= 1
+    case 'second-pane':
+      return f.agentPanes >= 2
+    case 'first-command':
+      return f.everCommanded
+    default:
+      return false
+  }
 }
