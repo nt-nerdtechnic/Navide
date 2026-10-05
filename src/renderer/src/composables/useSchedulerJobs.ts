@@ -74,6 +74,11 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
     return job.state?.last_status === 'skipped' && job.state.last_skip_reason === 'target_gone'
   }
 
+  /** Rebound onto its rebuilt pane but still stopped: it waits for someone to switch it on. */
+  function rebound(job: SchedulerJob): boolean {
+    return !job.enabled && !!job.state?.rebound_from && !targetGone(job)
+  }
+
   function skipLabel(job: SchedulerJob): string {
     const reason = job.state?.last_skip_reason
     return reason ? t(`scheduler.skip.${reason}`) : t('scheduler.skip.unknown')
@@ -287,6 +292,7 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
     now,
     light,
     targetGone,
+    rebound,
     skipLabel,
     targetLabel,
     backoffLabel,

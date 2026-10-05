@@ -8811,6 +8811,7 @@
     "target-with-id": "→ wake and send to pane \"{name}\" (#{id})",
     "retarget": "Rebind",
     "gone-disabled": "missing {n} runs in a row, disabled",
+    "rebound-reenable": "Rebound to the rebuilt pane, switch it back on",
     "every-minutes": "Every {n} min",
     "every-hours": "Every {n} h",
     "daily-at": "Daily at {time}",

@@ -8811,6 +8811,7 @@
     "target-with-id": "→ pane「{name}」（#{id}）を起こして送信",
     "retarget": "再バインド",
     "gone-disabled": "{n} 回続けて見つからず、停止しました",
+    "rebound-reenable": "再接続しました。もう一度有効にしてください",
     "every-minutes": "{n} 分ごと",
     "every-hours": "{n} 時間ごと",
     "daily-at": "毎日 {time}",

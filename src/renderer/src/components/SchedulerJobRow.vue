@@ -16,6 +16,7 @@ const tr: Translate = (key, params) => (params ? t(key, params) : t(key))
 
 const light = computed(() => props.api.light(props.job))
 const gone = computed(() => props.api.targetGone(props.job))
+const rebound = computed(() => props.api.rebound(props.job))
 const busy = computed(() => props.api.pendingId.value !== null)
 const backoff = computed(() => props.api.backoffLabel(props.job))
 const target = computed(() => props.api.targetLabel(props.job))
@@ -99,6 +100,7 @@ const updatedBy = computed(() => props.api.updatedByLabel(props.job))
         {{ t('scheduler.retarget') }}
       </button>
     </div>
+    <div v-else-if="rebound" class="sj-rebound" data-test="rebound">{{ t('scheduler.rebound-reenable') }}</div>
   </div>
 </template>
 
@@ -290,6 +292,12 @@ const updatedBy = computed(() => props.api.updatedByLabel(props.job))
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.sj-rebound {
+  margin-top: 3px;
+  padding-left: 11px;
+  font-size: var(--font-3xs);
+  color: var(--text-secondary);
 }
 .sj-gone {
   display: flex;

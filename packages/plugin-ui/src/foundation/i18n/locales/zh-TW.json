@@ -8811,6 +8811,7 @@
     "target-with-id": "→ 喚醒並傳給 pane「{name}」（#{id}）",
     "retarget": "重新綁定",
     "gone-disabled": "連續 {n} 次找不到，已自動停用",
+    "rebound-reenable": "已接回，請重新啟用",
     "every-minutes": "每 {n} 分鐘",
     "every-hours": "每 {n} 小時",
     "daily-at": "每天 {time}",

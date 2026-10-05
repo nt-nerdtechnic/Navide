@@ -1212,7 +1212,11 @@ class SchedulerService:
                     continue
                 job["action"] = {**job["action"], "pane_id": pane_id}
                 job["state"]["rebound_from"] = previous_pane_id
-                job["state"]["consecutive_target_gone"] = 0
+                # The target is back, so a stopped job no longer reads as
+                # aimed at nothing; it still waits for someone to switch it on.
+                _clear_target_gone(job["state"])
+                if job["state"].get("last_skip_reason") == SKIP_TARGET_GONE:
+                    job["state"]["last_skip_reason"] = None
                 await self.store.put_job(job)
                 moved.append(job["id"])
         if moved:
