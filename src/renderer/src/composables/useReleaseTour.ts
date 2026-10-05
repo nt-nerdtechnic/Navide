@@ -18,7 +18,6 @@ const named = shallowRef<{
   steps: TourStep[]
   onEnd?: (completed: boolean) => void
   skipOnLast: boolean
-  interactive: boolean
 } | null>(null)
 
 /** Whether `version`'s announcement carries a tour. */
@@ -35,9 +34,6 @@ export function useReleaseTour() {
   /** Whether the running tour keeps Skip on its last step (GuidedTour's
    *  skipOnLast). Only a named tour can ask for it. */
   const skipOnLast = computed(() => named.value?.skipOnLast ?? false)
-  /** Whether the running tour waits for actions (GuidedTour's interactive).
-   *  Only a named tour can ask for it. */
-  const interactive = computed(() => named.value?.interactive ?? false)
 
   /** Start `version`'s tour; false (and nothing starts) when it has none or
    *  another tour is running. */
@@ -50,21 +46,15 @@ export function useReleaseTour() {
   /** Start a tour that is not a release's. `id` stands in for the version in
    *  `activeVersion`; `onEnd` gets what `end` was called with, and nothing else
    *  is recorded. `skipOnLast` is for a tour that is one part of a longer
-   *  one; `interactive` makes its action cards wait for the person. False
-   *  when another tour is running. */
+   *  one. False when another tour is running. */
   function startNamed(
     id: string,
     tourSteps: TourStep[],
     onEnd?: (completed: boolean) => void,
-    opts: { skipOnLast?: boolean; interactive?: boolean } = {},
+    opts: { skipOnLast?: boolean } = {},
   ): boolean {
     if (activeVersion.value || tourSteps.length === 0) return false
-    named.value = {
-      steps: tourSteps,
-      onEnd,
-      skipOnLast: opts.skipOnLast ?? false,
-      interactive: opts.interactive ?? false,
-    }
+    named.value = { steps: tourSteps, onEnd, skipOnLast: opts.skipOnLast ?? false }
     activeVersion.value = id
     return true
   }
@@ -84,5 +74,5 @@ export function useReleaseTour() {
     return settingsGet<boolean>(tourDoneKey(version), false) === true
   }
 
-  return { activeVersion, steps, skipOnLast, interactive, start, startNamed, end, isDone }
+  return { activeVersion, steps, skipOnLast, start, startNamed, end, isDone }
 }

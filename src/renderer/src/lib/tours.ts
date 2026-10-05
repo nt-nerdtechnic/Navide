@@ -33,21 +33,7 @@ export interface TourStep {
   /** Label for the primary button instead of Next / Done — the action the
    *  person takes once the step closes (e.g. "Pick one"). */
   primaryKey?: string
-  /**
-   * Interactive tours only: the action this card waits for. The card has no
-   * Next; the host's `isComplete` decides when the action happened, and the
-   * host's `shouldSkip` whether it was done before the card came up. Names
-   * are the host's own (see lib/welcomeTour.ts). Ignored by other tours.
-   */
-  waitFor?: string
-  /** Interactive tours only: pass over this card when its anchor is absent. */
-  skipIfMissing?: boolean
 }
-
-/** How long an interactive card shows "done" before moving on by itself. */
-export const TOUR_DONE_ADVANCE_MS = 800
-/** How long an interactive card waits before pointing out where to look. */
-export const TOUR_STUCK_HINT_MS = 45_000
 
 /** Settings key recording that a version's tour was taken to its last step. */
 export function tourDoneKey(version: string): string {

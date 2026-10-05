@@ -9681,9 +9681,6 @@
     "back": "Back",
     "skip": "Skip tour",
     "done": "Done",
-    "waiting": "Waiting for you to do this…",
-    "done-feedback": "✓ Done",
-    "skip-step": "Skip this step",
     "welcome": {
       "pickFolder": "First, pick a folder for your agents to work in. Have a project? Click Browse…. Starting fresh? Click New…. Just trying it out? Click Home.",
       "openAgent": "Click ＋ and pick a CLI to open your first agent.",
