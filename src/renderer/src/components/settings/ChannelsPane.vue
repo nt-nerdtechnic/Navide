@@ -368,10 +368,13 @@ function managedFailureText(ev: ChannelManagedCreatedEvent): string {
   // Only a request that ran out has no bot in Telegram; a quick add can time out too.
   if (ev.reason === 'timeout' && !ev.created) return t('channels.managed.timeout')
   if (ev.reason === 'token_unavailable') return t('channels.managed.token-unavailable')
+  if (ev.reason === 'creator_not_linked') return t('channels.managed.creator-not-linked')
   const error = ev.error || t('channels.error.generic')
-  return ev.reason === 'rejected' || ev.reason === 'timeout'
+  const text = ev.reason === 'rejected' || ev.reason === 'timeout'
     ? t(`channels.quick.${ev.reason}`, { platform: platformName('telegram'), error })
     : error
+  // The bot exists in Telegram even though it was not added: a blind retry makes a second one.
+  return ev.created ? `${text} ${t('channels.managed.created-note')}` : text
 }
 
 /** The created bot is added (or failed): hand its invite to its link guide, as quick add does. */

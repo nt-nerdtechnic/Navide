@@ -181,15 +181,21 @@ async def test_a_matching_update_adds_the_new_bot_through_quick_add(env: MEnv) -
     assert len(env.events()) == 1 and len(env.api.calls_of("getManagedBotToken")) == 1
 
 
-async def test_a_bot_created_by_someone_not_linked_is_ignored(env: MEnv) -> None:
-    env.m.managed_create("default")
-    env.api.push_managed_bot(creator_id=CREATOR + 1, bot_id=NEW_BOT)
-    await _until(lambda: env.api.calls_of("getUpdates") and len(env.api.calls_of("getUpdates")) > 3)
-    assert not env.api.calls_of("getManagedBotToken") and not env.events() and not env.added_accounts()
-    # The request still stands for the linked creator.
-    env.api.push_managed_bot(creator_id=CREATOR, bot_id=NEW_BOT)
+async def test_a_bot_created_by_someone_not_linked_answers_the_request_at_once(env: MEnv) -> None:
+    req = env.m.managed_create("default", "made_bot")
+    env.api.push_managed_bot(creator_id=CREATOR + 1, bot_id=NEW_BOT, bot_username="made_bot")
     await _until(lambda: env.events())
-    assert env.events()[0]["ok"] is True
+    [event] = env.events()
+    # The bot exists in Telegram, so the window must not wait out the request and retry.
+    assert event["request_id"] == req["request_id"] and event["ok"] is False
+    assert event["reason"] == "creator_not_linked" and event["created"] is True
+    assert not env.api.calls_of("getManagedBotToken") and not env.added_accounts()
+    assert req["request_id"] not in env.m._managed
+    # The request is spent: a later bot for it does nothing.
+    env.api.push_managed_bot(creator_id=CREATOR, bot_id=NEW_BOT + 1)
+    polls = len(env.api.calls_of("getUpdates"))
+    await _until(lambda: len(env.api.calls_of("getUpdates")) > polls + 3)
+    assert len(env.events()) == 1 and not env.api.calls_of("getManagedBotToken")
 
 
 async def test_an_update_without_a_pending_request_is_ignored(env: MEnv) -> None:

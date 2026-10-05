@@ -677,8 +677,10 @@ class ChannelManager:
 
     def _on_managed_bot(self, platform: str, manager: str, adapter: ChannelAdapter, update: dict[str, Any]) -> None:
         """A ManagedBotUpdated from ``manager``. It is taken only when ``manager`` has an open
-        request and the creator is a user linked to ``manager``; anything else (a stranger
-        using the link, a token or owner change of a bot already here) is only logged."""
+        request and the creator is a user linked to ``manager``; a creator who is not linked
+        ends the request at once (the bot exists in Telegram, so waiting it out would only
+        prompt a retry and a second bot); anything else (a token or owner change of a bot
+        already here, a bot with no request) is only logged."""
         creator = str((update.get("user") or {}).get("id") or "")
         bot = update.get("bot") or {}
         bot_id = str(bot.get("id") or "")
@@ -693,15 +695,19 @@ class ChannelManager:
         if not open_requests:
             log.info("channels: %s reported bot %s with no open create request; ignored", label, bot_id)
             return
-        if not self.gate.is_allowed(platform, creator, manager):
-            log.warning("channels: bot %s was created through %s by user %s, who is not linked to it; ignored",
-                        bot_id, label, creator)
-            return
         username = str(bot.get("username") or "").lower()
         request = next((r for r in open_requests if r.username.lower() == username), open_requests[0])
         del self._managed[request.request_id]
         if request.timer is not None:
             request.timer.cancel()
+        if not self.gate.is_allowed(platform, creator, manager):
+            log.warning("channels: bot %s was created through %s by user %s, who is not linked to it; not added",
+                        bot_id, label, creator)
+            self._spawn(self._seams.broadcast("channels.managed_created", {
+                "request_id": request.request_id, "ok": False, "created": True, "reason": "creator_not_linked",
+                "error": f"bot {bot_id} was created by Telegram user {creator}, who is not linked to {label}",
+            }))
+            return
         self._spawn(self._managed_handoff(request, adapter, int(bot_id)))
 
     async def _managed_handoff(self, request: _ManagedRequest, adapter: Any, bot_id: int) -> None:

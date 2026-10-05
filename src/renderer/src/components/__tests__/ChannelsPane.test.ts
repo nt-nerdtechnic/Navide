@@ -869,9 +869,10 @@ describe('ChannelsPane', () => {
     it.each([
       [{ reason: 'timeout', error: 'no bot was created within 600s' }, 'No bot was created within 10 minutes. Try again.'],
       [{ reason: 'token_unavailable', error: 'bot is not managed', created: true }, 'The bot was created in Telegram, but its token could not be read. Check it in BotFather.'],
-      [{ reason: 'rejected', error: '401 Unauthorized', created: true }, 'Telegram rejected the credential: 401 Unauthorized'],
-      [{ reason: 'timeout', error: 'no answer from telegram within 10s', created: true }, 'Telegram did not answer in time. Check the network and try again. (no answer from telegram within 10s)'],
-      [{ reason: 'invalid', error: 'chat channels are turned off', created: true }, 'chat channels are turned off'],
+      [{ reason: 'creator_not_linked', error: 'bot 999 was created by Telegram user 8', created: true }, 'The bot was created in Telegram, but by a Telegram account not linked to this bot, so it was not added. Link that account first, or delete the bot in BotFather.'],
+      [{ reason: 'rejected', error: '401 Unauthorized', created: true }, 'Telegram rejected the credential: 401 Unauthorized The bot was already created in Telegram; check BotFather before trying again.'],
+      [{ reason: 'timeout', error: 'no answer from telegram within 10s', created: true }, 'Telegram did not answer in time. Check the network and try again. (no answer from telegram within 10s) The bot was already created in Telegram; check BotFather before trying again.'],
+      [{ reason: 'invalid', error: 'chat channels are turned off', created: true }, 'chat channels are turned off The bot was already created in Telegram; check BotFather before trying again.'],
     ])('shows a failure in words: %o', async (failure, text) => {
       seedManager(true)
       const w = await render()

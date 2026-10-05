@@ -154,7 +154,7 @@ export interface ChannelManagedCreatedEvent {
   account?: string
   name?: string
   link?: ChannelLinkInvite | null
-  /** "timeout" (no bot within the request's life), "token_unavailable", or quick add's reason. */
+  /** "timeout" (no bot within the request's life), "token_unavailable", "creator_not_linked", or quick add's reason. */
   reason?: string
   error?: string
   created?: boolean
