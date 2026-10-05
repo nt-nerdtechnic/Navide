@@ -9,10 +9,13 @@ relaunches a CLI nobody wants:
   or a create cleanup carry no flag and keep the record);
 * the CLI failed right at launch — typically a restore resuming a session the
   vendor no longer has — which would otherwise re-file 'spawned' and fail
-  again on every open.
+  again on every open;
+* the user ended the CLI from inside (/exit — a clean, zero exit), however
+  long it ran.
 
-A CLI still running when the app quits (shutdown) and a CLI the user ended
-from inside (a clean exit) keep today's behaviour, as does every window pane.
+A CLI still running when the app quits (shutdown) and a CLI that crashed
+(non-zero) after a working start keep the record so the panel restores it, as
+does every window pane.
 """
 
 from __future__ import annotations
@@ -175,7 +178,6 @@ async def test_a_panel_cli_that_fails_at_launch_retires_its_record(
 @pytest.mark.parametrize(
     ("reason", "exit_code", "uptime_ms"),
     [
-        ("exit", 0, 1800),          # ended cleanly from inside (/exit)
         ("shutdown", -15, 1800),    # app quit: restores next launch
         ("killed", -9, 1800),       # Stop / window close have their own paths
         ("exit", 1, 10 * 60_000),   # a long-running CLI that later failed
@@ -199,3 +201,37 @@ async def test_a_failed_launch_leaves_a_newer_session_record_alone(
     )
     await _exit("t-dock", reason="exit", exit_code=1, uptime_ms=1800)
     assert _status(store, recorded_panel) == "spawned"
+
+
+# ── A CLI the user ended from inside ────────────────────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uptime_ms", [1800, 10 * 60_000])
+async def test_a_panel_cli_ended_cleanly_from_inside_retires_its_record(
+    recorded_panel: str, store: ProjectStore, uptime_ms: int,
+) -> None:
+    await _exit("t-dock", reason="exit", exit_code=0, uptime_ms=uptime_ms)
+    assert _status(store, recorded_panel) == "removed"
+
+
+@pytest.mark.asyncio
+async def test_a_clean_exit_leaves_a_newer_session_record_alone(
+    recorded_panel: str, store: ProjectStore,
+) -> None:
+    store.record_manual_pane_spawn(
+        recorded_panel, pane_id=_DOCK_PANE, agent="claude", session_id="99999999-2222-3333-4444-555555555555",
+        origin="plan-window", surface="plans",
+    )
+    await _exit("t-dock", reason="exit", exit_code=0, uptime_ms=10 * 60_000)
+    assert _status(store, recorded_panel) == "spawned"
+
+
+@pytest.mark.asyncio
+async def test_a_window_pane_ended_cleanly_keeps_its_record(tmp_path: Path, store: ProjectStore) -> None:
+    ws = str(tmp_path)
+    store.record_manual_pane_spawn(ws, pane_id="main-pane", agent="claude", session_id=_SESSION)
+    await app._active_emit({
+        "type": "terminal.exit",
+        "payload": {"terminal_session_id": "t-main", "pane_id": "main-pane", "reason": "exit", "exit_code": 0, "uptime_ms": 1800},
+    })
+    assert _status(store, ws, "main-pane") == "spawned"

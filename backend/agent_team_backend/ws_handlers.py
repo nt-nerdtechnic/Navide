@@ -6841,16 +6841,20 @@ def _retire_dock_record(workspace_path: str, pane_id: str, surface: str, session
 
 
 def note_terminal_exit(payload: dict) -> None:
-    """A PTY ended: retire its panel's record when the CLI failed at launch.
+    """A PTY ended: retire its panel's record when the CLI failed at launch or
+    the user ended it cleanly from inside (/exit, a zero exit).
 
-    A clean exit (the user ended it from inside), a shutdown (the app quit — the
-    panel restores next launch) and a kill (Stop and window close retire on
-    their own paths) leave the record as it is."""
+    A crash after a working start (the panel restores it), a shutdown (the app
+    quit — the panel restores next launch) and a kill (Stop and window close
+    retire on their own paths) leave the record as it is."""
     entry = _DOCK_PTYS.pop(str(payload.get("terminal_session_id") or ""), None)
     if entry is None or payload.get("reason") not in ("exit", "error"):
         return
     exit_code = payload.get("exit_code")
     uptime_ms = payload.get("uptime_ms")
+    if payload.get("reason") == "exit" and exit_code == 0:
+        _retire_dock_record(*entry)
+        return
     if not isinstance(exit_code, int) or exit_code <= 0:
         return
     if not isinstance(uptime_ms, int) or uptime_ms > _DOCK_FAILED_START_MS:
