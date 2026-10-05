@@ -266,6 +266,8 @@ const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessag
 import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/whatsNew'
 import type { TourPrepare } from './lib/tours'
 import { useReleaseTour } from './composables/useReleaseTour'
+import { useWelcomeTour } from './composables/useWelcomeTour'
+import { paneTourReady } from './lib/welcomeTour'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -666,6 +668,65 @@ function runTourPrepare(prepare: TourPrepare): void {
     showSettings.value = false
   }
 }
+// ── First-run welcome tour ──────────────────────────────────────────────────
+// Due only after the first-run wizard (completeOnboarding marks it). A poll
+// rather than watches: the pane part waits on per-pane state (status, typing,
+// age) and on every modal being closed, and only a fresh install ever polls —
+// it stops for good once the tour is off.
+const welcomeTour = useWelcomeTour()
+const WELCOME_TOUR_POLL_MS = 1_000
+let welcomeTourPoll: ReturnType<typeof setInterval> | null = null
+// When the poll first saw each pane, for the busy-pane fallback.
+const welcomeTourPaneSeenAt = new Map<string, number>()
+function armWelcomeTourPoll(): void {
+  if (welcomeTourPoll || welcomeTour.stage() === 'off') return
+  welcomeTourPoll = setInterval(pollWelcomeTour, WELCOME_TOUR_POLL_MS)
+}
+function stopWelcomeTourPoll(): void {
+  if (welcomeTourPoll) clearInterval(welcomeTourPoll)
+  welcomeTourPoll = null
+  welcomeTourPaneSeenAt.clear()
+}
+function pollWelcomeTour(): void {
+  const stage = welcomeTour.stage()
+  if (stage === 'off') {
+    stopWelcomeTourPoll()
+    return
+  }
+  // A fail-open onboarding answer is a guess, not a settled shell.
+  if (onboardingComplete.value !== true || onboardingCheckFailed.value) return
+  if (!workspaceSelected.value || mainModalOpen()) return
+  if (stage === 'main') {
+    welcomeTour.startMain()
+    return
+  }
+  const now = Date.now()
+  const loginPaneIds = new Set([...pendingLoginPanes.values()].map((entry) => entry.paneId))
+  const ready = panesOnStage.value.some((pane) => {
+    if (!welcomeTourPaneSeenAt.has(pane.id)) welcomeTourPaneSeenAt.set(pane.id, now)
+    const ref = paneRefs[pane.id]
+    const lastKey = (ref?.lastUserKeyAt as number | undefined) ?? 0
+    return paneTourReady({
+      agentKey: pane.agentKey,
+      realized: pane.realized,
+      loginPane: loginPaneIds.has(pane.id),
+      status: ref?.displayStatus as string | undefined,
+      hasDraft: (ref?.hasDraft as boolean | undefined) === true,
+      msSinceLastKey: lastKey > 0 ? now - lastKey : Infinity,
+      msSinceSeen: now - welcomeTourPaneSeenAt.get(pane.id)!,
+    })
+  })
+  if (ready) welcomeTour.startPane()
+}
+watch(onboardingComplete, (value) => {
+  if (value === true) armWelcomeTourPoll()
+})
+// Help → First-Run Tour…: both parts, whatever was recorded. Settings would
+// cover every anchor, so it closes first.
+function replayWelcomeTour(): void {
+  showSettings.value = false
+  welcomeTour.replay()
+}
 // Announcements centre: the status-bar feed of release notes + updater news.
 const announcements = useAnnouncements()
 const quotaFailover = useQuotaFailover()
@@ -746,10 +807,16 @@ watch(
   },
   { immediate: true },
 )
+// A wizard reopened from Settings is a re-check, not a first run: finishing it
+// must not queue the welcome tour.
+let onboardingRerun = false
 function reopenOnboarding(): void {
+  onboardingRerun = true
   onboardingComplete.value = false
 }
 function completeOnboarding(): void {
+  if (!onboardingRerun) welcomeTour.markFirstRun()
+  onboardingRerun = false
   onboardingComplete.value = true
   void checkOnboarding()
 }
@@ -8636,6 +8703,10 @@ async function onMenuAction(action: string): Promise<void> {
   }
   if (action === 'show-whats-new') {
     showWhatsNewOnDemand()
+    return
+  }
+  if (action === 'show-welcome-tour') {
+    replayWelcomeTour()
     return
   }
   if (action === 'show-shortcuts') {
@@ -19657,7 +19728,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <NavideCloudMark variant="solid" class="titlebar-account-mark" />
         <span v-if="p2pAccountLabel" class="titlebar-account-dot" :class="p2pAccountDotClass"></span>
       </button>
-      <button class="titlebar-gear" @mousedown.stop @click="showSettings = true" :title="$t('label.titlebar-settings')">
+      <button class="titlebar-gear" data-tour="settings" @mousedown.stop @click="showSettings = true" :title="$t('label.titlebar-settings')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -20009,6 +20080,7 @@ function paneIsCommander(p: ActivePane): boolean {
       </div>
       <StageTabBar
         v-if="stageTabs.length > 0"
+        data-tour="stage-tabs"
         ref="stageTabBarRef"
         :tabs="stageTabs"
         :model-value="activeTab"

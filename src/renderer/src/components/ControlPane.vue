@@ -3142,7 +3142,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
     </div>
 
     <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
-    <div class="sidebar-tabs">
+    <div class="sidebar-tabs" data-tour="sidebar-views">
       <button
         v-for="t in visibleTabs"
         :key="t.id"
@@ -3540,6 +3540,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         <button
           v-if="!detachedWindow && freeMode && workspaces?.length"
           class="hdr-add-ws"
+          data-tour="open-agent"
           :disabled="!canSpawn"
           :aria-expanded="addMenuOpen && addMenuWorkspace === workspacePath"
           :title="canSpawn ? `${$t('action.new-agent-here')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"
@@ -3743,6 +3744,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                workspace — the menu remembers which heading opened it. -->
           <button
             class="ws-add"
+            data-tour="open-agent"
             :disabled="!canSpawn"
             :aria-expanded="addMenuOpen && addMenuWorkspace === ws.path"
             :title="canSpawn ? `${$t('action.add-to-grid')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"

@@ -8619,7 +8619,7 @@
       "environment": "Navide drives real CLIs in real terminals — these tools are what it runs on.",
       "agents": "Every pane you open runs one of these agents. One is enough to start.",
       "permissions": "Grant the access Navide needs to drive your machine.",
-      "ready": "Everything checks out. Open the app and pick a workspace."
+      "ready": "Everything checks out. Open the app and pick a workspace; the first time in, a short tour you can skip shows you around."
     },
     "install": "Install",
     "installing": "Installing…",
@@ -9681,6 +9681,47 @@
     "back": "Back",
     "skip": "Skip tour",
     "done": "Done",
+    "welcome": {
+      "openAgent": {
+        "title": "Open your first agent here",
+        "body": "Click ＋ next to the workspace and pick a CLI to open a pane. A CLI that isn’t installed yet is marked, and picking it walks you through installing it.",
+        "missing": "＋ is at the right end of the workspace row in the left sidebar."
+      },
+      "sidebarViews": {
+        "title": "Five views in the sidebar",
+        "body": "Agents, Pipeline, Explorer, Git and Plans. Plans are documents agents write for you to review; Git shows what they changed.",
+        "missing": "The view switcher is at the top of the left sidebar."
+      },
+      "settings": {
+        "title": "Settings and help live here",
+        "body": "The gear opens Settings, and its Help tab explains each feature with diagrams. You can replay this tour later from Help → First-Run Tour… in the menu bar.",
+        "missing": "Settings is the gear at the top right of the title bar."
+      },
+      "paneName": {
+        "title": "A pane’s name is its address",
+        "body": "Other agents use this name to send this pane messages. Double-click it to rename the pane; the address follows.",
+        "missing": "Open a pane first: its name is at the left of its title bar."
+      },
+      "typing": {
+        "title": "Type straight into the pane",
+        "body": "It works just like using this CLI in a terminal. Type @ to list the other panes’ addresses and have them message each other.",
+        "missing": "Open a pane first, then click into its terminal to type."
+      },
+      "usage": {
+        "title": "How much quota this account has left",
+        "body": "The badge shows the current account’s remaining quota. Click it to see when each limit resets, and to switch accounts if you have more than one.",
+        "missing": "The quota badge is on the right of a pane’s title bar; a CLI with no quota data shows none."
+      },
+      "groups": {
+        "title": "Arranging more panes",
+        "body": "Each tab above is a group, and ＋ adds one. The buttons at the far right switch the layout: grid, sidebar, spotlight, fullscreen.",
+        "missing": "The group tabs appear above the panes once a pane is open."
+      },
+      "more": {
+        "title": "More, for when you need it",
+        "body": "• Voice input: turn it on in Settings → Voice Input, then hold Ctrl+Alt+M and speak.\n• The Git and Plans views in the sidebar: what agents changed and the plans they wrote.\n• The Help tab in Settings: diagrams of every feature.\n\nReplay this tour any time from Help → First-Run Tour…."
+      }
+    },
     "v0_2_10": {
       "welcome": {
         "title": "Two new things in 0.2.10",

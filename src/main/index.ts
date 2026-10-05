@@ -5207,6 +5207,7 @@ app.whenReady().then(async () => {
     onReportIssue: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide/issues'),
     onShowShortcuts: () => sendMenuAction('show-shortcuts'),
     onShowWhatsNew: () => sendMenuAction('show-whats-new'),
+    onShowWelcomeTour: () => sendMenuAction('show-welcome-tour'),
     onOpenLegal: (route) => void shell.openExternal(LEGAL_LINKS[route]),
     onReloadWindow: (target) => {
       void windowCloseCoordinator.prepareAndReload(target)
