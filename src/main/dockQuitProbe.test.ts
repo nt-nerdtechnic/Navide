@@ -13,7 +13,7 @@ type Listener = (...args: never[]) => unknown
 const appListeners: Array<[string, Listener]> = []
 const ipcListeners = new Map<string, Listener>()
 const windowSends: Array<[string, unknown]> = []
-const dialogState = vi.hoisted(() => ({ response: 0, prompts: 0 }))
+const dialogState = vi.hoisted(() => ({ response: 0, prompts: 0, notices: [] as Array<{ message?: string; detail?: string }> }))
 
 // index.ts runs the Linux keyring preflight at import; never spawn dbus-send here.
 vi.mock('./linuxKeyring', () => ({ applyLinuxKeyringPreflight: () => false }))
@@ -39,6 +39,7 @@ vi.mock('electron', () => {
       return [{
         isDestroyed: () => false,
         destroy: () => {},
+        getTitle: () => 'Plans',
         webContents: {
           send: (channel: string, arg: unknown) => { windowSends.push([channel, arg]) },
         },
@@ -58,6 +59,7 @@ vi.mock('electron', () => {
         // Count only the quit prompt (two buttons), not the refusal notice.
         const options = (opts ?? _win) as { buttons?: unknown[] }
         if (options?.buttons?.length === 2) dialogState.prompts++
+        else dialogState.notices.push(options as { message?: string; detail?: string })
         return Promise.resolve({ response: dialogState.response, checkboxChecked: false })
       },
       showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }),
@@ -66,6 +68,8 @@ vi.mock('electron', () => {
       handle: (channel: string, listener: Listener) => { ipcListeners.set(channel, listener) },
       on: (channel: string, listener: Listener) => { ipcListeners.set(channel, listener) },
       removeHandler: () => {},
+      removeListener: () => {},
+      off: () => {},
     },
     nativeImage: { createFromPath: () => ({ isEmpty: () => true }), createEmpty: () => ({}) },
     Notification: class { static isSupported(): boolean { return false } show(): void {} },
@@ -107,6 +111,7 @@ describe('embedded AI panels after a cancelled quit', () => {
     windowSends.length = 0
     dialogState.response = 0
     dialogState.prompts = 0
+    dialogState.notices.length = 0
     vi.resetModules()
   })
 
@@ -169,5 +174,75 @@ describe('embedded AI panels after an abandoned update install', () => {
     expect(hook, 'index.ts wires no onInstallAbandoned hook').not.toBeNull()
     expect(hook![1]).toContain('dockQuitInProgress = false')
     expect(hook![1]).toContain('quittingWindowsPrepared = false')
+  })
+})
+
+// Past before-quit, Electron closes every window and silently cancels the quit
+// when one of those closes is prevented (a beforeunload, or a close participant
+// that appeared after the quit was prepared). No event says so: will-quit just
+// never comes. The flags must not stay set — every later window close would
+// leave its panels running — and the user must learn why the app did not quit.
+describe('embedded AI panels after a quit cancelled while closing windows', () => {
+  beforeEach(() => {
+    appListeners.length = 0
+    ipcListeners.clear()
+    windowSends.length = 0
+    dialogState.response = 0
+    dialogState.prompts = 0
+    dialogState.notices.length = 0
+    vi.resetModules()
+  })
+
+  async function bootNativeQuit(): Promise<{ beforeQuit: BeforeQuit; willQuit: () => void; appQuitting: () => boolean }> {
+    await import('./index')
+    const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
+    vi.spyOn(frontendPluginManager, 'hasWindowCloseParticipants').mockReturnValue(false)
+    vi.spyOn(frontendPluginManager, 'hasBackendActivity').mockReturnValue(false)
+    const setQuitConfirm = ipcListeners.get('app:setQuitConfirm') as (event: unknown, cfg: unknown) => void
+    setQuitConfirm({}, {
+      enabled: false,
+      cancelledMessage: 'Navide did not quit',
+      cancelledDetail: 'Stopped by: {windows}.',
+      cancelledUnknownWindow: 'a window that has closed since',
+    })
+    const willQuit = appListeners.filter(([event]) => event === 'will-quit')
+    return {
+      beforeQuit: appListeners.find(([event]) => event === 'before-quit')![1] as unknown as BeforeQuit,
+      willQuit: () => { for (const [, listener] of willQuit) (listener as () => void)() },
+      appQuitting: () => (frontendPluginManager as unknown as { appQuitting: () => boolean }).appQuitting(),
+    }
+  }
+
+  it('clears the flags and names the window when will-quit never comes', { timeout: 60_000 }, async () => {
+    const { beforeQuit, appQuitting } = await bootNativeQuit()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const preventDefault = vi.fn()
+      await beforeQuit({ preventDefault })
+      expect(preventDefault).not.toHaveBeenCalled()
+      expect(appQuitting()).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(appQuitting()).toBe(false)
+      expect(dialogState.notices).toEqual([
+        expect.objectContaining({ message: 'Navide did not quit', detail: 'Stopped by: Plans.' }),
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves a quit that reached will-quit alone', { timeout: 60_000 }, async () => {
+    const { beforeQuit, willQuit, appQuitting } = await bootNativeQuit()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await beforeQuit({ preventDefault: vi.fn() })
+      willQuit()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(appQuitting()).toBe(true)
+      expect(dialogState.notices).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

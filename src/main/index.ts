@@ -21,6 +21,7 @@ import { createWorkspaceFolder } from './workspace-create'
 import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, plansFactoryPackageSummary, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
 import { createWindowCloseCoordinator } from './plugins/windowCloseCoordinator'
+import { createQuitCancelWatch } from './quit-cancel-watch'
 import {
   handlePluginFrameAssetRequest,
   PLUGIN_FRAME_SCHEME,
@@ -252,6 +253,9 @@ let quitConfirm = {
   quitLabel: 'Quit',
   cancelLabel: 'Cancel',
   dontShowLabel: "Don't show this again",
+  cancelledMessage: 'Navide did not quit',
+  cancelledDetail: 'A window stopped the quit: {windows}. Finish or close what it is doing, then quit again.',
+  cancelledUnknownWindow: 'a window that has closed since',
 }
 let quitConfirmed = false
 let quittingWindowsPrepared = false
@@ -262,6 +266,26 @@ let quittingWindowsPrepared = false
 // app running.
 let dockQuitInProgress = false
 let quittingWindowsPreparation: Promise<boolean> | null = null
+// A quit that before-quit let through can still be cancelled while Electron
+// closes the windows, silently. Clear what the quit set and say which window
+// stopped it, as an abandoned update install does.
+const quitCancelWatch = createQuitCancelWatch({
+  timeoutMs: 5000,
+  openWindowTitles: () => BrowserWindow.getAllWindows()
+    .filter((window) => !window.isDestroyed())
+    .map((window) => window.getTitle()),
+  onCancelled: (titles) => {
+    dockQuitInProgress = false
+    quittingWindowsPrepared = false
+    windowRegistry.clearCleanExit()
+    const windows = titles.length > 0 ? titles.join(', ') : quitConfirm.cancelledUnknownWindow
+    void dialog.showMessageBox({
+      type: 'warning',
+      message: quitConfirm.cancelledMessage,
+      detail: quitConfirm.cancelledDetail.replace('{windows}', windows),
+    }).catch(() => undefined)
+  },
+})
 // True while the quit confirmation dialog is on screen, so a second close
 // request cannot stack another one.
 let quitPromptOpen = false
@@ -1019,7 +1043,7 @@ frontendPluginManager.setContributionIconResolver(contributionIcon)
 // quits: those panels restore next launch. Cmd+Q without the prompt sets only
 // quittingWindowsPrepared; a confirmed quit or an update install sets
 // dockQuitInProgress, which a vetoed quit clears again. An abandoned install
-// clears both.
+// clears both, and so does a quit cancelled while the windows close.
 frontendPluginManager.setAppQuittingProbe(() => dockQuitInProgress || quittingWindowsPrepared)
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
@@ -5547,6 +5571,7 @@ async function teardownBackendAndQuit(): Promise<void> {
 }
 
 app.on('will-quit', () => {
+  quitCancelWatch.disarm()
   terminalStorageOwnerService.dispose()
   filePickerHostService.dispose()
 })
@@ -5628,7 +5653,10 @@ app.on('before-quit', async (e) => {
   // now reports live plugin backends only - bound views, headless MCP instances
   // and in-flight calls - so a packaged launch that merely registered the bundled
   // Plans backend as metadata no longer keeps this guard permanently false.
-  if (!backend && !backendStarting && !frontendPluginManager.hasBackendActivity()) return
+  if (!backend && !backendStarting && !frontendPluginManager.hasBackendActivity()) {
+    quitCancelWatch.arm()
+    return
+  }
   e.preventDefault()
   void teardownBackendAndQuit()
 })

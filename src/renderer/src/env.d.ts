@@ -229,6 +229,9 @@ declare global {
         quitLabel: string
         cancelLabel: string
         dontShowLabel: string
+        cancelledMessage: string
+        cancelledDetail: string
+        cancelledUnknownWindow: string
       }) => void
       onQuitConfirmDisabled: (cb: () => void) => () => void
       onQuitProgress: (cb: (stage: 'saving' | 'stopping' | 'closing') => void) => () => void

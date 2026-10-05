@@ -687,6 +687,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
     quitLabel: string
     cancelLabel: string
     dontShowLabel: string
+    cancelledMessage: string
+    cancelledDetail: string
+    cancelledUnknownWindow: string
   }): void => ipcRenderer.send('app:setQuitConfirm', cfg),
   onQuitConfirmDisabled: (cb: () => void): (() => void) => {
     const listener = (): void => cb()

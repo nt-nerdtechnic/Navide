@@ -1223,6 +1223,9 @@ function pushQuitConfirmConfig(): void {
     quitLabel: i18n.global.t('confirm-close.quit'),
     cancelLabel: i18n.global.t('action.cancel'),
     dontShowLabel: i18n.global.t('confirm-close.dont-show-again'),
+    cancelledMessage: i18n.global.t('confirm-close.quit-cancelled-title'),
+    cancelledDetail: i18n.global.t('confirm-close.quit-cancelled-body', { windows: '{windows}' }),
+    cancelledUnknownWindow: i18n.global.t('confirm-close.quit-cancelled-unknown-window'),
   })
 }
 watch(confirmBeforeClose, pushQuitConfirmConfig)
