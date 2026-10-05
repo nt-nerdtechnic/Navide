@@ -7289,6 +7289,7 @@
     "plans-retry-running": "Retrying…",
     "plans-retry-failed": "Retry failed: {reason}",
     "plans-recovery-reason": "Plans v2 was withdrawn this session ({reason}).",
+    "plans-backend-stopped": "The Plans backend for “{folder}” stopped after repeated failures. Open Plans for this workspace to restart it, or restart Navide.",
     "yolo-mode": "YOLO mode",
     "yolo-bypass": "— auto-bypass permission prompts",
     "default": "Default",

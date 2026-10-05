@@ -86,6 +86,7 @@ declare global {
       repairPlansStorageRecord: () => Promise<{ ok: boolean; repaired: boolean; reason?: string }>
       onGitRecoveryChanged: (cb: (change: GitRecoveryChanged) => void) => () => void
       onPlansRecoveryChanged: (cb: (change: PlansRecoveryChanged) => void) => () => void
+      onPlansBackendStopped: (cb: (stopped: { workspacePath: string }) => void) => () => void
       onMenuAction: (cb: (action: string) => void) => void
       onSystemResumed: (cb: () => void) => () => void
       setRecentWorkspaces: (list: { path: string; name: string; exists: boolean }[]) => void

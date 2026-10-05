@@ -1277,9 +1277,20 @@ export class FrontendPluginManager {
           // (before dispatch). Unlike an unbind, giving up does mark Plans
           // ready when it was the last dead child - nothing else would ever
           // bring the mark back, and every other child is known to be alive.
+          const firstReport = !this.plansAbandonedBackendInstances.has(runtime.instanceId)
           this.plansDeadBackendInstances.delete(runtime.instanceId)
           this.plansAbandonedBackendInstances.add(runtime.instanceId)
           this.markPlansBackendReadyIfChildrenRecovered(runtime.packageVersion)
+          // A view's failure is shown by legacy recovery; a headless child has
+          // no surface, so tell the user once how to bring it back.
+          const workspacePath = this.headlessPlansWorkspacePaths.get(runtime.instanceId)
+          if (firstReport && workspacePath) {
+            try {
+              this.plansBackendStoppedHandler?.({ workspacePath })
+            } catch {
+              // A notice observer must not change the child failure result.
+            }
+          }
         } else {
           if (runtime.instanceId) this.plansDeadBackendInstances.add(runtime.instanceId)
           this.markPlansBackendUnavailable('child-unavailable')
@@ -1312,6 +1323,7 @@ export class FrontendPluginManager {
       // backend: the next restart or bind marks Plans ready.
       this.plansDeadBackendInstances.delete(runtime.instanceId)
       this.plansAbandonedBackendInstances.delete(runtime.instanceId)
+      this.headlessPlansWorkspacePaths.delete(runtime.instanceId)
     },
   })
   private readonly pendingBackendCalls = new Map<string, Map<string, AbortController>>()
@@ -1331,6 +1343,9 @@ export class FrontendPluginManager {
    *  callers never receive the generated instance id. */
   private readonly headlessBackendInstances = new Map<string, string>()
   private readonly pendingHeadlessBackendBinds = new Map<string, Promise<string>>()
+  /** Headless Plans instance id → its workspace, to tell the user which
+   *  workspace's backend stopped. */
+  private readonly headlessPlansWorkspacePaths = new Map<string, string>()
   /** webContents.id → opaque instance id, so a call's origin can be trusted,
    *  not the payload. */
   private readonly bySender = new Map<number, string>()
@@ -1494,6 +1509,7 @@ export class FrontendPluginManager {
         reason: string
       }) => void)
     | null = null
+  private plansBackendStoppedHandler: ((stopped: { workspacePath: string }) => void) | null = null
   /** Host-only liveness for the exact selected Plans descriptor/activation.
    *  An unavailable child must withdraw the MCP feature until a later bind
    *  succeeds; otherwise MCP keeps selecting the broken v2 adapter. */
@@ -2343,6 +2359,14 @@ export class FrontendPluginManager {
     }) => void) | null,
   ): void {
     this.plansBackendFailureHandler = handler
+  }
+
+  /** Observe a headless Plans child that stopped for good (its restart budget
+   *  is spent), once per child. */
+  setPlansBackendStoppedHandler(
+    handler: ((stopped: { workspacePath: string }) => void) | null,
+  ): void {
+    this.plansBackendStoppedHandler = handler
   }
 
   /** Wait for the initial backend/root bind of one exact view. This is used by
@@ -6306,6 +6330,7 @@ export class FrontendPluginManager {
       }
       this.markPlansBackendReady(packageVersion, packageDir)
       this.headlessBackendInstances.set(key, instanceId)
+      this.headlessPlansWorkspacePaths.set(instanceId, workspacePath)
       return instanceId
     }).catch((error: unknown) => {
       if (this.isPlansBackendAvailabilityError(error)) {
@@ -10002,6 +10027,7 @@ export class FrontendPluginManager {
     this.plansBackendHealthIdentity = null
     this.plansDeadBackendInstances.clear()
     this.plansAbandonedBackendInstances.clear()
+    this.headlessPlansWorkspacePaths.clear()
     await this.pluginBackendHost.close()
   }
 

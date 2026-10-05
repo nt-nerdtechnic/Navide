@@ -1311,6 +1311,16 @@ frontendPluginManager.setPlansBackendFailureHandler((failure) => {
     })
   }
 })
+frontendPluginManager.setPlansBackendStoppedHandler(({ workspacePath }) => {
+  // A headless (agent) Plans child failed too often to be restarted. Nothing
+  // on screen shows it, so the workspace's window tells the user how to bring
+  // it back; the renderer owns the localized text.
+  warnMain('[main] navide.plans agent backend stopped after repeated failures')
+  const target = findMainWindowForWorkspace(workspacePath) ?? mainWindow
+  if (target && !target.isDestroyed()) {
+    target.webContents.send('plans:backendStopped', { workspacePath })
+  }
+})
 let approvedInstalledPluginActivations = [
   ...installedPluginLoad.activationCatalog,
   ...factoryGitActivations,

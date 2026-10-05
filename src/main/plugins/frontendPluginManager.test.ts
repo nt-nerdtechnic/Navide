@@ -3038,14 +3038,28 @@ describe('Plans private filesystem grant revalidation', () => {
       mgr.executeAgentBackendCallForWorkspace(
         PLANS_PLUGIN_ID, workspacePath, { reqId, name: 'plans.list', args: {} },
       )
+    const stopped = vi.fn()
+    mgr.setPlansBackendStoppedHandler(stopped)
     try {
       await expect(agentList(spentWorkspace, 'spent-1')).resolves.toMatchObject({ ok: true })
       await expect(agentList(otherWorkspace, 'other-1')).resolves.toMatchObject({ ok: true })
 
+      // A failure that will be restarted is not reported to the user.
       observers.onBackendFailure?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId: 'headless-spent' },
+        new BackendPluginError('BACKEND_UNAVAILABLE'),
+      )
+      expect(stopped).not.toHaveBeenCalled()
+      const giveUp = () => observers.onBackendFailure?.(
         { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId: 'headless-spent' },
         new BackendPluginError('BACKEND_UNAVAILABLE', BACKEND_RESTART_BUDGET_SPENT_MESSAGE),
       )
+      giveUp()
+      expect(stopped).toHaveBeenCalledTimes(1)
+      expect(stopped).toHaveBeenCalledWith({ workspacePath: spentWorkspace })
+      // Reported once per instance, however often it is seen again.
+      giveUp()
+      expect(stopped).toHaveBeenCalledTimes(1)
       call.mockClear()
 
       await expect(agentList(spentWorkspace, 'spent-2')).resolves.toMatchObject({
@@ -3057,6 +3071,8 @@ describe('Plans private filesystem grant revalidation', () => {
 
       await expect(agentList(otherWorkspace, 'other-2')).resolves.toMatchObject({ ok: true })
       expect(call).toHaveBeenLastCalledWith('headless-other', 'plans.list', {}, expect.anything())
+      // Refused calls do not report it again.
+      expect(stopped).toHaveBeenCalledTimes(1)
 
       // Once its view is unbound the instance is no longer refused.
       observers.onBackendUnbound?.(

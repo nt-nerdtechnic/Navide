@@ -83,6 +83,20 @@ export interface PlansRecoveryChanged {
   reason?: string
 }
 
+export interface PlansBackendStopped {
+  workspacePath: string
+}
+
+function isPlansBackendStopped(payload: unknown): payload is PlansBackendStopped {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    !Array.isArray(payload) &&
+    'workspacePath' in payload &&
+    typeof payload.workspacePath === 'string'
+  )
+}
+
 function isPlansRecoveryChanged(payload: unknown): payload is PlansRecoveryChanged {
   return (
     typeof payload === 'object' &&
@@ -371,6 +385,14 @@ contextBridge.exposeInMainWorld('agentTeam', {
     }
     ipcRenderer.on('plans:recoveryChanged', listener)
     return () => ipcRenderer.removeListener('plans:recoveryChanged', listener)
+  },
+  // The Host gave up restarting a workspace's agent Plans backend.
+  onPlansBackendStopped: (cb: (stopped: PlansBackendStopped) => void): (() => void) => {
+    const listener = (_event: unknown, payload: unknown): void => {
+      if (isPlansBackendStopped(payload)) cb(payload)
+    }
+    ipcRenderer.on('plans:backendStopped', listener)
+    return () => ipcRenderer.removeListener('plans:backendStopped', listener)
   },
   onMenuAction: (cb: (action: string) => void): void => {
     ipcRenderer.on('menu:action', (_event, action: string) => cb(action))

@@ -326,6 +326,7 @@ import {
 import { accountLabel } from './lib/accountLabel'
 import { plaintextTokenStoreMessage, tLogin } from './composables/useCliProfiles'
 import { useStatusBarPopover } from './composables/useStatusBarPopover'
+import { plansBackendStoppedNotice } from './composables/plansBackendStoppedNotice'
 import navideMark from './assets/navide-mark.png'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -5774,6 +5775,7 @@ let stopGitContributionActions: (() => void) | null = null
 let stopPluginContributionChanges: (() => void) | null = null
 let stopGitRecoveryChanged: (() => void) | null = null
 let stopPlansRecoveryChanged: (() => void) | null = null
+let stopPlansBackendStopped: (() => void) | null = null
 onMounted(() => {
   stopGitContributionActions = window.agentTeam?.onGitContributionAction?.(onGitContributionAction) ?? null
   stopGitRecoveryChanged = window.agentTeam?.onGitRecoveryChanged?.((change) => {
@@ -5785,6 +5787,9 @@ onMounted(() => {
   stopPlansRecoveryChanged = window.agentTeam?.onPlansRecoveryChanged?.((change) => {
     legacyPlansRecovery.value = change.legacy
     legacyPlansRecoveryReason.value = change.legacy ? change.reason ?? '' : ''
+  }) ?? null
+  stopPlansBackendStopped = window.agentTeam?.onPlansBackendStopped?.(({ workspacePath }) => {
+    notifyRestore.toast(plansBackendStoppedNotice(workspacePath), { type: 'error' })
   }) ?? null
   void refreshPluginContributions()
   stopPluginContributionChanges = window.agentTeam?.plugins?.onContributionsChanged?.(() => {
@@ -5798,6 +5803,8 @@ onUnmounted(() => {
   stopGitRecoveryChanged = null
   stopPlansRecoveryChanged?.()
   stopPlansRecoveryChanged = null
+  stopPlansBackendStopped?.()
+  stopPlansBackendStopped = null
   stopPluginContributionChanges?.()
   stopPluginContributionChanges = null
 })
