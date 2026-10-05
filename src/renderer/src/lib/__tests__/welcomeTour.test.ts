@@ -190,3 +190,25 @@ describe('nextWelcomeTourMove', () => {
     expect(nextWelcomeTourMove({ ...base, eligible: true })).toBe('start')
   })
 })
+
+// 22:41: the tour broke at the @ bubble. vue-i18n reads a bare "@" as a linked
+// message and throws while compiling it, which stopped CoachMark rendering —
+// a key check alone never compiles the text. Render every line for real.
+describe('welcome tour text, compiled by vue-i18n', () => {
+  it('renders every line in every locale, with an @ where it talks about @', async () => {
+    const { i18n } = await import('@navide/plugin-ui/foundation')
+    const keys = [...WELCOME_STEPS.map((s) => s.textKey), 'tour.welcome.next', 'tour.welcome.doneFeedback', 'tour.welcome.finished']
+    for (const code of ['en-US', 'zh-TW', 'ja-JP']) {
+      i18n.global.locale.value = code as typeof i18n.global.locale.value
+      for (const key of keys) {
+        let text = ''
+        expect(() => {
+          text = i18n.global.t(key)
+        }, `${code} ${key}`).not.toThrow()
+        expect(text, `${code} ${key}`).not.toBe(key)
+        expect(text, `${code} ${key}`).not.toContain("{'")
+      }
+      expect(i18n.global.t('tour.welcome.talkMention'), code).toContain('@')
+    }
+  })
+})

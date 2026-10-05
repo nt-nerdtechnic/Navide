@@ -9685,7 +9685,7 @@
       "pickFolder": "First, pick a folder for your agents to work in. Have a project? Click Browse…. Starting fresh? Click New…. Just trying it out? Click Home.",
       "openAgent": "Click ＋ and pick a CLI to open your first agent.",
       "firstCommand": "Type a sentence here and press Enter, then watch it answer.",
-      "talkMention": "Open one more pane, then type @ in either pane and pick the other to give it a task.",
+      "talkMention": "Open one more pane, then type {'@'} in either pane and pick the other to give it a task.",
       "talkDrag": "Or drag one pane’s title bar onto another pane’s terminal to bring its conversation along.",
       "usageAccount": "Rest the pointer here to see the quota and account, and switch accounts right here if you need to.",
       "next": "Next",

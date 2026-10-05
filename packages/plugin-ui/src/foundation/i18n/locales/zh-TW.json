@@ -9685,7 +9685,7 @@
       "pickFolder": "先挑一個資料夾，agent 會在這裡工作。已有專案按「瀏覽…」，從零開始按「新增…」，想試試看就按「家目錄」。",
       "openAgent": "按 ＋ 選一支 CLI，開出第一個 agent。",
       "firstCommand": "在這裡打一句話按 Enter，看它回話。",
-      "talkMention": "再開一個 pane，然後在任一個 pane 打 @ 選另一個，叫它做事。",
+      "talkMention": "再開一個 pane，然後在任一個 pane 打 {'@'} 選另一個，叫它做事。",
       "talkDrag": "或把一個 pane 的標題列拖到另一個 pane 的終端區，帶入它的對話。",
       "usageAccount": "滑鼠停在這裡，看額度與帳號，需要時直接切換。",
       "next": "下一個",
