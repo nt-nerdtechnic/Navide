@@ -1018,7 +1018,8 @@ frontendPluginManager.setContributionIconResolver(contributionIcon)
 // Windows hosting embedded AI panels end them on close, but not while the app
 // quits: those panels restore next launch. Cmd+Q without the prompt sets only
 // quittingWindowsPrepared; a confirmed quit or an update install sets
-// dockQuitInProgress, which a vetoed quit clears again.
+// dockQuitInProgress, which a vetoed quit clears again. An abandoned install
+// clears both.
 frontendPluginManager.setAppQuittingProbe(() => dockQuitInProgress || quittingWindowsPrepared)
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
@@ -5278,7 +5279,9 @@ app.whenReady().then(async () => {
     // timeout) — restore the confirmation gate the waiver above disabled.
     // ...and the snapshot freeze above goes back with it: the app is still
     // running, so this run is not a clean exit after all.
-    onInstallAbandoned: () => { quitConfirmed = false; dockQuitInProgress = false; windowRegistry.clearCleanExit() },
+    // quitAndInstall's before-quit marked the windows prepared; the app is
+    // still running, so un-mark that too or windows stop ending their panels.
+    onInstallAbandoned: () => { quitConfirmed = false; dockQuitInProgress = false; quittingWindowsPrepared = false; windowRegistry.clearCleanExit() },
   })
   // Detect an unclean previous exit and stash its windows for the restore
   // banner. Always reset the file (start tracking this run) — but only OFFER

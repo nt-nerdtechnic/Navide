@@ -154,3 +154,20 @@ describe('embedded AI panels after a cancelled quit', () => {
     expect(appQuitting()).toBe(true)
   })
 })
+
+// autoUpdater.quitAndInstall() emits before-quit, which marks the windows
+// prepared; an install that then fails or times out leaves the app running, so
+// it must clear that flag along with dockQuitInProgress — else every later
+// window close keeps its panels running. Source-scanned because the updater
+// hooks are wired inside app.whenReady(), which this harness never resolves.
+describe('embedded AI panels after an abandoned update install', () => {
+  it('clears both quit flags the probe reads', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const mainSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8')
+    const hook = /onInstallAbandoned: \(\) => \{([^}]*)\}/.exec(mainSource)
+    expect(hook, 'index.ts wires no onInstallAbandoned hook').not.toBeNull()
+    expect(hook![1]).toContain('dockQuitInProgress = false')
+    expect(hook![1]).toContain('quittingWindowsPrepared = false')
+  })
+})
