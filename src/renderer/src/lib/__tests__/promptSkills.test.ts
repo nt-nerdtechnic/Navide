@@ -38,6 +38,8 @@ import {
   RING_SLOT_GAP,
   type PromptSkill,
 } from '../promptSkills'
+import { PROMPT_SKILL_SEED, seedText } from '../promptSkillSeed'
+import { i18n } from '@navide/plugin-ui/foundation'
 
 function skill(over: Partial<PromptSkill> = {}): PromptSkill {
   return {
@@ -184,6 +186,14 @@ describe('nextSkillId', () => {
 describe('builtinPromptSkills', () => {
   it('carries the legacy default prompt verbatim', () => {
     expect(builtinPromptSkills()[0].prompt).toBe(DEFAULT_LOOP_PROMPT)
+  })
+
+  it('takes its id, prompt and localized name from the seed the backend reads too', () => {
+    const [skill] = builtinPromptSkills()
+    expect(skill.id).toBe(PROMPT_SKILL_SEED.id)
+    expect(DEFAULT_LOOP_PROMPT).toBe(PROMPT_SKILL_SEED.prompt)
+    expect(skill.name).toBe(seedText('name', i18n.global.locale.value))
+    expect(seedText('name', 'fr')).toBe(PROMPT_SKILL_SEED.name['zh-TW'])
   })
 })
 

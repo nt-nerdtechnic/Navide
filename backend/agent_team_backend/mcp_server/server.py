@@ -6267,9 +6267,13 @@ def _prompt_skills_inventory(skill_id: str) -> dict[str, Any]:
     """The Prompts page's saved skills, as a summary or one of them in full."""
     from agent_team_backend import app as _app
 
+    from agent_team_backend import prompt_skills
+
     settings = _app.ui_settings_store.get()
     raw = settings.get(_PROMPT_SKILLS_SETTING_KEY)
     rows = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+    if _PROMPT_SKILLS_SETTING_KEY not in settings:
+        rows = prompt_skills.builtin(settings)
     if skill_id:
         skill = next((row for row in rows if row.get("id") == skill_id), None)
         if skill is None:
@@ -6280,9 +6284,7 @@ def _prompt_skills_inventory(skill_id: str) -> dict[str, Any]:
         "default_id": next((str(row.get("id", "")) for row in rows if row.get("isDefault")), ""),
     }
     if _PROMPT_SKILLS_SETTING_KEY not in settings:
-        # Never saved: the page seeds a builtin skill on first use, and its
-        # text lives in the renderer, so the backend cannot list it here.
-        result["note"] = "no prompt skills saved yet; the app seeds a builtin one on first use"
+        result["note"] = "no prompt skills saved yet; this is the builtin skill the app starts with"
     return result
 
 
@@ -6300,8 +6302,8 @@ async def prompt_list(ctx: Context, id: str = "") -> dict[str, Any]:
     Called with no id this lists metadata only — {skills, default_id}. Each
     skill is {id, name, icon, description, category, enabled, isDefault,
     maxTurns}; `default_id` is the id of the skill marked default, or "" when
-    none is. A `note` is added when the user has never saved any: the app then
-    seeds a builtin skill on first use, which is not visible from here.
+    none is. A `note` is added when the user has never saved any: the list is
+    then the builtin skill the app starts with.
 
     Called with an id it returns that one skill in full — {skill}, carrying
     `prompt` and `resumePrompt` as well. An id the list does not contain

@@ -6357,8 +6357,6 @@
       "advanced": "進階",
       "send-once": "單次送出",
       "send-once-hint": "只有預設技能會以 loop 方式執行；這個技能只送出一次，沒有續跑詞與輪次上限。",
-      "builtin-name": "開發推進",
-      "builtin-description": "持續推進到完成度 100%，完成後產出 HTML 報告書。",
       "untitled-name": "未命名技能"
     },
     "section": {

@@ -6357,8 +6357,6 @@
       "advanced": "詳細設定",
       "send-once": "1 回だけ送信",
       "send-once-hint": "ループするのは既定のスキルのみです。このスキルは 1 回だけ送信され、再開やターン数の上限は適用されません。",
-      "builtin-name": "実装を続ける",
-      "builtin-description": "100% 完了するまで作業を続け、最後に HTML レポートを作成します。",
       "untitled-name": "無題のスキル"
     },
     "section": {

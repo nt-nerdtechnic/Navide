@@ -6357,8 +6357,6 @@
       "advanced": "Advanced",
       "send-once": "Sends once",
       "send-once-hint": "Only the default skill runs as a loop; this one is sent once, with no resume or turn cap.",
-      "builtin-name": "Keep building",
-      "builtin-description": "Keep going until it is 100% complete, then produce an HTML report.",
       "untitled-name": "Untitled skill"
     },
     "section": {

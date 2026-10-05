@@ -9,6 +9,7 @@
 import { DEFAULT_LOOP_PROMPT, LOOP_PROMPT_SETTING_KEY } from './loopPrompt'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { i18n } from '@navide/plugin-ui/foundation'
+import { PROMPT_SKILL_SEED, seedText } from './promptSkillSeed'
 
 export const PROMPT_SKILLS_SETTING_KEY = 'prompt-skills'
 
@@ -106,14 +107,14 @@ export interface PromptSkill {
 export function builtinPromptSkills(legacyPrompt = DEFAULT_LOOP_PROMPT): PromptSkill[] {
   return [
     {
-      id: 'advance',
-      name: i18n.global.t('settings.prompts.builtin-name'),
-      icon: 'advance',
-      description: i18n.global.t('settings.prompts.builtin-description'),
+      id: PROMPT_SKILL_SEED.id,
+      name: seedText('name', i18n.global.locale.value),
+      icon: PROMPT_SKILL_SEED.icon,
+      description: seedText('description', i18n.global.locale.value),
       prompt: legacyPrompt,
       resumePrompt: '',
       maxTurns: 0,
-      category: 'dev',
+      category: PROMPT_SKILL_SEED.category,
       enabled: true,
       isDefault: true,
     },
