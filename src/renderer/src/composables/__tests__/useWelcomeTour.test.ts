@@ -52,7 +52,7 @@ describe('useWelcomeTour', () => {
     expect(welcome.stage()).toBe('pane')
 
     expect(welcome.startPane()).toBe(true)
-    expect(tour.steps.value?.map((s) => s.id)).toEqual(['first-command', 'more'])
+    expect(tour.steps.value?.map((s) => s.id)).toEqual(['first-command', 'talk-mention', 'talk-drag', 'usage-account', 'more'])
     tour.end(true)
     expect(welcome.stage()).toBe('off')
   })
@@ -119,7 +119,7 @@ describe('useWelcomeTour', () => {
     const welcome = useWelcomeTour()
     const tour = useReleaseTour()
     expect(welcome.replay()).toBe(true)
-    expect(tour.steps.value).toHaveLength(5)
+    expect(tour.steps.value).toHaveLength(8)
     expect(tour.skipOnLast.value).toBe(false)
     tour.end(true)
     expect(store.size).toBe(0)

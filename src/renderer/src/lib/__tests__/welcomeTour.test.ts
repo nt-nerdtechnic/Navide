@@ -46,10 +46,10 @@ function keysOf(step: (typeof WELCOME_REPLAY_STEPS)[number]): string[] {
 describe('welcome tour steps', () => {
   // One path: pick a workspace → open the first agent → give it a first
   // instruction. A card off that path does not get its own step.
-  it('is two cards on Welcome, one on the main screen, two on the first pane', () => {
+  it('is two cards on Welcome, one on the main screen, five on the first pane', () => {
     expect(WELCOME_START_STEPS.map((s) => s.id)).toEqual(['why-folder', 'pick-folder'])
     expect(WELCOME_MAIN_STEPS.map((s) => s.id)).toEqual(['open-agent'])
-    expect(WELCOME_PANE_STEPS.map((s) => s.id)).toEqual(['first-command', 'more'])
+    expect(WELCOME_PANE_STEPS.map((s) => s.id)).toEqual(['first-command', 'talk-mention', 'talk-drag', 'usage-account', 'more'])
   })
 
   it('replays all three parts in order, as one tour', () => {
@@ -115,6 +115,8 @@ describe('welcome tour steps', () => {
       'welcome-open': 'src/renderer/src/components/Welcome.vue',
       'welcome-open-buttons': 'src/renderer/src/components/Welcome.vue',
       'open-agent': 'src/renderer/src/components/ControlPane.vue',
+      'pane-header': 'src/renderer/src/components/TerminalPane.vue',
+      'usage-badge': 'src/renderer/src/components/TerminalPane.vue',
     }
     const used = new Set<string>()
     for (const step of WELCOME_REPLAY_STEPS) {

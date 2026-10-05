@@ -605,6 +605,7 @@ onMounted(() => {
     <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
       :class="['pane-header', { 'drag-over': isReorderDragOver }]"
+      data-tour="pane-header"
       :draggable="!editingTitle"
       :title="skillMenuActive ? '' : $t('pane.terminal.drag-to-tab-tooltip')"
       @click="emit('set-focus', $event)"
@@ -703,7 +704,7 @@ onMounted(() => {
           :style="statusBadgeVars"
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
-        <UsageBadge v-if="agentKey" :agent-key="agentKey" :cli-profiles="cliProfiles" />
+        <UsageBadge v-if="agentKey" data-tour="usage-badge" :agent-key="agentKey" :cli-profiles="cliProfiles" />
         <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>

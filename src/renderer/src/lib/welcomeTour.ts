@@ -51,8 +51,9 @@ export const WELCOME_MAIN_STEPS: TourStep[] = [
   },
 ]
 
-/** On the first pane once it waits for input: the first instruction, then
- *  what to try next. */
+/** On the first pane once it waits for input: the first instruction, the two
+ *  ways to have one agent work with another, the quota and account, then what
+ *  to try next. */
 export const WELCOME_PANE_STEPS: TourStep[] = [
   {
     id: 'first-command',
@@ -60,6 +61,27 @@ export const WELCOME_PANE_STEPS: TourStep[] = [
     titleKey: `${T}.firstCommand.title`,
     bodyKey: `${T}.firstCommand.body`,
     missingKey: `${T}.firstCommand.missing`,
+  },
+  {
+    id: 'talk-mention',
+    anchor: '.xterm-host[data-pane-id]',
+    titleKey: `${T}.talkMention.title`,
+    bodyKey: `${T}.talkMention.body`,
+    missingKey: `${T}.talkMention.missing`,
+  },
+  {
+    id: 'talk-drag',
+    anchor: '[data-tour="pane-header"]',
+    titleKey: `${T}.talkDrag.title`,
+    bodyKey: `${T}.talkDrag.body`,
+    missingKey: `${T}.talkDrag.missing`,
+  },
+  {
+    id: 'usage-account',
+    anchor: '[data-tour="usage-badge"]',
+    titleKey: `${T}.usageAccount.title`,
+    bodyKey: `${T}.usageAccount.body`,
+    missingKey: `${T}.usageAccount.missing`,
   },
   {
     id: 'more',
