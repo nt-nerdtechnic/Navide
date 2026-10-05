@@ -64,4 +64,22 @@ describe('useReleaseTour', () => {
     expect(centre.activeVersion.value).toBeNull()
     expect(centre.isDone('0.2.10')).toBe(true)
   })
+  it('runs a named tour through the same state, handing its end to the caller', async () => {
+    const { useReleaseTour } = await load()
+    const tour = useReleaseTour()
+    const ends: boolean[] = []
+    const steps = [{ id: 'a', titleKey: 't', bodyKey: 'b' }]
+    expect(tour.startNamed('welcome-main', steps, (completed) => ends.push(completed))).toBe(true)
+    expect(tour.activeVersion.value).toBe('welcome-main')
+    expect(tour.steps.value).toEqual(steps)
+    // One tour at a time: a release tour cannot start over it, nor a second named one.
+    expect(tour.start('0.2.10')).toBe(false)
+    expect(tour.startNamed('other', steps)).toBe(false)
+    tour.end(false)
+    expect(ends).toEqual([false])
+    expect(tour.activeVersion.value).toBeNull()
+    expect(tour.steps.value).toBeNull()
+    // A named tour never writes a release's done record.
+    expect(store.size).toBe(0)
+  })
 })
