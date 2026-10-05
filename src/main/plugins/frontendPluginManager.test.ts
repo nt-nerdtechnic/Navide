@@ -338,6 +338,7 @@ import {
   closeGitLeftPluginView,
   GIT_PLUGIN_ID,
   PLANS_PLUGIN_ID,
+  PLANS_BACKEND_STOPPED_MESSAGE,
   MINI_IDE_PLUGIN_ID,
   bundledMiniIdeDir,
   bundledPlansDir,
@@ -354,7 +355,7 @@ import {
   type PluginLaunchDescriptor,
   type PluginViewLaunchDescriptor,
 } from './frontendPluginManager'
-import { PluginBackendHost } from './pluginBackendHost'
+import { BACKEND_RESTART_BUDGET_SPENT_MESSAGE, PluginBackendHost } from './pluginBackendHost'
 import { BackendPluginError, PluginBackendSupervisor } from './pluginBackendSupervisor'
 import { EditorSelectionGrants } from './editorSelectionGrants'
 import type { PlansBridgeContext } from './plansBridge'
@@ -650,6 +651,8 @@ describe('backend Host session registration', () => {
     mgr: FrontendPluginManager
     childFailed: (instanceId: string) => void
     childRestarted: (instanceId: string, version?: string) => void
+    childUnbound: (instanceId: string) => void
+    childBudgetSpent: (instanceId: string) => void
   } {
     const mgr = new FrontendPluginManager()
     mgr.registerDescriptor({
@@ -679,6 +682,7 @@ describe('backend Host session registration', () => {
     const observers = host as unknown as {
       onBackendFailure?: (runtime: unknown, error: BackendPluginError) => void
       onBackendRestarted?: (runtime: unknown) => void
+      onBackendUnbound?: (runtime: unknown) => void
     }
     return {
       mgr,
@@ -688,6 +692,13 @@ describe('backend Host session registration', () => {
       ),
       childRestarted: (instanceId, version = packageVersion) => observers.onBackendRestarted?.(
         { pluginId: PLANS_PLUGIN_ID, packageVersion: version, instanceId },
+      ),
+      childUnbound: (instanceId) => observers.onBackendUnbound?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId },
+      ),
+      childBudgetSpent: (instanceId) => observers.onBackendFailure?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId },
+        new BackendPluginError('BACKEND_UNAVAILABLE', BACKEND_RESTART_BUDGET_SPENT_MESSAGE),
       ),
     }
   }
@@ -726,6 +737,108 @@ describe('backend Host session registration', () => {
       recoveredFirst.childRestarted('headless-1')
       expect(recoveredFirst.mgr.isPlansBackendAvailable()).toBe(false)
       expect(recoveredFirst.mgr.plansBackendFallbackAllowed()).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('keeps Plans withdrawn until every child that died has come back', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, childFailed, childRestarted } = plansManagerWithHostObservers()
+
+      childFailed('headless-a')
+      childFailed('headless-b')
+      childRestarted('headless-a')
+      expect(mgr.isPlansBackendAvailable()).toBe(false)
+      expect(mgr.plansBackendFallbackAllowed()).toBe(true)
+      childRestarted('headless-b')
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+      expect(mgr.plansBackendFallbackAllowed()).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('stops waiting for a dead child once its view is unbound', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, childFailed, childRestarted, childUnbound } = plansManagerWithHostObservers()
+
+      childFailed('headless-a')
+      childFailed('headless-b')
+      childUnbound('headless-b')
+      // Unbinding alone is no proof the backend works; the restart is.
+      expect(mgr.isPlansBackendAvailable()).toBe(false)
+      childRestarted('headless-a')
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('forgets the dead children when the user re-arms Plans', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, childFailed, childRestarted } = plansManagerWithHostObservers()
+
+      childFailed('headless-a')
+      expect(mgr.clearPlansBackendUnavailable()).toBe(true)
+      childFailed('headless-c')
+      childRestarted('headless-c')
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('keeps Plans withdrawn for another cause even after every dead child came back', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, childFailed, childRestarted } = plansManagerWithHostObservers()
+
+      childFailed('headless-a')
+      childFailed('headless-b')
+      mgr.markPlansBackendUnavailable('storage-unavailable')
+      childRestarted('headless-a')
+      childRestarted('headless-b')
+      expect(mgr.isPlansBackendAvailable()).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('does not let a child whose restart budget is spent hold Plans withdrawn', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // Another child is still dead: the spent one stops counting, the other
+      // one's restart brings Plans back.
+      const twoDead = plansManagerWithHostObservers()
+      twoDead.childFailed('headless-a')
+      twoDead.childFailed('headless-b')
+      twoDead.childBudgetSpent('headless-b')
+      expect(twoDead.mgr.isPlansBackendAvailable()).toBe(false)
+      twoDead.childRestarted('headless-a')
+      expect(twoDead.mgr.isPlansBackendAvailable()).toBe(true)
+
+      // The spent child was the last dead one: nothing will restart it, so
+      // Plans comes back at once instead of staying withdrawn for everyone.
+      const lastDead = plansManagerWithHostObservers()
+      lastDead.childFailed('headless-b')
+      lastDead.childBudgetSpent('headless-b')
+      expect(lastDead.mgr.isPlansBackendAvailable()).toBe(true)
+
+      // Spent while Plans was ready: the failure does not withdraw it.
+      const whileReady = plansManagerWithHostObservers()
+      whileReady.childBudgetSpent('headless-b')
+      expect(whileReady.mgr.isPlansBackendAvailable()).toBe(true)
+
+      // Another cause still keeps it withdrawn.
+      const otherCause = plansManagerWithHostObservers()
+      otherCause.childFailed('headless-b')
+      otherCause.mgr.markPlansBackendUnavailable('storage-unavailable')
+      otherCause.childBudgetSpent('headless-b')
+      expect(otherCause.mgr.isPlansBackendAvailable()).toBe(false)
     } finally {
       warnSpy.mockRestore()
     }
@@ -2872,6 +2985,90 @@ describe('Plans private filesystem grant revalidation', () => {
       unbind.mockRestore()
       bind.mockRestore()
       await mgr.closeBackendPlugins()
+    }
+  })
+
+  // A child that spent its restart budget is never restarted. Its workspace's
+  // agent calls must fail before dispatch with the recovery steps, and the other
+  // workspaces must keep using v2.
+  it('refuses agent calls for a workspace whose child is given up, before dispatch and without withdrawing Plans', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '2.0.0'
+    const spentWorkspace = process.cwd()
+    const otherWorkspace = mkdtempSync(join(tmpdir(), 'navide-plans-other-'))
+    mgr.registerDescriptor({
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: ['fs'],
+      devUrl: '',
+      entryFile: '/plugins/navide.plans/frontend/window/index.html',
+      views: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+    }, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.list'],
+      agentMethods: ['plans.list'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: ['fs'], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+    const bind = vi.spyOn(PluginBackendHost.prototype, 'bindWorkspace')
+      .mockImplementation(async (_runtime, _packageDir, workspacePath) =>
+        workspacePath === spentWorkspace ? 'headless-spent' : 'headless-other')
+    const call = vi.spyOn(PluginBackendHost.prototype, 'call').mockResolvedValue([] as never)
+    const host = (mgr as unknown as { pluginBackendHost: PluginBackendHost }).pluginBackendHost
+    const observers = host as unknown as {
+      onBackendFailure?: (runtime: unknown, error: BackendPluginError) => void
+      onBackendUnbound?: (runtime: unknown) => void
+    }
+    const agentList = (workspacePath: string, reqId: string) =>
+      mgr.executeAgentBackendCallForWorkspace(
+        PLANS_PLUGIN_ID, workspacePath, { reqId, name: 'plans.list', args: {} },
+      )
+    try {
+      await expect(agentList(spentWorkspace, 'spent-1')).resolves.toMatchObject({ ok: true })
+      await expect(agentList(otherWorkspace, 'other-1')).resolves.toMatchObject({ ok: true })
+
+      observers.onBackendFailure?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId: 'headless-spent' },
+        new BackendPluginError('BACKEND_UNAVAILABLE', BACKEND_RESTART_BUDGET_SPENT_MESSAGE),
+      )
+      call.mockClear()
+
+      await expect(agentList(spentWorkspace, 'spent-2')).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'BACKEND_UNAVAILABLE', message: PLANS_BACKEND_STOPPED_MESSAGE },
+      })
+      expect(call).not.toHaveBeenCalled()
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+
+      await expect(agentList(otherWorkspace, 'other-2')).resolves.toMatchObject({ ok: true })
+      expect(call).toHaveBeenLastCalledWith('headless-other', 'plans.list', {}, expect.anything())
+
+      // Once its view is unbound the instance is no longer refused.
+      observers.onBackendUnbound?.(
+        { pluginId: PLANS_PLUGIN_ID, packageVersion, instanceId: 'headless-spent' },
+      )
+      await expect(agentList(spentWorkspace, 'spent-3')).resolves.toMatchObject({ ok: true })
+    } finally {
+      call.mockRestore()
+      bind.mockRestore()
+      warnSpy.mockRestore()
+      await mgr.closeBackendPlugins()
+      rmSync(otherWorkspace, { recursive: true, force: true })
     }
   })
 

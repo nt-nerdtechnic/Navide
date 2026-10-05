@@ -781,7 +781,7 @@ describe('first-party backend restart after a child failure', () => {
 
   async function bindFailingViews(
     instanceIds: string[],
-    options: Pick<PluginBackendHostOptions, 'onBackendFailure' | 'onBackendRestarted'> = {},
+    options: Pick<PluginBackendHostOptions, 'onBackendFailure' | 'onBackendRestarted' | 'onBackendUnbound'> = {},
   ): Promise<{
     host: PluginBackendHost
     views: Map<string, { restart: ReturnType<typeof vi.fn>; fail: (error?: BackendPluginError) => void }>
@@ -850,6 +850,21 @@ describe('first-party backend restart after a child failure', () => {
 
     expect(onBackendRestarted).toHaveBeenCalledTimes(1)
     expect(onBackendRestarted).toHaveBeenCalledWith(expect.objectContaining({
+      pluginId: runtime.pluginId,
+      packageVersion: runtime.packageVersion,
+      instanceId: 'view-1',
+    }))
+  })
+
+  it('reports a view once when it is unbound', async () => {
+    const onBackendUnbound = vi.fn()
+    const { host } = await bindFailingViews(['view-1', 'view-2'], { onBackendUnbound })
+
+    await host.unbindView('view-1')
+    await host.unbindView('view-1')
+
+    expect(onBackendUnbound).toHaveBeenCalledTimes(1)
+    expect(onBackendUnbound).toHaveBeenCalledWith(expect.objectContaining({
       pluginId: runtime.pluginId,
       packageVersion: runtime.packageVersion,
       instanceId: 'view-1',

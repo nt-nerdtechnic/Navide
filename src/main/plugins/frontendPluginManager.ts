@@ -100,6 +100,7 @@ import {
   type PluginContributionCatalogEntry,
 } from './pluginContributionCatalog'
 import {
+  BACKEND_RESTART_BUDGET_SPENT_MESSAGE,
   canonicalBackendPackageDir,
   PluginBackendHost,
   type ThirdPartyAdmitter,
@@ -1270,7 +1271,19 @@ export class FrontendPluginManager {
         this.emitHostBackendFailureDiagnostic(runtime.pluginId, error)
       }
       if (runtime.pluginId === PLANS_PLUGIN_ID && this.isPlansBackendAvailabilityError(error)) {
-        this.markPlansBackendUnavailable('child-unavailable')
+        if (error.message === BACKEND_RESTART_BUDGET_SPENT_MESSAGE && runtime.instanceId) {
+          // A given-up child is never restarted, so it must not hold Plans
+          // withdrawn for every workspace: only its own workspace is refused
+          // (before dispatch). Unlike an unbind, giving up does mark Plans
+          // ready when it was the last dead child - nothing else would ever
+          // bring the mark back, and every other child is known to be alive.
+          this.plansDeadBackendInstances.delete(runtime.instanceId)
+          this.plansAbandonedBackendInstances.add(runtime.instanceId)
+          this.markPlansBackendReadyIfChildrenRecovered(runtime.packageVersion)
+        } else {
+          if (runtime.instanceId) this.plansDeadBackendInstances.add(runtime.instanceId)
+          this.markPlansBackendUnavailable('child-unavailable')
+        }
         const plugin = runtime.instanceId ? this.running.get(runtime.instanceId) : undefined
         if (plugin?.id === PLANS_PLUGIN_ID && plugin.workspacePath) {
           try {
@@ -1290,13 +1303,15 @@ export class FrontendPluginManager {
     },
     onBackendRestarted: (runtime) => {
       if (runtime.pluginId !== PLANS_PLUGIN_ID) return
-      const identity = this.plansBackendHealthIdentity
-      if (
-        this.plansBackendHealth !== 'unavailable' ||
-        !this.plansUnavailableByChildDeath ||
-        identity?.packageVersion !== runtime.packageVersion
-      ) return
-      this.markPlansBackendReady(identity.packageVersion, identity.packageDir)
+      if (runtime.instanceId) this.plansDeadBackendInstances.delete(runtime.instanceId)
+      this.markPlansBackendReadyIfChildrenRecovered(runtime.packageVersion)
+    },
+    onBackendUnbound: (runtime) => {
+      if (runtime.pluginId !== PLANS_PLUGIN_ID || !runtime.instanceId) return
+      // A gone view no longer blocks, but its going proves nothing about the
+      // backend: the next restart or bind marks Plans ready.
+      this.plansDeadBackendInstances.delete(runtime.instanceId)
+      this.plansAbandonedBackendInstances.delete(runtime.instanceId)
     },
   })
   private readonly pendingBackendCalls = new Map<string, Map<string, AbortController>>()
@@ -1489,6 +1504,12 @@ export class FrontendPluginManager {
    *  cause (legacy recovery, storage, a failed bind or view) keeps the mark
    *  until its own path clears it. */
   private plansUnavailableByChildDeath = false
+  /** Bound Plans instances whose child died and has not come back yet. Plans
+   *  is marked ready again only once none is left. */
+  private readonly plansDeadBackendInstances = new Set<string>()
+  /** Bound Plans instances whose child spent its restart budget. Agent calls
+   *  for them are refused before dispatch until they are unbound. */
+  private readonly plansAbandonedBackendInstances = new Set<string>()
   private readonly pendingActivations = new Map<
     string,
     ReturnType<typeof setTimeout> | null
@@ -2076,6 +2097,7 @@ export class FrontendPluginManager {
     if (this.plansBackendHealth !== 'unavailable') return false
     this.plansBackendHealth = 'unknown'
     this.plansBackendHealthIdentity = null
+    this.plansDeadBackendInstances.clear()
     this.discardHeadlessPlansBackends()
     this.refreshHostSessionRegistration()
     return true
@@ -2098,6 +2120,19 @@ export class FrontendPluginManager {
         )
       })
     }
+  }
+
+  /** Undo a mark that came only from child deaths once every dead child has
+   *  come back or stopped counting, for the same package version. */
+  private markPlansBackendReadyIfChildrenRecovered(packageVersion: string): void {
+    const identity = this.plansBackendHealthIdentity
+    if (
+      this.plansBackendHealth !== 'unavailable' ||
+      !this.plansUnavailableByChildDeath ||
+      this.plansDeadBackendInstances.size > 0 ||
+      identity?.packageVersion !== packageVersion
+    ) return
+    this.markPlansBackendReady(identity.packageVersion, identity.packageDir)
   }
 
   private markPlansBackendReady(packageVersion: string, packageDir: string): void {
@@ -6433,6 +6468,12 @@ export class FrontendPluginManager {
         initiator,
       )
     }
+    const cachedInstanceId = this.headlessBackendInstances.get(
+      this.headlessPlansKey(packageVersion, workspacePath),
+    )
+    if (cachedInstanceId && this.plansAbandonedBackendInstances.has(cachedInstanceId)) {
+      return buildError(record.reqId, 'BACKEND_UNAVAILABLE', PLANS_BACKEND_STOPPED_MESSAGE)
+    }
     if (record.name === 'plans.create' && !(await this.provisionPlansAssets(workspacePath))) {
       return buildError(record.reqId, 'BACKEND_UNAVAILABLE', 'Plans assets are unavailable')
     }
@@ -9940,6 +9981,8 @@ export class FrontendPluginManager {
     this.pendingHeadlessBackendBinds.clear()
     this.plansBackendHealth = 'unknown'
     this.plansBackendHealthIdentity = null
+    this.plansDeadBackendInstances.clear()
+    this.plansAbandonedBackendInstances.clear()
     await this.pluginBackendHost.close()
   }
 
@@ -12122,6 +12165,12 @@ export async function openMiniIdePluginView(
 
 /** Id of the Plans extension (the plan review surface). */
 export const PLANS_PLUGIN_ID = 'navide.plans'
+
+/** What an agent call gets for a workspace whose Plans child failed too often
+ *  to be restarted, including how the user brings it back. */
+export const PLANS_BACKEND_STOPPED_MESSAGE =
+  'The Plans backend for this workspace stopped after repeated failures. ' +
+  'Open Plans for this workspace to restart it, or restart Navide.'
 
 /** The production Plans package owns both the embedded left surface and the
  * dedicated window. A v2 descriptor with only one is an incomplete cutover

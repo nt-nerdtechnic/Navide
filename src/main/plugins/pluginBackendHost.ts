@@ -64,6 +64,8 @@ export interface PluginBackendHostOptions {
   /** Observe a failed first-party child that an automatic restart brought
    * back, while its view is still bound. */
   onBackendRestarted?: (runtime: BackendRuntimeContext) => void
+  /** Observe a bound view being unbound; its child is never reported again. */
+  onBackendUnbound?: (runtime: BackendRuntimeContext) => void
   /** Observe child diagnostic output (stderr / startup failure diagnostics). */
   onStderr?: (chunk: string) => void
   /** Re-check Host-owned trust immediately before every backend child spawn. */
@@ -218,6 +220,7 @@ export class PluginBackendHost {
   private readonly resolveExecutionPolicy?: PluginBackendHostOptions['resolveExecutionPolicy']
   private readonly onBackendFailure?: PluginBackendHostOptions['onBackendFailure']
   private readonly onBackendRestarted?: PluginBackendHostOptions['onBackendRestarted']
+  private readonly onBackendUnbound?: PluginBackendHostOptions['onBackendUnbound']
   private readonly onStderr?: PluginBackendHostOptions['onStderr']
   private reverifyBeforeSpawn?: PluginBackendHostOptions['reverifyBeforeSpawn']
   private admitThirdParty?: ThirdPartyAdmitter
@@ -244,6 +247,7 @@ export class PluginBackendHost {
     this.resolveExecutionPolicy = options.resolveExecutionPolicy
     this.onBackendFailure = options.onBackendFailure
     this.onBackendRestarted = options.onBackendRestarted
+    this.onBackendUnbound = options.onBackendUnbound
     this.onStderr = options.onStderr
     this.reverifyBeforeSpawn = options.reverifyBeforeSpawn
     this.admitThirdParty = options.admitThirdParty
@@ -654,6 +658,11 @@ export class PluginBackendHost {
     const task = (async (): Promise<void> => {
       this.views.delete(instanceId)
       this.firstPartyFailures.delete(instanceId)
+      try {
+        this.onBackendUnbound?.(view.runtime)
+      } catch {
+        // A liveness observer must not change the unbind result.
+      }
       this.clearIdleTimer(view)
       view.closing = true
       view.closingReason = reason
