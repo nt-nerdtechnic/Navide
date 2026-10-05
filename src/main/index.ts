@@ -322,6 +322,7 @@ function enterPlansRecovery(reason: string): void {
   if (plansRecoveryEnabled) return
   plansRecoveryEnabled = true
   plansRecoveryReason = reason
+  warnMain(`[main] navide.plans entering legacy recovery (${reason})`)
   for (const [key, hostWindow] of contributionWindows) {
     if (key.startsWith('navide.plans.') && !hostWindow.isDestroyed()) hostWindow.close()
   }

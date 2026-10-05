@@ -2665,6 +2665,118 @@ describe('Plans private filesystem grant revalidation', () => {
     }
   })
 
+  // Re-arm after legacy recovery used to keep a dead headless MCP child cached.
+  // The next agent call hit it, withdrew v2 again, and every filesystem Bridge
+  // request of the live Plans view was then denied - the Plans list showed
+  // "Plugin capability was denied." moments after the retry.
+  it('re-arms Plans v2 without a dead headless child withdrawing it under a live view', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '2.0.0'
+    const workspacePath = process.cwd()
+    mgr.registerDescriptor({
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: ['fs'],
+      devUrl: '',
+      entryFile: '/plugins/navide.plans/frontend/window/index.html',
+      views: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+    }, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.list'],
+      agentMethods: ['plans.list'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: ['fs'], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+    const bind = vi.spyOn(PluginBackendHost.prototype, 'bindWorkspace')
+      .mockResolvedValueOnce('headless-dead')
+      .mockResolvedValueOnce('headless-fresh')
+    const unbind = vi.spyOn(PluginBackendHost.prototype, 'unbindView').mockResolvedValue(undefined)
+    const call = vi.spyOn(PluginBackendHost.prototype, 'call').mockImplementation(async (instanceId) => {
+      if (instanceId === 'headless-dead') throw new BackendPluginError('BACKEND_UNAVAILABLE')
+      return [] as never
+    })
+    const service = vi
+      .spyOn(
+        mgr as unknown as {
+          sendPublicBackend: (wsType: string, payload: Record<string, unknown>) => Promise<unknown>
+        },
+        'sendPublicBackend',
+      )
+      .mockResolvedValue({ entries: [] })
+    const internals = mgr as unknown as {
+      sendPlansFilesystemService: (
+        operation: string,
+        payload: Record<string, unknown>,
+        context: PlansBridgeContext,
+      ) => Promise<unknown>
+    }
+    const viewContext: PlansBridgeContext = {
+      runtime: {
+        pluginId: PLANS_PLUGIN_ID,
+        packageVersion,
+        workspaceId: mgr.workspaceIdForPath(workspacePath),
+        instanceId: 'plans-left-1',
+        contributionKey: 'navide.plans.left',
+        hostWindowId: 'window-1',
+        initiator: { kind: 'user', id: 'user-1' },
+      },
+      workspacePath,
+      authorizedPlanRoot: workspacePath,
+      requestId: 'bridge-rearm-1',
+      signal: new AbortController().signal,
+      emit: () => undefined,
+    }
+    try {
+      // The headless child dies; the agent call withdraws v2 (legacy recovery).
+      await expect(mgr.executeAgentBackendCallForWorkspace(
+        PLANS_PLUGIN_ID,
+        workspacePath,
+        { reqId: 'agent-list-dead', name: 'plans.list', args: {} },
+      )).resolves.toMatchObject({ ok: false })
+      expect(mgr.isPlansBackendAvailable()).toBe(false)
+
+      // The user retries v2.
+      expect(mgr.clearPlansBackendUnavailable()).toBe(true)
+      expect(unbind).toHaveBeenCalledWith('headless-dead')
+
+      // An agent call right after the retry must reach a fresh child ...
+      await expect(mgr.executeAgentBackendCallForWorkspace(
+        PLANS_PLUGIN_ID,
+        workspacePath,
+        { reqId: 'agent-list-fresh', name: 'plans.list', args: {} },
+      )).resolves.toMatchObject({ ok: true })
+      expect(call).toHaveBeenLastCalledWith('headless-fresh', 'plans.list', {}, expect.anything())
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+
+      // ... so the live view's list keeps its filesystem access.
+      await expect(internals.sendPlansFilesystemService(
+        'fs.read_file',
+        { rel_path: 'draft.html' },
+        viewContext,
+      )).resolves.toEqual({ entries: [] })
+    } finally {
+      service.mockRestore()
+      call.mockRestore()
+      unbind.mockRestore()
+      bind.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
   // The child reads and writes its plan files itself and asks for the root
   // before each request, so resolve_root is where the Grant and an agent's
   // Execution Policy are enforced for those accesses.

@@ -1450,7 +1450,10 @@ export class FrontendPluginManager {
       this.running.get(plugin.instanceId) !== plugin ||
       !binding || !sameRuntimeBinding(binding, plugin.capabilityContext?.runtimeBinding) ||
       !this.plansCapabilityContext(binding.packageVersion, plugin.workspacePath ?? '', binding.audience ?? undefined)
-    ) return buildError(reqId, 'CAPABILITY_DENIED', 'Plans runtime Grant is unavailable')
+    ) {
+      warnMain(`[plugin-backend] ${PLANS_PLUGIN_ID} call denied for ${plugin.instanceId}: runtime Grant is unavailable`)
+      return buildError(reqId, 'CAPABILITY_DENIED', 'Plans runtime Grant is unavailable')
+    }
     return ready ? null : buildError(reqId, 'BACKEND_UNAVAILABLE', 'Plans storage is unavailable')
   }
   private activationFailureHandler:
@@ -2030,13 +2033,16 @@ export class FrontendPluginManager {
 
   /** Withdraw the v2 availability bit after a bind/child/recovery failure.
    *  The descriptor remains installed so recovery can retry it explicitly. */
-  markPlansBackendUnavailable(_reason = 'child-unavailable'): void {
+  markPlansBackendUnavailable(reason = 'child-unavailable'): void {
     const descriptor = this.descriptors.get(PLANS_PLUGIN_ID)
     if (
       descriptor?.capabilityPolicy?.kind !== 'manifest-v2' ||
       !nonEmptyString(descriptor.packageVersion) ||
       !nonEmptyString(descriptor.packageDir)
     ) return
+    if (this.plansBackendHealth !== 'unavailable') {
+      warnMain(`[plugin-backend] ${PLANS_PLUGIN_ID} v2 backend withdrawn (${reason})`)
+    }
     this.plansBackendHealth = 'unavailable'
     this.plansBackendHealthIdentity = {
       packageVersion: descriptor.packageVersion,
@@ -2053,8 +2059,28 @@ export class FrontendPluginManager {
     if (this.plansBackendHealth !== 'unavailable') return false
     this.plansBackendHealth = 'unknown'
     this.plansBackendHealthIdentity = null
+    this.discardHeadlessPlansBackends()
     this.refreshHostSessionRegistration()
     return true
+  }
+
+  /** A failed headless MCP child stays cached under its workspace key and
+   *  answers every later agent call with the same availability error. After a
+   *  re-arm that error withdraws v2 again under a live Plans view, whose
+   *  in-flight filesystem Bridge requests are then denied. The retry must give
+   *  the MCP route a fresh child, as it does the views. */
+  private discardHeadlessPlansBackends(): void {
+    for (const [key, instanceId] of this.headlessBackendInstances) {
+      if (!key.startsWith(`${PLANS_PLUGIN_ID}\u0000`)) continue
+      this.headlessBackendInstances.delete(key)
+      void this.pluginBackendHost.unbindView(instanceId).catch((error: unknown) => {
+        warnMain(
+          `[plugin-backend] unbind for ${instanceId} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      })
+    }
   }
 
   private markPlansBackendReady(packageVersion: string, packageDir: string): void {
@@ -5344,7 +5370,11 @@ export class FrontendPluginManager {
         if (plugin.id === PLANS_PLUGIN_ID && this.isPlansBackendAvailabilityError(error)) {
           this.markPlansBackendUnavailable('child-unavailable')
         }
-        return this.backendError(record.reqId, error)
+        const response = this.backendError(record.reqId, error)
+        if (plugin.id === PLANS_PLUGIN_ID && response.error?.code === 'CAPABILITY_DENIED') {
+          warnMain(`[plugin-backend] ${PLANS_PLUGIN_ID} ${record.name} denied for ${plugin.instanceId}`)
+        }
+        return response
       } finally {
         if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
         if (abortListener) controller.signal.removeEventListener('abort', abortListener)
@@ -5631,6 +5661,7 @@ export class FrontendPluginManager {
       resolveRoot: async (arguments_, context) => {
         if (context.signal.aborted) throw new PlansBridgeError('USER_CANCELLED')
         if (!this.plansBridgeCanDispatch(context)) {
+          this.warnPlansFilesystemDenied('resolve_root', context)
           throw new PlansBridgeError('CAPABILITY_DENIED', 'Filesystem capability is denied.')
         }
         return port.resolveRoot(arguments_, context)
@@ -6602,6 +6633,22 @@ export class FrontendPluginManager {
     )
   }
 
+  /** Name why a Plans filesystem Bridge request was refused. The child only
+   *  forwards the bare code, so this line is the only record of the cause. */
+  private warnPlansFilesystemDenied(operation: string, context: PlansBridgeContext): void {
+    const selection = this.plansBackendSelection()
+    const cause = context.signal.aborted ? 'request aborted'
+      : !selection ? 'no exact Plans activation'
+      : selection.activation.packageVersion !== context.runtime.packageVersion ? 'package version changed'
+      : !this.isPlansBackendAvailable() ? 'v2 backend withdrawn'
+      : 'Grant or execution policy mismatch'
+    warnMain(
+      `[plugin-backend] ${PLANS_PLUGIN_ID} filesystem ${operation} denied for ${
+        context.runtime.contributionKey ?? 'unknown view'
+      }: ${cause}`,
+    )
+  }
+
   private plansBridgeCanDispatch(context: PlansBridgeContext): boolean {
     if (context.signal.aborted) return false
     if (!nonEmptyString(context.workspacePath)) return false
@@ -6620,6 +6667,7 @@ export class FrontendPluginManager {
   ): Promise<JsonValue> {
     if (context.signal.aborted) throw new PlansBridgeError('USER_CANCELLED')
     if (!this.plansBridgeCanDispatch(context)) {
+      this.warnPlansFilesystemDenied(operation, context)
       throw new PlansBridgeError('CAPABILITY_DENIED', 'Filesystem capability is denied.')
     }
     try {
@@ -6636,6 +6684,7 @@ export class FrontendPluginManager {
       if (error instanceof PlansBridgeError) throw error
       if (context.signal.aborted) throw new PlansBridgeError('USER_CANCELLED')
       if (error instanceof Error && error.message === 'request denied before dispatch') {
+        this.warnPlansFilesystemDenied(operation, context)
         throw new PlansBridgeError('CAPABILITY_DENIED', 'Filesystem capability is denied.')
       }
       throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Filesystem service is unavailable.')
