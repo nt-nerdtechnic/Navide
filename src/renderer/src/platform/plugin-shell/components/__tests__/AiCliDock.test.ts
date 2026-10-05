@@ -729,6 +729,75 @@ describe('AiCliDock — messaging roster registration', () => {
     expect(wrapper.find('.ai-cli-address').exists()).toBe(false)
   })
 
+  it('retries a failed registration and shows the address once it succeeds', async () => {
+    vi.useFakeTimers()
+    try {
+      const { port, registerAgentPane } = registeringPort()
+      // A Plan window reload: the old window's connection still holds the id.
+      registerAgentPane.mockImplementationOnce(async () => ({
+        ok: false,
+        error: { code: 'FORBIDDEN', message: 'pane is held by another window' },
+      }) as never)
+      const wrapper = mountDock({ terminalPort: port, origin: 'plan-window' })
+      termState.status.value = 'running'
+      await flushPromises()
+      expect(registerAgentPane).toHaveBeenCalledTimes(1)
+      expect(wrapper.find('.ai-cli-address').exists()).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(registerAgentPane).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('.ai-cli-address').text()).toBe('@plans-claude')
+      expect(wrapper.find('.ai-cli-roster-error').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('says why in the panel when every registration attempt fails', async () => {
+    vi.useFakeTimers()
+    try {
+      const { port, registerAgentPane } = registeringPort()
+      registerAgentPane.mockImplementation(async () => ({
+        ok: false,
+        error: { code: 'FORBIDDEN', message: 'pane is held by another window' },
+      }) as never)
+      const wrapper = mountDock({ terminalPort: port, origin: 'plan-window' })
+      termState.status.value = 'running'
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await flushPromises()
+      expect(registerAgentPane).toHaveBeenCalledTimes(4)
+      const error = wrapper.find('.ai-cli-roster-error')
+      expect(error.exists()).toBe(true)
+      expect(error.text()).toContain('pane is held by another window')
+
+      // The CLI ends: nothing is left to be unreachable.
+      termState.status.value = 'exited'
+      await flushPromises()
+      expect(wrapper.find('.ai-cli-roster-error').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops retrying once the CLI ends', async () => {
+    vi.useFakeTimers()
+    try {
+      const { port, registerAgentPane } = registeringPort()
+      registerAgentPane.mockImplementation(async () => { throw new Error('socket closed') })
+      mountDock({ terminalPort: port, origin: 'plan-window' })
+      termState.status.value = 'running'
+      await flushPromises()
+      termState.status.value = 'exited'
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(registerAgentPane).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does nothing on a port that cannot register (older host)', async () => {
     mountDock({ origin: 'pipeline-manager' })
     termState.status.value = 'running'

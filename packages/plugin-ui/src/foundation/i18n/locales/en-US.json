@@ -8108,7 +8108,9 @@
     "open-in": "Open in {window}",
     "resumes-in": "Resumes in {window}",
     "resumes-in-window": "This AI panel lives in {window}. It resumes there, not as a pane in this window.",
-    "address-title": "Other panes reach this panel at {'@'}{address}"
+    "address-title": "Other panes reach this panel at {'@'}{address}",
+    "roster-error": "Other panes cannot reach this panel, and its Navide tools are refused: {reason}",
+    "roster-error-unknown": "unknown error"
   },
   "paneStatus": {
     "running": "running",

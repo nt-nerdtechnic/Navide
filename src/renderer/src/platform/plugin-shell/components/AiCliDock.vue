@@ -282,14 +282,28 @@ const rosterAddress = ref('')
 // Bumped by every unregister, so a register still in flight when the CLI ends
 // knows to undo itself instead of leaving a dead panel in the roster.
 let registerSeq = 0
+// A refused registration is retried before the panel gives up and says why: a
+// Plan window reload races its old connection, which holds the pane id until
+// the backend sees it close (FORBIDDEN "held by another window"). Until it
+// registers, every Navide tool the CLI calls is refused too.
+const REGISTER_RETRY_DELAYS_MS = [1000, 2000, 4000]
+let registerRetryTimer: ReturnType<typeof setTimeout> | null = null
+/** Why the last registration attempt failed, once retries ran out. */
+const rosterError = ref('')
+
+function clearRegisterRetry(): void {
+  if (registerRetryTimer) clearTimeout(registerRetryTimer)
+  registerRetryTimer = null
+}
 
 function dropRegistration(paneId: string): void {
   void Promise.resolve(props.terminalPort.unregisterAgentPane?.(paneId)).catch(() => undefined)
 }
 
-async function registerInRoster(): Promise<void> {
+async function registerInRoster(attempt = 0): Promise<void> {
   const port = props.terminalPort
   if (!port.registerAgentPane || !props.workspacePath) return
+  clearRegisterRetry()
   const seq = ++registerSeq
   const paneId = props.paneId
   let name = registeredAs?.paneId === paneId ? registeredAs.name : ''
@@ -302,8 +316,9 @@ async function registerInRoster(): Promise<void> {
     name = pickDockPaneName(`${dockSurface.value.surface}-${agentKey.value}`, props.workspacePath, paneId, panes)
   }
   let accepted = false
+  let failure = ''
   try {
-    accepted = (await port.registerAgentPane({
+    const resp = await port.registerAgentPane({
       pane_id: paneId,
       name,
       workspace_path: props.workspacePath,
@@ -311,26 +326,45 @@ async function registerInRoster(): Promise<void> {
       surface: dockSurface.value.surface,
       window_kind: dockSurface.value.windowKind,
       ...(port.onAgentMessage ? { deliverable: true } : {}),
-    })).ok
-  } catch {
+    })
+    accepted = resp.ok
+    // A host that cannot map the call never will: stay unregistered quietly,
+    // as on a port without registerAgentPane.
+    if (!accepted && resp.error?.code === 'UNMAPPED_CAPABILITY') return
+    if (!accepted) failure = resp.error?.message || resp.error?.code || ''
+  } catch (err) {
+    failure = err instanceof Error ? err.message : String(err)
+  }
+  if (seq !== registerSeq) {
+    if (accepted) dropRegistration(paneId)
     return
   }
   // A refused or unroutable registration leaves no entry: show no address that
-  // nothing answers at (a reconnect tries again).
-  if (!accepted) return
-  if (seq !== registerSeq) {
-    dropRegistration(paneId)
+  // nothing answers at. Retry; a reconnect also starts over.
+  if (!accepted) {
+    const delay = REGISTER_RETRY_DELAYS_MS[attempt]
+    if (delay === undefined) {
+      rosterError.value = failure || t('dockWindow.roster-error-unknown')
+      return
+    }
+    registerRetryTimer = setTimeout(() => {
+      registerRetryTimer = null
+      if (seq === registerSeq && props.terminalPort.status.value === 'connected') void registerInRoster(attempt + 1)
+    }, delay)
     return
   }
   registeredAs = { paneId, name }
   rosterAddress.value = name
+  rosterError.value = ''
 }
 
 function unregisterFromRoster(): void {
   registerSeq++
+  clearRegisterRetry()
   const previous = registeredAs
   registeredAs = null
   rosterAddress.value = ''
+  rosterError.value = ''
   if (previous) dropRegistration(previous.paneId)
 }
 
@@ -590,6 +624,7 @@ defineExpose({ start, stop, interrupt, pasteText, injectNow, toggle, terminal: t
       >@{{ rosterAddress }}</span>
       <span v-if="workspacePath" class="ai-cli-ws" :title="workspacePath">{{ workspaceName }}</span>
     </div>
+    <p v-if="rosterError" class="ai-cli-roster-error">{{ t('dockWindow.roster-error', { reason: rosterError }) }}</p>
     <div v-if="!active" class="ai-cli-controls">
       <select v-model="agentKey" class="ai-cli-agent-select">
         <option v-for="s in agentSpecs" :key="s.agentKey" :value="s.agentKey">{{ s.label }}</option>
@@ -798,6 +833,14 @@ defineExpose({ start, stop, interrupt, pasteText, injectNow, toggle, terminal: t
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ai-cli-roster-error {
+  color: var(--danger-fg);
+  flex-shrink: 0;
+  font-size: var(--font-2xs);
+  margin: 0;
+  padding: 4px 12px;
 }
 
 .ai-cli-empty {

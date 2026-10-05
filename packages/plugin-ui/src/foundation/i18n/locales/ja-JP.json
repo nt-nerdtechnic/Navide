@@ -8108,7 +8108,9 @@
     "open-in": "{window}で開く",
     "resumes-in": "{window}で再開",
     "resumes-in-window": "この AI パネルは「{window}」にあります。再開はそちらで行われ、このウィンドウの Pane にはなりません。",
-    "address-title": "他の Pane からは {'@'}{address} でこのパネルに届きます"
+    "address-title": "他の Pane からは {'@'}{address} でこのパネルに届きます",
+    "roster-error": "他の Pane からこのパネルに届かず、Navide のツールも使えません：{reason}",
+    "roster-error-unknown": "不明なエラー"
   },
   "paneStatus": {
     "running": "実行中",

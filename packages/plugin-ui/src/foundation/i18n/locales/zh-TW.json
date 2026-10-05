@@ -8108,7 +8108,9 @@
     "open-in": "在{window}中開啟",
     "resumes-in": "接續位置：{window}",
     "resumes-in-window": "這個 AI 面板屬於「{window}」，要回到那裡接續，不會在這個視窗開成 Pane。",
-    "address-title": "其他 Pane 以 {'@'}{address} 傳訊給這個面板"
+    "address-title": "其他 Pane 以 {'@'}{address} 傳訊給這個面板",
+    "roster-error": "其他 Pane 無法傳訊給這個面板，Navide 工具也會被拒絕：{reason}",
+    "roster-error-unknown": "未知錯誤"
   },
   "paneStatus": {
     "running": "執行中",
