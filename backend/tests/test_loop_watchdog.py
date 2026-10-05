@@ -67,13 +67,18 @@ async def test_one_stall_logs_once_and_reports_recovery(
     fast_watchdog, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING, logger="agent_team_backend.loop_watchdog")
+    stall_seen = _StallSeen()
+    logging.getLogger("agent_team_backend.loop_watchdog").addHandler(stall_seen)
     fast_watchdog.start(asyncio.get_running_loop())
     try:
         await asyncio.sleep(0.05)
-        # Long enough for the watcher thread to poll many times over one stall.
-        await _stall_loop(0.5)
+        # The stall lasts until it is reported (a late watcher can otherwise
+        # sleep through all of it), then long enough for many more polls.
+        assert stall_seen.seen.wait(30), "the watcher never reported the stall"
+        await _stall_loop(0.4)
     finally:
         await fast_watchdog.stop()
+        logging.getLogger("agent_team_backend.loop_watchdog").removeHandler(stall_seen)
 
     assert len(_stalls(caplog)) == 1
     assert len(_recoveries(caplog)) == 1
@@ -83,12 +88,22 @@ class _LateEvent(threading.Event):
     """A stop event whose waits return late, as a watcher thread on a loaded
     machine does: every poll lands ``LATE_S`` after it should."""
 
-    LATE_S = 0.4
+    LATE_S = 0.6
 
     def wait(self, timeout: float | None = None) -> bool:
         result = super().wait(timeout)
         time.sleep(self.LATE_S)
         return result
+
+
+class _StallSeen(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen = threading.Event()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if "stalled for" in record.getMessage():
+            self.seen.set()
 
 
 @pytest.mark.asyncio
@@ -100,15 +115,47 @@ async def test_recovery_is_reported_when_the_watcher_wakes_late(
     # wakes dropped the report on CI's loaded Windows runner.
     caplog.set_level(logging.WARNING, logger="agent_team_backend.loop_watchdog")
     monkeypatch.setattr(fast_watchdog._watchdog, "_stop_requested", _LateEvent())
+    # A watcher that polls late can sleep through a fixed-length stall, so the
+    # stall lasts until it has been reported, then stop() follows at once.
+    stall_seen = _StallSeen()
+    logging.getLogger("agent_team_backend.loop_watchdog").addHandler(stall_seen)
     fast_watchdog.start(asyncio.get_running_loop())
     try:
         await asyncio.sleep(0.05)
-        await _stall_loop(0.5)
+        assert stall_seen.seen.wait(30), "the watcher never reported the stall"
     finally:
         await fast_watchdog.stop()
+        logging.getLogger("agent_team_backend.loop_watchdog").removeHandler(stall_seen)
 
     assert len(_stalls(caplog)) == 1
     assert len(_recoveries(caplog)) == 1
+
+
+class _StopRaceEvent(threading.Event):
+    """A watcher poll that times out just before stop() and runs again only
+    well after it, as a thread descheduled at that moment does."""
+
+    def wait(self, timeout: float | None = None) -> bool:
+        result = super().wait(timeout)
+        if not result:
+            super().wait()  # until stop() has been requested
+            time.sleep(loop_watchdog.STALL_THRESHOLD_S * 2)
+        return result
+
+
+@pytest.mark.asyncio
+async def test_a_poll_that_lands_after_stop_reports_no_stall(
+    fast_watchdog, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # stop() cancels the tick task, so from then on the stamp ages without the
+    # loop stalling; a poll that looks after that must not call it a stall.
+    caplog.set_level(logging.WARNING, logger="agent_team_backend.loop_watchdog")
+    monkeypatch.setattr(fast_watchdog._watchdog, "_stop_requested", _StopRaceEvent())
+    fast_watchdog.start(asyncio.get_running_loop())
+    await asyncio.sleep(0.1)
+    await fast_watchdog.stop()
+
+    assert _messages(caplog) == []
 
 
 @pytest.mark.asyncio

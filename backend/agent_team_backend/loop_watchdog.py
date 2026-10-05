@@ -92,6 +92,10 @@ class _LoopWatchdog:
         while not self._stop_requested.wait(TICK_INTERVAL_S):
             last_tick = self._last_tick
             stalled_for = time.monotonic() - last_tick
+            if self._stop_requested.is_set():
+                # stop() landed after the poll timed out: the tick task is
+                # cancelled and the stamp ages without the loop stalling.
+                break
             if stalled_for >= STALL_THRESHOLD_S:
                 if stall_started_at is None:
                     stall_started_at = last_tick
