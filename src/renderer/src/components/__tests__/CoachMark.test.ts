@@ -219,4 +219,54 @@ describe('CoachMark', () => {
     key('Escape')
     expect(w.emitted('finish')).toBeUndefined()
   })
+
+  // 22:01: "I called it up on purpose." A replay is asked for: every bubble
+  // shows, in order, whatever the window already has.
+  describe('replay', () => {
+    it('shows a step already done instead of passing over it, and leaves it to Next', async () => {
+      facts.workspaceOpen = true
+      addTarget('a')
+      addTarget('b')
+      const w = start({ replay: true })
+      await tick()
+      expect(stepId()).toBe('one')
+      await tick(COACH_DONE_MS * 2)
+      expect(stepId()).toBe('one')
+      expect(w.emitted('progress')).toBeUndefined()
+      byTestId('coach-next')!.click()
+      await tick()
+      expect(stepId()).toBe('two')
+    })
+
+    it('still moves on by itself when the step is done while it is up', async () => {
+      addTarget('b')
+      const w = start({ replay: true, startIndex: 1 })
+      await tick()
+      facts.mentionAt = Date.now() + 1
+      await flushPromises()
+      await tick(COACH_DONE_MS)
+      expect(w.emitted('finish')).toEqual([[true]])
+    })
+
+    it('shows the bubble in the middle, with Next, when what it is about is not on screen', async () => {
+      addTarget('b')
+      start({ replay: true })
+      await tick(COACH_MISSING_SKIP_MS * 2)
+      expect(stepId()).toBe('one')
+      expect(bubble()!.classList.contains('centred')).toBe(true)
+      expect(byTestId('coach-ring')).toBeNull()
+      byTestId('coach-next')!.click()
+      await tick()
+      expect(stepId()).toBe('two')
+      expect(bubble()!.classList.contains('centred')).toBe(false)
+    })
+  })
+
+  it('on a first run still passes over a step already done', async () => {
+    facts.agentPanes = 1
+    addTarget('a')
+    const w = start({ steps: [{ id: 'pane', anchor: () => '#a', textKey: 'tour.next', waitFor: 'agent-pane' }, STEPS[1]] })
+    await tick()
+    expect(w.emitted('progress')).toEqual([[1]])
+  })
 })

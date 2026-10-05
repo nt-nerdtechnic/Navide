@@ -20,8 +20,12 @@ import {
 // A step already done when it comes up is passed over.
 //
 // Skip (or Esc, unless the focus is in a terminal, where Esc belongs to the
-// CLI) ends the tour. A replay adds Next, to read it through without doing
-// anything. Steps are data (lib/welcomeTour.ts).
+// CLI) ends the tour. Steps are data (lib/welcomeTour.ts).
+//
+// A replay is asked for, so it shows every bubble in order: nothing is passed
+// over for being done already, each bubble has Next, and one whose control is
+// not on screen sits in the middle instead of waiting unseen. An action done
+// while a bubble is up still moves it on.
 
 const props = withDefaults(
   defineProps<{
@@ -56,6 +60,9 @@ let doneTimer: ReturnType<typeof setTimeout> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
 // When the current skipIfMissing step first found its control absent (0 = present).
 let missingSince = 0
+// The step's action was already done when it came up (a replay shows it
+// anyway): only Next moves it on, not the done-ness it arrived with.
+let doneAtEntry = false
 let ended = false
 
 function end(completed: boolean): void {
@@ -77,10 +84,12 @@ function enter(): void {
     end(true)
     return
   }
-  if (welcomeActionAlreadyDone(current.waitFor, props.facts())) {
+  const facts = props.facts()
+  if (!props.replay && welcomeActionAlreadyDone(current.waitFor, facts)) {
     advance()
     return
   }
+  doneAtEntry = welcomeActionDone(current.waitFor, facts, enteredAt.value)
   locate()
 }
 
@@ -108,7 +117,7 @@ function locate(): void {
   }
   rect.value = null
   targetId.value = ''
-  if (!current.skipIfMissing || doneShown.value) return
+  if (!current.skipIfMissing || doneShown.value || props.replay) return
   const now = Date.now()
   if (!missingSince) missingSince = now
   else if (now - missingSince >= COACH_MISSING_SKIP_MS) advance()
@@ -118,7 +127,7 @@ function locate(): void {
 watch(
   () => !!step.value && welcomeActionDone(step.value.waitFor, props.facts(), enteredAt.value),
   (done) => {
-    if (!done || doneShown.value || ended) return
+    if (!done || doneShown.value || ended || doneAtEntry) return
     doneShown.value = true
     doneTimer = setTimeout(() => {
       doneTimer = null
@@ -151,6 +160,9 @@ const BUBBLE_W = 280
 // A generous guess at the bubble's height: only used to decide above/below.
 const BUBBLE_H = 140
 
+// A replay's bubble whose control is not on screen sits in the middle.
+const centred = computed(() => props.replay && !rect.value)
+
 const ringStyle = computed((): Record<string, string> => {
   const r = rect.value
   if (!r) return { pointerEvents: 'none' }
@@ -165,7 +177,7 @@ const ringStyle = computed((): Record<string, string> => {
 
 const bubbleStyle = computed((): Record<string, string> => {
   const r = rect.value
-  if (!r) return { pointerEvents: 'auto' }
+  if (!r) return { pointerEvents: 'auto', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
   const vw = window.innerWidth
   const vh = window.innerHeight
   const left = Math.max(GAP, Math.min(r.left, vw - BUBBLE_W - GAP))
@@ -177,10 +189,11 @@ const bubbleStyle = computed((): Record<string, string> => {
 
 <template>
   <Teleport to="body">
-    <div v-if="!suspended && rect && step" class="coach" data-testid="coach-layer" style="pointer-events: none">
-      <div class="coach-ring" data-testid="coach-ring" :data-target="targetId" :style="ringStyle"></div>
+    <div v-if="!suspended && step && (rect || centred)" class="coach" data-testid="coach-layer" style="pointer-events: none">
+      <div v-if="rect" class="coach-ring" data-testid="coach-ring" :data-target="targetId" :style="ringStyle"></div>
       <div
         class="coach-bubble"
+        :class="{ centred }"
         data-testid="coach-bubble"
         :data-step="step.id"
         :style="bubbleStyle"
