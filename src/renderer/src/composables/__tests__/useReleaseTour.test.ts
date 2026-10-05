@@ -98,4 +98,17 @@ describe('useReleaseTour', () => {
     tour.end(false)
     expect(tour.skipOnLast.value).toBe(false)
   })
+
+  it('runs a named tour interactively only when asked, and a release tour never', async () => {
+    const { useReleaseTour } = await load()
+    const tour = useReleaseTour()
+    const steps = [{ id: 'a', titleKey: 't', bodyKey: 'b' }]
+    tour.start('0.2.10')
+    expect(tour.interactive.value).toBe(false)
+    tour.end(false)
+    tour.startNamed('part', steps, undefined, { interactive: true })
+    expect(tour.interactive.value).toBe(true)
+    tour.end(false)
+    expect(tour.interactive.value).toBe(false)
+  })
 })

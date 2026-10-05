@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { findTourAnchor, type TourPrepare, type TourStep } from '../lib/tours'
+import {
+  findTourAnchor,
+  TOUR_DONE_ADVANCE_MS,
+  TOUR_STUCK_HINT_MS,
+  type TourPrepare,
+  type TourStep,
+} from '../lib/tours'
 
 // A step-by-step walkthrough over the live window: each step dims everything
 // but the element it is about and explains it in a card beside it. Steps are
@@ -10,6 +16,14 @@ import { findTourAnchor, type TourPrepare, type TourStep } from '../lib/tours'
 // Keyboard: → / Enter next, ← back, Esc leaves; Tab stays inside the card.
 // The keys are taken in the capture phase so a Settings modal underneath does
 // not also close on the same Esc.
+//
+// Interactive mode (the first-run tour) adds action cards: a step with
+// `waitFor` has no Next — it waits until the host's `isComplete` says the
+// person did it, shows "done" for a moment and moves on by itself. While an
+// action card is up the window stays usable: the spotlit element takes clicks
+// and keys go where they normally would. A step the host's `shouldSkip` says
+// is already done is passed over. Concept cards, the last card and every
+// non-interactive tour behave exactly as above.
 
 const props = withDefaults(
   defineProps<{
@@ -21,8 +35,24 @@ const props = withDefaults(
     /** Keep Skip on the last step: the tour is one part of a longer one, so
      *  its last step is not the end and Skip still has something to skip. */
     skipOnLast?: boolean
+    /** Honour `waitFor` / `skipIfMissing` on steps (see the note above). */
+    interactive?: boolean
+    /** Whether a card's action has happened since `enteredAt` (ms epoch). */
+    isComplete?: (step: TourStep, enteredAt: number) => boolean
+    /** Whether a card's action was done before the card came up. */
+    shouldSkip?: (step: TourStep) => boolean
+    /** Something else needs the screen: draw nothing and leave keys alone. */
+    suspended?: boolean
   }>(),
-  { runPrepare: undefined, anchorTimeoutMs: 2000, skipOnLast: false },
+  {
+    runPrepare: undefined,
+    anchorTimeoutMs: 2000,
+    skipOnLast: false,
+    interactive: false,
+    isComplete: undefined,
+    shouldSkip: undefined,
+    suspended: false,
+  },
 )
 /** `completed` is true only when the last step's Done was used. */
 const emit = defineEmits<{ close: [completed: boolean] }>()
@@ -49,6 +79,36 @@ const shownIsLast = computed(() => shownIndex.value === props.steps.length - 1)
 const missing = computed(
   () => settled.value && shownIndex.value === index.value && !!step.value?.anchor && !anchorEl.value,
 )
+const isActionStep = (s: TourStep | undefined): boolean => props.interactive && !!s?.waitFor
+/** The card on screen waits for the person instead of offering Next. */
+const actionCard = computed(() => isActionStep(shownStep.value))
+
+// Interactive state for the current card. `direction` is which way a passed-
+// over card continues: Back over a done card must not bounce forward again.
+let direction: 1 | -1 = 1
+const enteredAt = ref(0)
+const doneShown = ref(false)
+const stuck = ref(false)
+let doneTimer: ReturnType<typeof setTimeout> | null = null
+let stuckTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearActionTimers(): void {
+  if (doneTimer) clearTimeout(doneTimer)
+  if (stuckTimer) clearTimeout(stuckTimer)
+  doneTimer = null
+  stuckTimer = null
+}
+
+/** Move past the current step in the direction the tour was going. */
+function passOver(): void {
+  if (direction < 0 && index.value > 0) {
+    index.value--
+    return
+  }
+  direction = 1
+  if (isLast.value) emit('close', true)
+  else index.value++
+}
 
 // Each step change starts a new lookup; an older one still polling must not
 // write its result over the newer step's.
@@ -75,9 +135,16 @@ function nextFrame(): Promise<void> {
 async function enterStep(): Promise<void> {
   const token = ++lookupToken
   clearPoll()
+  clearActionTimers()
   settled.value = false
+  doneShown.value = false
+  stuck.value = false
   const current = step.value
   if (!current) return
+  if (isActionStep(current) && props.shouldSkip?.(current)) {
+    passOver()
+    return
+  }
   if (current.prepare && props.runPrepare) {
     // Opening Settings can take a while: show this step's card centred now
     // rather than leaving the previous one up or nothing at all.
@@ -129,6 +196,11 @@ async function enterStep(): Promise<void> {
 
 function settle(token: number, el: HTMLElement | null): void {
   if (token !== lookupToken) return
+  const current = step.value
+  if (isActionStep(current) && current?.skipIfMissing && !el) {
+    passOver()
+    return
+  }
   anchorEl.value = el
   rect.value = null
   if (el) {
@@ -137,14 +209,44 @@ function settle(token: number, el: HTMLElement | null): void {
   }
   shownIndex.value = index.value
   settled.value = true
+  if (isActionStep(current)) {
+    // The person's next move is in the window, not on the card: focus stays
+    // where it is, and the card points out where to look if it takes long.
+    enteredAt.value = Date.now()
+    stuckTimer = setTimeout(() => {
+      stuck.value = true
+    }, TOUR_STUCK_HINT_MS)
+    return
+  }
   void nextTick(() => cardRef.value?.querySelector<HTMLElement>('[data-tour-primary]')?.focus())
 }
+
+// An action card's action happened: say so, then move on by itself.
+watch(
+  () =>
+    settled.value &&
+    shownIndex.value === index.value &&
+    isActionStep(step.value) &&
+    !!props.isComplete?.(step.value!, enteredAt.value),
+  (done) => {
+    if (!done || doneShown.value) return
+    clearActionTimers()
+    stuck.value = false
+    doneShown.value = true
+    doneTimer = setTimeout(() => {
+      doneTimer = null
+      direction = 1
+      next()
+    }, TOUR_DONE_ADVANCE_MS)
+  },
+)
 
 function measure(): void {
   if (anchorEl.value) rect.value = anchorEl.value.getBoundingClientRect()
 }
 
 function next(): void {
+  direction = 1
   if (isLast.value) {
     emit('close', true)
     return
@@ -152,6 +254,7 @@ function next(): void {
   index.value++
 }
 function back(): void {
+  direction = -1
   if (index.value > 0) index.value--
 }
 function leave(): void {
@@ -161,7 +264,11 @@ function leave(): void {
 watch(index, () => void enterStep())
 
 function onKeydown(e: KeyboardEvent): void {
+  if (props.suspended) return
   const inCard = !!cardRef.value && cardRef.value.contains(e.target as Node)
+  // An action card asks the person to do something in the window — typing a
+  // first instruction included — so keys outside the card are theirs.
+  if (actionCard.value && !inCard) return
   if (e.key === 'Escape') {
     leave()
   } else if (e.key === 'ArrowRight') {
@@ -204,6 +311,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   lookupToken++
   clearPoll()
+  clearActionTimers()
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('resize', measure)
 })
@@ -217,6 +325,22 @@ const GAP = 12
 const CARD_W = 340
 // A generous guess at the card's height: only used to decide above/below.
 const CARD_H = 230
+
+// The four strips around the hole that still catch clicks on an action card.
+const blockerStyles = computed((): Record<string, string>[] => {
+  const r = rect.value
+  if (!r) return []
+  const top = Math.max(0, r.top - PAD)
+  const bottom = r.bottom + PAD
+  const left = Math.max(0, r.left - PAD)
+  const right = r.right + PAD
+  return [
+    { top: '0', left: '0', right: '0', height: `${top}px` },
+    { top: `${bottom}px`, left: '0', right: '0', bottom: '0' },
+    { top: `${top}px`, left: '0', width: `${left}px`, height: `${bottom - top}px` },
+    { top: `${top}px`, left: `${right}px`, right: '0', height: `${bottom - top}px` },
+  ]
+})
 
 const holeStyle = computed(() => {
   const r = rect.value
@@ -248,9 +372,16 @@ const cardStyle = computed((): Record<string, string> => {
 
 <template>
   <Teleport to="body">
-    <div class="tour" data-testid="guided-tour">
+    <div v-if="!suspended" class="tour" :class="{ 'tour--pass': actionCard }" data-testid="guided-tour">
       <div v-if="rect" class="tour-hole" :style="holeStyle" data-testid="tour-hole"></div>
       <div v-else class="tour-dim"></div>
+      <!-- An action card lets the spotlit element take clicks: the layer
+           itself lets pointer events through, and these four cover the rest
+           of the window so a stray click outside the hole still lands on the
+           tour. Without an anchor nothing is spotlit and nothing is covered. -->
+      <template v-if="actionCard && rect">
+        <div v-for="(b, i) in blockerStyles" :key="i" class="tour-blocker" :style="b"></div>
+      </template>
       <div
         v-if="shownStep"
         ref="cardRef"
@@ -271,6 +402,11 @@ const cardStyle = computed((): Record<string, string> => {
         <p v-if="missing && shownStep.missingKey" class="tour-missing" data-testid="tour-missing">
           {{ t(shownStep.missingKey) }}
         </p>
+        <p
+          v-else-if="actionCard && stuck && shownStep.missingKey"
+          class="tour-missing"
+          data-testid="tour-stuck"
+        >{{ t(shownStep.missingKey) }}</p>
         <div class="tour-actions">
           <button v-if="!shownIsLast || skipOnLast" type="button" class="tour-skip" data-testid="tour-skip" @click="leave">
             {{ t('tour.skip') }}
@@ -283,7 +419,21 @@ const cardStyle = computed((): Record<string, string> => {
             data-testid="tour-back"
             @click="back"
           >{{ t('tour.back') }}</button>
+          <template v-if="actionCard">
+            <span v-if="doneShown" class="tour-status tour-status--done" data-testid="tour-done-feedback">
+              {{ t('tour.done-feedback') }}
+            </span>
+            <span v-else class="tour-status" data-testid="tour-waiting">{{ t('tour.waiting') }}</span>
+            <button
+              type="button"
+              class="nv-btn"
+              :class="{ 'tour-skip-step--stuck': stuck }"
+              data-testid="tour-skip-step"
+              @click="next"
+            >{{ t('tour.skip-step') }}</button>
+          </template>
           <button
+            v-else
             type="button"
             class="nv-btn nv-btn--primary"
             data-tour-primary
@@ -304,6 +454,29 @@ const cardStyle = computed((): Record<string, string> => {
      points into an open Settings page. */
   z-index: calc(var(--z-modal) + 400);
   font-family: var(--font-ui);
+}
+.tour--pass {
+  pointer-events: none;
+}
+.tour--pass .tour-card,
+.tour-blocker {
+  pointer-events: auto;
+}
+.tour-blocker {
+  position: absolute;
+}
+.tour-status {
+  align-self: center;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+.tour-status--done {
+  color: var(--success-fg);
+  font-weight: 600;
+}
+.tour-skip-step--stuck {
+  border-color: var(--accent-fg);
+  color: var(--accent-fg);
 }
 .tour-dim {
   position: absolute;

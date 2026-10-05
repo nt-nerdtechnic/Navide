@@ -9681,6 +9681,9 @@
     "back": "Back",
     "skip": "Skip tour",
     "done": "Done",
+    "waiting": "Waiting for you to do this…",
+    "done-feedback": "✓ Done",
+    "skip-step": "Skip this step",
     "welcome": {
       "whyFolder": {
         "title": "First, pick the folder your agents will work in",

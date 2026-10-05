@@ -9681,6 +9681,9 @@
     "back": "戻る",
     "skip": "ツアーをスキップ",
     "done": "完了",
+    "waiting": "この操作を待っています…",
+    "done-feedback": "✓ できました",
+    "skip-step": "この手順をスキップ",
     "welcome": {
       "whyFolder": {
         "title": "まず、エージェントが作業するフォルダーを選びます",

@@ -9681,6 +9681,9 @@
     "back": "上一步",
     "skip": "略過導覽",
     "done": "完成",
+    "waiting": "等你做完這一步…",
+    "done-feedback": "✓ 做到了",
+    "skip-step": "跳過這一步",
     "welcome": {
       "whyFolder": {
         "title": "先挑一個資料夾，agent 會在那裡工作",
