@@ -289,3 +289,31 @@ async def test_a_login_past_the_deadline_is_undone(env: Env, monkeypatch) -> Non
             break
         await asyncio.sleep(0.02)
     _no_trace(env)
+
+
+async def test_a_lock_held_while_the_login_waits_does_not_stretch_the_deadline(env: Env, monkeypatch) -> None:
+    # The undo needs the channels lock; waiting for it inline kept quick add
+    # past its deadline whenever another operation held that lock.
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_DEADLINE_S", 0.3)
+    _login_as(env, "silent")
+    adding = asyncio.ensure_future(env.m.quick_add("telegram", {}, {"token": "tok-slow"}, ACCOUNT))
+    for _ in range(100):
+        if ("telegram", ACCOUNT) in env.store.accounts():
+            break
+        await asyncio.sleep(0.01)
+    await env.m._lock.acquire()  # another channels operation, mid-way
+    try:
+        done, _ = await asyncio.wait({adding}, timeout=1.0)
+        assert done, "quick add waited for the lock past its deadline"
+        res = adding.result()
+        assert not res["ok"] and res["reason"] == "timeout"
+    finally:
+        env.m._lock.release()
+        if not adding.done():
+            await adding
+    for _ in range(100):
+        if ("telegram", ACCOUNT) not in env.store.accounts() and env.m.adapter_for("telegram", ACCOUNT) is None:
+            break
+        await asyncio.sleep(0.02)
+    _no_trace(env)

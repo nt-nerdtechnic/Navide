@@ -258,6 +258,8 @@ class ChannelManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = asyncio.Lock()
         self._quick_adding: set[BotKey] = set()  # bots a quick add is storing and verifying
+        # Undos of half-added bots: apart from _tasks so stop() does not cut one short.
+        self._quick_add_undos: dict[BotKey, asyncio.Task[None]] = {}
         # Memory only: a backend restart forgets them, and a later managed_bot update is ignored.
         self._managed: dict[str, _ManagedRequest] = {}  # request_id -> open t.me/newbot request
         self.relay = relay.RelayTable(clock=clock, on_expired=self._relay_expired)
@@ -578,9 +580,7 @@ class ChannelManager:
                                           QUICK_ADD_DEADLINE_S)
         except asyncio.TimeoutError:
             bot = (platform, account)
-            if bot in self.store.accounts() or bot in self._adapters:
-                # In the background: the lock it needs may be what held this call up.
-                self._spawn(self._discard_bot(platform, account))
+            self._undo_quick_add(platform, account)  # e.g. cancelled after it succeeded, while naming it
             return {"ok": False, "reason": "timeout",
                     "error": f"adding {_bot_label(bot)} did not finish within {QUICK_ADD_DEADLINE_S:g}s"}
 
@@ -607,13 +607,13 @@ class ChannelManager:
                 await self._discard_bot(platform, account)
                 return {"ok": False, **failure}
         except BaseException:
-            # Cancelled (the asking window went away) or failed midway: the caller never
-            # hears of this bot, so it must not stay. Shielded so a second cancel cannot stop the undo.
-            if bot in self.store.accounts() or bot in self._adapters:
-                await asyncio.shield(self._discard_bot(platform, account))
+            # Cancelled (the asking window went away, the deadline passed) or failed midway:
+            # the caller never hears of this bot, so it must not stay.
+            self._undo_quick_add(platform, account)
             raise
         finally:
-            self._quick_adding.discard(bot)
+            if bot not in self._quick_add_undos:
+                self._quick_adding.discard(bot)
         identity = adapter.status.identity
         async with self._lock:
             acct = self.store.accounts().get(bot)
@@ -650,6 +650,26 @@ class ChannelManager:
         except asyncio.TimeoutError:
             detail = f": {status.last_error}" if status.last_error else ""
             return {"reason": "timeout", "error": f"no answer from {bot[0]} within {QUICK_ADD_TIMEOUT_S:g}s{detail}"}
+
+    def _undo_quick_add(self, platform: str, account: str) -> None:
+        """Discard a half-added bot in the background, never waited for: the lock the undo
+        needs may be what held the quick add up. The bot stays reserved in _quick_adding
+        until it is gone, so adding it again cannot race the undo; a second call is a no-op."""
+        bot = (platform, account)
+        if bot in self._quick_add_undos or (bot not in self.store.accounts() and bot not in self._adapters):
+            return
+        self._quick_adding.add(bot)
+
+        async def undo() -> None:
+            try:
+                await self._discard_bot(platform, account)
+            except Exception:  # noqa: BLE001
+                log.exception("channels: undoing the quick add of %s failed", _bot_label(bot))
+            finally:
+                self._quick_add_undos.pop(bot, None)
+                self._quick_adding.discard(bot)
+
+        self._quick_add_undos[bot] = asyncio.ensure_future(undo())
 
     async def _discard_bot(self, platform: str, account: str) -> None:
         """Undo a quick add: the connection, the stored credential and every row of the bot."""
