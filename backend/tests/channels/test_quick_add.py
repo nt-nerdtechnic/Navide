@@ -261,3 +261,31 @@ async def test_a_bot_that_did_not_start_is_not_reported_added(env: Env, monkeypa
     res = await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT)
     assert not res["ok"] and res["reason"] == "invalid"
     _no_trace(env)
+
+
+async def test_a_held_channels_lock_ends_in_a_timeout_before_the_window_gives_up(env: Env, monkeypatch) -> None:
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_DEADLINE_S", 0.3)
+    _login_as(env, "ready")
+    await env.m._lock.acquire()  # another channels operation that never finishes
+    try:
+        res = await asyncio.wait_for(env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT), 3)
+    finally:
+        env.m._lock.release()
+    assert not res["ok"] and res["reason"] == "timeout"
+    await asyncio.sleep(0.05)
+    _no_trace(env)
+    # Nothing is left half-added: the same bot can be added again.
+    assert (await env.m.quick_add("telegram", {}, {"token": "tok-Q"}, ACCOUNT))["ok"]
+
+
+async def test_a_login_past_the_deadline_is_undone(env: Env, monkeypatch) -> None:
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_DEADLINE_S", 0.3)
+    _login_as(env, "silent")
+    res = await asyncio.wait_for(env.m.quick_add("telegram", {}, {"token": "tok-slow"}, ACCOUNT), 3)
+    assert not res["ok"] and res["reason"] == "timeout"
+    for _ in range(100):
+        if ("telegram", ACCOUNT) not in env.store.accounts() and env.m.adapter_for("telegram", ACCOUNT) is None:
+            break
+        await asyncio.sleep(0.02)
+    _no_trace(env)

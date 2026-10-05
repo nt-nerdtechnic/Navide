@@ -69,8 +69,9 @@ export const DEFAULT_ACCOUNT = 'default'
 
 // The backend's worst case, each step bounded on its side: storing the credential
 // (a Keychain write, up to 10 s), waiting for the platform to accept it (10 s,
-// QUICK_ADD_TIMEOUT_S), then undoing a failure (a Keychain delete, up to 10 s) —
-// 30 s, plus 15 s for the channels lock and the round trips.
+// QUICK_ADD_TIMEOUT_S), then undoing a failure (a Keychain delete, up to 10 s).
+// The whole call, the channels lock included, gives up at 30 s (QUICK_ADD_DEADLINE_S)
+// and answers "timeout", so this only covers a backend that cannot answer at all.
 const QUICK_ADD_TIMEOUT_MS = 45_000
 
 /** A fresh id for a bot being added: stable for its life, whatever it is renamed to. */

@@ -88,6 +88,9 @@ MSG_LINK_FAILED = "⚠️ 連結失敗，請回到 Navide 重新取得代碼"
 LINK_TARGETS = ("direct", "group")
 QUICK_ADD_TIMEOUT_S = 10.0  # how long a quick add waits for the platform to accept the credential
 QUICK_ADD_POLL_S = 0.1
+# A whole quick add, the channels lock included: under the window's 45 s (QUICK_ADD_TIMEOUT_MS)
+# with room for the undo of a failure (a Keychain delete, up to 10 s) and the round trips.
+QUICK_ADD_DEADLINE_S = 30.0
 # Telegram Managed Bots (Bot API 9.6): how long a t.me/newbot link waits for its bot.
 MANAGED_REQUEST_TTL_S = 600.0
 MANAGED_DEFAULT_NAME = "Navide bot"
@@ -559,9 +562,22 @@ class ChannelManager:
         its credential, name it after its identity when unnamed, and with ``link_target``
         hand back a link invite (as ``link_create``). Any failure removes everything this
         call stored; ``reason`` is "rejected" (credential refused), "timeout" or "invalid"
-        (refused before connecting)."""
+        (refused before connecting). The whole call ends within QUICK_ADD_DEADLINE_S."""
         _check_platform(platform)
         _check_account(account)
+        try:
+            return await asyncio.wait_for(self._quick_add(platform, config, secret, account, link_target),
+                                          QUICK_ADD_DEADLINE_S)
+        except asyncio.TimeoutError:
+            bot = (platform, account)
+            if bot in self.store.accounts() or bot in self._adapters:
+                # In the background: the lock it needs may be what held this call up.
+                self._spawn(self._discard_bot(platform, account))
+            return {"ok": False, "reason": "timeout",
+                    "error": f"adding {_bot_label(bot)} did not finish within {QUICK_ADD_DEADLINE_S:g}s"}
+
+    async def _quick_add(self, platform: str, config: dict[str, Any], secret: dict[str, Any] | None,
+                         account: str, link_target: str) -> dict[str, Any]:
         bot = (platform, account)
         if bot in self.store.accounts() or bot in self._quick_adding:
             return {"ok": False, "reason": "invalid", "error": f"{_bot_label(bot)} is already configured"}
