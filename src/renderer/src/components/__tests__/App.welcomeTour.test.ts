@@ -43,16 +43,13 @@ describe('first-run welcome tour', () => {
     expect(poll).toMatch(/case 'stop':\s+stopWelcomeTourPoll\(\)/)
   })
 
-  it('judges "first install" by the window as the check began, not as the answer arrives', () => {
+  it('judges "first install" by the window as the check began, retrying a failed answer', () => {
     const check = functionBody('checkWelcomeTourRecords')
     // The snapshot is taken before the (slow at launch) request goes out.
-    expect(check.indexOf('const workspaceOpenAtStart = workspaceSelected.value')).toBeLessThan(
-      check.indexOf("backend.send<{ recent?: { last_opened_at?: string }[] }>('workspace.list_recent', {})"),
-    )
-    expect(check).toContain('isFirstInstall({ workspaceOpenAtStart, recents: resp.payload?.recent ?? [], checkStartedAt })')
-    // A failed answer counts as a record: the tour stays off rather than
-    // greet a returning user.
-    expect(check).toMatch(/catch \{\s+welcomeTourDecision = 'not-first-install'/)
+    expect(check.indexOf('workspaceOpenAtStart: workspaceSelected.value')).toBeLessThan(check.indexOf('fetchRecents'))
+    expect(check).toContain('decideFirstInstall({')
+    expect(check).toContain("backend.send<{ recent?: { last_opened_at?: string }[] }>('workspace.list_recent', {})")
+    expect(check).toContain('warn: (message) => console.warn(message)')
   })
 
   it('routes Help → First-Run Tour… to the replay', () => {

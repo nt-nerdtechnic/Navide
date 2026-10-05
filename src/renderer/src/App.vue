@@ -269,7 +269,7 @@ import { useReleaseTour } from './composables/useReleaseTour'
 import { useWelcomeTour, welcomeActionTimes } from './composables/useWelcomeTour'
 import {
   WELCOME_STEPS,
-  isFirstInstall,
+  decideFirstInstall,
   nextWelcomeTourMove,
   type WelcomeFacts,
   type WelcomeTourDecision,
@@ -700,17 +700,16 @@ async function checkWelcomeTourRecords(): Promise<void> {
   welcomeTourDecision = 'checking'
   // The window as the check begins: the recent list can take a while at
   // launch, and a folder picked meanwhile must not count against the person.
-  const workspaceOpenAtStart = workspaceSelected.value
-  const checkStartedAt = Date.now()
-  try {
-    const resp = await backend.send<{ recent?: { last_opened_at?: string }[] }>('workspace.list_recent', {})
-    welcomeTourDecision =
-      resp.ok && isFirstInstall({ workspaceOpenAtStart, recents: resp.payload?.recent ?? [], checkStartedAt })
-        ? 'first-install'
-        : 'not-first-install'
-  } catch {
-    welcomeTourDecision = 'not-first-install'
-  }
+  welcomeTourDecision = await decideFirstInstall({
+    workspaceOpenAtStart: workspaceSelected.value,
+    checkStartedAt: Date.now(),
+    fetchRecents: async () => {
+      const resp = await backend.send<{ recent?: { last_opened_at?: string }[] }>('workspace.list_recent', {})
+      return { ok: resp.ok, recent: resp.payload?.recent }
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    warn: (message) => console.warn(message),
+  })
 }
 // The tour is for a first install only, and any workspace record means this
 // is not one: one open already (a restored window), or one in the recent

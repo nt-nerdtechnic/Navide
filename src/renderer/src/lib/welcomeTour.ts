@@ -151,6 +151,48 @@ export function isFirstInstall(s: {
   })
 }
 
+/** How many times the first-install check asks for the recent list. */
+export const WELCOME_RECORD_TRIES = 3
+/** The wait before each retry; it grows, since a launch-time backend is busy. */
+const WELCOME_RECORD_BACKOFF_MS = [2_000, 5_000]
+
+/**
+ * Ask for the recent-workspace list and judge "first install" from it (see
+ * isFirstInstall), retrying a failed or thrown answer with a growing wait. One
+ * slow launch-time request must not call the tour off for good: only when every
+ * try fails is it given up on — safely, as "not a first install" — and logged.
+ * The window is judged as the first try began, however late the answer.
+ */
+export async function decideFirstInstall(s: {
+  workspaceOpenAtStart: boolean
+  checkStartedAt: number
+  fetchRecents: () => Promise<{ ok: boolean; recent?: { last_opened_at?: string }[] }>
+  sleep: (ms: number) => Promise<void>
+  warn: (message: string) => void
+}): Promise<'first-install' | 'not-first-install'> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const resp = await s.fetchRecents()
+      if (resp.ok) {
+        return isFirstInstall({
+          workspaceOpenAtStart: s.workspaceOpenAtStart,
+          recents: resp.recent ?? [],
+          checkStartedAt: s.checkStartedAt,
+        })
+          ? 'first-install'
+          : 'not-first-install'
+      }
+    } catch {
+      // Retried below, like a refused answer.
+    }
+    if (attempt >= WELCOME_RECORD_TRIES) {
+      s.warn(`[welcome-tour] the recent-workspace list failed ${attempt} times; leaving the first-run tour off`)
+      return 'not-first-install'
+    }
+    await s.sleep(WELCOME_RECORD_BACKOFF_MS[attempt - 1] ?? WELCOME_RECORD_BACKOFF_MS.at(-1)!)
+  }
+}
+
 /**
  * What App's poll does next for the first-run tour. "First install" is
  * decided first and once — before anything on screen can hold the tour up —

@@ -4,7 +4,9 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
+  WELCOME_RECORD_TRIES,
   WELCOME_STEPS,
+  decideFirstInstall,
   isFirstInstall,
   nextWelcomeTourMove,
   welcomeActionAlreadyDone,
@@ -233,5 +235,59 @@ describe('welcome tour text, compiled by vue-i18n', () => {
       }
       expect(i18n.global.t('tour.welcome.talkMention'), code).toContain('@')
     }
+  })
+})
+
+// M13: one failed or timed-out recent-list request called the tour off for
+// good. Failures now retry with a growing wait; only when every try fails is
+// it given up on, and that is logged.
+describe('decideFirstInstall', () => {
+  const at = Date.parse('2026-10-05T15:00:40Z')
+  function run(answers: Array<{ ok: boolean; recent?: { last_opened_at?: string }[] } | Error>) {
+    const waits: number[] = []
+    const warnings: string[] = []
+    let calls = 0
+    const result = decideFirstInstall({
+      workspaceOpenAtStart: false,
+      checkStartedAt: at,
+      fetchRecents: async () => {
+        const a = answers[Math.min(calls++, answers.length - 1)]
+        if (a instanceof Error) throw a
+        return a
+      },
+      sleep: async (ms) => {
+        waits.push(ms)
+      },
+      warn: (m) => warnings.push(m),
+    })
+    return { result, waits, warnings, calls: () => calls }
+  }
+
+  it('answers from the first good reply', async () => {
+    const r = run([{ ok: true, recent: [] }])
+    expect(await r.result).toBe('first-install')
+    expect(r.calls()).toBe(1)
+    expect(r.waits).toEqual([])
+  })
+
+  it('retries a failed or thrown reply with a growing wait, then answers', async () => {
+    const r = run([{ ok: false }, new Error('timeout'), { ok: true, recent: [{ last_opened_at: '2026-10-05T14:00:00Z' }] }])
+    expect(await r.result).toBe('not-first-install')
+    expect(r.calls()).toBe(3)
+    expect(r.waits).toHaveLength(2)
+    expect(r.waits[1]).toBeGreaterThan(r.waits[0])
+    expect(r.warnings).toEqual([])
+  })
+
+  it('gives up, logging it, only after every try failed', async () => {
+    const r = run([new Error('timeout')])
+    expect(await r.result).toBe('not-first-install')
+    expect(r.calls()).toBe(WELCOME_RECORD_TRIES)
+    expect(r.warnings).toHaveLength(1)
+  })
+
+  it('judges by the window as the first try began, however late the answer', async () => {
+    const r = run([{ ok: false }, { ok: true, recent: [{ last_opened_at: '2026-10-05T15:00:52Z' }] }])
+    expect(await r.result).toBe('first-install')
   })
 })
