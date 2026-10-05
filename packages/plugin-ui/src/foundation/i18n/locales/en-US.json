@@ -8619,7 +8619,7 @@
       "environment": "Navide drives real CLIs in real terminals — these tools are what it runs on.",
       "agents": "Every pane you open runs one of these agents. One is enough to start.",
       "permissions": "Grant the access Navide needs to drive your machine.",
-      "ready": "Everything checks out. Open the app and pick a workspace; the first time in, a short tour you can skip shows you around."
+      "ready": "Everything checks out. The first time through, a short tour you can skip at any point helps you pick a workspace and open your first agent."
     },
     "install": "Install",
     "installing": "Installing…",
@@ -9682,44 +9682,31 @@
     "skip": "Skip tour",
     "done": "Done",
     "welcome": {
+      "whyFolder": {
+        "title": "First, pick the folder your agents will work in",
+        "body": "A workspace is the folder you want agents to work on: panes start there, read and write its files, and keep the plans they write there too. So you pick one before you can open an agent.",
+        "missing": "This step is on the Open Workspace screen: in Workspace mode, the ＋ in the sidebar header opens it."
+      },
+      "pickFolder": {
+        "title": "Pick one now",
+        "body": "Already have a project → click Browse… and choose its folder. Starting from scratch → click New… to create an empty folder. Just trying things out → click Home. Once you pick, the main screen opens.",
+        "missing": "This step is on the Open Workspace screen: in Workspace mode, the ＋ in the sidebar header opens it.",
+        "go": "Pick one"
+      },
       "openAgent": {
-        "title": "Open your first agent here",
-        "body": "Click ＋ next to the workspace and pick a CLI to open a pane. A CLI that isn’t installed yet is marked, and picking it walks you through installing it.",
-        "missing": "＋ is at the right end of the workspace row in the left sidebar."
+        "title": "Click ＋ to open your first agent",
+        "body": "Click the ＋ at the right end of the workspace row and pick a CLI (Claude Code, for example); a pane opens on the right. A CLI that isn’t installed yet is marked, and picking it walks you through installing it.",
+        "missing": "＋ is at the right end of the workspace row in the left sidebar; switch the sidebar to the Agents view first.",
+        "go": "Open one"
       },
-      "sidebarViews": {
-        "title": "Five views in the sidebar",
-        "body": "Agents, Pipeline, Explorer, Git and Plans. Plans are documents agents write for you to review; Git shows what they changed.",
-        "missing": "The view switcher is at the top of the left sidebar."
-      },
-      "settings": {
-        "title": "Settings and help live here",
-        "body": "The gear opens Settings, and its Help tab explains each feature with diagrams. You can replay this tour later from Help → First-Run Tour… in the menu bar.",
-        "missing": "Settings is the gear at the top right of the title bar."
-      },
-      "paneName": {
-        "title": "A pane’s name is its address",
-        "body": "Other agents use this name to send this pane messages. Double-click it to rename the pane; the address follows.",
-        "missing": "Open a pane first: its name is at the left of its title bar."
-      },
-      "typing": {
-        "title": "Type straight into the pane",
-        "body": "It works just like using this CLI in a terminal. Type @ to list the other panes’ addresses and have them message each other.",
-        "missing": "Open a pane first, then click into its terminal to type."
-      },
-      "usage": {
-        "title": "How much quota this account has left",
-        "body": "The badge shows the current account’s remaining quota. Click it to see when each limit resets, and to switch accounts if you have more than one.",
-        "missing": "The quota badge is on the right of a pane’s title bar; a CLI with no quota data shows none."
-      },
-      "groups": {
-        "title": "Arranging more panes",
-        "body": "Each tab above is a group, and ＋ adds one. The buttons at the far right switch the layout: grid, sidebar, spotlight, fullscreen.",
-        "missing": "The group tabs appear above the panes once a pane is open."
+      "firstCommand": {
+        "title": "Give it your first instruction here",
+        "body": "Click into the pane and type a sentence as you would in a terminal — for example, “Explain how this project is structured” — then press Enter. Once it starts answering, you know how to use it.",
+        "missing": "Open a pane first with the ＋ next to the workspace, then click into its terminal to type."
       },
       "more": {
-        "title": "More, for when you need it",
-        "body": "• Voice input: turn it on in Settings → Voice Input, then hold Ctrl+Alt+M and speak.\n• The Git and Plans views in the sidebar: what agents changed and the plans they wrote.\n• The Help tab in Settings: diagrams of every feature.\n\nReplay this tour any time from Help → First-Run Tour…."
+        "title": "What to try next",
+        "body": "• Click ＋ again for a second pane, then type @ in either pane to have one ask the other to do something.\n• A pane’s name is its address — double-click it to rename the pane.\n• The badge on the right of the title bar is the quota left; click it to see when it resets or to switch accounts.\n• Each tab above the panes is a group; the buttons at the far right change the layout.\n• Click Git or Plans in the sidebar to see what agents changed and the plans they wrote.\n• The gear → Help explains every feature with diagrams; for voice input, turn it on in Settings → Voice Input, then hold Ctrl+Alt+M and speak.\n• Next time, go straight back to a workspace from Recent on the Welcome screen; ☆ pins the ones you use most.\n\nTo replay this tour: Help → First-Run Tour…"
       }
     },
     "v0_2_10": {

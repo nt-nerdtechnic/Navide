@@ -631,7 +631,6 @@ onMounted(() => {
         <span
           v-else
           class="title"
-          data-tour="pane-title"
           :title="$t('pane.terminal.rename-title-tooltip')"
           @dblclick.stop="startTitleEdit"
         >{{ title }}</span>
@@ -704,7 +703,7 @@ onMounted(() => {
           :style="statusBadgeVars"
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
-        <UsageBadge v-if="agentKey" data-tour="usage-badge" :agent-key="agentKey" :cli-profiles="cliProfiles" />
+        <UsageBadge v-if="agentKey" :agent-key="agentKey" :cli-profiles="cliProfiles" />
         <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>

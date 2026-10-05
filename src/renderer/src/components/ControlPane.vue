@@ -3142,7 +3142,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
     </div>
 
     <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
-    <div class="sidebar-tabs" data-tour="sidebar-views">
+    <div class="sidebar-tabs">
       <button
         v-for="t in visibleTabs"
         :key="t.id"

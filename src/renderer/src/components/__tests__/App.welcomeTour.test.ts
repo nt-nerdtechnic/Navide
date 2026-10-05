@@ -28,13 +28,24 @@ describe('first-run welcome tour', () => {
     expect(functionBody('evaluateWhatsNew')).not.toContain('welcomeTour')
   })
 
-  it('waits for the shell: onboarding settled for real, a workspace open, nothing modal on screen', () => {
+  it('waits for onboarding to settle for real and for nothing modal on screen', () => {
     const poll = functionBody('pollWelcomeTour')
     expect(poll).toContain('onboardingComplete.value !== true')
     expect(poll).toContain('onboardingCheckFailed.value')
-    expect(poll).toContain('!workspaceSelected.value')
     expect(poll).toContain('mainModalOpen()')
-    expect(poll.indexOf('mainModalOpen()')).toBeLessThan(poll.indexOf('welcomeTour.startMain()'))
+    expect(poll.indexOf('mainModalOpen()')).toBeLessThan(poll.indexOf('welcomeTour.startWelcome()'))
+  })
+
+  it('starts on Welcome, or moves past it when a workspace is already open', () => {
+    const poll = functionBody('pollWelcomeTour')
+    expect(poll).toMatch(/if \(stage === 'start'\) \{\s+if \(workspaceSelected\.value\) welcomeTour\.passWelcome\(\)\s+else welcomeTour\.startWelcome\(\)/)
+  })
+
+  it('shows the main-screen part only once a workspace is open', () => {
+    const poll = functionBody('pollWelcomeTour')
+    const gate = poll.indexOf('if (!workspaceSelected.value) return')
+    expect(gate).toBeGreaterThan(poll.indexOf("stage === 'start'"))
+    expect(gate).toBeLessThan(poll.indexOf('welcomeTour.startMain()'))
   })
 
   it('starts the pane part only for a pane on stage that paneTourReady accepts', () => {
@@ -55,8 +66,8 @@ describe('first-run welcome tour', () => {
     expect(functionBody('replayWelcomeTour')).toContain('welcomeTour.replay()')
   })
 
-  it('anchors the settings step on the title-bar gear and the groups step on the tab bar', () => {
-    expect(appSource).toMatch(/<button class="titlebar-gear" data-tour="settings"/)
-    expect(appSource).toMatch(/<StageTabBar\s+v-if="stageTabs\.length > 0"\s+data-tour="stage-tabs"/)
+  it('tells GuidedTour whether the last card keeps Skip', () => {
+    expect(appSource).toContain('const activeTourSkipOnLast = releaseTour.skipOnLast')
+    expect(appSource).toMatch(/<GuidedTour[^>]*@close="endTour"\s+:skip-on-last="activeTourSkipOnLast"/)
   })
 })

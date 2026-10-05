@@ -1,9 +1,13 @@
 // The first-run welcome tour: what it shows, and when a pane is ready for it.
 //
-// Two short parts walked by GuidedTour.vue. The main-screen part shows where a
-// CLI pane is opened once the first workspace is open; the pane part explains
-// a pane once the first one has come to rest. Only a fresh install gets them
-// (useWelcomeTour.ts records that), and Help → First-Run Tour… replays both.
+// Its job is to leave a new user able to do one thing end to end: pick a
+// workspace, open the first agent, give it a first instruction and watch it
+// answer. Three short parts, each where the person actually is at that point
+// of that path — the Welcome screen, the first main screen, the first pane
+// once it is waiting for input — and every card names the action to take
+// next. Anything off the path is a line on the last card, not a card of its
+// own. Only a fresh install gets the tour (useWelcomeTour.ts records that),
+// and Help → First-Run Tour… replays all three parts.
 //
 // No step has a `prepare`: the tour only points, it never opens, closes or
 // types into anything. Anchors are dedicated `data-tour` attributes so a
@@ -16,6 +20,26 @@ import type { TourStep } from './tours'
 
 const T = 'tour.welcome'
 
+/** On Welcome: why a folder comes first, then pick one. */
+export const WELCOME_START_STEPS: TourStep[] = [
+  {
+    id: 'why-folder',
+    anchor: '[data-tour="welcome-open"]',
+    titleKey: `${T}.whyFolder.title`,
+    bodyKey: `${T}.whyFolder.body`,
+    missingKey: `${T}.whyFolder.missing`,
+  },
+  {
+    id: 'pick-folder',
+    anchor: '[data-tour="welcome-open-buttons"]',
+    titleKey: `${T}.pickFolder.title`,
+    bodyKey: `${T}.pickFolder.body`,
+    missingKey: `${T}.pickFolder.missing`,
+    primaryKey: `${T}.pickFolder.go`,
+  },
+]
+
+/** On the first main screen: open the first agent. */
 export const WELCOME_MAIN_STEPS: TourStep[] = [
   {
     id: 'open-agent',
@@ -23,51 +47,19 @@ export const WELCOME_MAIN_STEPS: TourStep[] = [
     titleKey: `${T}.openAgent.title`,
     bodyKey: `${T}.openAgent.body`,
     missingKey: `${T}.openAgent.missing`,
-  },
-  {
-    id: 'sidebar-views',
-    anchor: '[data-tour="sidebar-views"]',
-    titleKey: `${T}.sidebarViews.title`,
-    bodyKey: `${T}.sidebarViews.body`,
-    missingKey: `${T}.sidebarViews.missing`,
-  },
-  {
-    id: 'settings',
-    anchor: '[data-tour="settings"]',
-    titleKey: `${T}.settings.title`,
-    bodyKey: `${T}.settings.body`,
-    missingKey: `${T}.settings.missing`,
+    primaryKey: `${T}.openAgent.go`,
   },
 ]
 
+/** On the first pane once it waits for input: the first instruction, then
+ *  what to try next. */
 export const WELCOME_PANE_STEPS: TourStep[] = [
   {
-    id: 'pane-name',
-    anchor: '[data-tour="pane-title"]',
-    titleKey: `${T}.paneName.title`,
-    bodyKey: `${T}.paneName.body`,
-    missingKey: `${T}.paneName.missing`,
-  },
-  {
-    id: 'typing',
+    id: 'first-command',
     anchor: '.xterm-host[data-pane-id]',
-    titleKey: `${T}.typing.title`,
-    bodyKey: `${T}.typing.body`,
-    missingKey: `${T}.typing.missing`,
-  },
-  {
-    id: 'usage',
-    anchor: '[data-tour="usage-badge"]',
-    titleKey: `${T}.usage.title`,
-    bodyKey: `${T}.usage.body`,
-    missingKey: `${T}.usage.missing`,
-  },
-  {
-    id: 'groups',
-    anchor: '[data-tour="stage-tabs"]',
-    titleKey: `${T}.groups.title`,
-    bodyKey: `${T}.groups.body`,
-    missingKey: `${T}.groups.missing`,
+    titleKey: `${T}.firstCommand.title`,
+    bodyKey: `${T}.firstCommand.body`,
+    missingKey: `${T}.firstCommand.missing`,
   },
   {
     id: 'more',
@@ -76,14 +68,20 @@ export const WELCOME_PANE_STEPS: TourStep[] = [
   },
 ]
 
-/** Help → First-Run Tour…: both parts as one walk. */
-export const WELCOME_REPLAY_STEPS: TourStep[] = [...WELCOME_MAIN_STEPS, ...WELCOME_PANE_STEPS]
+/** Help → First-Run Tour…: all three parts as one walk. */
+export const WELCOME_REPLAY_STEPS: TourStep[] = [
+  ...WELCOME_START_STEPS,
+  ...WELCOME_MAIN_STEPS,
+  ...WELCOME_PANE_STEPS,
+]
 
-export type WelcomeStage = 'off' | 'main' | 'pane'
+export type WelcomeStage = 'off' | 'start' | 'main' | 'pane'
 
-/** Which part is due: none unless a first run left the tour pending. */
-export function welcomeStage(state: { pending: boolean; mainDone: boolean }): WelcomeStage {
+/** Which part is due: none unless a first run left the tour pending, then
+ *  each part once the one before it is done. */
+export function welcomeStage(state: { pending: boolean; startDone: boolean; mainDone: boolean }): WelcomeStage {
   if (!state.pending) return 'off'
+  if (!state.startDone) return 'start'
   return state.mainDone ? 'pane' : 'main'
 }
 

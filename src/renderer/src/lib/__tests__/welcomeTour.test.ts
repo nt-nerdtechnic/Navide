@@ -9,6 +9,7 @@ import {
   WELCOME_MAIN_STEPS,
   WELCOME_PANE_STEPS,
   WELCOME_REPLAY_STEPS,
+  WELCOME_START_STEPS,
   paneTourReady,
   welcomeStage,
   type WelcomePaneProbe,
@@ -31,19 +32,38 @@ function lookup(messages: Record<string, unknown>, key: string): unknown {
   )
 }
 
+function leafKeys(node: unknown, prefix: string): string[] {
+  if (!node || typeof node !== 'object') return [prefix]
+  return Object.entries(node as Record<string, unknown>).flatMap(([k, v]) => leafKeys(v, `${prefix}.${k}`))
+}
+
 const source = (rel: string): string => readFileSync(resolve(process.cwd(), rel), 'utf8')
 
+function keysOf(step: (typeof WELCOME_REPLAY_STEPS)[number]): string[] {
+  return [step.titleKey, step.bodyKey, step.missingKey, step.primaryKey].filter(Boolean) as string[]
+}
+
 describe('welcome tour steps', () => {
-  it('is three steps on the main screen, then five on the first pane', () => {
-    expect(WELCOME_MAIN_STEPS.map((s) => s.id)).toEqual(['open-agent', 'sidebar-views', 'settings'])
-    expect(WELCOME_PANE_STEPS.map((s) => s.id)).toEqual(['pane-name', 'typing', 'usage', 'groups', 'more'])
+  // One path: pick a workspace → open the first agent → give it a first
+  // instruction. A card off that path does not get its own step.
+  it('is two cards on Welcome, one on the main screen, two on the first pane', () => {
+    expect(WELCOME_START_STEPS.map((s) => s.id)).toEqual(['why-folder', 'pick-folder'])
+    expect(WELCOME_MAIN_STEPS.map((s) => s.id)).toEqual(['open-agent'])
+    expect(WELCOME_PANE_STEPS.map((s) => s.id)).toEqual(['first-command', 'more'])
   })
 
-  it('replays both parts in order, as one tour', () => {
+  it('replays all three parts in order, as one tour', () => {
     expect(WELCOME_REPLAY_STEPS.map((s) => s.id)).toEqual([
+      ...WELCOME_START_STEPS.map((s) => s.id),
       ...WELCOME_MAIN_STEPS.map((s) => s.id),
       ...WELCOME_PANE_STEPS.map((s) => s.id),
     ])
+  })
+
+  it('ends each of the first two parts on a button named for the action that comes next', () => {
+    expect(WELCOME_START_STEPS.at(-1)!.primaryKey).toBe('tour.welcome.pickFolder.go')
+    expect(WELCOME_MAIN_STEPS.at(-1)!.primaryKey).toBe('tour.welcome.openAgent.go')
+    expect(WELCOME_PANE_STEPS.at(-1)!.primaryKey).toBeUndefined()
   })
 
   it('never opens or closes anything on its own', () => {
@@ -52,8 +72,7 @@ describe('welcome tour steps', () => {
 
   it('keeps its text under tour.welcome, in every locale', () => {
     for (const step of WELCOME_REPLAY_STEPS) {
-      const keys = [step.titleKey, step.bodyKey, ...(step.missingKey ? [step.missingKey] : [])]
-      for (const key of keys) {
+      for (const key of keysOf(step)) {
         expect(key.startsWith('tour.welcome.'), key).toBe(true)
         for (const { code, messages } of LOCALES) {
           const value = lookup(messages, key)
@@ -61,6 +80,14 @@ describe('welcome tour steps', () => {
           expect((value as string).trim(), `${code} ${key}`).not.toBe('')
         }
       }
+    }
+  })
+
+  it('has the same tour.welcome keys in every locale, and none left over', () => {
+    const used = new Set(WELCOME_REPLAY_STEPS.flatMap(keysOf))
+    for (const { code, messages } of LOCALES) {
+      const keys = leafKeys(lookup(messages, 'tour.welcome'), 'tour.welcome').sort()
+      expect(keys, code).toEqual([...used].sort())
     }
   })
 
@@ -73,7 +100,7 @@ describe('welcome tour steps', () => {
   it('writes no macOS-only shortcut: ⌘ is the Win/Super key off macOS', () => {
     for (const step of WELCOME_REPLAY_STEPS) {
       for (const { code, messages } of LOCALES) {
-        for (const key of [step.titleKey, step.bodyKey, step.missingKey].filter(Boolean) as string[]) {
+        for (const key of keysOf(step)) {
           expect(lookup(messages, key) as string, `${code} ${key}`).not.toMatch(/[⌘⇧⌥]/)
         }
       }
@@ -85,12 +112,9 @@ describe('welcome tour steps', () => {
   // file that renders it.
   it('points only at data-tour anchors the components actually render', () => {
     const where: Record<string, string> = {
+      'welcome-open': 'src/renderer/src/components/Welcome.vue',
+      'welcome-open-buttons': 'src/renderer/src/components/Welcome.vue',
       'open-agent': 'src/renderer/src/components/ControlPane.vue',
-      'sidebar-views': 'src/renderer/src/components/ControlPane.vue',
-      settings: 'src/renderer/src/App.vue',
-      'pane-title': 'src/renderer/src/components/TerminalPane.vue',
-      'usage-badge': 'src/renderer/src/components/TerminalPane.vue',
-      'stage-tabs': 'src/renderer/src/App.vue',
     }
     const used = new Set<string>()
     for (const step of WELCOME_REPLAY_STEPS) {
@@ -102,17 +126,35 @@ describe('welcome tour steps', () => {
       if (step.anchor) expect(() => document.querySelectorAll(step.anchor!), step.id).not.toThrow()
     }
   })
+
+  it('leaves no data-tour anchor behind that no step points at', () => {
+    const files = [
+      'src/renderer/src/App.vue',
+      'src/renderer/src/components/ControlPane.vue',
+      'src/renderer/src/components/TerminalPane.vue',
+      'src/renderer/src/components/Welcome.vue',
+    ]
+    const used = new Set(
+      WELCOME_REPLAY_STEPS.flatMap((s) => [...(s.anchor ?? '').matchAll(/\[data-tour="([^"]+)"\]/g)].map((m) => m[1])),
+    )
+    for (const file of files) {
+      for (const [, name] of source(file).matchAll(/data-tour="([^"]+)"/g)) {
+        expect(used.has(name), `${file}: data-tour="${name}"`).toBe(true)
+      }
+    }
+  })
 })
 
 describe('welcomeStage', () => {
   it('is off unless a first run left the tour pending', () => {
-    expect(welcomeStage({ pending: false, mainDone: false })).toBe('off')
-    expect(welcomeStage({ pending: false, mainDone: true })).toBe('off')
+    expect(welcomeStage({ pending: false, startDone: false, mainDone: false })).toBe('off')
+    expect(welcomeStage({ pending: false, startDone: true, mainDone: true })).toBe('off')
   })
 
-  it('shows the main screen first, then the first pane', () => {
-    expect(welcomeStage({ pending: true, mainDone: false })).toBe('main')
-    expect(welcomeStage({ pending: true, mainDone: true })).toBe('pane')
+  it('goes Welcome, then the main screen, then the first pane', () => {
+    expect(welcomeStage({ pending: true, startDone: false, mainDone: false })).toBe('start')
+    expect(welcomeStage({ pending: true, startDone: true, mainDone: false })).toBe('main')
+    expect(welcomeStage({ pending: true, startDone: true, mainDone: true })).toBe('pane')
   })
 })
 

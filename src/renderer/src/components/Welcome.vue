@@ -240,9 +240,9 @@ function ctxCopyPath(): void {
         <p class="tagline">{{ $t('label.tagline') }}</p>
       </header>
 
-      <section class="w-open">
+      <section class="w-open" data-tour="welcome-open">
         <h2>{{ $t('label.open-workspace') }}</h2>
-        <div class="w-open-btns">
+        <div class="w-open-btns" data-tour="welcome-open-buttons">
           <button class="primary" :disabled="picking" @click="browse">
             {{ picking ? '…' : $t('action.browse') }}
           </button>
