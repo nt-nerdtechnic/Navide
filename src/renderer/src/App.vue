@@ -267,7 +267,13 @@ import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/wh
 import type { TourPrepare } from './lib/tours'
 import { useReleaseTour } from './composables/useReleaseTour'
 import { useWelcomeTour, welcomeActionTimes } from './composables/useWelcomeTour'
-import { WELCOME_STEPS, nextWelcomeTourMove, type WelcomeFacts } from './lib/welcomeTour'
+import {
+  WELCOME_STEPS,
+  isFirstInstall,
+  nextWelcomeTourMove,
+  type WelcomeFacts,
+  type WelcomeTourDecision,
+} from './lib/welcomeTour'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -687,34 +693,37 @@ function stopWelcomeTourPoll(): void {
   if (welcomeTourPoll) clearInterval(welcomeTourPoll)
   welcomeTourPoll = null
 }
-// Whether the recent-workspace list was empty (null = not checked yet).
-let welcomeTourRecordsEmpty: boolean | null = null
-let welcomeTourRecordsChecking = false
+// Where the first-install check stands this session (see isFirstInstall).
+let welcomeTourDecision: WelcomeTourDecision = 'unchecked'
 async function checkWelcomeTourRecords(): Promise<void> {
-  if (welcomeTourRecordsChecking) return
-  welcomeTourRecordsChecking = true
+  if (welcomeTourDecision !== 'unchecked') return
+  welcomeTourDecision = 'checking'
+  // The window as the check begins: the recent list can take a while at
+  // launch, and a folder picked meanwhile must not count against the person.
+  const workspaceOpenAtStart = workspaceSelected.value
+  const checkStartedAt = Date.now()
   try {
-    const resp = await backend.send<{ recent?: unknown[] }>('workspace.list_recent', {})
-    welcomeTourRecordsEmpty = resp.ok && (resp.payload?.recent?.length ?? 0) === 0
+    const resp = await backend.send<{ recent?: { last_opened_at?: string }[] }>('workspace.list_recent', {})
+    welcomeTourDecision =
+      resp.ok && isFirstInstall({ workspaceOpenAtStart, recents: resp.payload?.recent ?? [], checkStartedAt })
+        ? 'first-install'
+        : 'not-first-install'
   } catch {
-    welcomeTourRecordsEmpty = false
-  } finally {
-    welcomeTourRecordsChecking = false
+    welcomeTourDecision = 'not-first-install'
   }
 }
 // The tour is for a first install only, and any workspace record means this
 // is not one: one open already (a restored window), or one in the recent
-// list. That is decided first and once (see nextWelcomeTourMove) — waiting
-// for the CLI health guide first let a folder picked meanwhile count against
-// the person.
+// list. That is decided first and once, from the window as the check began
+// (see nextWelcomeTourMove, isFirstInstall) — deciding later let a folder
+// picked meanwhile count against the person.
 function pollWelcomeTour(): void {
   switch (nextWelcomeTourMove({
     pending: welcomeTour.pending(),
     active: !!welcomeTourActive.value,
     settled: onboardingComplete.value === true && !onboardingCheckFailed.value,
     eligible: welcomeTour.eligible(),
-    workspaceOpen: workspaceSelected.value,
-    recordsEmpty: welcomeTourRecordsEmpty,
+    decision: welcomeTourDecision,
     blocked: mainModalOpen() || !!cliHealthGuide.value,
   })) {
     case 'stop':
@@ -723,7 +732,7 @@ function pollWelcomeTour(): void {
     case 'cancel':
       welcomeTour.cancel()
       return
-    case 'check-records':
+    case 'check':
       void checkWelcomeTourRecords()
       return
     case 'mark-eligible':

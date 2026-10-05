@@ -89,6 +89,9 @@ export const COACH_DONE_MS = 800
 export const COACH_MISSING_SKIP_MS = 3_000
 /** How often a bubble re-finds its control (it may move, appear or go). */
 export const COACH_TICK_MS = 250
+/** How long a bubble stays out of the way once the person presses the
+ *  control it points at (a menu it opens would sit under the bubble). */
+export const COACH_ASIDE_MS = 15_000
 
 /** Whether a step's action happened since `since`. */
 export function welcomeActionDone(action: WelcomeAction, f: WelcomeFacts, since: number): boolean {
@@ -124,14 +127,35 @@ export function welcomeActionAlreadyDone(action: WelcomeAction, f: WelcomeFacts)
   }
 }
 
-export type WelcomeTourMove = 'stop' | 'wait' | 'cancel' | 'check-records' | 'mark-eligible' | 'start'
+export type WelcomeTourMove = 'stop' | 'wait' | 'cancel' | 'check' | 'mark-eligible' | 'start'
+
+/** Where the first-install check stands this session. */
+export type WelcomeTourDecision = 'unchecked' | 'checking' | 'first-install' | 'not-first-install'
 
 /**
- * What App's poll does next for the first-run tour. "First install" (no
- * workspace open, an empty recent list) is decided first and once — before
- * anything on screen can hold the tour up — and the answer is kept
- * (`eligible`). Deciding it later read the folder the person picked while a
- * modal held the tour back as a record against them, and called it off.
+ * Whether this is a first install, judged by the window as the check began:
+ * no workspace open then, and no recent workspace opened before then. A
+ * folder picked while the answer was on its way — at launch it can take a
+ * while — is the person starting the tour's first step, not a record against
+ * them. A record that cannot be dated counts against them, to be safe.
+ */
+export function isFirstInstall(s: {
+  workspaceOpenAtStart: boolean
+  recents: readonly { last_opened_at?: string }[]
+  checkStartedAt: number
+}): boolean {
+  if (s.workspaceOpenAtStart) return false
+  return s.recents.every((r) => {
+    const at = r.last_opened_at ? Date.parse(r.last_opened_at) : NaN
+    return Number.isFinite(at) && at >= s.checkStartedAt
+  })
+}
+
+/**
+ * What App's poll does next for the first-run tour. "First install" is
+ * decided first and once — before anything on screen can hold the tour up —
+ * and the answer is kept (`eligible`); after that only a clear screen is
+ * waited for.
  */
 export function nextWelcomeTourMove(s: {
   pending: boolean
@@ -139,17 +163,23 @@ export function nextWelcomeTourMove(s: {
   /** Onboarding has really finished (not a fail-open guess). */
   settled: boolean
   eligible: boolean
-  workspaceOpen: boolean
-  /** The recent-workspace list was empty; null = not checked yet. */
-  recordsEmpty: boolean | null
+  decision: WelcomeTourDecision
   /** A modal or the CLI health guide is up. */
   blocked: boolean
 }): WelcomeTourMove {
   if (!s.pending) return 'stop'
   if (s.active || !s.settled) return 'wait'
   if (!s.eligible) {
-    if (s.workspaceOpen || s.recordsEmpty === false) return 'cancel'
-    return s.recordsEmpty === null ? 'check-records' : 'mark-eligible'
+    switch (s.decision) {
+      case 'unchecked':
+        return 'check'
+      case 'checking':
+        return 'wait'
+      case 'first-install':
+        return 'mark-eligible'
+      case 'not-first-install':
+        return 'cancel'
+    }
   }
   return s.blocked ? 'wait' : 'start'
 }

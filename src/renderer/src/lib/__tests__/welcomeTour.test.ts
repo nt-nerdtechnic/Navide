@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   WELCOME_STEPS,
+  isFirstInstall,
   nextWelcomeTourMove,
   welcomeActionAlreadyDone,
   welcomeActionDone,
@@ -148,18 +149,46 @@ describe('welcomeActionDone / welcomeActionAlreadyDone', () => {
   })
 })
 
-// 21:59: the tour came up for one bubble and was gone. The first-install check
-// waited behind the CLI health guide; the person picked a folder meanwhile, and
-// the check then read that folder as a workspace record and called the tour
-// off. The check now runs first, once, and its answer is kept.
+// 21:59 and 23:01: the tour never got going. The first-install check waited —
+// first behind the CLI health guide, then on a recent-list answer slow at
+// launch — and a folder the person picked meanwhile was read as a record
+// against them. The check now judges the window as it was when it began.
+describe('isFirstInstall', () => {
+  const at = Date.parse('2026-10-05T15:00:40Z')
+  const opened = (iso: string) => ({ last_opened_at: iso })
+
+  it('is a first install with no workspace open and no older record', () => {
+    expect(isFirstInstall({ workspaceOpenAtStart: false, recents: [], checkStartedAt: at })).toBe(true)
+  })
+
+  it('does not count a folder opened after the check began', () => {
+    expect(
+      isFirstInstall({ workspaceOpenAtStart: false, recents: [opened('2026-10-05T15:00:52Z')], checkStartedAt: at }),
+    ).toBe(true)
+  })
+
+  it('is not one with a workspace open as it began, or an older record', () => {
+    expect(isFirstInstall({ workspaceOpenAtStart: true, recents: [], checkStartedAt: at })).toBe(false)
+    expect(
+      isFirstInstall({ workspaceOpenAtStart: false, recents: [opened('2026-10-05T14:00:00Z')], checkStartedAt: at }),
+    ).toBe(false)
+  })
+
+  it('counts a record it cannot date against the person, to be safe', () => {
+    expect(isFirstInstall({ workspaceOpenAtStart: false, recents: [{}], checkStartedAt: at })).toBe(false)
+    expect(
+      isFirstInstall({ workspaceOpenAtStart: false, recents: [opened('yesterday')], checkStartedAt: at }),
+    ).toBe(false)
+  })
+})
+
 describe('nextWelcomeTourMove', () => {
   const base = {
     pending: true,
     active: false,
     settled: true,
     eligible: false,
-    workspaceOpen: false,
-    recordsEmpty: null as boolean | null,
+    decision: 'unchecked' as const,
     blocked: false,
   }
 
@@ -169,25 +198,19 @@ describe('nextWelcomeTourMove', () => {
     expect(nextWelcomeTourMove({ ...base, settled: false })).toBe('wait')
   })
 
-  it('decides "first install" before anything on screen can hold it up', () => {
-    expect(nextWelcomeTourMove({ ...base, blocked: true })).toBe('check-records')
-    expect(nextWelcomeTourMove({ ...base, blocked: true, recordsEmpty: true })).toBe('mark-eligible')
+  it('starts the first-install check before anything on screen can hold it up, and waits for it', () => {
+    expect(nextWelcomeTourMove({ ...base, blocked: true })).toBe('check')
+    expect(nextWelcomeTourMove({ ...base, decision: 'checking' })).toBe('wait')
   })
 
-  it('calls the tour off for a workspace record found while deciding', () => {
-    expect(nextWelcomeTourMove({ ...base, workspaceOpen: true })).toBe('cancel')
-    expect(nextWelcomeTourMove({ ...base, recordsEmpty: false })).toBe('cancel')
+  it('keeps the answer: eligible, or the tour called off', () => {
+    expect(nextWelcomeTourMove({ ...base, blocked: true, decision: 'first-install' })).toBe('mark-eligible')
+    expect(nextWelcomeTourMove({ ...base, decision: 'not-first-install' })).toBe('cancel')
   })
 
-  it('keeps going after a folder is picked once it has decided — the picked folder is no record against it', () => {
-    const decided = { ...base, eligible: true }
-    // The health guide is still up: wait, but never cancel.
-    expect(nextWelcomeTourMove({ ...decided, workspaceOpen: true, blocked: true })).toBe('wait')
-    expect(nextWelcomeTourMove({ ...decided, workspaceOpen: true, recordsEmpty: false })).toBe('start')
-  })
-
-  it('starts on a clear screen', () => {
-    expect(nextWelcomeTourMove({ ...base, eligible: true })).toBe('start')
+  it('once eligible, only waits for a clear screen — nothing opened since counts against it', () => {
+    expect(nextWelcomeTourMove({ ...base, eligible: true, blocked: true })).toBe('wait')
+    expect(nextWelcomeTourMove({ ...base, eligible: true, decision: 'not-first-install' })).toBe('start')
   })
 })
 
