@@ -1169,6 +1169,15 @@ class UsageService:
                     unverified.set_exception(err)
                     tasks[provider] = unverified
                     continue
+                except Exception as err:  # noqa: BLE001 — one provider must not sink the rest
+                    # A store that cannot be read (a locked database, a bad
+                    # row) fails only this vendor; raising here would abandon
+                    # the reads already started for the others. Logged with
+                    # the other fetch failures below.
+                    failed = asyncio.get_running_loop().create_future()
+                    failed.set_exception(err)
+                    tasks[provider] = failed
+                    continue
                 async def bound_fetch(ctx=context, adapter=spec):
                     return await adapter.fetch_usage_from_context(ctx)
                 tasks[provider] = asyncio.create_task(bound_fetch())
