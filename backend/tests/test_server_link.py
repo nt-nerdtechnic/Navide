@@ -7,6 +7,7 @@ be running for these to pass, and none of them touches the real Keychain.
 from __future__ import annotations
 
 import asyncio
+import logging
 import base64
 import os
 import json
@@ -632,6 +633,40 @@ async def test_roster_additions_renames_and_removals_are_published():
         settled = (len(conn.upserts), len(conn.syncs), len(conn.removes))
         await asyncio.sleep(0.2)
         assert (len(conn.upserts), len(conn.syncs), len(conn.removes)) == settled
+    finally:
+        await link.stop()
+
+
+async def test_a_session_the_server_no_longer_has_counts_as_removed(caplog):
+    # The server forgot the session (its own cleanup, a restart): SESSION_GONE is
+    # the outcome remove wanted, not a failure to retry on every sweep (7304
+    # warnings in three days on an installed build).
+    def session_gone(conn: "FakeConnection", message: dict) -> dict | None:
+        if message.get("type") == "sessions.remove":
+            conn.removes.append(message.get("payload") or {})
+            return {
+                "id": message["id"],
+                "type": "sessions.remove.result",
+                "ok": False,
+                "error": {"code": "SESSION_GONE", "message": "no such session"},
+            }
+        return default_responder(conn, message)
+
+    agent_messaging.register("p1", "reviewer", "/tmp/proj-a", agent_key="claude")
+    server = FakeServer(responder=session_gone)
+    link = make_link(server)
+    await link.start()
+    try:
+        await _until(lambda: bool(server.opened and server.opened[0].syncs))
+        conn = server.opened[0]
+        caplog.set_level(logging.WARNING, logger="agent_team_backend.server_link")
+        agent_messaging.unregister("p1")
+        link.notify_roster_changed()
+        await _until(lambda: bool(conn.removes))
+        link.notify_roster_changed()
+        await asyncio.sleep(0.3)
+        assert len(conn.removes) == 1
+        assert not [r for r in caplog.records if "sessions.remove" in r.getMessage()]
     finally:
         await link.stop()
 

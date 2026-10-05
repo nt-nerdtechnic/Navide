@@ -1579,7 +1579,8 @@ class ServerLink:
         session_id = self._session_ids.get(pane_id)
         if session_id:
             reply = await self._request("sessions.remove", {"sessionId": session_id})
-            if not reply.get("ok"):
+            # SESSION_GONE: the server no longer has it, which is what removing wanted.
+            if not reply.get("ok") and self._conflict_code(reply) != "SESSION_GONE":
                 # Retried on the next sweep, and swept up by the sync after the
                 # next reconnect either way.
                 log.warning(
