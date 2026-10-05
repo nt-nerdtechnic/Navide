@@ -402,6 +402,22 @@ async def test_check_message_decodes_the_windows_structured_failure_reason(
 
 
 @pytest.mark.asyncio
+async def test_check_message_keeps_the_note_on_a_message_delivered_into_a_busy_cli(
+    captured: list[dict[str, Any]],
+) -> None:
+    """A panel that waited out its quiet cap still pastes the message; the
+    sender should see it went in while the CLI was busy, still as delivered."""
+    _seed()
+    sent = await plan_mcp.cli_send("beta/reviewer", "hi", _ctx())
+    plan_mcp.record_delivery_result(sent["msg_key"], True, '{"key":"delivered-while-busy"}')
+
+    result = await plan_mcp.cli_check_message(sent["msg_key"], _ctx())
+
+    assert result["status"] == "delivered"
+    assert result["reason"] == "delivered-while-busy"
+
+
+@pytest.mark.asyncio
 async def test_check_message_keeps_an_undecodable_reason_verbatim(
     captured: list[dict[str, Any]],
 ) -> None:

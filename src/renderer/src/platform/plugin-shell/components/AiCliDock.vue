@@ -493,12 +493,14 @@ async function pasteContext(
 }
 
 /** Wait for the CLI's output to go quiet (injectQuietMs of silence after its
- *  first output, injectTimeoutMs cap). False when the CLI died meanwhile. */
-async function waitForQuiet(term: InstanceType<typeof AiCliTerminal>): Promise<boolean> {
+ *  first output, injectTimeoutMs cap). 'timed-out' when the cap ran out first,
+ *  false when the CLI died meanwhile. */
+async function waitForQuiet(term: InstanceType<typeof AiCliTerminal>): Promise<'quiet' | 'timed-out' | false> {
   const deadline = Date.now() + props.injectTimeoutMs
   for (;;) {
     const last = term.lastRawActivityAt
-    if ((last > 0 && Date.now() - last >= props.injectQuietMs) || Date.now() >= deadline) return true
+    if (last > 0 && Date.now() - last >= props.injectQuietMs) return 'quiet'
+    if (Date.now() >= deadline) return 'timed-out'
     await new Promise((r) => setTimeout(r, 250))
     if (term.status !== 'running') return false
   }
@@ -546,12 +548,15 @@ async function deliverAgentMessage(message: DockAgentMessage): Promise<void> {
     return
   }
   try {
-    if (!(await waitForQuiet(term))) {
+    const waited = await waitForQuiet(term)
+    if (!waited) {
       report(false, 'pane-closed')
       return
     }
-    if (await pasteContext(term, () => message.text)) report(true)
-    else report(false, 'inject-failed')
+    // Still pasted after the cap, but the sender learns it went into a busy CLI.
+    if (!(await pasteContext(term, () => message.text))) report(false, 'inject-failed')
+    else if (waited === 'timed-out') report(true, 'delivered-while-busy')
+    else report(true)
   } catch {
     report(false, 'inject-failed')
   }

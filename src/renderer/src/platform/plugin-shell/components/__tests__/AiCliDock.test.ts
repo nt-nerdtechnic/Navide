@@ -883,6 +883,20 @@ describe('AiCliDock — message delivery into the panel', () => {
     expect(reportAgentDelivery).toHaveBeenCalledTimes(1)
   })
 
+  it('still delivers to a CLI that never goes quiet, reporting it went in while busy', async () => {
+    const { port, send, reportAgentDelivery } = deliveringPort()
+    mountDock({ terminalPort: port, injectTimeoutMs: 300 })
+    termState.status.value = 'running'
+    // Output keeps arriving: the CLI is busy for the whole wait.
+    termState.lastRawActivityAt.value = Date.now() + 60000
+    await flushPromises()
+    send({})
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(termSpies.pasteText).toHaveBeenCalledWith(bracketedPaste('ENVELOPE'))
+    expect(termSpies.pasteText).toHaveBeenCalledWith('\r')
+    expect(reportAgentDelivery).toHaveBeenCalledWith('k-1', true, 'delivered-while-busy')
+  })
+
   it('reports pane-closed when no CLI is running', async () => {
     const { port, send, reportAgentDelivery } = deliveringPort()
     mountDock({ terminalPort: port })
