@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 
 import pytest
@@ -70,6 +71,38 @@ async def test_one_stall_logs_once_and_reports_recovery(
     try:
         await asyncio.sleep(0.05)
         # Long enough for the watcher thread to poll many times over one stall.
+        await _stall_loop(0.5)
+    finally:
+        await fast_watchdog.stop()
+
+    assert len(_stalls(caplog)) == 1
+    assert len(_recoveries(caplog)) == 1
+
+
+class _LateEvent(threading.Event):
+    """A stop event whose waits return late, as a watcher thread on a loaded
+    machine does: every poll lands ``LATE_S`` after it should."""
+
+    LATE_S = 0.4
+
+    def wait(self, timeout: float | None = None) -> bool:
+        result = super().wait(timeout)
+        time.sleep(self.LATE_S)
+        return result
+
+
+@pytest.mark.asyncio
+async def test_recovery_is_reported_when_the_watcher_wakes_late(
+    fast_watchdog, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The loop turned again (it ran stop()), so the stall is over whenever the
+    # watcher gets to look. Judging that by the stamp's age when the thread
+    # wakes dropped the report on CI's loaded Windows runner.
+    caplog.set_level(logging.WARNING, logger="agent_team_backend.loop_watchdog")
+    monkeypatch.setattr(fast_watchdog._watchdog, "_stop_requested", _LateEvent())
+    fast_watchdog.start(asyncio.get_running_loop())
+    try:
+        await asyncio.sleep(0.05)
         await _stall_loop(0.5)
     finally:
         await fast_watchdog.stop()
