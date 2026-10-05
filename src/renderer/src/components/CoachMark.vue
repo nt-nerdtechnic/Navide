@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { findTourAnchor } from '../lib/tours'
 import {
+  COACH_ASIDE_MS,
   COACH_DONE_MS,
   COACH_MISSING_SKIP_MS,
   COACH_TICK_MS,
@@ -26,6 +27,10 @@ import {
 // over for being done already, each bubble has Next, and one whose control is
 // not on screen sits in the middle instead of waiting unseen. An action done
 // while a bubble is up still moves it on.
+//
+// Pressing the control a bubble points at — + opens its CLI menu right where
+// the bubble sits — steps the bubble aside (the ring stays) until the step is
+// done, or for COACH_ASIDE_MS if nothing comes of it.
 //
 // The last bubble never closes by itself, in either mode: its action — resting
 // the pointer on the quota badge — happens on the way to the bubble too, and
@@ -68,6 +73,14 @@ let missingSince = 0
 // The step's action was already done when it came up (a replay shows it
 // anyway): only Next moves it on, not the done-ness it arrived with.
 let doneAtEntry = false
+// The person is working the spotlit control: the bubble is out of the way.
+const aside = ref(false)
+let asideTimer: ReturnType<typeof setTimeout> | null = null
+function clearAside(): void {
+  if (asideTimer) clearTimeout(asideTimer)
+  asideTimer = null
+  aside.value = false
+}
 let ended = false
 
 function end(completed: boolean): void {
@@ -80,6 +93,7 @@ function enter(): void {
   if (doneTimer) clearTimeout(doneTimer)
   doneTimer = null
   doneShown.value = false
+  clearAside()
   missingSince = 0
   enteredAt.value = Date.now()
   rect.value = null
@@ -142,6 +156,18 @@ watch(
   },
 )
 
+function onPointerdown(e: PointerEvent | MouseEvent): void {
+  const r = rect.value
+  if (props.suspended || ended || !r) return
+  if (e.clientX < r.left - PAD || e.clientX > r.right + PAD || e.clientY < r.top - PAD || e.clientY > r.bottom + PAD) return
+  clearAside()
+  aside.value = true
+  asideTimer = setTimeout(() => {
+    asideTimer = null
+    aside.value = false
+  }, COACH_ASIDE_MS)
+}
+
 function onKeydown(e: KeyboardEvent): void {
   if (props.suspended || e.key !== 'Escape') return
   const focus = document.activeElement
@@ -151,12 +177,15 @@ function onKeydown(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('pointerdown', onPointerdown, true)
   ticker = setInterval(locate, COACH_TICK_MS)
   enter()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('pointerdown', onPointerdown, true)
   if (ticker) clearInterval(ticker)
+  clearAside()
   if (doneTimer) clearTimeout(doneTimer)
 })
 
@@ -198,6 +227,7 @@ const bubbleStyle = computed((): Record<string, string> => {
     <div v-if="!suspended && step && (rect || centred)" class="coach" data-testid="coach-layer" style="pointer-events: none">
       <div v-if="rect" class="coach-ring" data-testid="coach-ring" :data-target="targetId" :style="ringStyle"></div>
       <div
+        v-if="!aside"
         class="coach-bubble"
         :class="{ centred }"
         data-testid="coach-bubble"
@@ -229,8 +259,9 @@ const bubbleStyle = computed((): Record<string, string> => {
 .coach {
   position: fixed;
   inset: 0;
-  /* Below every modal: the tour steps aside for them (App suspends it). */
-  z-index: calc(var(--z-modal) - 1);
+  /* Above the Welcome screen (z-modal + 110), whose buttons the first bubble
+     points at; below Settings (z-modal + 120). Real modals suspend the tour. */
+  z-index: calc(var(--z-modal) + 115);
   font-family: var(--font-ui);
 }
 .coach-ring {

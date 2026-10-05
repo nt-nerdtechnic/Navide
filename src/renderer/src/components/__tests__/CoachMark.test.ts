@@ -9,6 +9,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 
 import CoachMark from '../CoachMark.vue'
 import {
+  COACH_ASIDE_MS,
   COACH_DONE_MS,
   COACH_MISSING_SKIP_MS,
   COACH_TICK_MS,
@@ -324,5 +325,61 @@ describe('CoachMark', () => {
     const w = start({ steps: [{ id: 'pane', anchor: () => '#a', textKey: 'tour.next', waitFor: 'agent-pane' }, STEPS[1]] })
     await tick()
     expect(w.emitted('progress')).toEqual([[1]])
+  })
+
+  // 23:01: on Welcome no bubble showed at all. The bubbles sat at
+  // z-modal − 1, under the Welcome overlay (z-modal + 110). They belong above
+  // it and below Settings (z-modal + 120); real modals suspend the tour anyway.
+  it('draws above the Welcome screen and below Settings', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const offset = (file: string, selector: string): number => {
+      const css = readFileSync(resolve(process.cwd(), file), 'utf8')
+      const block = css.slice(css.indexOf(`${selector} {`))
+      const m = /z-index:\s*calc\(var\(--z-modal\)\s*([+-])\s*(\d+)\)/.exec(block.slice(0, block.indexOf('}')))
+      expect(m, `${file} ${selector}`).not.toBeNull()
+      return (m![1] === '-' ? -1 : 1) * Number(m![2])
+    }
+    const coach = offset('src/renderer/src/components/CoachMark.vue', '.coach')
+    expect(coach).toBeGreaterThan(offset('src/renderer/src/components/Welcome.vue', '.welcome-overlay'))
+    expect(coach).toBeLessThan(120)
+  })
+
+  // Pressing + opens the CLI menu right where the bubble sits (below +). Once
+  // the person acts on the control, the bubble gets out of the way.
+  it('steps the bubble aside while the person works the spotlit control, keeping the ring', async () => {
+    const a = addTarget('a')
+    addTarget('b')
+    start()
+    await tick()
+    a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
+    await flushPromises()
+    expect(bubble()).toBeNull()
+    expect(byTestId('coach-ring')).not.toBeNull()
+    // Back if nothing comes of it.
+    await tick(COACH_ASIDE_MS)
+    expect(stepId()).toBe('one')
+  })
+
+  it('comes back for the next step once the action is done', async () => {
+    const a = addTarget('a')
+    addTarget('b')
+    start()
+    await tick()
+    a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
+    facts.workspaceOpen = true
+    await flushPromises()
+    await tick(COACH_DONE_MS)
+    await tick()
+    expect(stepId()).toBe('two')
+  })
+
+  it('stays put for a press elsewhere', async () => {
+    addTarget('a')
+    start()
+    await tick()
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 600, clientY: 600 }))
+    await flushPromises()
+    expect(stepId()).toBe('one')
   })
 })
