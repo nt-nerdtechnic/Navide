@@ -99,7 +99,7 @@ describe('CoachMark', () => {
     expect(byTestId('tour-back')).toBeNull()
   })
 
-  it('never takes a click or a key from the window: the layer and the highlight let them through', async () => {
+  it('takes no key, and lets clicks through the layer and the ring to the control', async () => {
     addTarget('a')
     start()
     await tick()
@@ -467,6 +467,84 @@ describe('CoachMark', () => {
       await tick()
       esc()
       expect(w.emitted('finish')).toEqual([[false]])
+    })
+  })
+
+  // 23:46: "no clicking anywhere else during the tour (a grey mask), so a
+  // stray click cannot end it". A spotlight: grey strips around the control
+  // take every click and do nothing; the control and the bubble stay usable.
+  describe('mask', () => {
+    const strips = (): HTMLElement[] => [...document.body.querySelectorAll<HTMLElement>('[data-testid="coach-mask"]')]
+
+    it('covers everything but the control with grey strips that take the clicks', async () => {
+      addTarget('a')
+      start()
+      await tick()
+      expect(strips()).toHaveLength(4)
+      for (const strip of strips()) expect(strip.style.pointerEvents).toBe('auto')
+      // The control itself lies in the gap between them.
+      const [top, bottom, left, right] = strips().map((el) => el.style)
+      expect(top.height).toBe('96px')
+      expect(bottom.top).toBe('134px')
+      expect(left.width).toBe('96px')
+      expect(right.left).toBe('164px')
+    })
+
+    it('does nothing when clicked: the tour neither ends nor moves on', async () => {
+      addTarget('a')
+      const w = start()
+      await tick()
+      for (const strip of strips()) {
+        strip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 5, clientY: 5 }))
+        strip.click()
+      }
+      await tick()
+      expect(w.emitted('finish')).toBeUndefined()
+      expect(w.emitted('progress')).toBeUndefined()
+      expect(stepId()).toBe('one')
+    })
+
+    it('follows the control when it moves', async () => {
+      const a = addTarget('a')
+      start()
+      await tick()
+      vi.spyOn(a, 'getBoundingClientRect').mockReturnValue({
+        x: 300, y: 200, top: 200, left: 300, right: 360, bottom: 230, width: 60, height: 30,
+        toJSON: () => ({}),
+      } as DOMRect)
+      await tick()
+      expect(strips()[0].style.height).toBe('196px')
+      expect(strips()[2].style.width).toBe('296px')
+    })
+
+    it('lifts while the person works the control, so a menu it opens can be used', async () => {
+      const a = addTarget('a')
+      start()
+      await tick()
+      a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
+      await flushPromises()
+      expect(strips()).toHaveLength(0)
+    })
+
+    it('lifts once the step is done, and comes back for the next one', async () => {
+      addTarget('a')
+      addTarget('b')
+      start()
+      await tick()
+      facts.workspaceOpen = true
+      await flushPromises()
+      expect(strips()).toHaveLength(0)
+      await tick(COACH_DONE_MS)
+      await tick()
+      expect(stepId()).toBe('two')
+      expect(strips()).toHaveLength(4)
+    })
+
+    it('is not drawn when there is no control to point at', async () => {
+      start({ replay: true })
+      await tick()
+      expect(stepId()).toBe('one')
+      expect(strips()).toHaveLength(0)
     })
   })
 })

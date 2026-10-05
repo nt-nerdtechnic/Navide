@@ -15,9 +15,12 @@ import {
 } from '../lib/welcomeTour'
 
 // Coach marks: a small bubble beside the real control, saying the one thing
-// to do there. Nothing is dimmed and nothing is blocked — the layer and the
-// ring around the control let every click through, and no key is taken — so
-// the person does the step in the real window. Once the host's facts say it
+// to do there, the person doing the step in the real window. The rest of the
+// window is masked — grey strips around the control take every click and do
+// nothing, so a stray click cannot end or derail the tour — while the control
+// and the bubble stay usable, and no key is taken. Once the person presses
+// the control (+ opens a menu outside the gap) or the step is done, the mask
+// lifts until the next step. Once the host's facts say it
 // is done, the bubble says so for a moment and moves on to the next control.
 // A step already done when it comes up is passed over.
 //
@@ -212,6 +215,27 @@ const BUBBLE_H = 140
 // A replay's bubble whose control is not on screen sits in the middle, and so
 // does a first-run bubble whose control stayed away (`lost`).
 const centred = computed(() => (props.replay || lost.value) && !rect.value)
+/** The rest of the window is masked: there is a control to work, and the
+ *  person has not started on it nor finished it yet. */
+const masked = computed(() => !!rect.value && !aside.value && !doneShown.value)
+
+// The four strips around the control's gap.
+const maskStyles = computed((): Record<string, string>[] => {
+  const r = rect.value
+  if (!r) return []
+  const top = Math.max(0, r.top - PAD)
+  const bottom = r.bottom + PAD
+  const left = Math.max(0, r.left - PAD)
+  const right = r.right + PAD
+  const strip = { pointerEvents: 'auto' }
+  return [
+    { ...strip, top: '0', left: '0', right: '0', height: `${top}px` },
+    { ...strip, top: `${bottom}px`, left: '0', right: '0', bottom: '0' },
+    { ...strip, top: `${top}px`, left: '0', width: `${left}px`, height: `${bottom - top}px` },
+    { ...strip, top: `${top}px`, left: `${right}px`, right: '0', height: `${bottom - top}px` },
+  ]
+})
+
 /** Whether a bubble is on screen right now. */
 const bubbleVisible = computed(() => !props.suspended && !!step.value && !aside.value && (!!rect.value || centred.value))
 
@@ -242,6 +266,19 @@ const bubbleStyle = computed((): Record<string, string> => {
 <template>
   <Teleport to="body">
     <div v-if="!suspended && step && (rect || centred)" class="coach" data-testid="coach-layer" style="pointer-events: none">
+      <template v-if="masked">
+        <div
+          v-for="(m, i) in maskStyles"
+          :key="i"
+          class="coach-mask"
+          data-testid="coach-mask"
+          :style="m"
+          @pointerdown.stop.prevent
+          @mousedown.stop.prevent
+          @click.stop.prevent
+          @contextmenu.stop.prevent
+        ></div>
+      </template>
       <div v-if="rect" class="coach-ring" data-testid="coach-ring" :data-target="targetId" :style="ringStyle"></div>
       <div
         v-if="!aside"
@@ -281,6 +318,11 @@ const bubbleStyle = computed((): Record<string, string> => {
      points at; below Settings (z-modal + 120). Real modals suspend the tour. */
   z-index: calc(var(--z-modal) + 115);
   font-family: var(--font-ui);
+}
+.coach-mask {
+  position: absolute;
+  background: rgb(0 0 0 / 32%);
+  backdrop-filter: grayscale(1);
 }
 .coach-ring {
   position: absolute;
