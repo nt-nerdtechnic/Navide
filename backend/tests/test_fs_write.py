@@ -11,8 +11,10 @@ import base64
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -85,7 +87,11 @@ _CHILD_WRITER = """
 import json, os, sys, time
 from agent_team_backend import fs_write
 
-root, expected, content, call = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4]
+root, expected, call = sys.argv[1], float(sys.argv[2]), sys.argv[4]
+# The content comes from a file: at ~180 KB it is over Linux's per-argument
+# limit and Windows' whole command-line limit.
+with open(sys.argv[3], encoding="utf-8") as f:
+    content = f.read()
 real_replace = os.replace
 def slow_replace(src, dst):
     time.sleep(float(sys.argv[5]))
@@ -125,13 +131,20 @@ def _race_in_processes(root: Path, call: str, writers: int = 4) -> None:
     target.write_text("old", encoding="utf-8")
     before = target.stat().st_mtime
     contents = [f"writer {i} " * 20_000 for i in range(writers)]
+    # Outside root, which must end up holding doc.html alone.
+    content_dir = Path(tempfile.mkdtemp())
+    content_files = []
+    for i, content in enumerate(contents):
+        content_file = content_dir / f"content-{i}.txt"
+        content_file.write_text(content, encoding="utf-8")
+        content_files.append(content_file)
     children = [
         subprocess.Popen(
-            [sys.executable, "-c", _CHILD_WRITER, str(root), repr(before), content, call,
+            [sys.executable, "-c", _CHILD_WRITER, str(root), repr(before), str(content_file), call,
              str(_SLOW_REPLACE_S)],
             cwd=BACKEND_ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
-        for content in contents
+        for content_file in content_files
     ]
     try:
         for child in children:
@@ -145,6 +158,7 @@ def _race_in_processes(root: Path, call: str, writers: int = 4) -> None:
             child.stdin.close()
             child.wait(timeout=30)
             child.stdout.close()
+        shutil.rmtree(content_dir, ignore_errors=True)
     _assert_exactly_one_writer_won(root, results, contents, before)
 
 
