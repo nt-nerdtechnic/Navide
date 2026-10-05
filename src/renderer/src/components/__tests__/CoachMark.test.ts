@@ -126,13 +126,67 @@ describe('CoachMark', () => {
     expect(w.emitted('progress')).toEqual([[1]])
   })
 
-  it('finishes as completed when the last action is done', async () => {
+  // 22:41: "at the quota step it just left the tour". The quota step is the
+  // last; resting the pointer on the badge — as the bubble asks, and on the
+  // way to the bubble — completed it, and the tour closed 0.8s later while
+  // the person was still reading the badge. The last step never closes by
+  // itself: it says done and waits for Done.
+  it('says the last action is done and waits for Done instead of closing by itself', async () => {
     addTarget('b')
     const w = start({ startIndex: 1 })
     await tick()
     facts.mentionAt = Date.now() + 1
     await flushPromises()
-    await tick(COACH_DONE_MS)
+    await tick(COACH_DONE_MS * 3)
+    expect(w.emitted('finish')).toBeUndefined()
+    expect(stepId()).toBe('two')
+    expect(byTestId('coach-done')).not.toBeNull()
+    byTestId('coach-finish')!.click()
+    expect(w.emitted('finish')).toEqual([[true]])
+  })
+
+  it('does the same on a replay', async () => {
+    addTarget('b')
+    const w = start({ replay: true, startIndex: 1 })
+    await tick()
+    facts.mentionAt = Date.now() + 1
+    await flushPromises()
+    await tick(COACH_DONE_MS * 3)
+    expect(w.emitted('finish')).toBeUndefined()
+    // The last step offers Done, not Next.
+    expect(byTestId('coach-next')).toBeNull()
+    byTestId('coach-finish')!.click()
+    expect(w.emitted('finish')).toEqual([[true]])
+  })
+
+  it('walks a replay through all six steps, each one waiting, ending only at the last one’s Done', async () => {
+    const { WELCOME_STEPS } = await import('../../lib/welcomeTour')
+    // The window a replay usually meets: a workspace, two panes, a first turn done.
+    Object.assign(facts, { workspaceOpen: true, agentPanes: 2, everCommanded: true })
+    for (const sel of ['open-agent', 'pane-stage', 'usage-badge']) {
+      const el = addTarget(sel)
+      el.removeAttribute('id')
+      el.setAttribute('data-tour', sel)
+    }
+    const host = addTarget('host')
+    host.removeAttribute('id')
+    host.className = 'xterm-host'
+    host.setAttribute('data-pane-id', 'p1')
+    const w = start({ steps: WELCOME_STEPS, replay: true })
+    const seen: string[] = []
+    for (let i = 0; i < WELCOME_STEPS.length; i++) {
+      await tick(COACH_DONE_MS * 3)
+      seen.push(stepId()!)
+      expect(w.emitted('finish'), `ended at ${stepId()}`).toBeUndefined()
+      if (i < WELCOME_STEPS.length - 1) byTestId('coach-next')!.click()
+    }
+    expect(seen).toEqual(WELCOME_STEPS.map((s) => s.id))
+    // Resting on the quota badge at the last step does not end it either.
+    facts.usageAt = Date.now() + 1
+    await flushPromises()
+    await tick(COACH_DONE_MS * 3)
+    expect(w.emitted('finish')).toBeUndefined()
+    byTestId('coach-finish')!.click()
     expect(w.emitted('finish')).toEqual([[true]])
   })
 
@@ -238,14 +292,16 @@ describe('CoachMark', () => {
       expect(stepId()).toBe('two')
     })
 
-    it('still moves on by itself when the step is done while it is up', async () => {
+    it('still moves on by itself when a step before the last is done while it is up', async () => {
+      addTarget('a')
       addTarget('b')
-      const w = start({ replay: true, startIndex: 1 })
+      const w = start({ replay: true, steps: [{ ...STEPS[1], id: 'first' }, STEPS[1]] })
       await tick()
       facts.mentionAt = Date.now() + 1
       await flushPromises()
       await tick(COACH_DONE_MS)
-      expect(w.emitted('finish')).toEqual([[true]])
+      await tick()
+      expect(w.emitted('progress')).toEqual([[1]])
     })
 
     it('shows the bubble in the middle, with Next, when what it is about is not on screen', async () => {

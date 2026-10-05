@@ -26,6 +26,10 @@ import {
 // over for being done already, each bubble has Next, and one whose control is
 // not on screen sits in the middle instead of waiting unseen. An action done
 // while a bubble is up still moves it on.
+//
+// The last bubble never closes by itself, in either mode: its action — resting
+// the pointer on the quota badge — happens on the way to the bubble too, and
+// closing then took the tour away mid-read. It says done and waits for Done.
 
 const props = withDefaults(
   defineProps<{
@@ -51,6 +55,7 @@ const { t } = useI18n()
 
 const index = ref(props.startIndex)
 const step = computed<CoachStep | undefined>(() => props.steps[index.value])
+const isLast = computed(() => index.value === props.steps.length - 1)
 const enteredAt = ref(0)
 const doneShown = ref(false)
 const rect = ref<DOMRect | null>(null)
@@ -129,6 +134,7 @@ watch(
   (done) => {
     if (!done || doneShown.value || ended || doneAtEntry) return
     doneShown.value = true
+    if (isLast.value) return
     doneTimer = setTimeout(() => {
       doneTimer = null
       advance()
@@ -207,8 +213,11 @@ const bubbleStyle = computed((): Record<string, string> => {
           <button type="button" class="coach-link" data-testid="coach-skip" @click="end(false)">
             {{ t('tour.skip') }}
           </button>
-          <button v-if="replay" type="button" class="coach-link" data-testid="coach-next" @click="advance">
+          <button v-if="replay && !isLast" type="button" class="coach-link" data-testid="coach-next" @click="advance">
             {{ t('tour.welcome.next') }}
+          </button>
+          <button v-if="isLast" type="button" class="coach-link" data-testid="coach-finish" @click="end(true)">
+            {{ t('tour.done') }}
           </button>
         </div>
       </div>
