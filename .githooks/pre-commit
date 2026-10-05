@@ -56,4 +56,18 @@ if [ -n "$missing" ]; then
   echo "but the commit will not, and CI will fail typecheck/import. --no-verify bypasses." >&2
   exit 1
 fi
+
+# Run the same secret scan CI runs (Secret scan / Gitleaks) on the staged
+# changes, so a finding stops the commit here instead of failing on GitHub
+# after the push. False positives go in .gitleaksignore, as CI reads it too.
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn; then
+    echo "" >&2
+    echo "pre-commit: gitleaks found a possible secret in the staged changes (see above)." >&2
+    echo "Remove it, or add its fingerprint to .gitleaksignore if it is not a secret." >&2
+    exit 1
+  fi
+else
+  echo "pre-commit: gitleaks is not installed, so the secret scan was skipped (brew install gitleaks)." >&2
+fi
 exit 0

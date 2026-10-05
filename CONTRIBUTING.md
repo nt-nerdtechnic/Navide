@@ -103,9 +103,17 @@ unstaged or untracked; the local typecheck passes because the file is on disk,
 and only CI fails. Stage the missing file too or drop the import; `--no-verify`
 bypasses the check when you know what you are doing.
 
+Both `.githooks/pre-commit` (staged changes) and `.githooks/pre-push` (every
+commit about to be pushed) also run the secret scan CI runs, gitleaks with
+`.gitleaks.toml`, so a finding stops you locally instead of failing the
+`Secret scan` workflow after the push. Install it with `brew install gitleaks`;
+without it the hooks print a warning and skip the scan. Record a false positive
+by adding its fingerprint to `.gitleaksignore`, which CI reads as well.
+
 > 每個 clone 執行一次 `git config core.hooksPath .githooks`。pre-commit 會擋下
 > 「staged 的檔 import 了還沒進 index 的相對模組」——本機 typecheck 看得到工作樹的檔所以會過，
-> 只有 CI 會紅。
+> 只有 CI 會紅。pre-commit 與 pre-push 也會跑和 CI 相同的 gitleaks 密鑰掃描；誤判請把
+> fingerprint 加進 `.gitleaksignore`。
 
 ---
 
