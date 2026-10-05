@@ -5,6 +5,7 @@ import { findTourAnchor } from '../lib/tours'
 import {
   COACH_ASIDE_MS,
   COACH_DONE_MS,
+  COACH_MISSING_CENTRE_MS,
   COACH_MISSING_SKIP_MS,
   COACH_TICK_MS,
   welcomeActionAlreadyDone,
@@ -68,8 +69,11 @@ const targetId = ref('')
 
 let doneTimer: ReturnType<typeof setTimeout> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
-// When the current skipIfMissing step first found its control absent (0 = present).
+// When the current step first found its control absent (0 = present).
 let missingSince = 0
+// A first-run step whose control stayed away: its bubble shows in the middle,
+// saying so, with Next, instead of sitting unseen with no way out.
+const lost = ref(false)
 // The step's action was already done when it came up (a replay shows it
 // anyway): only Next moves it on, not the done-ness it arrived with.
 let doneAtEntry = false
@@ -95,6 +99,7 @@ function enter(): void {
   doneShown.value = false
   clearAside()
   missingSince = 0
+  lost.value = false
   enteredAt.value = Date.now()
   rect.value = null
   targetId.value = ''
@@ -132,14 +137,19 @@ function locate(): void {
     rect.value = el.getBoundingClientRect()
     targetId.value = el.id
     missingSince = 0
+    lost.value = false
     return
   }
   rect.value = null
   targetId.value = ''
-  if (!current.skipIfMissing || doneShown.value || props.replay) return
+  if (doneShown.value || props.replay) return
   const now = Date.now()
   if (!missingSince) missingSince = now
-  else if (now - missingSince >= COACH_MISSING_SKIP_MS) advance()
+  if (current.skipIfMissing) {
+    if (now - missingSince >= COACH_MISSING_SKIP_MS) advance()
+  } else if (now - missingSince >= COACH_MISSING_CENTRE_MS) {
+    lost.value = true
+  }
 }
 
 // The step's action happened: say so, then move on.
@@ -199,8 +209,9 @@ const BUBBLE_W = 280
 // A generous guess at the bubble's height: only used to decide above/below.
 const BUBBLE_H = 140
 
-// A replay's bubble whose control is not on screen sits in the middle.
-const centred = computed(() => props.replay && !rect.value)
+// A replay's bubble whose control is not on screen sits in the middle, and so
+// does a first-run bubble whose control stayed away (`lost`).
+const centred = computed(() => (props.replay || lost.value) && !rect.value)
 /** Whether a bubble is on screen right now. */
 const bubbleVisible = computed(() => !props.suspended && !!step.value && !aside.value && (!!rect.value || centred.value))
 
@@ -244,12 +255,13 @@ const bubbleStyle = computed((): Record<string, string> => {
       >
         <p class="coach-progress">{{ t('tour.progress', { n: index + 1, total: steps.length }) }}</p>
         <p class="coach-text">{{ t(step.textKey) }}</p>
+        <p v-if="lost && !rect" class="coach-missing" data-testid="coach-missing">{{ t('tour.welcome.missing') }}</p>
         <p v-if="doneShown" class="coach-done" data-testid="coach-done">{{ t('tour.welcome.doneFeedback') }}</p>
         <div class="coach-actions">
           <button type="button" class="coach-link" data-testid="coach-skip" @click="end(false)">
             {{ t('tour.skip') }}
           </button>
-          <button v-if="replay && !isLast" type="button" class="coach-link" data-testid="coach-next" @click="advance">
+          <button v-if="(replay || lost) && !isLast" type="button" class="coach-link" data-testid="coach-next" @click="advance">
             {{ t('tour.welcome.next') }}
           </button>
           <button v-if="isLast" type="button" class="coach-link" data-testid="coach-finish" @click="end(true)">
@@ -300,6 +312,11 @@ const bubbleStyle = computed((): Record<string, string> => {
 }
 .coach-text {
   margin: 0;
+}
+.coach-missing {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
 }
 .coach-done {
   margin: 6px 0 0;

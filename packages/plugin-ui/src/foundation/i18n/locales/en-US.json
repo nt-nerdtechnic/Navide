@@ -9690,7 +9690,8 @@
       "usageAccount": "Rest the pointer here to see the quota and account, and switch accounts right here if you need to.",
       "next": "Next",
       "doneFeedback": "✓ Done",
-      "finished": "Tour complete. You can see it again from Help → First-Run Tour…."
+      "finished": "Tour complete. You can see it again from Help → First-Run Tour….",
+      "missing": "What this step points at isn’t on screen right now. You can press Next to move on."
     },
     "v0_2_10": {
       "welcome": {

@@ -82,6 +82,7 @@ describe('welcome tour steps', () => {
       'tour.welcome.next',
       'tour.welcome.doneFeedback',
       'tour.welcome.finished',
+      'tour.welcome.missing',
     ].sort()
     for (const { code, messages } of LOCALES) {
       expect(leafKeys(lookup(messages, 'tour.welcome'), 'tour.welcome').sort(), code).toEqual(used)
@@ -222,7 +223,13 @@ describe('nextWelcomeTourMove', () => {
 describe('welcome tour text, compiled by vue-i18n', () => {
   it('renders every line in every locale, with an @ where it talks about @', async () => {
     const { i18n } = await import('@navide/plugin-ui/foundation')
-    const keys = [...WELCOME_STEPS.map((s) => s.textKey), 'tour.welcome.next', 'tour.welcome.doneFeedback', 'tour.welcome.finished']
+    const keys = [
+      ...WELCOME_STEPS.map((s) => s.textKey),
+      'tour.welcome.next',
+      'tour.welcome.doneFeedback',
+      'tour.welcome.finished',
+      'tour.welcome.missing',
+    ]
     for (const code of ['en-US', 'zh-TW', 'ja-JP']) {
       i18n.global.locale.value = code as typeof i18n.global.locale.value
       for (const key of keys) {

@@ -87,6 +87,9 @@ export const WELCOME_STEPS: CoachStep[] = [
 export const COACH_DONE_MS = 800
 /** How long a skipIfMissing step waits for its control before passing over. */
 export const COACH_MISSING_SKIP_MS = 3_000
+/** How long a first-run bubble waits for a missing control before showing in
+ *  the middle, saying so, with Next — never sitting unseen. */
+export const COACH_MISSING_CENTRE_MS = 2_000
 /** How often a bubble re-finds its control (it may move, appear or go). */
 export const COACH_TICK_MS = 250
 /** How long a bubble stays out of the way once the person presses the

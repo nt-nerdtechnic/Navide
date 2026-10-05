@@ -11,6 +11,7 @@ import CoachMark from '../CoachMark.vue'
 import {
   COACH_ASIDE_MS,
   COACH_DONE_MS,
+  COACH_MISSING_CENTRE_MS,
   COACH_MISSING_SKIP_MS,
   COACH_TICK_MS,
   type CoachStep,
@@ -237,13 +238,32 @@ describe('CoachMark', () => {
     expect(w.emitted('progress')).toEqual([[1]])
   })
 
-  it('waits, without a bubble, while what a step points at is not on screen', async () => {
-    start()
-    await tick(COACH_MISSING_SKIP_MS * 2)
+  // M15: a step whose control was not on screen drew nothing, so the tour sat
+  // invisible. After a short wait it now shows its bubble in the middle,
+  // saying it cannot find the place, with Next.
+  it('shows a step whose control is missing in the middle, saying so, with Next', async () => {
+    addTarget('b')
+    const w = start()
+    await tick()
     expect(bubble()).toBeNull()
+    await tick(COACH_MISSING_CENTRE_MS)
+    expect(stepId()).toBe('one')
+    expect(bubble()!.classList.contains('centred')).toBe(true)
+    expect(byTestId('coach-missing')?.textContent).toContain(i18n.global.t('tour.welcome.missing'))
+    byTestId('coach-next')!.click()
+    await tick()
+    expect(stepId()).toBe('two')
+    expect(w.emitted('progress')).toEqual([[1]])
+  })
+
+  it('moves the bubble to its control once the control turns up', async () => {
+    start()
+    await tick(COACH_MISSING_CENTRE_MS)
+    expect(bubble()!.classList.contains('centred')).toBe(true)
     addTarget('a')
     await tick()
-    expect(stepId()).toBe('one')
+    expect(bubble()!.classList.contains('centred')).toBe(false)
+    expect(byTestId('coach-missing')).toBeNull()
   })
 
   it('passes over a step that asks to when what it points at stays away', async () => {
