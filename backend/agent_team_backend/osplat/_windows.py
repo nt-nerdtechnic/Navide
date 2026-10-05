@@ -54,6 +54,18 @@ from .spec import ProcInfo
 log = logging.getLogger(__name__)
 
 
+# A temp path for a hook's response body, ending the hook (exit 0) with one
+# line on stderr when none can be made. A random name rather than
+# GetTempFileName: that creates tmpXXXX.tmp and fails for good once 65535 are
+# left behind by hooks killed mid-wait; curl creates this file itself.
+_PS_TEMP_PATH = (
+    "$TMP = $null; $TMPERR = ''; "
+    "try { $TMP = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName()) } catch { $TMPERR = \"$_\" }; "
+    "if (-not $TMP) { [Console]::Error.Write('navide hook: no temp file: ' + $TMPERR + "
+    "[Environment]::NewLine); exit 0 }; "
+)
+
+
 class WindowsPaths:
     """`%APPDATA%` / `%LOCALAPPDATA%`, falling back to their standard layout.
 
@@ -1554,8 +1566,7 @@ class WindowsScripts:
         )
         if keep_body:
             post = (
-                f"$TMP = $null; try {{ $TMP = [IO.Path]::GetTempFileName() }} catch {{}}; "
-                f"if (-not $TMP) {{ exit 0 }}; "
+                f"{_PS_TEMP_PATH}"
                 f"{post}; "
                 f"$OUTB = $null; try {{ $OUTB = [IO.File]::ReadAllBytes($TMP) }} catch {{}}; "
                 f"Remove-Item -LiteralPath $TMP -Force -ErrorAction SilentlyContinue; "
@@ -1581,8 +1592,7 @@ class WindowsScripts:
         return (
             f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
             f"if (-not $PORT) {{ exit 0 }}; "
-            f"$TMP = $null; try {{ $TMP = [IO.Path]::GetTempFileName() }} catch {{}}; "
-            f"if (-not $TMP) {{ exit 0 }}; "
+            f"{_PS_TEMP_PATH}"
             f"& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} -o $TMP -X POST "
             f"-H 'Content-Type: application/json' "
             f"-H 'X-Agent-Team-Event: rewake' "

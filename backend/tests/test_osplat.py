@@ -1013,13 +1013,35 @@ class TestScripts:
             keep_body=True,
         )
         assert "\n" not in command
-        assert "if (-not $TMP) { exit 0 }" in command
+        assert "if (-not $TMP) { [Console]::Error.Write(" in command
         assert "& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 4 -o $TMP -X POST" in command
         assert "[IO.File]::ReadAllBytes($TMP)" in command
         assert "Remove-Item -LiteralPath $TMP" in command
         assert "[Console]::OpenStandardOutput()" in command
         assert "OutputEncoding" not in command
         assert command.endswith("exit 0")
+
+    def test_windows_temp_files_never_run_out_and_a_missing_one_says_why(self):
+        """GetTempFileName creates tmpXXXX.tmp and fails once 65535 are left
+        behind (each hook killed mid-wait leaves one), after which every hook
+        exited 0 without a word. A random name under TEMP has no such ceiling,
+        and a temp path that cannot be made is reported on stderr."""
+        from agent_team_backend.osplat import _windows
+
+        commands = [
+            _windows.scripts.hook_post_json(
+                port_file="p", header_file="h", url_path="/hooks/claude",
+                event="stop", timeout_s=4, keep_body=True,
+            ),
+            _windows.scripts.hook_rewake(
+                port_file="p", header_file="h", url_path="/hooks/claude/rewake", timeout_s=1860
+            ),
+        ]
+        for command in commands:
+            assert "GetTempFileName" not in command
+            assert "$TMP = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName())" in command
+            assert "if (-not $TMP) { [Console]::Error.Write('navide hook: no temp file: '" in command
+            assert "[Console]::Error.WriteLine" not in command  # see #147 below
 
     def test_windows_discarded_body_keeps_the_exact_command_text(self):
         # Only the kept-body branch changed for the Stop-path garbling; every
@@ -1077,7 +1099,7 @@ class TestScripts:
         assert "OutputEncoding" not in command
         assert "Remove-Item -LiteralPath $TMP" in command
         # No temp file, no wakeup to deliver; a blank body wakes nobody.
-        assert "if (-not $TMP) { exit 0 }" in command
+        assert "if (-not $TMP) { [Console]::Error.Write(" in command
         assert "if (($BODY -join '').Trim()) {" in command
 
     def test_posix_rewake_keeps_the_exact_command_text(self, monkeypatch):
