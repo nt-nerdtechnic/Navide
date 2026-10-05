@@ -14965,6 +14965,38 @@ describe('FrontendPluginManager — ending a closed window\'s AI panels', () => 
     expect(() => mgr.endDockSurface('plans', '/ws/a')).not.toThrow()
   })
 
+  // Removing a built-in plugin with nothing to take over ends its panels: their
+  // PTYs are not in the AI-session ledger, so no other removal step reaches them.
+  it('ends the panels of a removed built-in plugin that no fallback replaces', () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://dock-removal-test')
+    mgr.registerInstalledPackage({ id: PLANS_PLUGIN_ID, requires: [] }, undefined, { official: true })
+    mgr.removeInstalledPlugin(PLANS_PLUGIN_ID)
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    expect(socket.url).toBe('ws://dock-removal-test')
+    socket.open()
+    expect(sentOfType(socket, 'terminal.kill_surface')).toEqual([{ surface: 'plans', workspace_path: '' }])
+  })
+
+  it('leaves the panels running when a built-in fallback takes over', () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://dock-removal-fallback-test')
+    const before = wsMock.FakeNodeWebSocket.instances.length
+    mgr.registerBuiltin(devPlansPluginDescriptor())
+    mgr.registerInstalledPackage({ id: PLANS_PLUGIN_ID, requires: [] }, undefined, { official: true })
+    mgr.removeInstalledPlugin(PLANS_PLUGIN_ID)
+    expect(wsMock.FakeNodeWebSocket.instances.length).toBe(before)
+  })
+
+  it('ends no panel for a plugin without a panel surface', () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://dock-removal-thirdparty-test')
+    const before = wsMock.FakeNodeWebSocket.instances.length
+    mgr.registerInstalledPackage({ id: 'acme.demo', requires: [] })
+    mgr.removeInstalledPlugin('acme.demo')
+    expect(wsMock.FakeNodeWebSocket.instances.length).toBe(before)
+  })
+
   it('warns when the backend refuses the kill', async () => {
     const mgr = new FrontendPluginManager()
     const send = vi.fn(() => Promise.reject(new Error('backend down')))

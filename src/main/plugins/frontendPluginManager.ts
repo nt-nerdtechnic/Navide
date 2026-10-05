@@ -165,6 +165,7 @@ import {
 } from './pluginFrameAssetProtocol'
 import { validatePluginDetailTarget } from './pluginDetailTargetSchema'
 import { canonicalTrustJson } from './pluginRegistryTrust'
+import { dockSurfaceForPlugin } from '../dockSurfaceProvider'
 
 /** Everything the manager needs to launch one plugin view. */
 export interface PluginLaunchDescriptor {
@@ -11546,6 +11547,11 @@ export class FrontendPluginManager {
       this.revokePackageVersionInBackground(id, packageVersion)
     }
     this.stopAiSessionsForPlugin(id)
+    // Its embedded AI panels are not in the AI-session ledger, so nothing above
+    // ends them. A built-in fallback taking over keeps them (it serves the same
+    // surface); otherwise they end as when their window closes.
+    const surface = dockSurfaceForPlugin(id)
+    if (surface && !this.builtinFallbacks.has(id)) this.endDockSurface(surface)
     this.destroyPluginInstances(id)
     this.clearTerminalRoutes(id)
   }

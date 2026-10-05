@@ -13,3 +13,8 @@ export function dockSurfaceProvided(surface: string, hasPlugin: (pluginId: strin
   const pluginId = SURFACE_PLUGIN[surface]
   return pluginId === undefined || hasPlugin(pluginId)
 }
+
+/** The panel surface a built-in plugin provides, if any. */
+export function dockSurfaceForPlugin(pluginId: string): string | undefined {
+  return Object.keys(SURFACE_PLUGIN).find((surface) => SURFACE_PLUGIN[surface] === pluginId)
+}
