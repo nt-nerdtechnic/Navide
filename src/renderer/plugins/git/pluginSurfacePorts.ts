@@ -231,7 +231,11 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
       rows,
     }),
     interrupt: (sessionId) => request('terminal.interrupt', { terminal_session_id: sessionId }),
-    kill: (sessionId, force) => request('terminal.kill', { terminal_session_id: sessionId, force }),
+    kill: (sessionId, force, options) => request('terminal.kill', {
+      terminal_session_id: sessionId,
+      force,
+      ...(options?.retireRestore ? { retire_restore: true } : {}),
+    }),
     redraw: (sessionId, cols, rows) => request('terminal.redraw', {
       terminal_session_id: sessionId,
       cols,

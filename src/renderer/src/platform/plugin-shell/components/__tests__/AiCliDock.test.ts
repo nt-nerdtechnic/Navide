@@ -440,6 +440,8 @@ describe('AiCliDock — running controls and lifecycle events', () => {
     expect(termSpies.interrupt).toHaveBeenCalledTimes(1)
     await wrapper.find('.ai-cli-btn.danger').trigger('click')
     expect(termSpies.kill).toHaveBeenCalledTimes(1)
+    // Stop is the one kill that tells the backend not to restore this CLI.
+    expect(termSpies.kill).toHaveBeenCalledWith({ retireRestore: true })
     expect(termSpies.cancelPendingCreate).not.toHaveBeenCalled()
   })
 

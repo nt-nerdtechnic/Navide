@@ -589,7 +589,8 @@ function stop(): void {
   // While 'starting' there is no sessionId yet, so kill() would be a no-op and
   // a hung terminal.create would be uncancellable — cancel the pending create.
   if (term.status === 'starting') void term.cancelPendingCreate().catch(() => {})
-  else void term.kill()
+  // The user does not want this CLI back: no restore on the next window open.
+  else void term.kill({ retireRestore: true })
 }
 
 function pasteText(text: string): boolean {

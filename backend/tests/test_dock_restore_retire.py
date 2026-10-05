@@ -4,7 +4,9 @@ A panel (AiCliDock) restores its CLI on the next window open while its record
 is 'spawned'. Two endings must retire that record, or every window open
 relaunches a CLI nobody wants:
 
-* the user pressed Stop (terminal.kill on the panel's PTY);
+* the user pressed Stop (terminal.kill on the panel's PTY, flagged
+  retire_restore — the Host's own kills on plugin recovery, version revoke
+  or a create cleanup carry no flag and keep the record);
 * the CLI failed right at launch — typically a restore resuming a session the
   vendor no longer has — which would otherwise re-file 'spawned' and fail
   again on every open.
@@ -72,10 +74,11 @@ def _status(store: ProjectStore, ws: str, pane_id: str = _DOCK_PANE) -> str:
     return next(p.spawn_status for p in store.load_or_create(ws).panes if p.pane_id == pane_id)
 
 
-async def _kill(session: app.Session, term_id: str) -> None:
-    await app.handle_message(session, {
-        "id": "k1", "type": "terminal.kill", "payload": {"terminal_session_id": term_id, "force": True},
-    })
+async def _kill(session: app.Session, term_id: str, *, retire_restore: bool = True) -> None:
+    payload: dict[str, Any] = {"terminal_session_id": term_id, "force": True}
+    if retire_restore:
+        payload["retire_restore"] = True
+    await app.handle_message(session, {"id": "k1", "type": "terminal.kill", "payload": payload})
 
 
 def _session(terminals: FakeTerminals) -> app.Session:
@@ -109,6 +112,20 @@ async def test_stopping_a_panel_retires_its_restore_record(tmp_path: Path, store
 
     assert terminals.killed == ["t-dock"]
     assert _status(store, ws) == "removed"
+
+
+@pytest.mark.asyncio
+async def test_a_kill_without_the_stop_flag_keeps_the_record(tmp_path: Path, store: ProjectStore) -> None:
+    """Plugin recovery, a revoked package version and a create cleanup kill a
+    panel's PTY too; none of them is the user not wanting it back."""
+    ws = str(tmp_path)
+    _record_panel(store, ws)
+    terminals = FakeTerminals([SimpleNamespace(id="t-dock", pane_id=_DOCK_PANE, metadata=_dock_meta(ws))])
+
+    await _kill(_session(terminals), "t-dock", retire_restore=False)
+
+    assert terminals.killed == ["t-dock"]
+    assert _status(store, ws) == "spawned"
 
 
 @pytest.mark.asyncio

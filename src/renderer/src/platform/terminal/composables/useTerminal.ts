@@ -3238,10 +3238,13 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     return !(reply && typeof reply === 'object' && (reply as { ok?: unknown }).ok === false)
   }
 
-  async function kill(opts?: { force?: boolean }): Promise<void> {
+  async function kill(opts?: { force?: boolean; retireRestore?: boolean }): Promise<void> {
     if (!sessionId.value) return
     rememberSessionId('')  // explicit kill — never reattach to this PTY
-    await terminalPort.kill(sessionId.value, opts?.force ?? false)
+    const force = opts?.force ?? false
+    // Only an explicit Stop carries the flag; every other kill stays two-argument.
+    if (opts?.retireRestore) await terminalPort.kill(sessionId.value, force, { retireRestore: true })
+    else await terminalPort.kill(sessionId.value, force)
   }
 
   // Pin this pane's width at its current column count, so a layout mode that

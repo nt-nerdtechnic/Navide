@@ -303,7 +303,11 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
       rows,
     }),
     interrupt: (sessionId) => send('terminal.interrupt', { terminal_session_id: sessionId }),
-    kill: (sessionId, force) => send('terminal.kill', { terminal_session_id: sessionId, force }),
+    kill: (sessionId, force, options) => send('terminal.kill', {
+      terminal_session_id: sessionId,
+      force,
+      ...(options?.retireRestore ? { retire_restore: true } : {}),
+    }),
     redraw: (sessionId, cols, rows) => send('terminal.redraw', {
       terminal_session_id: sessionId,
       cols,

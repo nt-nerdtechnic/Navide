@@ -8223,8 +8223,11 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
         if app._PTY_OWNERS.get(term_session_id) is session:
             app._PTY_OWNERS.pop(term_session_id, None)
     # A panel's CLI the user stopped is not one to bring back on the next
-    # window open (the panel's Stop is the only kill it sends).
-    if dock and pane_id_for_unreg:
+    # window open. Only the panel's Stop flags its kill: the Host also kills
+    # panel PTYs (plugin recovery, a revoked version, a create cleanup), and
+    # those must leave the record to restore. The flag reaches no record but
+    # the killed session's own panel one (its metadata, not the payload).
+    if dock and pane_id_for_unreg and payload.get("retire_restore") is True:
         _DOCK_PTYS.pop(term_session_id, None)
         _retire_dock_record(dock[0], pane_id_for_unreg, dock[1])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))

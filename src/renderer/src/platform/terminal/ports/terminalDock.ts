@@ -126,7 +126,9 @@ export interface TerminalDockPort {
   reattach(sessionIds: string[], cols: number, rows: number): Promise<PortResponse<{ alive: string[]; dead: string[]; logs?: Record<string, string> }>>
   resize(sessionId: string, cols: number, rows: number): Promise<PortResponse>
   interrupt(sessionId: string): Promise<PortResponse>
-  kill(sessionId: string, force: boolean): Promise<PortResponse>
+  /** `retireRestore`: the user stopped this CLI (an embedded panel's Stop), so
+   *  the backend retires the panel's restore record. Every other kill keeps it. */
+  kill(sessionId: string, force: boolean, options?: { retireRestore?: boolean }): Promise<PortResponse>
   redraw(sessionId: string, cols: number, rows: number): Promise<PortResponse>
 
   onOutput(callback: (payload: TerminalOutputEvent) => void): () => void
