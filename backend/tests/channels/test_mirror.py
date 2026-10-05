@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -11,7 +12,7 @@ import pytest
 from agent_team_backend import agent_messaging
 from agent_team_backend.channels import mirror as mirror_mod
 from agent_team_backend.channels import redact, ws_api
-from agent_team_backend.channels.base import Capabilities, Location
+from agent_team_backend.channels.base import Capabilities, ChannelSendError, Location
 from agent_team_backend.channels.mirror import (
     EchoGuard, Outbox, OwnerMap, format_tree, match_name, parse_at_target, parse_command,
 )
@@ -416,6 +417,29 @@ async def test_topic_creation_failure_falls_back_to_prefixed_messages(env: Env) 
     assert [b for b in env.store.bindings() if b.auto] == []
     env.turn_complete("pane-2", "still reported")
     await _until(lambda: _said(env, "↳ tester ✅ 完成"))
+
+
+async def test_a_chat_that_is_not_a_forum_is_asked_for_a_topic_only_once(env: Env, caplog) -> None:
+    # Every new child in a plain Telegram group used to try createForumTopic again
+    # and warn "the chat is not a forum"; the chat cannot have topics, so it is remembered.
+    calls: list[str] = []
+
+    async def not_a_forum(chat_id: str, title: str) -> Location:
+        calls.append(title)
+        raise ChannelSendError("這個群組沒有開啟主題功能 (the chat is not a forum)")
+
+    env.tg.create_location = not_a_forum  # type: ignore[method-assign]
+    caplog.set_level(logging.INFO, logger="agent_team_backend.channels.mirror")
+    panes = _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
+    await env.m.mirror.sync_lineage()
+    panes.append(_pane("pane-3", "linter", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    assert calls == ["↳ tester"]
+    assert [b for b in env.store.bindings() if b.auto] == []
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "topic" in r.getMessage()]
+    assert len(warnings) == 1
+    env.turn_complete("pane-3", "still reported")
+    await _until(lambda: _said(env, "↳ linter ✅ 完成"))
 
 
 async def test_closed_child_releases_its_topic_and_says_so(env: Env) -> None:

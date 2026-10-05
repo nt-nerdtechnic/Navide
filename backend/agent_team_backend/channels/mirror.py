@@ -358,6 +358,9 @@ class Mirror:
         self._outboxes: dict[str, Outbox] = {}
         self._seen_children: set[str] = set()
         self._topic_failed: set[str] = set()
+        # Chats that said they cannot have topics (a Telegram group that is not a
+        # forum): not asked again while this process runs.
+        self._no_topic_chats: set[str] = set()
         self._rows_seen: OrderedDict[str, None] = OrderedDict()
         self._delegations: OrderedDict[str, float] = OrderedDict()
         self._sync_task: asyncio.Task[None] | None = None
@@ -626,15 +629,22 @@ class Mirror:
         if adapter is None:
             return
         opened = MSG_CHILD_OPENED.format(parent=parent["name"], child=cname)
+        chat = f"{root.platform}:{root.account}:{root.chat_id}"
         if adapter.capabilities.threads and adapter.capabilities.create_location \
-                and cid not in self._topic_failed and not any(b.pane_id == cid for b in self.m.store.bindings()):
+                and cid not in self._topic_failed and chat not in self._no_topic_chats \
+                and not any(b.pane_id == cid for b in self.m.store.bindings()):
             try:
                 loc = await adapter.create_location(root.chat_id, f"↳ {cname}")
                 self.m.store.bind(cid, loc, verbosity=root.verbosity,
                                   parent_pane_id=str(parent.get("pane_id") or root.pane_id), auto=True)
             except Exception as exc:  # noqa: BLE001 — falls back to prefixed messages in the parent chat
-                log.warning("channels: child topic for %s failed: %s", cname, exc)
                 self._topic_failed.add(cid)
+                if "not a forum" in str(exc).lower():
+                    self._no_topic_chats.add(chat)
+                    log.warning("channels: child topic for %s failed: %s; children of this chat use "
+                                "prefixed messages from now on", cname, exc)
+                else:
+                    log.warning("channels: child topic for %s failed: %s", cname, exc)
             else:
                 await self.m._changed()
                 if shows(root.verbosity, "standard"):
