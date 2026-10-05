@@ -107,6 +107,14 @@ async def settle(service: SchedulerService) -> None:
         await task
 
 
+async def caught_up(service: SchedulerService) -> None:
+    """Wait for the catch-up task to finish. No wall-clock budget: the fake
+    clock makes its sleeps instant, so all its time is real SQLite commits,
+    and eight jobs' worth took over 5 s on the Windows runner. A hang still
+    fails there, on the per-test --timeout the Windows CI job passes."""
+    await service._catch_up_task  # noqa: SLF001
+
+
 async def create(service: SchedulerService, **over) -> dict:
     return (await service.upsert(every_job(**over)))["job"]
 
@@ -276,7 +284,7 @@ async def test_catch_up_runs_one_slot_per_job_burst_then_spaced(env) -> None:
     try:
         assert restarted._catch_up_task is not None  # noqa: SLF001
         # The regular tick must leave pending catch-up jobs to the catch-up task.
-        await asyncio.wait_for(restarted._catch_up_task, 5)  # noqa: SLF001
+        await caught_up(restarted)
         await settle(restarted)
         assert len(env["bridge"].delivered) == 7  # one per job, not one per missed slot
         spacing = [s for s in env["sleeps"] if s == CATCH_UP_SPACING_S]
@@ -315,7 +323,7 @@ async def test_catch_up_is_sequential(env) -> None:
     restarted = env["make"]()
     await restarted.start()
     try:
-        await asyncio.wait_for(restarted._catch_up_task, 5)  # noqa: SLF001
+        await caught_up(restarted)
         assert len(bridge.delivered) == 3 and active["max"] == 1
     finally:
         await restarted.close()
@@ -336,7 +344,7 @@ async def test_catch_up_waits_for_a_window(env) -> None:
     restarted._sleep = window_appears  # noqa: SLF001
     await restarted.start()
     try:
-        await asyncio.wait_for(restarted._catch_up_task, 5)  # noqa: SLF001
+        await caught_up(restarted)
         await settle(restarted)
         assert len(env["bridge"].delivered) == 1
     finally:
@@ -536,7 +544,7 @@ async def test_once_missed_while_closed_is_caught_up_once(env) -> None:
     restarted = env["make"]()
     await restarted.start()
     try:
-        await asyncio.wait_for(restarted._catch_up_task, 5)  # noqa: SLF001
+        await caught_up(restarted)
         await settle(restarted)
         assert len(env["bridge"].delivered) == 1
         row = await job_row(restarted, job["id"])
