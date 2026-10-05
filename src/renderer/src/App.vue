@@ -403,8 +403,12 @@ onMounted(() => {
   pushQuitConfirmConfig()
   window.agentTeam?.onQuitConfirmDisabled?.(() => { confirmBeforeClose.value = false })
   // Main narrates the quit sequence; the overlay stays up until the window
-  // is destroyed, so there is nothing to clear it.
+  // is destroyed, unless the quit is cancelled after it went up.
   window.agentTeam?.onQuitProgress?.((stage) => {
+    if (stage === 'cancelled') {
+      quitStage.value = null
+      return
+    }
     quitStage.value = stage
     // 'saving' is the last point in the quit sequence where the backend that
     // receives settings writes is still up — main stops it before `app.quit()`

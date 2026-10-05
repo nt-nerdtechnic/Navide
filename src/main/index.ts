@@ -267,6 +267,9 @@ let quittingWindowsPrepared = false
 // app running.
 let dockQuitInProgress = false
 let quittingWindowsPreparation: Promise<boolean> | null = null
+// Set once teardownBackendAndQuit has stopped the backend and put up the
+// shutdown screen, so a quit cancelled after that can bring both back.
+let quitTeardownRan = false
 // A quit that before-quit let through can still be cancelled while Electron
 // closes the windows, silently. Clear what the quit set and say which window
 // stopped it, as an abandoned update install does.
@@ -280,11 +283,24 @@ const quitCancelWatch = createQuitCancelWatch({
     quittingWindowsPrepared = false
     windowRegistry.clearCleanExit()
     const windows = titles.length > 0 ? titles.join(', ') : quitConfirm.cancelledUnknownWindow
-    void dialog.showMessageBox({
-      type: 'warning',
-      message: quitConfirm.cancelledMessage,
-      detail: quitConfirm.cancelledDetail.replace('{windows}', windows),
-    }).catch(() => undefined)
+    void (async () => {
+      // The teardown stopped the backend and put up the shutdown screen; the
+      // app is staying, so bring both back before saying why.
+      if (quitTeardownRan) {
+        quitTeardownRan = false
+        try {
+          await restartBackendNow()
+        } catch (err) {
+          console.error('[main] restarting the backend after a cancelled quit failed', err)
+        }
+        broadcastQuitStage('cancelled')
+      }
+      await dialog.showMessageBox({
+        type: 'warning',
+        message: quitConfirm.cancelledMessage,
+        detail: quitConfirm.cancelledDetail.replace('{windows}', windows),
+      })
+    })().catch(() => undefined)
   },
 })
 // True while the quit confirmation dialog is on screen, so a second close
@@ -2093,7 +2109,11 @@ async function autoRestartBackend(): Promise<void> {
   }
 }
 
-ipcMain.handle('backend:restart', async () => {
+ipcMain.handle('backend:restart', () => restartBackendNow())
+
+/** A deliberate restart: the Settings button, and a quit cancelled after its
+ *  teardown stopped the backend. */
+async function restartBackendNow(): Promise<ReturnType<typeof backendInfoPayload>> {
   // Supersede the automatic budget BEFORE the busy guard. An auto-restart can
   // hold `backendBusy` for a full health-check timeout (45 s by default), and
   // bailing out first would leave its schedule armed and its in-flight spawn
@@ -2143,7 +2163,7 @@ ipcMain.handle('backend:restart', async () => {
     backendAutoRestart.cancel()
     backendRestartPending = null
   }
-})
+}
 
 ipcMain.handle('backend:stop', async () => {
   // Cancel BEFORE the busy guard, for the reason spelled out in backend:restart:
@@ -5538,6 +5558,7 @@ const PLUGIN_BACKEND_STOP_WAIT_MS = 6000
 const SETTINGS_FLUSH_GRACE_MS = 250
 
 async function teardownBackendAndQuit(): Promise<void> {
+  quitTeardownRan = true
   // Put the shutdown screen up before anything below can block: the waits here
   // run into seconds, and the windows stay on screen for all of it.
   broadcastQuitStage('saving')

@@ -699,8 +699,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
   },
   /** Stages of the quit sequence, so the window can show a shutdown screen
    *  instead of sitting there looking hung while the backend is stopped. */
-  onQuitProgress: (cb: (stage: 'saving' | 'stopping' | 'closing') => void): (() => void) => {
-    const listener = (_event: unknown, stage: 'saving' | 'stopping' | 'closing'): void => cb(stage)
+  onQuitProgress: (cb: (stage: 'saving' | 'stopping' | 'closing' | 'cancelled') => void): (() => void) => {
+    const listener = (_event: unknown, stage: 'saving' | 'stopping' | 'closing' | 'cancelled'): void => cb(stage)
     ipcRenderer.on('app:quitProgress', listener)
     return () => ipcRenderer.removeListener('app:quitProgress', listener)
   },

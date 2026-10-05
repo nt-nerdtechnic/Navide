@@ -17,6 +17,23 @@ const dialogState = vi.hoisted(() => ({ response: 0, prompts: 0, notices: [] as 
 
 // index.ts runs the Linux keyring preflight at import; never spawn dbus-send here.
 vi.mock('./linuxKeyring', () => ({ applyLinuxKeyringPreflight: () => false }))
+// A cancelled quit after the teardown restarts the backend; record it in place
+// of spawning one.
+const backendState = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('./backend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./backend')>()
+  return {
+    ...actual,
+    startBackend: async () => {
+      backendState.events.push('backend started')
+      const { EventEmitter } = await import('node:events')
+      return {
+        host: '127.0.0.1', port: 1, shell: '/bin/sh', hostSessionToken: 't', dataDir: '/tmp',
+        proc: new EventEmitter(), stop: async () => {},
+      }
+    },
+  }
+})
 vi.mock('electron', () => {
   const app = {
     isPackaged: false,
@@ -40,8 +57,13 @@ vi.mock('electron', () => {
         isDestroyed: () => false,
         destroy: () => {},
         getTitle: () => 'Plans',
+        id: 1,
+        isFocused: () => true,
         webContents: {
-          send: (channel: string, arg: unknown) => { windowSends.push([channel, arg]) },
+          send: (channel: string, arg: unknown) => {
+            windowSends.push([channel, arg])
+            if (channel === 'app:quitProgress') backendState.events.push(`quit stage ${String(arg)}`)
+          },
         },
       }]
     }
@@ -59,7 +81,10 @@ vi.mock('electron', () => {
         // Count only the quit prompt (two buttons), not the refusal notice.
         const options = (opts ?? _win) as { buttons?: unknown[] }
         if (options?.buttons?.length === 2) dialogState.prompts++
-        else dialogState.notices.push(options as { message?: string; detail?: string })
+        else {
+          dialogState.notices.push(options as { message?: string; detail?: string })
+          backendState.events.push('notice')
+        }
         return Promise.resolve({ response: dialogState.response, checkboxChecked: false })
       },
       showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }),
@@ -227,6 +252,42 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
       expect(dialogState.notices).toEqual([
         expect.objectContaining({ message: 'Navide did not quit', detail: 'Stopped by: Plans.' }),
       ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restarts the backend and lifts the shutdown screen when the teardown already ran', { timeout: 60_000 }, async () => {
+    const { beforeQuit, appQuitting } = await bootNativeQuit()
+    const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
+    backendState.events.length = 0
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      // First pass: a live plugin backend sends the quit through the teardown,
+      // which stops the backend and puts up the shutdown screen.
+      vi.mocked(frontendPluginManager.hasBackendActivity).mockReturnValue(true)
+      const teardown = vi.fn()
+      await beforeQuit({ preventDefault: teardown })
+      expect(teardown).toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+      // The teardown's app.quit() re-enters with nothing left to stop.
+      vi.mocked(frontendPluginManager.hasBackendActivity).mockReturnValue(false)
+      await beforeQuit({ preventDefault: vi.fn() })
+
+      // Closing the windows cancels the quit: will-quit never comes.
+      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.waitFor(() => expect(backendState.events).toContain('notice'))
+      expect(backendState.events).toEqual([
+        'quit stage saving',
+        'quit stage stopping',
+        'quit stage closing',
+        'backend started',
+        'quit stage cancelled',
+        'notice',
+      ])
+      // The renderers reconnect on this, as after any backend restart.
+      expect(windowSends).toContainEqual(['backend:changed', expect.objectContaining({ status: 'ready' })])
+      expect(appQuitting()).toBe(false)
     } finally {
       vi.useRealTimers()
     }
