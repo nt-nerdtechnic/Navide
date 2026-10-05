@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PluginBackendHost, canonicalBackendPackageDir, type PluginBackendHostOptions } from './pluginBackendHost'
+import {
+  BACKEND_RESTART_BUDGET_SPENT_MESSAGE,
+  PluginBackendHost,
+  canonicalBackendPackageDir,
+  type PluginBackendHostOptions,
+} from './pluginBackendHost'
 import type {
   BackendPluginLaunchSpec,
   PluginBackendSupervisorOptions,
@@ -772,6 +777,104 @@ describe('first-party backend restart after a child failure', () => {
     fail()
     await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[1])
     expect(restart).toHaveBeenCalledTimes(2)
+  })
+
+  async function bindFailingViews(
+    instanceIds: string[],
+    options: Pick<PluginBackendHostOptions, 'onBackendFailure'> = {},
+  ): Promise<{
+    host: PluginBackendHost
+    views: Map<string, { restart: ReturnType<typeof vi.fn>; fail: (error?: BackendPluginError) => void }>
+  }> {
+    const views = new Map<
+      string,
+      { restart: ReturnType<typeof vi.fn>; fail: (error?: BackendPluginError) => void }
+    >()
+    let binding = ''
+    const host = new PluginBackendHost({
+      ...options,
+      createSupervisor: (_activation, supervisorOptions) => {
+        const restart = vi.fn(async () => ({ serverInfo: { name: 'controlled', version: '1.0.0' } }))
+        views.set(binding, {
+          restart,
+          fail: (error = new BackendPluginError('BACKEND_UNAVAILABLE')) => supervisorOptions.onFailure?.(error),
+        })
+        return {
+          start: vi.fn(async () => ({ serverInfo: { name: 'controlled', version: '1.0.0' } })),
+          restart,
+          clientFor: vi.fn(() => ({ call: vi.fn(async () => null as never), subscribe: vi.fn() })),
+          close: vi.fn(async () => undefined),
+        } as unknown as PluginBackendSupervisor
+      },
+      resolvePlanRoot: async ({ workspacePath }) => workspacePath,
+    })
+    hosts.push(host)
+    host.register(activation)
+    for (const instanceId of instanceIds) {
+      binding = instanceId
+      await host.bindView(
+        { ...runtime, instanceId, hostWindowId: `window-${instanceId}` },
+        activation.packageDir,
+        process.cwd(),
+      )
+    }
+    return { host, views }
+  }
+
+  it('keeps a separate restart budget for each view', async () => {
+    vi.useFakeTimers()
+    const { views } = await bindFailingViews(['view-1', 'view-2'])
+    const first = views.get('view-1')!
+    const second = views.get('view-2')!
+
+    for (const delay of BACKEND_RESTART_DELAYS_MS) {
+      first.fail()
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+    first.fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_CRASH_WINDOW_MS / 2)
+    expect(first.restart).toHaveBeenCalledTimes(BACKEND_RESTART_DELAYS_MS.length)
+
+    second.fail()
+    await vi.advanceTimersByTimeAsync(BACKEND_RESTART_DELAYS_MS[0])
+    expect(second.restart).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgets a view\'s failures once the view is unbound', async () => {
+    vi.useFakeTimers()
+    const { host, views } = await bindFailingViews(['view-1'])
+    const failures = (host as unknown as { firstPartyFailures: Map<string, number[]> }).firstPartyFailures
+
+    views.get('view-1')!.fail()
+    expect(failures.has('view-1')).toBe(true)
+    await host.unbindView('view-1')
+    expect(failures.size).toBe(0)
+  })
+
+  it('reports a spent restart budget to the failure observer', async () => {
+    vi.useFakeTimers()
+    const onBackendFailure = vi.fn()
+    const { views } = await bindFailingViews(['view-1'], { onBackendFailure })
+    const view = views.get('view-1')!
+    const cause = new Error('child exited with code 1')
+    const failure = new BackendPluginError('BACKEND_UNAVAILABLE', undefined, { cause })
+
+    for (const delay of BACKEND_RESTART_DELAYS_MS) {
+      view.fail(failure)
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+    for (const [, error] of onBackendFailure.mock.calls) expect(error).toBe(failure)
+    view.fail(failure)
+
+    expect(onBackendFailure).toHaveBeenCalledTimes(BACKEND_RESTART_DELAYS_MS.length + 1)
+    const [reportedRuntime, reported] = onBackendFailure.mock.calls.at(-1)!
+    expect(reportedRuntime).toMatchObject({ instanceId: 'view-1' })
+    expect(reported).toBeInstanceOf(BackendPluginError)
+    expect(reported).toMatchObject({
+      code: 'BACKEND_UNAVAILABLE',
+      message: BACKEND_RESTART_BUDGET_SPENT_MESSAGE,
+      cause,
+    })
   })
 })
 

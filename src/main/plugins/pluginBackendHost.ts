@@ -192,6 +192,11 @@ function defaultSupervisor(
   return new PluginBackendSupervisor(activation, options)
 }
 
+/** The failure a first-party child reports once it has failed too often to be
+ * restarted again; the original error stays its cause. */
+export const BACKEND_RESTART_BUDGET_SPENT_MESSAGE =
+  'Backend plugin failed repeatedly and will not be restarted.'
+
 /**
  * Host-owned router for one package's Backend Wire child processes.
  *
@@ -215,7 +220,7 @@ export class PluginBackendHost {
   private readonly thirdPartyIdleMs: number
   private readonly backends = new Map<string, RegisteredBackend>()
   private readonly views = new Map<string, BoundView>()
-  /** First-party child failure times per plugin, for restart backoff. */
+  /** First-party child failure times per bound view, for restart backoff. */
   private readonly firstPartyFailures = new Map<string, number[]>()
   /** Package-version revocations are serialized and also act as an admission
    *  barrier while the old views and child are being drained. */
@@ -474,12 +479,19 @@ export class PluginBackendHost {
               error.cause ? '' : ' (no cause reported)'
             }`,
           )
+          // Each view has its own budget: one window's crashing child must not
+          // use up another window's restarts.
+          const delay = noteBackendFailure(this.firstPartyFailures, view.runtime.instanceId ?? '', Date.now())
           try {
-            this.onBackendFailure?.(view.runtime, error)
+            this.onBackendFailure?.(
+              view.runtime,
+              delay === null
+                ? new BackendPluginError(error.code, BACKEND_RESTART_BUDGET_SPENT_MESSAGE, { cause: error.cause })
+                : error,
+            )
           } catch {
             // A liveness observer must not change the child failure result.
           }
-          const delay = noteBackendFailure(this.firstPartyFailures, view.runtime.pluginId, Date.now())
           if (delay === null) {
             console.warn(`[plugin-backend] ${view.runtime.pluginId} failed too often; leaving it stopped`)
             return
@@ -629,6 +641,7 @@ export class PluginBackendHost {
     const packageKey = backendKey(view.activation.pluginId, view.activation.packageVersion)
     const task = (async (): Promise<void> => {
       this.views.delete(instanceId)
+      this.firstPartyFailures.delete(instanceId)
       this.clearIdleTimer(view)
       view.closing = true
       view.closingReason = reason
