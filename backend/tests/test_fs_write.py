@@ -7,6 +7,8 @@ property no other test pinned: a single-call write replaces the file by rename.
 
 from __future__ import annotations
 
+import base64
+import errno
 import json
 import os
 import subprocess
@@ -260,3 +262,78 @@ else:
 print("locked", flush=True)
 sys.stdin.readline()
 """
+
+
+# ── chunked-write part errors ────────────────────────────────────────────────
+
+_UPLOAD_ID = "0123456789abcdef0123456789abcdef"
+
+
+def _part(root: Path, offset: int, data: bytes) -> dict:
+    return fs_write.write_part(str(root), "doc.html", _UPLOAD_ID, offset, base64.b64encode(data).decode())
+
+
+def test_a_later_part_of_a_missing_upload_says_the_upload_is_gone(tmp_path: Path) -> None:
+    result = _part(tmp_path, 5, b"later")
+
+    assert result["ok"] is False
+    assert "out of order" not in result["error"]
+    assert "no such upload" in result["error"]
+
+
+def test_a_later_part_that_cannot_open_the_upload_reports_why(tmp_path: Path, monkeypatch) -> None:
+    assert _part(tmp_path, 0, b"first")["ok"] is True
+    real_open = os.open
+
+    def refuse(path, flags, *args, **kwargs):
+        if str(path).endswith(".upload"):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", refuse)
+    result = _part(tmp_path, 5, b"later")
+
+    assert result["ok"] is False
+    assert "out of order" not in result["error"]
+    assert "Permission denied" in result["error"]
+
+
+def test_the_part_after_a_failed_write_says_the_upload_is_gone(tmp_path: Path, monkeypatch) -> None:
+    assert _part(tmp_path, 0, b"first")["ok"] is True
+    real_fdopen = os.fdopen
+
+    class DiskFull:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self.handle.__exit__(*exc)
+
+        def fileno(self):
+            return self.handle.fileno()
+
+        def write(self, data):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(os, "fdopen", lambda fd, mode: DiskFull(real_fdopen(fd, mode)))
+    failed = _part(tmp_path, 5, b"second")
+    monkeypatch.undo()
+    after = _part(tmp_path, 5, b"second")
+
+    assert failed["ok"] is False
+    assert "No space left on device" in failed["error"]
+    assert after["ok"] is False
+    assert "out of order" not in after["error"]
+    assert "no such upload" in after["error"]
+
+
+def test_a_part_at_the_wrong_offset_is_still_out_of_order(tmp_path: Path) -> None:
+    assert _part(tmp_path, 0, b"first")["ok"] is True
+
+    result = _part(tmp_path, 3, b"later")
+
+    assert result == {"ok": False, "error": "upload part out of order"}
+    assert _part(tmp_path, 5, b"later")["ok"] is True

@@ -9,6 +9,7 @@ bundle it without pulling in ``fs_service``'s third-party dependencies.
 from __future__ import annotations
 
 import base64
+import errno
 import os
 import re
 import stat as stat_mod
@@ -286,9 +287,14 @@ def write_part(
         try:
             fd = os.open(staging, flags, 0o600)
         except OSError as exc:
-            if offset != 0:
-                raise FsError("upload part out of order") from exc
-            raise FsError("cannot create upload file") from exc
+            if offset == 0:
+                raise FsError("cannot create upload file") from exc
+            # Only a size mismatch below means out of order. A missing staging
+            # file is an upload that expired or whose earlier part failed (a
+            # failed part removes it); anything else keeps its own reason.
+            if exc.errno == errno.ENOENT:
+                raise FsError("no such upload (it expired or an earlier part failed)") from exc
+            raise FsError(f"cannot open upload file: {exc.strerror}") from exc
         out_of_order = False
         try:
             with os.fdopen(fd, "ab") as handle:
