@@ -155,6 +155,22 @@ async def test_rebind_clears_the_target_gone_marks_but_keeps_the_job_off(env) ->
     assert stored["state"]["last_skip_reason"] is None
     assert stored["state"]["last_status"] == "skipped"
     assert stored["state"]["rebound_from"] == "old-1"
+    assert stored["state"]["rebound_needs_enable"] is True
+
+
+async def test_switching_a_rebound_job_on_ends_the_reenable_ask_for_good(env) -> None:
+    service = env["service"]
+    job = (await service.upsert(pane_job("old-1")))["job"]
+    env["bridge"].outcomes = [dict(GONE) for _ in range(TARGET_GONE_DISABLE_AFTER)]
+    for _ in range(TARGET_GONE_DISABLE_AFTER):
+        await next_slot(env)
+    await service.rebind_after_rebuild("old-1", "new-2", "s", "s")
+    assert (await job_of(service, job["id"]))["state"]["rebound_needs_enable"] is True
+    assert (await service.set_enabled(job["id"], True))["ok"] is True
+    assert (await service.set_enabled(job["id"], False))["ok"] is True
+    state = (await job_of(service, job["id"]))["state"]
+    assert not state.get("rebound_needs_enable")
+    assert state["rebound_from"] == "old-1"
 
 
 async def test_rebind_clears_a_single_target_gone_skip_on_an_enabled_job(env) -> None:
@@ -167,6 +183,7 @@ async def test_rebind_clears_a_single_target_gone_skip_on_an_enabled_job(env) ->
     assert stored["enabled"] is True
     assert stored["state"]["last_skip_reason"] is None
     assert stored["state"]["last_status"] == "skipped"
+    assert not stored["state"].get("rebound_needs_enable")
 
 
 async def test_manual_pane_spawn_rebinds_a_resumed_rebuild(env, tmp_path, monkeypatch) -> None:

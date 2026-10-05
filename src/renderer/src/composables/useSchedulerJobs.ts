@@ -76,7 +76,7 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
 
   /** Rebound onto its rebuilt pane but still stopped: it waits for someone to switch it on. */
   function rebound(job: SchedulerJob): boolean {
-    return !job.enabled && !!job.state?.rebound_from && !targetGone(job)
+    return !job.enabled && !!job.state?.rebound_needs_enable && !targetGone(job)
   }
 
   function skipLabel(job: SchedulerJob): string {

@@ -55,6 +55,8 @@ export interface JobState {
   disabled_reason?: string | null
   /** The pane id a rebuild moved this job off (session lineage). */
   rebound_from?: string
+  /** Rebound while disabled; cleared once the job is switched back on. */
+  rebound_needs_enable?: boolean
 }
 
 /** Who created a job (`owner`) or last changed it (`updated_by`). A job saved

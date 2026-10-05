@@ -265,7 +265,13 @@ describe('TaskerPanel — Navide jobs', () => {
         state: {
           last_status: 'skipped', last_skip_reason: null, consecutive_errors: 0,
           consecutive_target_gone: 0, disabled_reason: null, rebound_from: PANE_A,
+          rebound_needs_enable: true,
         },
+      }),
+      // Rebound, switched back on, then stopped by hand: the ask was answered.
+      job('stopped-later', {
+        enabled: false,
+        state: { last_status: 'ok', consecutive_errors: 0, rebound_from: PANE_A, rebound_needs_enable: false },
       }),
       job('running', {
         state: {
@@ -279,6 +285,7 @@ describe('TaskerPanel — Navide jobs', () => {
     expect(stopped.attributes('data-light')).toBe('off')
     expect(stopped.find('[data-test="target-gone"]').exists()).toBe(false)
     expect(stopped.get('[data-test="rebound"]').text()).toContain(t('scheduler.rebound-reenable'))
+    expect(row(wrapper, 'stopped-later').find('[data-test="rebound"]').exists()).toBe(false)
     const running = row(wrapper, 'running')
     expect(running.attributes('data-light')).toBe('skip')
     expect(running.find('[data-test="target-gone"]').exists()).toBe(false)

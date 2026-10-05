@@ -1150,6 +1150,7 @@ class SchedulerService:
                 else:
                     state["next_run_at"] = next_run_after(job["schedule"], self.now_ms())
                 _clear_target_gone(state)
+                state["rebound_needs_enable"] = False
             await self.store.set_enabled(
                 job_id, enabled, state, self.now_ms(), updated_by=owner_of(actor), owner=owner
             )
@@ -1217,6 +1218,8 @@ class SchedulerService:
                 _clear_target_gone(job["state"])
                 if job["state"].get("last_skip_reason") == SKIP_TARGET_GONE:
                     job["state"]["last_skip_reason"] = None
+                if not job["enabled"]:
+                    job["state"]["rebound_needs_enable"] = True
                 await self.store.put_job(job)
                 moved.append(job["id"])
         if moved:
