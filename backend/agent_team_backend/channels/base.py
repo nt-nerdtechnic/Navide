@@ -115,6 +115,21 @@ class ChannelAdapter(Protocol):
         ...
 
 
+ButtonRows = list[list[tuple[str, str]]]  # rows of (label, callback data)
+
+
+class MenuAdapter(Protocol):
+    """Optional, beside ``capabilities.buttons``: buttons laid out in rows (the quick menu)."""
+
+    async def send_menu(self, loc: Location, text: str, rows: ButtonRows) -> str:
+        """Send one message carrying ``rows`` and return its id."""
+        ...
+
+    async def edit_menu(self, loc: Location, message_id: str, text: str, rows: ButtonRows) -> None:
+        """Replace the menu message's text and buttons."""
+        ...
+
+
 class ChannelAuthError(Exception):
     """The credential was rejected (401/403/404-on-token). Stop retrying."""
 

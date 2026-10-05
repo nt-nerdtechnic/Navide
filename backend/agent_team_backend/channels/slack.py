@@ -335,6 +335,26 @@ class SlackAdapter:
         await self._write("chat.update", {"channel": loc.chat_id, "ts": message_id,
                                           "text": text[:EDIT_LIMIT], "blocks": []})
 
+    @staticmethod
+    def _menu_blocks(text: str, rows: list[list[tuple[str, str]]]) -> list[dict[str, Any]]:
+        # One actions block a row (25 elements each at most); action ids unique in the message.
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": text[:SECTION_LIMIT]}}] + [
+            {"type": "actions", "elements": [
+                {"type": "button", "action_id": f"nv_{r}_{n}", "value": data[:2000],
+                 "text": {"type": "plain_text", "text": label[:75]}}
+                for n, (label, data) in enumerate(row[:25])
+            ]} for r, row in enumerate(rows)
+        ]
+
+    async def send_menu(self, loc: Location, text: str, rows: list[list[tuple[str, str]]]) -> str:
+        """One message carrying ``rows`` of buttons (the quick menu); its ts."""
+        body = {**self._base_body(loc), "text": text[:SECTION_LIMIT], "blocks": self._menu_blocks(text, rows)}
+        return str((await self._write("chat.postMessage", body)).get("ts") or "")
+
+    async def edit_menu(self, loc: Location, message_id: str, text: str, rows: list[list[tuple[str, str]]]) -> None:
+        await self._write("chat.update", {"channel": loc.chat_id, "ts": message_id, "text": text[:SECTION_LIMIT],
+                                          "blocks": self._menu_blocks(text, rows)})
+
     async def send_typing(self, loc: Location) -> None:
         return None  # Slack exposes no bot typing indicator over Socket Mode / Web API.
 

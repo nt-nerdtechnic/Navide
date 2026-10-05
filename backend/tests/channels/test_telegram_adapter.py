@@ -475,3 +475,20 @@ async def test_managed_bot_token_asks_for_the_new_bots_user_id(api: FakeBotApi) 
     api.fail("getManagedBotToken", 400, "Bad Request: bot not found")
     with pytest.raises(Exception, match="bot not found"):
         await ad.managed_bot_token(1000)
+
+
+async def test_menu_sends_and_edits_several_button_rows(api: FakeBotApi) -> None:
+    ad = _adapter(api)
+    loc = Location("telegram", "default", "42", "50")
+    rows = [[("💬 A", "nv2:p:aaaaaaaa"), ("💬 B", "nv2:p:bbbbbbbb")], [("Next ▶", "nv2:g:cccccccc")]]
+    message_id = await ad.send_menu(loc, "menu", rows)
+    sent = api.calls_of("sendMessage")[0]
+    assert sent["message_thread_id"] == 50 and message_id.isdigit()
+    assert sent["reply_markup"]["inline_keyboard"] == [
+        [{"text": "💬 A", "callback_data": "nv2:p:aaaaaaaa"}, {"text": "💬 B", "callback_data": "nv2:p:bbbbbbbb"}],
+        [{"text": "Next ▶", "callback_data": "nv2:g:cccccccc"}],
+    ]
+    await ad.edit_menu(loc, "9", "page 2", rows[1:])
+    edit = api.calls_of("editMessageText")[0]
+    assert edit["message_id"] == 9
+    assert edit["reply_markup"]["inline_keyboard"] == [[{"text": "Next ▶", "callback_data": "nv2:g:cccccccc"}]]

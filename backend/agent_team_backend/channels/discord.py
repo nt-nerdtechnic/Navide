@@ -372,6 +372,25 @@ class DiscordAdapter:
                 "components": []}
         await self._write("PATCH", f"/channels/{self._target(loc)}/messages/{message_id}", body)
 
+    @staticmethod
+    def _action_rows(rows: list[list[tuple[str, str]]]) -> list[dict[str, Any]]:
+        # Five buttons an action row, five rows a message.
+        return [{"type": 1, "components": [
+            {"type": 2, "style": 2, "label": label[:38], "custom_id": data[:100]} for label, data in row[:5]
+        ]} for row in rows[:5]]
+
+    async def send_menu(self, loc: Location, text: str, rows: list[list[tuple[str, str]]]) -> str:
+        """One message carrying ``rows`` of buttons (the quick menu); its id."""
+        body = {"content": text[: self.capabilities.text_limit], "allowed_mentions": {"parse": []},
+                "components": self._action_rows(rows)}
+        resp = await self._write("POST", f"/channels/{self._target(loc)}/messages", body)
+        return str(resp.json().get("id") or "")
+
+    async def edit_menu(self, loc: Location, message_id: str, text: str, rows: list[list[tuple[str, str]]]) -> None:
+        body = {"content": text[: self.capabilities.text_limit], "allowed_mentions": {"parse": []},
+                "components": self._action_rows(rows)}
+        await self._write("PATCH", f"/channels/{self._target(loc)}/messages/{message_id}", body)
+
     async def send_typing(self, loc: Location) -> None:
         await self._write("POST", f"/channels/{self._target(loc)}/typing")
 

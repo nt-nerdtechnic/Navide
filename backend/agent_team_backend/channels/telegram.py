@@ -340,6 +340,25 @@ class TelegramAdapter:
                 return
             raise
 
+    @staticmethod
+    def _keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
+        return {"inline_keyboard": [[{"text": label, "callback_data": data} for label, data in row] for row in rows]}
+
+    async def send_menu(self, loc: Location, text: str, rows: list[list[tuple[str, str]]]) -> str:
+        """One message carrying ``rows`` of buttons (the quick menu); its id."""
+        params = {**self._target(loc), "reply_markup": self._keyboard(rows)}
+        result = await self._send_rich("sendMessage", params, text[: self.capabilities.text_limit])
+        return str(result.get("message_id", ""))
+
+    async def edit_menu(self, loc: Location, message_id: str, text: str, rows: list[list[tuple[str, str]]]) -> None:
+        params = {"chat_id": loc.chat_id, "message_id": int(message_id), "reply_markup": self._keyboard(rows)}
+        try:
+            await self._send_rich("editMessageText", params, text[: self.capabilities.text_limit])
+        except ChannelSendError as exc:
+            if "message is not modified" in str(exc).lower():
+                return
+            raise
+
     async def send_typing(self, loc: Location) -> None:
         await self._send_call("sendChatAction", {**self._target(loc), "action": "typing"})
 
