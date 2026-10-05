@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, protocol, safeStorage, session, shell, systemPreferences, type IpcMainInvokeEvent } from 'electron'
+import { devUserDataPath } from './devUserData'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
 import { guardLastWindowClose } from './last-window-close'
 import { join, dirname, basename, isAbsolute, relative, sep } from 'node:path'
@@ -201,9 +202,11 @@ const plansDevProfile =
     ? requestedPlansDevProfile
     : null
 if (!app.isPackaged) {
-  app.setPath('userData',
-    `${app.getPath('userData')}${plansDevProfile ? `-dev-plans-${plansDevProfile}` : '-dev'}`,
-  )
+  const devUserData = devUserDataPath(app.getPath('userData'), process.env, plansDevProfile)
+  app.setPath('userData', devUserData.path)
+  if (devUserData.ignored !== null) {
+    console.warn(`[main] NAVIDE_DEV_USER_DATA_DIR must be an absolute path; ignoring ${devUserData.ignored}`)
+  }
 }
 if (
   !app.isPackaged &&
