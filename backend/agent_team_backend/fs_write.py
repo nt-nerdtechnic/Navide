@@ -13,6 +13,9 @@ import os
 import re
 import stat as stat_mod
 import time
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +53,82 @@ def _resolve_mutation_safe(workspace_path: str, rel_path: str) -> Path:
 _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool
 
 
+if os.name == "nt":
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                # LK_LOCK gives up after ~10 s of retries; a writer holds the
+                # lock only for one check-and-rename, so keep waiting.
+                continue
+
+    def _unlock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _unlock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _target_lock(target: Path) -> Iterator[None]:
+    """Serialise the mtime check and the rename onto ``target``.
+
+    Two processes write the same documents (the Plans view backend and the
+    headless one), so an in-process lock is not enough: this is an OS file lock
+    on a sibling lock file (not the target, whose inode the rename replaces).
+    Each acquisition opens its own descriptor, which also excludes threads of
+    one process. The lock file is removed on release; a waiter that wakes up
+    holding a lock on a removed (or replaced) lock file retries on the current
+    one, so removal never lets two writers in at once.
+    """
+    lock_path = target.parent / f".{target.name}.lock"
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    while True:
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            _lock_fd(fd)
+        except BaseException:
+            os.close(fd)
+            raise
+        try:
+            current = os.stat(lock_path)
+        except FileNotFoundError:
+            current = None
+        if current is not None and os.path.samestat(os.fstat(fd), current):
+            break
+        _unlock_fd(fd)
+        os.close(fd)
+    try:
+        yield
+    finally:
+        if os.name == "nt":
+            # Windows cannot remove a file that is open; once closed, the
+            # removal fails harmlessly while another writer has it open.
+            _unlock_fd(fd)
+            os.close(fd)
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+        else:
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+            os.close(fd)
+
+
 def write_file(
     workspace_path: str,
     rel_path: str,
@@ -78,34 +157,36 @@ def write_file(
             return {"ok": False, "error": f"cannot encode content as {encoding}: {exc}"}
         if len(encoded) > _WRITE_SIZE_LIMIT:
             raise FsError(f"content too large ({len(encoded) // 1024} KB; limit 50 MB)")
-        orig_mode: int | None = None
-        if target.exists():
-            st = target.stat()
-            orig_mode = st.st_mode
-            if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
-                return {
-                    "ok": False,
-                    "conflict": True,
-                    "mtime": st.st_mtime,
-                    "error": "file changed on disk",
-                }
         target.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic write: write to a temp file then rename so a crash can't
-        # leave the target half-written/truncated.
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        try:
-            tmp.write_bytes(encoded)
-            if orig_mode is not None:
-                # os.replace swaps the inode; keep the original permission
-                # bits (e.g. a script's executable bit) on the replacement.
-                os.chmod(tmp, stat_mod.S_IMODE(orig_mode))
-            os.replace(tmp, target)
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
+        with _target_lock(target):
+            orig_mode: int | None = None
+            if target.exists():
+                st = target.stat()
+                orig_mode = st.st_mode
+                if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
+                    return {
+                        "ok": False,
+                        "conflict": True,
+                        "mtime": st.st_mtime,
+                        "error": "file changed on disk",
+                    }
+            # Atomic write: write to a temp file then rename so a crash can't
+            # leave the target half-written/truncated. The name is unique per
+            # write so no other writer can touch it.
+            tmp = target.parent / f"{target.name}.{uuid.uuid4().hex}.tmp"
+            try:
+                tmp.write_bytes(encoded)
+                if orig_mode is not None:
+                    # os.replace swaps the inode; keep the original permission
+                    # bits (e.g. a script's executable bit) on the replacement.
+                    os.chmod(tmp, stat_mod.S_IMODE(orig_mode))
+                os.replace(tmp, target)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
+            return {"ok": True, "mtime": target.stat().st_mtime}
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": True, "mtime": target.stat().st_mtime}
 
 
 # ── chunked (multi-part) writes ─────────────────────────────────────────────
@@ -243,17 +324,18 @@ def write_commit(
             raise FsError("no such upload")
         if staging.stat().st_size != total_size:
             raise FsError("upload incomplete")
-        orig_mode: int | None = None
-        if target.exists():
-            st = target.stat()
-            orig_mode = st.st_mode
-            if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
-                staging.unlink(missing_ok=True)
-                return {"ok": False, "conflict": True, "mtime": st.st_mtime, "error": "file changed on disk"}
-        if orig_mode is not None:
-            os.chmod(staging, stat_mod.S_IMODE(orig_mode))
-        os.replace(staging, target)
-        return {"ok": True, "mtime": target.stat().st_mtime}
+        with _target_lock(target):
+            orig_mode: int | None = None
+            if target.exists():
+                st = target.stat()
+                orig_mode = st.st_mode
+                if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
+                    staging.unlink(missing_ok=True)
+                    return {"ok": False, "conflict": True, "mtime": st.st_mtime, "error": "file changed on disk"}
+            if orig_mode is not None:
+                os.chmod(staging, stat_mod.S_IMODE(orig_mode))
+            os.replace(staging, target)
+            return {"ok": True, "mtime": target.stat().st_mtime}
     except (FsError, OSError) as exc:
         if staging is not None:
             staging.unlink(missing_ok=True)
