@@ -700,6 +700,11 @@ class ChannelManager:
             return {"ok": False, "error": f"{_bot_label(('telegram', manager))} has not logged in yet"}
         if not getattr(adapter.status, "can_manage_bots", False):
             return {"ok": False, "error": f"Bot Management Mode is off for {identity}"}
+        # Only a linked user's creation is ever added (_on_managed_bot), so without one the
+        # link could only make a bot Navide then refuses.
+        if not self.gate.has_linked("telegram", manager):
+            return {"ok": False, "reason": "manager_not_linked",
+                    "error": f"no user is linked to {identity} yet; link one before creating a bot through it"}
         manager_username = identity[1:]
         if username and not _TELEGRAM_USERNAME_RE.match(username):
             return {"ok": False, "error": f"invalid username {username!r}"}

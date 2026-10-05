@@ -183,6 +183,8 @@ export interface ChannelLinkFailedEvent {
 export interface ChannelResult<T = Record<string, unknown>> {
   ok: boolean
   error?: string
+  /** The backend's machine-readable why, when a refusal carries one. */
+  reason?: string
   data?: T
 }
 
@@ -234,10 +236,13 @@ function createChannelsStore(backend: Backend) {
     payload: Record<string, unknown> = {}
   ): Promise<ChannelResult<T>> {
     try {
-      const resp = await backend.send<T & { ok?: boolean; error?: string }>(type, payload)
+      const resp = await backend.send<T & { ok?: boolean; error?: string; reason?: string }>(type, payload)
       const body = resp.payload
       if (!resp.ok || !body) return { ok: false, error: resp.error?.message ?? `${type} failed` }
-      if (body.ok === false) return { ok: false, error: body.error ?? `${type} failed` }
+      if (body.ok === false) {
+        const error = body.error ?? `${type} failed`
+        return typeof body.reason === 'string' ? { ok: false, error, reason: body.reason } : { ok: false, error }
+      }
       return { ok: true, data: body }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }

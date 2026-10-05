@@ -9353,6 +9353,7 @@
       "timeout": "10 分以内に bot が作成されませんでした。もう一度お試しください。",
       "token-unavailable": "bot は Telegram で作成されましたが、トークンを取得できませんでした。BotFather で確認してください。",
       "creator-not-linked": "bot は Telegram で作成されましたが、作成した Telegram アカウントがこの bot にリンクされていないため追加されませんでした。先にそのアカウントをリンクするか、BotFather で bot を削除してください。",
+      "manager-not-linked": "この bot にはまだリンクされたユーザーがいません。先にリンクしてから、この bot で新しい bot を作成してください。",
       "created-note": "bot は Telegram で作成済みです。やり直す前に BotFather で確認してください。"
     },
     "connect": "接続",

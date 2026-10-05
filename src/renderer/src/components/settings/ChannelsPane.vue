@@ -354,7 +354,9 @@ async function createManaged(bot: BotRow): Promise<void> {
   try {
     const res = await store.managedCreate(bot.account)
     if (!res.ok || !res.data) {
-      managedError[bot.key] = res.error ?? t('channels.error.generic')
+      managedError[bot.key] = res.reason === 'manager_not_linked'
+        ? t('channels.managed.manager-not-linked')
+        : res.error ?? t('channels.error.generic')
       return
     }
     managedWaiting[bot.key] = res.data.request_id

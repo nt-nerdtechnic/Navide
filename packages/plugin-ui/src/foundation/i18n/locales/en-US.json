@@ -9353,6 +9353,7 @@
       "timeout": "No bot was created within 10 minutes. Try again.",
       "token-unavailable": "The bot was created in Telegram, but its token could not be read. Check it in BotFather.",
       "creator-not-linked": "The bot was created in Telegram, but by a Telegram account not linked to this bot, so it was not added. Link that account first, or delete the bot in BotFather.",
+      "manager-not-linked": "No user is linked to this bot yet. Link one before creating a new bot through it.",
       "created-note": "The bot was already created in Telegram; check BotFather before trying again."
     },
     "connect": "Connect",

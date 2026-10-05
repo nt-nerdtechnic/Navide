@@ -147,6 +147,16 @@ async def test_create_needs_bot_management_mode(tmp_path) -> None:
         e.db.close()
 
 
+async def test_create_refuses_a_manager_no_user_is_linked_to(env: MEnv) -> None:
+    env.store.remove_allow("telegram", str(CREATOR))
+    # A user linked to another bot does not count for this one.
+    env.store.add_allow("telegram", str(CREATOR), "neil", 1, "bot-other")
+    res = env.m.managed_create("default")
+    assert not res["ok"] and res["reason"] == "manager_not_linked"
+    assert "linked" in res["error"]
+    assert env.m._managed == {}  # noqa: SLF001
+
+
 async def test_create_refuses_an_unknown_manager_and_a_bad_username(env: MEnv) -> None:
     assert not env.m.managed_create("bot-nope")["ok"]
     res = env.m.managed_create("default", "bad/name")

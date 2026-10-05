@@ -843,6 +843,20 @@ describe('ChannelsPane', () => {
       expect(managerRow(w).find('[data-testid="channel-managed-waiting"]').exists()).toBe(false)
     })
 
+    it('explains a manager no user is linked to, instead of the raw error', async () => {
+      seedManager(true)
+      const w = await render()
+      mock.setResponse('channels.managed_create', {
+        ok: false, reason: 'manager_not_linked', error: 'no user is linked to @navide_bot yet',
+      })
+      await managerRow(w).get('[data-testid="channel-managed-create"]').trigger('click')
+      await managerRow(w).get('[data-testid="channel-managed-confirm"]').trigger('click')
+      await flushPromises()
+      expect(openExternal).not.toHaveBeenCalled()
+      expect(managerRow(w).get('[data-testid="channel-managed-error"]').text()).toBe(
+        'No user is linked to this bot yet. Link one before creating a new bot through it.')
+    })
+
     it('hands the created bot to its link guide, as quick add does', async () => {
       seedManager(true)
       const w = await render()
