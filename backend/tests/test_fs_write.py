@@ -202,12 +202,12 @@ def test_a_writer_woken_on_a_removed_lock_file_waits_for_the_current_one(
     real_lock = fs_write._lock_fd
     rival: list[int] = []
 
-    def lock_then_find_the_file_replaced(fd: int) -> None:
-        real_lock(fd)
+    def lock_then_find_the_file_replaced(fd: int, deadline: float) -> None:
+        real_lock(fd, deadline)
         if not rival:
             os.unlink(lock_path)
             rival.append(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600))
-            real_lock(rival[0])
+            real_lock(rival[0], deadline)
 
             def release_rival() -> None:
                 fs_write._unlock_fd(rival[0])
@@ -221,3 +221,42 @@ def test_a_writer_woken_on_a_removed_lock_file_waits_for_the_current_one(
         waited = time.monotonic() - started
     assert waited >= _SLOW_REPLACE_S
     assert not lock_path.exists()
+
+
+def test_a_write_fails_instead_of_hanging_while_another_process_holds_the_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "doc.html").write_text("old", encoding="utf-8")
+    monkeypatch.setattr(fs_write, "_LOCK_TIMEOUT_S", _SLOW_REPLACE_S)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _CHILD_LOCK_HOLDER, str(tmp_path / ".doc.html.lock")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        started = time.monotonic()
+        result = fs_write.write_file(str(tmp_path), "doc.html", "new")
+        waited = time.monotonic() - started
+    finally:
+        holder.stdin.close()
+        holder.wait(timeout=30)
+        holder.stdout.close()
+
+    assert result["ok"] is False
+    assert "another process" in result["error"]
+    assert _SLOW_REPLACE_S <= waited < 5
+    assert (tmp_path / "doc.html").read_text(encoding="utf-8") == "old"
+
+
+_CHILD_LOCK_HOLDER = """
+import os, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+if os.name == "nt":
+    import msvcrt
+    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+else:
+    import fcntl
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+print("locked", flush=True)
+sys.stdin.readline()
+"""

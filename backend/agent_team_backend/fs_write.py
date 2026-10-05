@@ -53,19 +53,20 @@ def _resolve_mutation_safe(workspace_path: str, rel_path: str) -> Path:
 _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool
 
 
+# A writer holds the lock for one check-and-rename. Anything holding it far
+# longer (a hung or hostile process) fails the write instead of hanging it.
+_LOCK_TIMEOUT_S = 10.0
+
 if os.name == "nt":
     import msvcrt
 
-    def _lock_fd(fd: int) -> None:
+    def _try_lock_fd(fd: int) -> bool:
         os.lseek(fd, 0, os.SEEK_SET)
-        while True:
-            try:
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-                return
-            except OSError:
-                # LK_LOCK gives up after ~10 s of retries; a writer holds the
-                # lock only for one check-and-rename, so keep waiting.
-                continue
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
 
     def _unlock_fd(fd: int) -> None:
         os.lseek(fd, 0, os.SEEK_SET)
@@ -73,11 +74,22 @@ if os.name == "nt":
 else:
     import fcntl
 
-    def _lock_fd(fd: int) -> None:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    def _try_lock_fd(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
 
     def _unlock_fd(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _lock_fd(fd: int, deadline: float) -> None:
+    while not _try_lock_fd(fd):
+        if time.monotonic() >= deadline:
+            raise FsError("the file is being written by another process")
+        time.sleep(0.005)
 
 
 @contextmanager
@@ -94,10 +106,11 @@ def _target_lock(target: Path) -> Iterator[None]:
     """
     lock_path = target.parent / f".{target.name}.lock"
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    deadline = time.monotonic() + _LOCK_TIMEOUT_S
     while True:
         fd = os.open(lock_path, flags, 0o600)
         try:
-            _lock_fd(fd)
+            _lock_fd(fd, deadline)
         except BaseException:
             os.close(fd)
             raise
