@@ -862,19 +862,34 @@ async def test_busy_partials_are_skipped_not_queued(stream: Path, monkeypatch: p
 async def test_a_partial_after_a_slow_one_does_not_wait_for_the_next_second(
     stream: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Each partial takes 1.2 s of a 1 s interval: the next one starts right
-    # after it, not at the following whole-second tick (0.8 s later).
-    monkeypatch.setattr(voice_handlers, "PARTIAL_INTERVAL_S", 1.0)
-    monkeypatch.setenv("FAKE_STT_DELAY_S", "1.2")
+    # A partial that outlasts the interval is followed as soon as it is done,
+    # not at the next interval tick. The interval is one no test lasts long
+    # enough to wait out, and the slow partial is made slow by moving its start
+    # back past the interval: a loop that waits for the clock never starts the
+    # second partial, however fast this machine is. Timing the gap between
+    # sidecar requests instead measured the machine (CI's loaded macOS runner
+    # took over 0.5 s to turn one partial into the next).
+    monkeypatch.setattr(voice_handlers, "PARTIAL_INTERVAL_S", 600.0)
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
-    await _speak(session, sid, range(16), pause=0.2)
-    await _settle(session)
-    requests = [r for r in _requests(stream) if r["segments"]]
-    assert len(requests) >= 2, requests
-    # Serial, one at a time, and back to back (timed by the sidecar's clock).
-    assert all(0 <= b["start"] - a["end"] < 0.5 for a, b in zip(requests, requests[1:])), requests
+    rec = voice_handlers._active
+    rec.partial_started = time.monotonic() - voice_handlers.PARTIAL_INTERVAL_S
+    await _speak(session, sid, range(4), pause=0.0)
+    first = await _next_partial(rec, None)
+    rec.partial_started -= voice_handlers.PARTIAL_INTERVAL_S  # it outlasted the interval
+    await _speak(session, sid, range(4, 8), pause=0.0)
+    await _next_partial(rec, first)
+    assert first.done()  # serial: never started beside the previous one
     await _send(session, "voice.cancel", {"sessionId": sid})
+
+
+async def _next_partial(rec: voice_handlers._Recording, previous: asyncio.Task | None, timeout: float = 5.0) -> asyncio.Task:
+    """Wait for a partial other than ``previous`` to start."""
+    deadline = time.monotonic() + timeout
+    while rec.partial is None or rec.partial is previous:
+        assert time.monotonic() < deadline, "no partial started"
+        await asyncio.sleep(0.01)
+    return rec.partial
 
 
 async def test_a_partial_over_its_budget_is_cancelled_and_streaming_goes_on(
