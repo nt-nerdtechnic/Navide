@@ -1,104 +1,76 @@
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
-import {
-  WELCOME_MAIN_STEPS,
-  WELCOME_PANE_STEPS,
-  WELCOME_REPLAY_STEPS,
-  WELCOME_START_STEPS,
-  welcomeStage,
-  type WelcomeStage,
-} from '../lib/welcomeTour'
-import { useReleaseTour } from './useReleaseTour'
 
-// What the first-run welcome tour records, and which part is due.
+// What the first-run welcome tour records, and whether it is running.
 //
 // `pending` is set only when the first-run wizard is completed (or put off)
 // — never from the onboarding status check — so an install that was already
-// set up before this tour existed never sees it. Ending any part early (Skip,
-// Esc) counts as seen and turns the whole tour off: it was pushed at the user,
-// who may well not be new to Navide, so a skip must not bring it back. Skip is
-// therefore on every card — the last card of the first two parts too, since
-// another part still follows. The replay records nothing.
+// set up before this tour existed never sees it; App.vue also calls it off
+// when a workspace record turns up as it comes due. Ending it, finished or
+// skipped, turns it off for good: it was pushed at the user, who may well
+// not be new to Navide. How far it got is kept, so a restart picks up there.
+// A replay from the Help menu records nothing.
 //
-// The first-run parts are interactive: an action card waits until the person
-// does what it asks (lib/welcomeTour.ts names the actions). Most actions are
-// read off state the window already has; the three that are momentary — an
-// @ pick, a pane dropped on another, the quota badge opened (which switching
-// account from it always follows) — are reported through `notify`, which records nothing unless an
-// interactive part is running. The replay is a plain walk-through.
+// Most of what a step waits for is read off the window (App.vue's
+// welcomeFacts); the three momentary actions — an @ pick, a pane dropped on
+// another, the quota badge opened — are reported through `notify`, which
+// records nothing unless the tour is running.
 const PENDING_KEY = 'agentTeam.tour.welcome.pending'
-const START_DONE_KEY = 'agentTeam.tour.welcome.startDone'
-const MAIN_DONE_KEY = 'agentTeam.tour.welcome.mainDone'
+const STEP_KEY = 'agentTeam.tour.welcome.step'
 
 export type WelcomeMoment = 'mention' | 'drop' | 'usage'
 
-/** When each momentary action last happened during an interactive part. */
+/** When each momentary action last happened while the tour ran. */
 export const welcomeActionTimes = reactive({ mentionAt: 0, dropAt: 0, usageAt: 0 })
 
-export function useWelcomeTour() {
-  const tour = useReleaseTour()
+/** Which tour is on screen: the first-run one, a replay, or none. */
+const active = ref<'first-run' | 'replay' | null>(null)
 
-  function stage(): WelcomeStage {
-    return welcomeStage({
-      pending: settingsGet<boolean>(PENDING_KEY, false) === true,
-      startDone: settingsGet<boolean>(START_DONE_KEY, false) === true,
-      mainDone: settingsGet<boolean>(MAIN_DONE_KEY, false) === true,
-    })
+export function useWelcomeTour() {
+  function pending(): boolean {
+    return settingsGet<boolean>(PENDING_KEY, false) === true
+  }
+
+  function savedStep(): number {
+    const step = settingsGet<number>(STEP_KEY, 0)
+    return Number.isInteger(step) && step > 0 ? step : 0
   }
 
   /** The first-run wizard was just completed: the tour is due. */
   function markFirstRun(): void {
     settingsSet(PENDING_KEY, true)
-    settingsSet(START_DONE_KEY, false)
-    settingsSet(MAIN_DONE_KEY, false)
+    settingsSet(STEP_KEY, 0)
   }
 
-  /** A part ended: finishing it moves on, leaving it early ends the tour. */
-  function partEnded(doneKey: string): (completed: boolean) => void {
-    return (completed) => {
-      if (completed) settingsSet(doneKey, true)
-      else settingsSet(PENDING_KEY, false)
-    }
-  }
-
-  function startWelcome(): boolean {
-    if (stage() !== 'start') return false
-    return tour.startNamed('welcome-start', WELCOME_START_STEPS, partEnded(START_DONE_KEY), {
-      skipOnLast: true,
-      interactive: true,
-    })
-  }
-
-  /** This is not a first install after all (a workspace record turned up
-   *  when the tour came due): the whole tour is off, not just Welcome. */
+  /** Not a first install after all: the tour is off. */
   function cancel(): void {
     settingsSet(PENDING_KEY, false)
+    if (active.value === 'first-run') active.value = null
   }
 
-  function startMain(): boolean {
-    if (stage() !== 'main') return false
-    return tour.startNamed('welcome-main', WELCOME_MAIN_STEPS, partEnded(MAIN_DONE_KEY), {
-      skipOnLast: true,
-      interactive: true,
-    })
+  function start(): boolean {
+    if (active.value || !pending()) return false
+    active.value = 'first-run'
+    return true
   }
 
-  function startPane(): boolean {
-    if (stage() !== 'pane') return false
-    return tour.startNamed('welcome-pane', WELCOME_PANE_STEPS, () => settingsSet(PENDING_KEY, false), {
-      interactive: true,
-    })
+  function replay(): void {
+    active.value = 'replay'
   }
 
-  function replay(): boolean {
-    return tour.startNamed('welcome-replay', WELCOME_REPLAY_STEPS)
+  function progress(step: number): void {
+    if (active.value === 'first-run') settingsSet(STEP_KEY, step)
   }
 
-  /** A momentary action happened; a no-op unless an interactive part runs. */
+  function finish(_completed: boolean): void {
+    if (active.value === 'first-run') settingsSet(PENDING_KEY, false)
+    active.value = null
+  }
+
   function notify(what: WelcomeMoment): void {
-    if (!tour.interactive.value) return
+    if (!active.value) return
     welcomeActionTimes[`${what}At`] = Date.now()
   }
 
-  return { stage, markFirstRun, startWelcome, cancel, startMain, startPane, replay, notify }
+  return { active, pending, savedStep, markFirstRun, cancel, start, replay, progress, finish, notify }
 }

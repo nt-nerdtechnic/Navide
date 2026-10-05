@@ -1,0 +1,222 @@
+// @vitest-environment happy-dom
+// The first-run tour as coach marks: a bubble beside the real control, the
+// whole window usable, the bubble moving on once the person has done it.
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { reactive } from 'vue'
+
+import { i18n } from '@navide/plugin-ui/foundation'
+
+import CoachMark from '../CoachMark.vue'
+import {
+  COACH_DONE_MS,
+  COACH_MISSING_SKIP_MS,
+  COACH_TICK_MS,
+  type CoachStep,
+  type WelcomeFacts,
+} from '../../lib/welcomeTour'
+
+const facts = reactive<WelcomeFacts>({
+  workspaceOpen: false,
+  agentPanes: 0,
+  commandAt: 0,
+  everCommanded: false,
+  mentionAt: 0,
+  dropAt: 0,
+  usageAt: 0,
+})
+
+const STEPS: CoachStep[] = [
+  { id: 'one', anchor: () => '#a', textKey: 'tour.next', waitFor: 'workspace-open' },
+  { id: 'two', anchor: () => '#b', textKey: 'tour.back', waitFor: 'mention' },
+]
+
+let wrapper: ReturnType<typeof mount> | null = null
+
+function start(opts: { steps?: CoachStep[]; replay?: boolean; suspended?: boolean; startIndex?: number } = {}) {
+  wrapper = mount(CoachMark, {
+    props: {
+      steps: opts.steps ?? STEPS,
+      facts: () => facts,
+      startIndex: opts.startIndex ?? 0,
+      replay: opts.replay ?? false,
+      suspended: opts.suspended ?? false,
+    },
+    global: { plugins: [i18n] },
+  })
+  return wrapper
+}
+
+function addTarget(id: string): HTMLElement {
+  const el = document.createElement('button')
+  el.id = id
+  vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+    x: 100, y: 100, top: 100, left: 100, right: 160, bottom: 130, width: 60, height: 30,
+    toJSON: () => ({}),
+  } as DOMRect)
+  document.body.append(el)
+  return el
+}
+
+const bubble = (): HTMLElement | null => document.body.querySelector<HTMLElement>('[data-testid="coach-bubble"]')
+const stepId = (): string | undefined => bubble()?.dataset.step
+const byTestId = (id: string): HTMLElement | null => document.body.querySelector<HTMLElement>(`[data-testid="${id}"]`)
+async function tick(ms = COACH_TICK_MS): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms)
+  await flushPromises()
+}
+function key(k: string, target: EventTarget = document.body): KeyboardEvent {
+  const e = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })
+  target.dispatchEvent(e)
+  return e
+}
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  i18n.global.locale.value = 'en-US'
+  Object.assign(facts, { workspaceOpen: false, agentPanes: 0, commandAt: 0, everCommanded: false, mentionAt: 0, dropAt: 0, usageAt: 0 })
+})
+afterEach(() => {
+  wrapper?.unmount()
+  wrapper = null
+  document.body.replaceChildren()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+describe('CoachMark', () => {
+  it('shows a bubble beside the control, with the step count and Skip, and no Next or Back', async () => {
+    addTarget('a')
+    start()
+    await tick()
+    expect(stepId()).toBe('one')
+    expect(bubble()?.textContent).toContain(i18n.global.t('tour.next'))
+    expect(bubble()?.textContent).toContain(i18n.global.t('tour.progress', { n: 1, total: 2 }))
+    expect(byTestId('coach-skip')).not.toBeNull()
+    expect(byTestId('coach-next')).toBeNull()
+    expect(byTestId('tour-back')).toBeNull()
+  })
+
+  it('never takes a click or a key from the window: the layer and the highlight let them through', async () => {
+    addTarget('a')
+    start()
+    await tick()
+    const layer = byTestId('coach-layer')!
+    const ring = byTestId('coach-ring')!
+    expect(layer.style.pointerEvents).toBe('none')
+    expect(ring.style.pointerEvents).toBe('none')
+    // Only the bubble itself is clickable.
+    expect(bubble()!.style.pointerEvents).toBe('auto')
+    for (const k of ['a', 'Enter', 'ArrowRight', 'Tab']) expect(key(k).defaultPrevented, k).toBe(false)
+    expect(stepId()).toBe('one')
+  })
+
+  it('moves on by itself once the action is done, saying so first', async () => {
+    addTarget('a')
+    addTarget('b')
+    const w = start()
+    await tick()
+    facts.workspaceOpen = true
+    await flushPromises()
+    expect(byTestId('coach-done')).not.toBeNull()
+    expect(stepId()).toBe('one')
+    await tick(COACH_DONE_MS)
+    await tick()
+    expect(stepId()).toBe('two')
+    expect(w.emitted('progress')).toEqual([[1]])
+  })
+
+  it('finishes as completed when the last action is done', async () => {
+    addTarget('b')
+    const w = start({ startIndex: 1 })
+    await tick()
+    facts.mentionAt = Date.now() + 1
+    await flushPromises()
+    await tick(COACH_DONE_MS)
+    expect(w.emitted('finish')).toEqual([[true]])
+  })
+
+  it('passes over a step already done when it comes up', async () => {
+    facts.workspaceOpen = true
+    addTarget('b')
+    const w = start()
+    await tick()
+    expect(stepId()).toBe('two')
+    expect(w.emitted('progress')).toEqual([[1]])
+  })
+
+  it('ends as skipped from Skip', async () => {
+    addTarget('a')
+    const w = start()
+    await tick()
+    byTestId('coach-skip')!.click()
+    expect(w.emitted('finish')).toEqual([[false]])
+  })
+
+  it('takes Esc as Skip, but not while the person is in a terminal, where Esc belongs to the CLI', async () => {
+    addTarget('a')
+    const term = document.createElement('div')
+    term.className = 'xterm'
+    const input = document.createElement('textarea')
+    term.append(input)
+    document.body.append(term)
+    const w = start()
+    await tick()
+    input.focus()
+    const inTerminal = key('Escape', input)
+    expect(inTerminal.defaultPrevented).toBe(false)
+    expect(w.emitted('finish')).toBeUndefined()
+    input.blur()
+    key('Escape')
+    expect(w.emitted('finish')).toEqual([[false]])
+  })
+
+  it('offers Next on a replay, so it can be read through without doing anything', async () => {
+    addTarget('a')
+    addTarget('b')
+    const w = start({ replay: true })
+    await tick()
+    byTestId('coach-next')!.click()
+    await tick()
+    expect(stepId()).toBe('two')
+    expect(w.emitted('progress')).toEqual([[1]])
+  })
+
+  it('waits, without a bubble, while what a step points at is not on screen', async () => {
+    start()
+    await tick(COACH_MISSING_SKIP_MS * 2)
+    expect(bubble()).toBeNull()
+    addTarget('a')
+    await tick()
+    expect(stepId()).toBe('one')
+  })
+
+  it('passes over a step that asks to when what it points at stays away', async () => {
+    addTarget('b')
+    const w = start({ steps: [{ ...STEPS[0], skipIfMissing: true }, STEPS[1]] })
+    await tick(COACH_MISSING_SKIP_MS - COACH_TICK_MS)
+    expect(w.emitted('progress')).toBeUndefined()
+    await tick(COACH_TICK_MS * 2)
+    expect(stepId()).toBe('two')
+  })
+
+  it('follows a step whose target depends on the window', async () => {
+    addTarget('a')
+    addTarget('b')
+    start({ steps: [{ id: 'moving', anchor: (f) => (f.agentPanes < 2 ? '#a' : '#b'), textKey: 'tour.next', waitFor: 'mention' }] })
+    await tick()
+    expect(byTestId('coach-ring')!.dataset.target).toBe('a')
+    facts.agentPanes = 2
+    await tick()
+    expect(byTestId('coach-ring')!.dataset.target).toBe('b')
+  })
+
+  it('draws nothing and leaves keys alone while something else has the screen', async () => {
+    addTarget('a')
+    const w = start({ suspended: true })
+    await tick()
+    expect(byTestId('coach-layer')).toBeNull()
+    key('Escape')
+    expect(w.emitted('finish')).toBeUndefined()
+  })
+})

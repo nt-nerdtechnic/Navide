@@ -264,10 +264,10 @@ const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/whatsNew'
-import type { TourPrepare, TourStep } from './lib/tours'
+import type { TourPrepare } from './lib/tours'
 import { useReleaseTour } from './composables/useReleaseTour'
 import { useWelcomeTour, welcomeActionTimes } from './composables/useWelcomeTour'
-import { paneTourReady, welcomeActionAlreadyDone, welcomeActionDone, type WelcomeFacts } from './lib/welcomeTour'
+import { WELCOME_STEPS, type WelcomeFacts } from './lib/welcomeTour'
 import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
 import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
@@ -344,6 +344,7 @@ import { shellCommandArgv } from '../../shared/osplat'
 const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
 const WhatsNewModal = defineAsyncComponent(() => import('./components/WhatsNewModal.vue'))
 const GuidedTour = defineAsyncComponent(() => import('./components/GuidedTour.vue'))
+const CoachMark = defineAsyncComponent(() => import('./components/CoachMark.vue'))
 const CliHealthGuide = defineAsyncComponent(() => import('./components/CliHealthGuide.vue'))
 const CliInstallDialog = defineAsyncComponent(() => import('./components/CliInstallDialog.vue'))
 const SkillInstallApprovalDialog = defineAsyncComponent(() => import('./components/SkillInstallApprovalDialog.vue'))
@@ -632,8 +633,6 @@ function closeWhatsNew(): void {
 const releaseTour = useReleaseTour()
 const activeTourVersion = releaseTour.activeVersion
 const activeTourSteps = releaseTour.steps
-const activeTourSkipOnLast = releaseTour.skipOnLast
-const activeTourInteractive = releaseTour.interactive
 const whatsNewTourDone = computed(() => {
   const entry = whatsNewEntry.value
   return !!entry?.tour?.length && releaseTour.isDone(entry.version)
@@ -671,19 +670,22 @@ function runTourPrepare(prepare: TourPrepare): void {
   }
 }
 // ── First-run welcome tour ──────────────────────────────────────────────────
-// Due only after the first-run wizard (completeOnboarding marks it): Welcome,
-// then the first main screen, then the first pane at rest. A poll rather than
-// watches: the pane part waits on per-pane state (status, typing, age) and on
-// every modal being closed, and only a fresh install ever polls — it stops for
-// good once the tour is off.
+// Coach marks (CoachMark.vue): a bubble beside the real control, the whole
+// window usable, the bubble moving on once the person has done what it says.
+// Due only after the first-run wizard (completeOnboarding marks it). A poll
+// starts it once onboarding has settled and nothing modal is up, and stops
+// for good once the tour is off.
 const welcomeTour = useWelcomeTour()
+const welcomeTourActive = welcomeTour.active
 const WELCOME_TOUR_POLL_MS = 1_000
 let welcomeTourPoll: ReturnType<typeof setInterval> | null = null
-// When the poll first saw each pane, for the busy-pane fallback.
-const welcomeTourPaneSeenAt = new Map<string, number>()
 function armWelcomeTourPoll(): void {
-  if (welcomeTourPoll || welcomeTour.stage() === 'off') return
+  if (welcomeTourPoll || !welcomeTour.pending()) return
   welcomeTourPoll = setInterval(pollWelcomeTour, WELCOME_TOUR_POLL_MS)
+}
+function stopWelcomeTourPoll(): void {
+  if (welcomeTourPoll) clearInterval(welcomeTourPoll)
+  welcomeTourPoll = null
 }
 // Whether the recent-workspace list was found empty this session.
 let welcomeTourRecordsChecked = false
@@ -701,27 +703,22 @@ async function checkWelcomeTourRecords(): Promise<void> {
     welcomeTourRecordsChecking = false
   }
 }
-function stopWelcomeTourPoll(): void {
-  if (welcomeTourPoll) clearInterval(welcomeTourPoll)
-  welcomeTourPoll = null
-  welcomeTourPaneSeenAt.clear()
-}
 function pollWelcomeTour(): void {
-  const stage = welcomeTour.stage()
-  if (stage === 'off') {
+  if (!welcomeTour.pending()) {
     stopWelcomeTourPoll()
     return
   }
+  if (welcomeTourActive.value) return
   // A fail-open onboarding answer is a guess, not a settled shell.
   if (onboardingComplete.value !== true || onboardingCheckFailed.value) return
   // The CLI health guide can open right after onboarding; it is not a modal
-  // to the keybinding context, but the tour must not dim it from above.
+  // to the keybinding context, but the tour waits for it all the same.
   if (mainModalOpen() || cliHealthGuide.value) return
   // The tour is for a first install only, and any workspace record means this
   // is not one: one open already (a restored window), or one in the recent
-  // list. Checked once, as the tour comes due — the folder picked on Welcome
-  // a moment later is a record too, and must not call the tour off.
-  if (stage === 'start') {
+  // list. Checked once, before the first bubble — the folder picked at that
+  // bubble is a record too, and a restart part-way through must not count it.
+  if (welcomeTour.savedStep() === 0) {
     if (workspaceSelected.value) {
       welcomeTour.cancel()
       return
@@ -730,38 +727,15 @@ function pollWelcomeTour(): void {
       void checkWelcomeTourRecords()
       return
     }
-    welcomeTour.startWelcome()
-    return
   }
-  if (!workspaceSelected.value) return
-  if (stage === 'main') {
-    welcomeTour.startMain()
-    return
-  }
-  const now = Date.now()
-  const loginPaneIds = new Set([...pendingLoginPanes.values()].map((entry) => entry.paneId))
-  const ready = panesOnStage.value.some((pane) => {
-    if (!welcomeTourPaneSeenAt.has(pane.id)) welcomeTourPaneSeenAt.set(pane.id, now)
-    const ref = paneRefs[pane.id]
-    const lastKey = (ref?.lastUserKeyAt as number | undefined) ?? 0
-    return paneTourReady({
-      agentKey: pane.agentKey,
-      realized: pane.realized,
-      loginPane: loginPaneIds.has(pane.id),
-      status: ref?.displayStatus as string | undefined,
-      hasDraft: (ref?.hasDraft as boolean | undefined) === true,
-      msSinceLastKey: lastKey > 0 ? now - lastKey : Infinity,
-      msSinceSeen: now - welcomeTourPaneSeenAt.get(pane.id)!,
-    })
-  })
-  if (ready) welcomeTour.startPane()
+  welcomeTour.start()
 }
 watch(onboardingComplete, (value) => {
   if (value === true) armWelcomeTourPoll()
 })
-// What the first-run tour's action cards read off the window (see
-// lib/welcomeTour.ts). A plain function, not a computed: `paneTurnCompleteAt`
-// is not reactive, and GuidedTour calls this from its own reactive watch.
+// What the tour's steps read off the window (see lib/welcomeTour.ts). A plain
+// function, not a computed: `paneTurnCompleteAt` is not reactive, and
+// CoachMark calls this from its own reactive watch.
 function welcomeFacts(): WelcomeFacts {
   const loginPaneIds = new Set([...pendingLoginPanes.values()].map((entry) => entry.paneId))
   const ids = panesOnStage.value
@@ -786,21 +760,19 @@ function welcomeFacts(): WelcomeFacts {
     usageAt: welcomeActionTimes.usageAt,
   }
 }
-function welcomeStepComplete(step: TourStep, enteredAt: number): boolean {
-  return !!step.waitFor && welcomeActionDone(step.waitFor, welcomeFacts(), enteredAt)
-}
-function welcomeStepSkip(step: TourStep): boolean {
-  return !!step.waitFor && welcomeActionAlreadyDone(step.waitFor, welcomeFacts())
-}
-// An action card can send the person somewhere that needs the whole screen —
-// the install dialog after +, Settings, a release note, the CLI health guide.
-// The tour steps aside until it is gone; a release tour never does.
-const welcomeTourSuspended = computed(() =>
-  activeTourInteractive.value &&
-  (!!cliInstallRequest.value || !!whatsNewEntry.value || showSettings.value || !!cliHealthGuide.value)
+// Read when CoachMark mounts: a first run resumes where it got to.
+const welcomeTourStartIndex = computed(() =>
+  welcomeTourActive.value === 'first-run' ? welcomeTour.savedStep() : 0
 )
-// Help → First-Run Tour…: all three parts as a plain walk-through, whatever
-// was recorded. Settings would cover every anchor, so it closes first.
+// The install dialog after +, Settings, a release note or tour, the CLI health
+// guide: the bubbles step aside until it is gone.
+const welcomeTourSuspended = computed(() => mainModalOpen() || !!cliHealthGuide.value)
+function onWelcomeTourFinish(completed: boolean): void {
+  welcomeTour.finish(completed)
+  if (completed) notifyRestore.toast(i18n.global.t('tour.welcome.finished'), { type: 'success' })
+}
+// Help → First-Run Tour…: the same bubbles, with Next to read them through,
+// recording nothing. Settings would cover every control, so it closes first.
 function replayWelcomeTour(): void {
   showSettings.value = false
   welcomeTour.replay()
@@ -20915,11 +20887,17 @@ function paneIsCommander(p: ActivePane): boolean {
       :steps="activeTourSteps"
       :run-prepare="runTourPrepare"
       @close="endTour"
-      :skip-on-last="activeTourSkipOnLast"
-      :interactive="activeTourInteractive"
-      :is-complete="welcomeStepComplete"
-      :should-skip="welcomeStepSkip"
+    />
+    <CoachMark
+      v-if="welcomeTourActive"
+      :key="welcomeTourActive"
+      :steps="WELCOME_STEPS"
+      :facts="welcomeFacts"
+      :start-index="welcomeTourStartIndex"
+      :replay="welcomeTourActive === 'replay'"
       :suspended="welcomeTourSuspended"
+      @progress="welcomeTour.progress"
+      @finish="onWelcomeTourFinish"
     />
     <!-- Status bar -->
     <div v-if="shellLayout.chrome.statusbar" class="statusbar">

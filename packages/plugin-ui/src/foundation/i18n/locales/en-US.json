@@ -9685,52 +9685,15 @@
     "done-feedback": "✓ Done",
     "skip-step": "Skip this step",
     "welcome": {
-      "whyFolder": {
-        "title": "First, pick the folder your agents will work in",
-        "body": "A workspace is the folder you want agents to work on: panes start there, read and write its files, and keep the plans they write there too. So you pick one before you can open an agent.",
-        "missing": "This step is on the Open Workspace screen: in Workspace mode, the ＋ in the sidebar header opens it."
-      },
-      "pickFolder": {
-        "title": "Pick one now",
-        "body": "Already have a project → click Browse… and choose its folder. Starting from scratch → click New… to create an empty folder. Just trying things out → click Home. Once you pick, the main screen opens.",
-        "missing": "This step is on the Open Workspace screen: in Workspace mode, the ＋ in the sidebar header opens it.",
-        "go": "Pick one"
-      },
-      "openAgent": {
-        "title": "Click ＋ to open your first agent",
-        "body": "Click the ＋ at the right end of the workspace row and pick a CLI (Claude Code, for example); a pane opens on the right. A CLI that isn’t installed yet is marked, and picking it walks you through installing it.",
-        "missing": "＋ is at the right end of the workspace row in the left sidebar; switch the sidebar to the Agents view first.",
-        "go": "Open one"
-      },
-      "firstCommand": {
-        "title": "Give it your first instruction here",
-        "body": "Click into the pane and type a sentence as you would in a terminal — for example, “Explain how this project is structured” — then press Enter. Once it starts answering, you know how to use it.",
-        "missing": "Open a pane first with the ＋ next to the workspace, then click into its terminal to type."
-      },
-      "openSecond": {
-        "title": "Open one more pane",
-        "body": "Agents need a partner to work with. Click the ＋ next to the workspace again and pick a CLI to open a second pane.",
-        "missing": "＋ is at the right end of the workspace row in the left sidebar."
-      },
-      "talkMention": {
-        "title": "Type @ to get another agent working",
-        "body": "In one pane, type @ and pick the other pane’s name from the list, then write what you want it to do and press Enter: this agent passes the message on, and the other one gets it once it is free.",
-        "missing": "Open two panes first, then type @ in either one’s terminal."
-      },
-      "talkDrag": {
-        "title": "Or drag another pane in",
-        "body": "Drag another pane by its title bar and drop it on this pane’s terminal: its name, session and recent conversation land in the input line. Add your question and press Enter. Type @ before you drop to bring in just its name.",
-        "missing": "Open two panes first: drag a pane by its title bar (or its row in the sidebar) and drop it on another pane’s terminal."
-      },
-      "usageAccount": {
-        "title": "Check the quota and account, and switch when you need to",
-        "body": "Rest the pointer on the badge at the right of the pane’s title bar: it lists the current account, how much of each limit is left and when it resets. With more than one account, click another in the list to switch; with only one, use “Add / manage accounts…” to add another.",
-        "missing": "The badge stays hidden until this CLI has quota data; you can add and switch accounts in Settings → Accounts."
-      },
-      "more": {
-        "title": "What to try next",
-        "body": "• A pane’s name is its address — double-click it to rename the pane.\n• Each tab above the panes is a group; the buttons at the far right change the layout.\n• Click Git or Plans in the sidebar to see what agents changed and the plans they wrote.\n• The gear → Help explains every feature with diagrams; for voice input, turn it on in Settings → Voice Input, then hold Ctrl+Alt+M and speak.\n• Next time, go straight back to a workspace from Recent on the Welcome screen; ☆ pins the ones you use most.\n\nTo replay this tour: Help → First-Run Tour…"
-      }
+      "pickFolder": "First, pick a folder for your agents to work in. Have a project? Click Browse…. Starting fresh? Click New…. Just trying it out? Click Home.",
+      "openAgent": "Click ＋ and pick a CLI to open your first agent.",
+      "firstCommand": "Type a sentence here and press Enter, then watch it answer.",
+      "talkMention": "Open one more pane, then type @ in either pane and pick the other to give it a task.",
+      "talkDrag": "Or drag one pane’s title bar onto another pane’s terminal to bring its conversation along.",
+      "usageAccount": "Rest the pointer here to see the quota and account, and switch accounts right here if you need to.",
+      "next": "Next",
+      "doneFeedback": "✓ Done",
+      "finished": "Tour complete. You can see it again from Help → First-Run Tour…."
     },
     "v0_2_10": {
       "welcome": {

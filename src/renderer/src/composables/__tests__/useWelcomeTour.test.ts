@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// The first-run welcome tour: who gets it, in which order, and what ending it
-// records.
+// The first-run welcome tour: who gets it, where it resumes, and what ending
+// it records.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const store = vi.hoisted(() => new Map<string, unknown>())
@@ -14,139 +14,86 @@ vi.mock('@navide/plugin-ui/shared', () => ({
 
 async function load() {
   vi.resetModules()
-  const welcome = await import('../useWelcomeTour')
-  const release = await import('../useReleaseTour')
-  return { ...welcome, ...release }
+  return import('../useWelcomeTour')
 }
 
 beforeEach(() => store.clear())
 
 describe('useWelcomeTour', () => {
   it('stays off for an install that never ran the first-run wizard (an upgrade)', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
+    const { useWelcomeTour } = await load()
     const welcome = useWelcomeTour()
-    expect(welcome.stage()).toBe('off')
-    expect(welcome.startWelcome()).toBe(false)
-    expect(welcome.startMain()).toBe(false)
-    expect(welcome.startPane()).toBe(false)
-    expect(useReleaseTour().activeVersion.value).toBeNull()
+    expect(welcome.pending()).toBe(false)
+    expect(welcome.start()).toBe(false)
+    expect(welcome.active.value).toBeNull()
   })
 
-  it('runs Welcome, then the main screen, then the first pane, each only once the one before is done', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
+  it('starts once a first run marked it, at the first bubble', async () => {
+    const { useWelcomeTour } = await load()
     const welcome = useWelcomeTour()
-    const tour = useReleaseTour()
     welcome.markFirstRun()
-    expect(welcome.stage()).toBe('start')
-    expect(welcome.startMain()).toBe(false)
-    expect(welcome.startPane()).toBe(false)
-
-    expect(welcome.startWelcome()).toBe(true)
-    expect(tour.steps.value?.map((s) => s.id)).toEqual(['why-folder', 'pick-folder'])
-    tour.end(true)
-    expect(welcome.stage()).toBe('main')
-
-    expect(welcome.startMain()).toBe(true)
-    expect(tour.steps.value?.map((s) => s.id)).toEqual(['open-agent'])
-    tour.end(true)
-    expect(welcome.stage()).toBe('pane')
-
-    expect(welcome.startPane()).toBe(true)
-    expect(tour.steps.value?.map((s) => s.id)).toEqual(['first-command', 'open-second', 'talk-mention', 'talk-drag', 'usage-account', 'more'])
-    tour.end(true)
-    expect(welcome.stage()).toBe('off')
+    expect(welcome.pending()).toBe(true)
+    expect(welcome.savedStep()).toBe(0)
+    expect(welcome.start()).toBe(true)
+    expect(welcome.active.value).toBe('first-run')
+    // One at a time.
+    expect(welcome.start()).toBe(false)
   })
 
-  it('offers Skip on the last card of the first two parts, not on the very last card', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
+  it('remembers how far it got, so a restart picks up there', async () => {
+    const { useWelcomeTour } = await load()
     const welcome = useWelcomeTour()
-    const tour = useReleaseTour()
     welcome.markFirstRun()
-    welcome.startWelcome()
-    expect(tour.skipOnLast.value).toBe(true)
-    expect(tour.interactive.value).toBe(true)
-    tour.end(true)
-    welcome.startMain()
-    expect(tour.skipOnLast.value).toBe(true)
-    tour.end(true)
-    welcome.startPane()
-    expect(tour.skipOnLast.value).toBe(false)
+    welcome.start()
+    welcome.progress(3)
+    expect(welcome.savedStep()).toBe(3)
   })
 
-  it('treats a skip on the very first card as seen, ending all three parts', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
-    const welcome = useWelcomeTour()
-    welcome.markFirstRun()
-    welcome.startWelcome()
-    useReleaseTour().end(false)
-    expect(welcome.stage()).toBe('off')
-    expect(welcome.startMain()).toBe(false)
-    expect(welcome.startPane()).toBe(false)
-  })
-
-  it('treats a skip in a later part as seen too', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
-    const welcome = useWelcomeTour()
-    const tour = useReleaseTour()
-    welcome.markFirstRun()
-    welcome.startWelcome()
-    tour.end(true)
-    welcome.startMain()
-    tour.end(false)
-    expect(welcome.stage()).toBe('off')
+  it('is off for good once it ends, finished or skipped', async () => {
+    const { useWelcomeTour } = await load()
+    for (const completed of [true, false]) {
+      store.clear()
+      const welcome = useWelcomeTour()
+      welcome.markFirstRun()
+      welcome.start()
+      welcome.finish(completed)
+      expect(welcome.active.value).toBeNull()
+      expect(welcome.pending()).toBe(false)
+      expect(welcome.start()).toBe(false)
+    }
   })
 
   it('calls the whole tour off when this turns out not to be a first install', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
+    const { useWelcomeTour } = await load()
     const welcome = useWelcomeTour()
     welcome.markFirstRun()
     welcome.cancel()
-    expect(welcome.stage()).toBe('off')
-    expect(welcome.startWelcome()).toBe(false)
-    expect(welcome.startMain()).toBe(false)
-    expect(welcome.startPane()).toBe(false)
-    expect(useReleaseTour().activeVersion.value).toBeNull()
+    expect(welcome.pending()).toBe(false)
+    expect(welcome.start()).toBe(false)
   })
 
-  it('does not start over a tour that is already running', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
+  it('replays on request without recording anything, even over a pending tour', async () => {
+    const { useWelcomeTour } = await load()
     const welcome = useWelcomeTour()
-    const tour = useReleaseTour()
-    welcome.markFirstRun()
-    tour.start('0.2.10')
-    expect(welcome.startWelcome()).toBe(false)
-    expect(tour.activeVersion.value).toBe('0.2.10')
-  })
-
-  it('replays all three parts on request, recording nothing and leaving a pending tour pending', async () => {
-    const { useWelcomeTour, useReleaseTour } = await load()
-    const welcome = useWelcomeTour()
-    const tour = useReleaseTour()
-    expect(welcome.replay()).toBe(true)
-    expect(tour.steps.value).toHaveLength(9)
-    expect(tour.interactive.value).toBe(false)
-    expect(tour.skipOnLast.value).toBe(false)
-    tour.end(true)
+    welcome.replay()
+    expect(welcome.active.value).toBe('replay')
+    welcome.progress(4)
+    welcome.finish(true)
     expect(store.size).toBe(0)
 
     welcome.markFirstRun()
     welcome.replay()
-    tour.end(false)
-    expect(welcome.stage()).toBe('start')
+    welcome.finish(false)
+    expect(welcome.pending()).toBe(true)
+    expect(welcome.savedStep()).toBe(0)
   })
 
-  it('records an action only while an interactive part is running', async () => {
-    const { useWelcomeTour, useReleaseTour, welcomeActionTimes } = await load()
+  it('records a momentary action only while the tour is running', async () => {
+    const { useWelcomeTour, welcomeActionTimes } = await load()
     const welcome = useWelcomeTour()
-    const tour = useReleaseTour()
     welcome.notify('mention')
     expect(welcomeActionTimes.mentionAt).toBe(0)
     welcome.replay()
-    welcome.notify('mention')
-    expect(welcomeActionTimes.mentionAt).toBe(0)
-    tour.end(true)
-    welcome.markFirstRun()
-    welcome.startWelcome()
     welcome.notify('mention')
     welcome.notify('drop')
     welcome.notify('usage')
