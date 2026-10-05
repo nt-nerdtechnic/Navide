@@ -14423,6 +14423,28 @@ describe('agent capability requests the Host cannot serve', () => {
     }
   })
 
+  it('answers BACKEND_ERROR when executing the request throws', async () => {
+    const { mgr, socket } = connectHost('acme.agent-throws', true)
+    await flush()
+    const execute = vi.spyOn(mgr, 'executeAgentCapability').mockRejectedValue(new Error('boom'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, legacyRequest('req-throws'))
+      await flush()
+
+      const results = resultsOf(socket)
+      expect(results).toHaveLength(1)
+      expect(results[0].payload).toEqual({
+        request_id: 'req-throws',
+        response: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'BACKEND_ERROR' }) }),
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('req-throws'))
+    } finally {
+      warn.mockRestore()
+      execute.mockRestore()
+    }
+  })
+
   it('still answers a well-formed request on the current client exactly once', async () => {
     const { socket } = connectHost('acme.agent-normal', true)
     await flush()

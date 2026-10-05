@@ -7817,15 +7817,20 @@ export class FrontendPluginManager {
       return refuse('BAD_REQUEST', 'agent capability request is malformed')
     }
 
-    const response = legacyRequest
-      ? record.operation === 'capability'
-        ? await this.executeAgentCapability(record.instance_id as string, record.payload)
-        : await this.executeAgentBackendCall(record.instance_id as string, record.payload)
-      : await this.executeAgentBackendCallForWorkspace(
-        (record.target as Record<string, unknown>).plugin_id as string,
-        (record.target as Record<string, unknown>).workspace_path as string,
-        record.payload,
-      )
+    let response: CapabilityResponse
+    try {
+      response = legacyRequest
+        ? record.operation === 'capability'
+          ? await this.executeAgentCapability(record.instance_id as string, record.payload)
+          : await this.executeAgentBackendCall(record.instance_id as string, record.payload)
+        : await this.executeAgentBackendCallForWorkspace(
+          (record.target as Record<string, unknown>).plugin_id as string,
+          (record.target as Record<string, unknown>).workspace_path as string,
+          record.payload,
+        )
+    } catch (error) {
+      return refuse('BACKEND_ERROR', error instanceof Error ? error.message : String(error))
+    }
     if (this.wsClient !== client || !this.hostSessionRegistered) {
       return refuse('BACKEND_UNAVAILABLE', 'Host backend session lapsed while the request ran')
     }
