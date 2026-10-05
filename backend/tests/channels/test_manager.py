@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hashlib
 import itertools
 import sqlite3
@@ -1301,3 +1302,22 @@ async def test_pairing_approval_after_a_restart_goes_through_the_bot_that_got_th
     finally:
         await e2.m.stop()
         e.db.close()
+
+
+async def test_a_background_task_that_fails_is_logged_with_its_traceback(env: Env, caplog) -> None:
+    async def boom() -> None:
+        raise RuntimeError("background boom")
+
+    async def forever() -> None:
+        await asyncio.sleep(3600)
+
+    caplog.set_level(logging.ERROR, logger=mgr_mod.__name__)
+    failed = env.m._spawn(boom())
+    cancelled = env.m._spawn(forever())
+    await asyncio.sleep(0)
+    cancelled.cancel()
+    await asyncio.wait({failed, cancelled})
+    await asyncio.sleep(0)  # done callbacks run on the next loop turn
+    errors = [r for r in caplog.records if r.name == mgr_mod.__name__ and r.levelno >= logging.ERROR]
+    assert len(errors) == 1  # the cancelled task is not an error
+    assert errors[0].exc_info and "background boom" in str(errors[0].exc_info[1])

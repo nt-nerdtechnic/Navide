@@ -347,8 +347,16 @@ class ChannelManager:
     def _spawn(self, coro: Awaitable[Any]) -> asyncio.Task[Any]:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._task_done)
         return task
+
+    def _task_done(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("channels: background task %s failed", task.get_name(), exc_info=exc)
 
     def adapter_for(self, platform: str, account: str = DEFAULT_ACCOUNT) -> ChannelAdapter | None:
         """The running bot ``account`` on ``platform``; None when it is not connected."""
