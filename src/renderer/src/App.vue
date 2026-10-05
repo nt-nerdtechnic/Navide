@@ -685,6 +685,22 @@ function armWelcomeTourPoll(): void {
   if (welcomeTourPoll || welcomeTour.stage() === 'off') return
   welcomeTourPoll = setInterval(pollWelcomeTour, WELCOME_TOUR_POLL_MS)
 }
+// Whether the recent-workspace list was found empty this session.
+let welcomeTourRecordsChecked = false
+let welcomeTourRecordsChecking = false
+async function checkWelcomeTourRecords(): Promise<void> {
+  if (welcomeTourRecordsChecking) return
+  welcomeTourRecordsChecking = true
+  try {
+    const resp = await backend.send<{ recent?: unknown[] }>('workspace.list_recent', {})
+    if (!resp.ok || (resp.payload?.recent?.length ?? 0) > 0) welcomeTour.cancel()
+    else welcomeTourRecordsChecked = true
+  } catch {
+    welcomeTour.cancel()
+  } finally {
+    welcomeTourRecordsChecking = false
+  }
+}
 function stopWelcomeTourPoll(): void {
   if (welcomeTourPoll) clearInterval(welcomeTourPoll)
   welcomeTourPoll = null
@@ -701,9 +717,20 @@ function pollWelcomeTour(): void {
   // The CLI health guide can open right after onboarding; it is not a modal
   // to the keybinding context, but the tour must not dim it from above.
   if (mainModalOpen() || cliHealthGuide.value) return
+  // The tour is for a first install only, and any workspace record means this
+  // is not one: one open already (a restored window), or one in the recent
+  // list. Checked once, as the tour comes due — the folder picked on Welcome
+  // a moment later is a record too, and must not call the tour off.
   if (stage === 'start') {
-    if (workspaceSelected.value) welcomeTour.passWelcome()
-    else welcomeTour.startWelcome()
+    if (workspaceSelected.value) {
+      welcomeTour.cancel()
+      return
+    }
+    if (!welcomeTourRecordsChecked) {
+      void checkWelcomeTourRecords()
+      return
+    }
+    welcomeTour.startWelcome()
     return
   }
   if (!workspaceSelected.value) return

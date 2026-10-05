@@ -96,12 +96,15 @@ describe('useWelcomeTour', () => {
     expect(welcome.stage()).toBe('off')
   })
 
-  it('moves past Welcome without showing it when a workspace is already open', async () => {
+  it('calls the whole tour off when this turns out not to be a first install', async () => {
     const { useWelcomeTour, useReleaseTour } = await load()
     const welcome = useWelcomeTour()
     welcome.markFirstRun()
-    welcome.passWelcome()
-    expect(welcome.stage()).toBe('main')
+    welcome.cancel()
+    expect(welcome.stage()).toBe('off')
+    expect(welcome.startWelcome()).toBe(false)
+    expect(welcome.startMain()).toBe(false)
+    expect(welcome.startPane()).toBe(false)
     expect(useReleaseTour().activeVersion.value).toBeNull()
   })
 

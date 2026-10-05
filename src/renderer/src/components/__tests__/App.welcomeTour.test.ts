@@ -43,9 +43,25 @@ describe('first-run welcome tour', () => {
     expect(functionBody('mainModalOpen')).not.toContain('cliHealthGuide')
   })
 
-  it('starts on Welcome, or moves past it when a workspace is already open', () => {
+  // 20:44: "the tour only ever appears on a first install; a workspace record
+  // means it is not one" — and then the whole tour is off, not just Welcome.
+  it('calls the whole tour off when a workspace is already open as it comes due', () => {
     const poll = functionBody('pollWelcomeTour')
-    expect(poll).toMatch(/if \(stage === 'start'\) \{\s+if \(workspaceSelected\.value\) welcomeTour\.passWelcome\(\)\s+else welcomeTour\.startWelcome\(\)/)
+    const start = poll.slice(poll.indexOf("if (stage === 'start') {"))
+    expect(start).toMatch(/^if \(stage === 'start'\) \{\s+if \(workspaceSelected\.value\) \{\s+welcomeTour\.cancel\(\)/)
+    expect(appSource).not.toContain('passWelcome')
+  })
+
+  it('checks the recent-workspace list once before starting, and starts only when it is empty', () => {
+    const poll = functionBody('pollWelcomeTour')
+    const start = poll.slice(poll.indexOf("if (stage === 'start') {"))
+    expect(start.indexOf('welcomeTourRecordsChecked')).toBeLessThan(start.indexOf('welcomeTour.startWelcome()'))
+    const check = functionBody('checkWelcomeTourRecords')
+    expect(check).toContain("backend.send<{ recent?: unknown[] }>('workspace.list_recent', {})")
+    // Any record, a failed answer or an error: not a first install, as far as
+    // the tour can tell — it stays off rather than greet a returning user.
+    expect(check).toMatch(/if \(!resp\.ok \|\| \(resp\.payload\?\.recent\?\.length \?\? 0\) > 0\) welcomeTour\.cancel\(\)/)
+    expect(check).toMatch(/catch \{\s+welcomeTour\.cancel\(\)/)
   })
 
   it('shows the main-screen part only once a workspace is open', () => {

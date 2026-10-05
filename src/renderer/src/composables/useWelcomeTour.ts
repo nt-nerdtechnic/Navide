@@ -69,10 +69,10 @@ export function useWelcomeTour() {
     })
   }
 
-  /** A workspace was already open when the tour came due (a window opened on
-   *  a folder never shows Welcome): go on to the main-screen part. */
-  function passWelcome(): void {
-    if (stage() === 'start') settingsSet(START_DONE_KEY, true)
+  /** This is not a first install after all (a workspace record turned up
+   *  when the tour came due): the whole tour is off, not just Welcome. */
+  function cancel(): void {
+    settingsSet(PENDING_KEY, false)
   }
 
   function startMain(): boolean {
@@ -100,5 +100,5 @@ export function useWelcomeTour() {
     welcomeActionTimes[`${what}At`] = Date.now()
   }
 
-  return { stage, markFirstRun, startWelcome, passWelcome, startMain, startPane, replay, notify }
+  return { stage, markFirstRun, startWelcome, cancel, startMain, startPane, replay, notify }
 }
