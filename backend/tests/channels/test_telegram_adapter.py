@@ -123,7 +123,7 @@ async def test_backoff_restarts_after_a_successful_poll(api: FakeBotApi) -> None
         pass
 
     api.fail("getUpdates", 500, "Internal Server Error", times=3)
-    ad = TelegramAdapter(TOKEN, base_url=api.base_url, backoff=backoff, poll_timeout_s=1)
+    ad = TelegramAdapter(TOKEN, base_url=api.base_url, backoff=backoff, poll_timeout_s=1, stable_s=0.0)
     await ad.start(emit)
     try:
         await _until(lambda: len(attempts) == 3 and ad.status.lifecycle == "ready"
@@ -131,6 +131,33 @@ async def test_backoff_restarts_after_a_successful_poll(api: FakeBotApi) -> None
         api.fail("getUpdates", 500, "Internal Server Error")
         await _until(lambda: len(attempts) == 4)
         assert attempts == [1, 2, 3, 1]
+    finally:
+        await ad.stop()
+
+
+async def test_a_session_that_answers_then_drops_at_once_keeps_backing_off(api: FakeBotApi) -> None:
+    # Same rule as ReceiveLoop: only a session that stayed up READY_STABLE_S
+    # restarts the series, or a server that answers once and fails would be
+    # retried at the first-step delay forever.
+    attempts: list[int] = []
+
+    def backoff(attempt: int, _r: float) -> float:
+        attempts.append(attempt)
+        return 0.01
+
+    async def emit(_msg: InboundMessage) -> None:
+        pass
+
+    api.fail("getUpdates", 500, "Internal Server Error", times=3)
+    ad = TelegramAdapter(TOKEN, base_url=api.base_url, backoff=backoff, poll_timeout_s=1, stable_s=10.0)
+    await ad.start(emit)
+    try:
+        await _until(lambda: len(attempts) == 3 and ad.status.lifecycle == "ready"
+                     and len(api.calls_of("getUpdates")) >= 5)
+        assert ad.status.reconnect_attempts == 0  # the status still shows a live session
+        api.fail("getUpdates", 500, "Internal Server Error")
+        await _until(lambda: len(attempts) == 4)
+        assert attempts == [1, 2, 3, 4]
     finally:
         await ad.stop()
 

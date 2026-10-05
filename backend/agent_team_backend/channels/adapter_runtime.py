@@ -43,6 +43,10 @@ SEND_MAX_RETRIES = 3
 # forever.
 READY_STABLE_S = 60.0
 
+# How long a reconnect the server asked for waits when the previous one also
+# ended in such a request without a stable session in between.
+RECONNECT_NOW_MIN_S = 1.0
+
 # How long a stop waits for a cancelled receive task before cancelling it again.
 CANCEL_RETRY_S = 0.5
 
@@ -150,8 +154,12 @@ class ReceiveLoop:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await inner
 
+    def _was_stable(self) -> bool:
+        return self._ready_at is not None and time.monotonic() - self._ready_at >= self.stable_s
+
     async def _run(self) -> None:
         attempt = 0
+        reconnects_in_row = 0
         while not self._stopping:
             self._ready_at = None
             try:
@@ -168,16 +176,23 @@ class ReceiveLoop:
                 log.warning("channel %s blocked: %s", self.name, self.status.last_error)
                 return
             except ReconnectNow as exc:
+                # A stable session ends any backoff series, as a drop after one would.
+                if self._was_stable():
+                    attempt = 0
+                    reconnects_in_row = 0
+                reconnects_in_row += 1
                 self.status.connected = False
                 self.status.lifecycle = "recovering"
                 log.info("channel %s reconnecting: %s", self.name, exc)
+                if reconnects_in_row > 1:
+                    await asyncio.sleep(RECONNECT_NOW_MIN_S)
                 continue
             except Exception as exc:  # noqa: BLE001 - every drop reconnects
                 if self._stopping:
                     break
+                reconnects_in_row = 0
                 # Only a connection that stayed ready starts a fresh backoff series.
-                stable = self._ready_at is not None and time.monotonic() - self._ready_at >= self.stable_s
-                attempt = 1 if stable else attempt + 1
+                attempt = 1 if self._was_stable() else attempt + 1
                 self.status.connected = False
                 self.status.lifecycle = "recovering"
                 self.status.reconnect_attempts = attempt

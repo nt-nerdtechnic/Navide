@@ -45,7 +45,7 @@ from .base import (
     backoff_delay,
 )
 from . import redact
-from .adapter_runtime import cancel_and_wait
+from .adapter_runtime import READY_STABLE_S, cancel_and_wait
 from .text import TEXT_LIMITS, chunk_text, is_telegram_parse_error, markdown_to_telegram_html
 
 log = logging.getLogger(__name__)
@@ -104,6 +104,7 @@ class TelegramAdapter:
         backoff: Callable[[int, float], float] = backoff_delay,
         stall_timeout_s: float = STALL_WATCHDOG_S,
         poll_timeout_s: int = POLL_TIMEOUT_S,
+        stable_s: float = READY_STABLE_S,
     ) -> None:
         self._token = token.strip()
         redact.add_secret(self._token)
@@ -114,6 +115,7 @@ class TelegramAdapter:
         self._attempt = 0
         self._stall_timeout_s = stall_timeout_s
         self._poll_timeout_s = poll_timeout_s
+        self._stable_s = stable_s
         self.status = TelegramStatus()
         # Receives each ManagedBotUpdated (a bot this one manages was created, re-tokened
         # or changed owner); the manager decides what it means. None: such updates are skipped.
@@ -189,6 +191,7 @@ class TelegramAdapter:
         self.status.lifecycle = "ready"
         self.status.connected = True
         self.status.last_connected_at = time.time()
+        ready_at = time.monotonic()
         while True:
             params: dict[str, Any] = {
                 "timeout": self._poll_timeout_s,
@@ -203,8 +206,10 @@ class TelegramAdapter:
                 )
             except asyncio.TimeoutError as exc:
                 raise RuntimeError("getUpdates stalled; restarting") from exc
-            # A poll answered: the next failure is a fresh drop, not one more in a series.
-            self._attempt = 0
+            # A session that stayed up (ReceiveLoop's rule): the next failure is a fresh
+            # drop, not one more in a series. A shorter one keeps backing off.
+            if time.monotonic() - ready_at >= self._stable_s:
+                self._attempt = 0
             self.status.lifecycle = "ready"
             self.status.connected = True
             self.status.reconnect_attempts = 0
