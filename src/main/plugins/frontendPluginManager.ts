@@ -1255,6 +1255,8 @@ export class FrontendPluginManager {
     }
   }
 
+  /** What {@link closeBackendPlugins} unregistered, for {@link reopenBackendPlugins}. */
+  private activationsBeforeClose: BackendPluginLaunchSpec[] = []
   /** Package-local Backend Wire children receive only Host-approved temp paths. */
   private readonly pluginBackendHost = new PluginBackendHost({
     environment: createPluginBackendChildEnvironment(),
@@ -9219,37 +9221,15 @@ export class FrontendPluginManager {
     }
   }
 
-  private wireSurface(
+  /** Bind a view's package backend: the Plans window's, or a third-party
+   *  view's. Runs when the view mounts, and again for a still-open view when
+   *  the backends come back after a cancelled quit. */
+  private bindViewBackend(
     instanceId: string,
     record: RunningPlugin,
     hostWindow: BrowserWindow,
     descriptor: PluginLaunchDescriptor,
-    isV2Identity: boolean,
-    openedViaLegacyAdapter: boolean,
-    preflight = false,
   ): void {
-    const contents = record.view.webContents
-    this.running.set(instanceId, record)
-    const onReceiverNavigation = (): void => {
-      // did-navigate fires only after a new main-frame document commits. A
-      // cancelled navigation must leave the still-live receiver authoritative.
-      this.revokeReceiverFrames(instanceId)
-      const current = this.running.get(instanceId)
-      if (current?.view.webContents === contents) current.documentGeneration += 1
-    }
-    contents.on('did-navigate', onReceiverNavigation)
-    record.detachReceiverFrames = () => {
-      if (!contents.isDestroyed()) contents.removeListener('did-navigate', onReceiverNavigation)
-    }
-    if (isV2Identity && this.activationFailureHandler && !preflight) {
-      // Register the activation immediately so load failure / renderer death
-      // remain observable, but do not spend the readiness budget while the
-      // entry document itself is still loading.
-      this.pendingActivations.set(instanceId, null)
-    }
-    if (openedViaLegacyAdapter) this.legacyInstances.set(descriptor.id, instanceId)
-    if (record.carrier === 'surface') this.bySender.set(record.senderId, instanceId)
-
     const activation = nonEmptyString(descriptor.packageVersion) && nonEmptyString(descriptor.packageDir)
       ? this.pluginBackendHost.activationFor(
           descriptor.id,
@@ -9359,6 +9339,40 @@ export class FrontendPluginManager {
         void record.backendBindingTask.catch(() => undefined)
       }
     }
+  }
+
+  private wireSurface(
+    instanceId: string,
+    record: RunningPlugin,
+    hostWindow: BrowserWindow,
+    descriptor: PluginLaunchDescriptor,
+    isV2Identity: boolean,
+    openedViaLegacyAdapter: boolean,
+    preflight = false,
+  ): void {
+    const contents = record.view.webContents
+    this.running.set(instanceId, record)
+    const onReceiverNavigation = (): void => {
+      // did-navigate fires only after a new main-frame document commits. A
+      // cancelled navigation must leave the still-live receiver authoritative.
+      this.revokeReceiverFrames(instanceId)
+      const current = this.running.get(instanceId)
+      if (current?.view.webContents === contents) current.documentGeneration += 1
+    }
+    contents.on('did-navigate', onReceiverNavigation)
+    record.detachReceiverFrames = () => {
+      if (!contents.isDestroyed()) contents.removeListener('did-navigate', onReceiverNavigation)
+    }
+    if (isV2Identity && this.activationFailureHandler && !preflight) {
+      // Register the activation immediately so load failure / renderer death
+      // remain observable, but do not spend the readiness budget while the
+      // entry document itself is still loading.
+      this.pendingActivations.set(instanceId, null)
+    }
+    if (openedViaLegacyAdapter) this.legacyInstances.set(descriptor.id, instanceId)
+    if (record.carrier === 'surface') this.bySender.set(record.senderId, instanceId)
+
+    this.bindViewBackend(instanceId, record, hostWindow, descriptor)
 
     // A plugin needing the backend gets the shared transport connected now (if
     // the backend url is already known) so server-push events reach it without
@@ -10029,7 +10043,34 @@ export class FrontendPluginManager {
     this.plansDeadBackendInstances.clear()
     this.plansAbandonedBackendInstances.clear()
     this.headlessPlansWorkspacePaths.clear()
+    this.activationsBeforeClose = this.pluginBackendHost.registeredActivations()
     await this.pluginBackendHost.close()
+  }
+
+  /** Undo {@link closeBackendPlugins} for an app that keeps running (a quit
+   *  cancelled after its teardown): register the activations again and bind
+   *  every still-open view that had a backend. Children start on first call,
+   *  as after a launch. */
+  reopenBackendPlugins(): void {
+    const activations = this.activationsBeforeClose
+    this.activationsBeforeClose = []
+    for (const activation of activations) {
+      try {
+        this.registerBackendActivation(activation)
+      } catch (error) {
+        warnMain(`[plugin-backend] ${activation.pluginId} could not be registered again: ${
+          error instanceof Error ? error.message : String(error)
+        }`)
+      }
+    }
+    for (const [instanceId, record] of this.running) {
+      if (!record.backendBindingTask || record.hostWindow.isDestroyed()) continue
+      const descriptor = this.descriptors.get(record.id)
+      if (!descriptor) continue
+      record.backendWorkspaceId = null
+      record.backendBindingTask = null
+      this.bindViewBackend(instanceId, record, record.hostWindow, descriptor)
+    }
   }
 
   /**

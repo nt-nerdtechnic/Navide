@@ -352,6 +352,10 @@ export class PluginBackendHost {
     return activation?.packageDir === canonicalPackageDir ? activation : undefined
   }
 
+  registeredActivations(): BackendPluginLaunchSpec[] {
+    return [...this.backends.values()].map(({ activation }) => activation)
+  }
+
   activationForPlugin(pluginId: string): BackendPluginLaunchSpec | undefined {
     return [...this.backends.values()].find(({ activation }) => activation.pluginId === pluginId)?.activation
   }

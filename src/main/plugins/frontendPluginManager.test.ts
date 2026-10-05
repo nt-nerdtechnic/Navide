@@ -3649,6 +3649,81 @@ describe('devPlansPluginDescriptor', () => {
     }
   })
 
+  // The quit teardown closes every package backend; a quit cancelled after it
+  // leaves the app running, so the backends must come back: the activations
+  // re-registered and every still-open backend view bound again.
+  it('reopens the package backends after a cancelled quit closed them', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '1.0.0'
+    const view: NonNullable<PluginLaunchDescriptor['views']>[number] = {
+      id: 'window',
+      contributionKey: `${PLANS_PLUGIN_ID}.window`,
+      kind: 'custom',
+      location: 'window',
+      title: 'Plans',
+      entryFile: '/plugins/navide.plans/index.html',
+    }
+    const context: HostCapabilityContext = {
+      publisherEligible: false,
+      userGrant: { packageVersion, system: ['fs'], storage: true },
+      runtimeBinding: {
+        pluginId: PLANS_PLUGIN_ID,
+        packageVersion,
+        workspaceId: 'bound-workspace',
+        instanceId: null,
+        audience: view.contributionKey,
+      },
+    }
+    const packageDescriptor: PluginLaunchDescriptor = {
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: [],
+      devUrl: '',
+      entryFile: view.entryFile,
+      views: [view],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+      capabilityContext: context,
+    }
+    mgr.registerDescriptor(packageDescriptor, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.resolve_root'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    const bind = vi.spyOn(PluginBackendHost.prototype, 'bindView').mockResolvedValue()
+    const host = new FakeBrowserWindow()
+    try {
+      const handle = await mgr.openView(packageDescriptor, view, {
+        hostWindow: asHost(host),
+        bounds: 'fill',
+        workspacePath: '/workspace',
+        query: '?workspace_path=%2Fworkspace',
+        capabilityContext: context,
+      })
+      expect(bind).toHaveBeenCalledOnce()
+
+      await mgr.closeBackendPlugins()
+      expect(mgr.hasBackendActivation(PLANS_PLUGIN_ID, packageVersion)).toBe(false)
+
+      mgr.reopenBackendPlugins()
+      expect(mgr.hasBackendActivation(PLANS_PLUGIN_ID, packageVersion)).toBe(true)
+      await vi.waitFor(() => expect(bind).toHaveBeenCalledTimes(2))
+      expect(bind.mock.calls[1][0]).toMatchObject({ pluginId: PLANS_PLUGIN_ID, instanceId: handle.instanceId })
+      mgr.destroyInstance(handle.instanceId)
+    } finally {
+      bind.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
   it('rejects a package Plans call whose workspace path is not sender-bound', async () => {
     const mgr = new FrontendPluginManager()
     const packageVersion = '1.0.0'

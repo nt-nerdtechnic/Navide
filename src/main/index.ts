@@ -284,8 +284,8 @@ const quitCancelWatch = createQuitCancelWatch({
     windowRegistry.clearCleanExit()
     const windows = titles.length > 0 ? titles.join(', ') : quitConfirm.cancelledUnknownWindow
     void (async () => {
-      // The teardown stopped the backend and put up the shutdown screen; the
-      // app is staying, so bring both back before saying why.
+      // The teardown stopped the backend and the plugin backends and put up the
+      // shutdown screen; the app is staying, so bring them back before saying why.
       if (quitTeardownRan) {
         quitTeardownRan = false
         try {
@@ -293,6 +293,7 @@ const quitCancelWatch = createQuitCancelWatch({
         } catch (err) {
           console.error('[main] restarting the backend after a cancelled quit failed', err)
         }
+        frontendPluginManager.reopenBackendPlugins()
         broadcastQuitStage('cancelled')
       }
       await dialog.showMessageBox({

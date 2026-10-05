@@ -265,6 +265,9 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
     try {
       // First pass: a live plugin backend sends the quit through the teardown,
       // which stops the backend and puts up the shutdown screen.
+      vi.spyOn(frontendPluginManager, 'reopenBackendPlugins').mockImplementation(() => {
+        backendState.events.push('plugin backends reopened')
+      })
       vi.mocked(frontendPluginManager.hasBackendActivity).mockReturnValue(true)
       const teardown = vi.fn()
       await beforeQuit({ preventDefault: teardown })
@@ -282,6 +285,7 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
         'quit stage stopping',
         'quit stage closing',
         'backend started',
+        'plugin backends reopened',
         'quit stage cancelled',
         'notice',
       ])
