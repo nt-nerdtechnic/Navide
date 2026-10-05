@@ -697,7 +697,9 @@ function pollWelcomeTour(): void {
   }
   // A fail-open onboarding answer is a guess, not a settled shell.
   if (onboardingComplete.value !== true || onboardingCheckFailed.value) return
-  if (mainModalOpen()) return
+  // The CLI health guide can open right after onboarding; it is not a modal
+  // to the keybinding context, but the tour must not dim it from above.
+  if (mainModalOpen() || cliHealthGuide.value) return
   if (stage === 'start') {
     if (workspaceSelected.value) welcomeTour.passWelcome()
     else welcomeTour.startWelcome()

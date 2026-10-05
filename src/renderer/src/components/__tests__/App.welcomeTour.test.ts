@@ -36,6 +36,13 @@ describe('first-run welcome tour', () => {
     expect(poll.indexOf('mainModalOpen()')).toBeLessThan(poll.indexOf('welcomeTour.startWelcome()'))
   })
 
+  it('waits for the CLI health guide too, which can open right after onboarding but is not a modal', () => {
+    const poll = functionBody('pollWelcomeTour')
+    expect(poll).toMatch(/if \(mainModalOpen\(\) \|\| cliHealthGuide\.value\) return/)
+    // The guide stays out of mainModalOpen: that drives the modalOpen keybinding context.
+    expect(functionBody('mainModalOpen')).not.toContain('cliHealthGuide')
+  })
+
   it('starts on Welcome, or moves past it when a workspace is already open', () => {
     const poll = functionBody('pollWelcomeTour')
     expect(poll).toMatch(/if \(stage === 'start'\) \{\s+if \(workspaceSelected\.value\) welcomeTour\.passWelcome\(\)\s+else welcomeTour\.startWelcome\(\)/)
