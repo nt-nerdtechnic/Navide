@@ -4376,7 +4376,7 @@
           "h2": "「代理」分頁的三層結構",
           "p1": "由上而下是<strong>工作區列 → 群組列 → 面板列</strong>。",
           "rows": {
-            "workspace": "<strong>工作區列</strong>：摺疊箭頭、摺疊鈕、專案名與路徑、面板數（<code>開著的 / 全部</code>，被回收或等待還原的佔位面板不算開著），右邊有 <code>↻</code>（重建全部）、歷史記錄、<code>⋯</code>、<code>＋</code>。右鍵有 <em>用 Finder 開啟此資料夾</em>、<em>複製路徑</em>、<em>回收此專案的 CLI</em>、移到某個工作區群組、<em>關閉工作區</em>（只移除這一列，CLI 繼續跑，之後重開會接回）、<em>關閉工作區與 CLI 視窗</em>（結束全部 CLI）。<code>⋯</code> 打開的是同一批動作的完整版（重建全部、歷史記錄、Finder、複製路徑、重新命名專案、在自己的視窗開啟、回收、關閉）；它<strong>靠近視窗底部時會自動往上翻</strong>，選單本身太長時<strong>在裡面捲動不會把它關掉</strong>，只有捲動選單以外的地方才會關。",
+            "workspace": "<strong>工作區列</strong>：由左到右是摺疊箭頭、資料夾圖示、專案名、面板數（<code>開著的 / 全部</code>，被回收或等待還原的佔位面板不算開著）、路徑、摺疊鈕、<code>＋</code>、<code>⋯</code>（{more}）。右鍵依序有 <em>{rename}</em>、<em>{finder}</em>、<em>{copyPath}</em>、<em>{moveToGroup}</em>（移到某個工作區群組，有工作區群組時才出現）、<em>{reclaim}</em>、<em>{close}</em>（只移除這一列，CLI 繼續跑，之後重開會接回）、<em>{closePanes}</em>（結束全部 CLI）。<strong><code>↻</code>「{rebuildAll}」與「{history}」不在列上，在 <code>⋯</code> 選單裡</strong>：側欄縮到最窄時，列上多一顆按鈕就會擠掉專案名的寬度，所以收了進去。<code>⋯</code> 依序是 {rebuildAll}、{history}、{finder}、{copyPath}、{rename}、{detach}（可以拆出去時才有）、{reclaim}，以及可以關閉時的兩種關閉；它<strong>靠近視窗底部時會自動往上翻</strong>，選單本身太長時<strong>在裡面捲動不會把它關掉</strong>，只有捲動選單以外的地方才會關。",
             "group": "<strong>群組列</strong>：黏在頂端捲動，顯示狀態色點、群組名、成員數，一顆滑鼠移上去才浮現的摺疊鈕，以及一顆「在這個群組裡開 agent」的 <code>＋</code>。成員列的左緣有一條中性色細軌，表示它們同屬一群。",
             "pane": "<strong>面板列</strong>：名稱、狀態、Docked 標籤等。"
           },
