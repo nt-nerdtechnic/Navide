@@ -198,6 +198,28 @@ describe('GuidedTour', () => {
     expect(w.emitted('close')).toEqual([[true]])
   })
 
+  it('keeps Skip on the last step when the tour is one part of a longer one', async () => {
+    const w = mount(GuidedTour, {
+      props: { steps: [STEPS[0]], skipOnLast: true, anchorTimeoutMs: 300 },
+      global: { plugins: [i18n] },
+    })
+    wrapper = w
+    await settle()
+    expect(document.body.querySelector('[data-testid="tour-skip"]')).not.toBeNull()
+    click('tour-skip')
+    expect(w.emitted('close')).toEqual([[false]])
+  })
+
+  it('labels the primary button with the step’s own text when it has one', async () => {
+    start([{ ...STEPS[0], primaryKey: 'tour.next' }, { ...STEPS[2], primaryKey: 'tour.back' }])
+    await settle()
+    expect(document.body.querySelector('[data-testid="tour-next"]')?.textContent?.trim()).toBe('Next')
+    click('tour-next')
+    await settle()
+    // The last step's own label replaces Done.
+    expect(document.body.querySelector('[data-testid="tour-next"]')?.textContent?.trim()).toBe('Back')
+  })
+
   it('emits close(false) from Skip', async () => {
     const w = start(STEPS)
     await settle()

@@ -82,4 +82,20 @@ describe('useReleaseTour', () => {
     // A named tour never writes a release's done record.
     expect(store.size).toBe(0)
   })
+
+  it('keeps Skip on the last step only for a named tour that asks for it', async () => {
+    const { useReleaseTour } = await load()
+    const tour = useReleaseTour()
+    const steps = [{ id: 'a', titleKey: 't', bodyKey: 'b' }]
+    tour.start('0.2.10')
+    expect(tour.skipOnLast.value).toBe(false)
+    tour.end(false)
+    tour.startNamed('plain', steps)
+    expect(tour.skipOnLast.value).toBe(false)
+    tour.end(false)
+    tour.startNamed('part', steps, undefined, { skipOnLast: true })
+    expect(tour.skipOnLast.value).toBe(true)
+    tour.end(false)
+    expect(tour.skipOnLast.value).toBe(false)
+  })
 })

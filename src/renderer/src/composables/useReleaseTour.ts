@@ -14,7 +14,11 @@ import { tourDoneKey, type TourStep } from '../lib/tours'
 const activeVersion = ref<string | null>(null)
 // Set only while a named tour runs; a release tour reads its steps from the
 // version's announcement instead.
-const named = shallowRef<{ steps: TourStep[]; onEnd?: (completed: boolean) => void } | null>(null)
+const named = shallowRef<{
+  steps: TourStep[]
+  onEnd?: (completed: boolean) => void
+  skipOnLast: boolean
+} | null>(null)
 
 /** Whether `version`'s announcement carries a tour. */
 export function hasReleaseTour(version: string): boolean {
@@ -27,6 +31,9 @@ export function useReleaseTour() {
     if (!version) return null
     return named.value ? named.value.steps : (whatsNewFor(version)?.tour ?? null)
   })
+  /** Whether the running tour keeps Skip on its last step (GuidedTour's
+   *  skipOnLast). Only a named tour can ask for it. */
+  const skipOnLast = computed(() => named.value?.skipOnLast ?? false)
 
   /** Start `version`'s tour; false (and nothing starts) when it has none or
    *  another tour is running. */
@@ -38,10 +45,16 @@ export function useReleaseTour() {
 
   /** Start a tour that is not a release's. `id` stands in for the version in
    *  `activeVersion`; `onEnd` gets what `end` was called with, and nothing else
-   *  is recorded. False when another tour is running. */
-  function startNamed(id: string, tourSteps: TourStep[], onEnd?: (completed: boolean) => void): boolean {
+   *  is recorded. `skipOnLast` is for a tour that is one part of a longer
+   *  one. False when another tour is running. */
+  function startNamed(
+    id: string,
+    tourSteps: TourStep[],
+    onEnd?: (completed: boolean) => void,
+    opts: { skipOnLast?: boolean } = {},
+  ): boolean {
     if (activeVersion.value || tourSteps.length === 0) return false
-    named.value = { steps: tourSteps, onEnd }
+    named.value = { steps: tourSteps, onEnd, skipOnLast: opts.skipOnLast ?? false }
     activeVersion.value = id
     return true
   }
@@ -61,5 +74,5 @@ export function useReleaseTour() {
     return settingsGet<boolean>(tourDoneKey(version), false) === true
   }
 
-  return { activeVersion, steps, start, startNamed, end, isDone }
+  return { activeVersion, steps, skipOnLast, start, startNamed, end, isDone }
 }

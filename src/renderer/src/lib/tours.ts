@@ -30,6 +30,9 @@ export interface TourStep {
    * thing lives instead of pointing at it.
    */
   missingKey?: string
+  /** Label for the primary button instead of Next / Done — the action the
+   *  person takes once the step closes (e.g. "Pick one"). */
+  primaryKey?: string
 }
 
 /** Settings key recording that a version's tour was taken to its last step. */
