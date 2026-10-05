@@ -6842,7 +6842,8 @@ export class FrontendPluginManager {
   }
 
   private releaseAiTerminalOwner(plugin: RunningPlugin, identity: AiTerminalStorageIdentity): void {
-    if (!this.terminalStorageHandler) return
+    // During an app quit the owner views are already being torn down.
+    if (!this.terminalStorageHandler || this.appQuitting()) return
     const hasSibling = [...this.running.values()].some((candidate) =>
       candidate !== plugin && this.terminalStorageIdentity(candidate)?.resumeKey === identity.resumeKey)
     if (hasSibling) return

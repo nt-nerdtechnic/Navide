@@ -13151,6 +13151,32 @@ describe('first-party Git private bridge', () => {
     expect(ownerCalls).toHaveLength(0)
   })
 
+  it('skips the AI terminal owner release while the app is quitting', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const operations: string[] = []
+    opened.mgr.setTerminalStorageHandler(async (_origin, request) => {
+      operations.push(request.operation)
+      return null
+    })
+    const internal = opened.mgr as unknown as {
+      running: Map<string, unknown>
+      terminalStorageIdentity(plugin: unknown): unknown
+      releaseAiTerminalOwner(plugin: unknown, identity: unknown): void
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const identity = internal.terminalStorageIdentity(plugin)
+    expect(identity).toBeTruthy()
+    let quitting = true
+    opened.mgr.setAppQuittingProbe(() => quitting)
+    internal.releaseAiTerminalOwner(plugin, identity)
+    await Promise.resolve()
+    expect(operations).toEqual([])
+    quitting = false
+    internal.releaseAiTerminalOwner(plugin, identity)
+    await Promise.resolve()
+    expect(operations).toEqual(['release'])
+  })
+
   it('allows selection reporting after exit without a session id while retaining session checks when supplied', async () => {
     const opened = await openGitView('/workspace', 'git-window')
     opened.mgr.setPublicCapabilityHandler((plan) => opened.mgr.executePublicCapability(plan))
