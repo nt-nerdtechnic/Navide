@@ -260,7 +260,7 @@ class ChannelManager:
         self._quick_adding: set[BotKey] = set()  # bots a quick add is storing and verifying
         # Memory only: a backend restart forgets them, and a later managed_bot update is ignored.
         self._managed: dict[str, _ManagedRequest] = {}  # request_id -> open t.me/newbot request
-        self.relay = relay.RelayTable(clock=clock)
+        self.relay = relay.RelayTable(clock=clock, on_expired=self._relay_expired)
         self._debounce: dict[tuple[str, str], _Debounce] = {}
         # One serial worker per location: order kept within a chat, chats never block each other.
         self._workers: dict[str, _Worker] = {}
@@ -1710,6 +1710,11 @@ class ChannelManager:
             if request.message_id:
                 self._spawn(self._settle_prompt(request, note))
 
+    def _relay_expired(self, request: relay.RelayRequest) -> None:
+        """A request the TTL removed: its chat prompt says so and drops its buttons."""
+        if request.message_id:
+            self._spawn(self._settle_prompt(request, MSG_RELAY_EXPIRED))
+
     async def _settle_prompt(self, request: relay.RelayRequest, note: str) -> None:
         adapter = self._adapters.get((request.loc.platform, request.loc.account))
         if not request.message_id or adapter is None or not adapter.capabilities.edit:
@@ -1718,7 +1723,7 @@ class ChannelManager:
         try:
             await adapter.edit_text(request.loc, request.message_id, redact.redact_text(text))
         except Exception as exc:  # noqa: BLE001
-            log.info("channels: settling relay prompt in %s failed: %s", request.loc.key(), exc)
+            log.warning("channels: settling relay prompt in %s failed: %s", request.loc.key(), exc)
 
     async def _send_awaiting(self, pane_id: str, loc: Location, prompt: str, text: str) -> None:
         """An awaiting notice with nothing to answer, retried like a relay prompt."""

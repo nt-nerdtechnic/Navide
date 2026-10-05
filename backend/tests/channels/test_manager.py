@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from agent_team_backend.channels import manager as mgr_mod
+from agent_team_backend.channels import relay as relay_mod
 from agent_team_backend.channels.base import AdapterStatus, Capabilities, InboundMessage, Location
 from agent_team_backend.channels.manager import (
     MSG_INTERRUPTED,
@@ -1321,3 +1322,24 @@ async def test_a_background_task_that_fails_is_logged_with_its_traceback(env: En
     errors = [r for r in caplog.records if r.name == mgr_mod.__name__ and r.levelno >= logging.ERROR]
     assert len(errors) == 1  # the cancelled task is not an error
     assert errors[0].exc_info and "background boom" in str(errors[0].exc_info[1])
+
+
+async def test_a_relay_prompt_that_runs_out_its_ttl_is_settled(clocked) -> None:
+    env, clock = clocked
+    req = env.m.relay.create("pane-1", "permission", [], Location("telegram", "default", "-100", "50"))
+    req.message_id, req.message_text = "77", "⏸ Allow Bash(npm run build)?"
+    clock.t += relay_mod.REQUEST_TTL_S + 1
+    assert env.m.relay.get(req.id) is None  # anything that reads the table prunes it
+    await _until(lambda: any(m == "77" for m, _ in env.tg.edits))
+    assert ("77", f"⏸ Allow Bash(npm run build)?\n\n{mgr_mod.MSG_RELAY_EXPIRED}") in env.tg.edits
+    assert env.m.relay._by_id == {}
+
+
+async def test_a_relay_prompt_that_cannot_be_settled_is_a_warning(env: Env, caplog) -> None:
+    caplog.set_level(logging.INFO, logger=mgr_mod.__name__)
+    env.tg.fail_edits = True
+    req = env.m.relay.create("pane-1", "permission", [], Location("telegram", "default", "-100", "50"))
+    req.message_id = "77"
+    await env.m._settle_prompt(req, mgr_mod.MSG_RELAY_SUPERSEDED)
+    [record] = [r for r in caplog.records if "settling relay prompt" in r.getMessage()]
+    assert record.levelno == logging.WARNING

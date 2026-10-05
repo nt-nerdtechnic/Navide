@@ -19,7 +19,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .base import Location
 
@@ -205,9 +205,12 @@ def buttons_for(request: RelayRequest) -> list[tuple[str, str]]:
 
 
 class RelayTable:
-    def __init__(self, *, clock=time.monotonic) -> None:
+    def __init__(self, *, clock=time.monotonic,
+                 on_expired: Callable[[RelayRequest], None] | None = None) -> None:
         self._clock = clock
         self._by_id: dict[str, RelayRequest] = {}
+        # Told of each request the TTL removed, so its chat prompt can be settled.
+        self._on_expired = on_expired
 
     def create(
         self, pane_id: str, kind: str, options: list[str], loc: Location, prompt: str = ""
@@ -238,11 +241,15 @@ class RelayTable:
             del self._by_id[req.id]
         return gone
 
-    def prune(self) -> None:
+    def prune(self) -> list[RelayRequest]:
+        """Drop the requests older than REQUEST_TTL_S; returns them."""
         cutoff = self._clock() - REQUEST_TTL_S
-        for rid, req in list(self._by_id.items()):
-            if req.created < cutoff:
-                del self._by_id[rid]
+        gone = [req for req in self._by_id.values() if req.created < cutoff]
+        for req in gone:
+            del self._by_id[req.id]
+            if self._on_expired is not None:
+                self._on_expired(req)
+        return gone
 
     def for_location(self, location_key: str) -> list[RelayRequest]:
         self.prune()
