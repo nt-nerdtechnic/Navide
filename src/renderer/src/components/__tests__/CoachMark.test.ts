@@ -382,4 +382,71 @@ describe('CoachMark', () => {
     await flushPromises()
     expect(stepId()).toBe('one')
   })
+
+  // H1: Esc closed the tour whatever else it was doing — closing the + menu,
+  // cancelling a rename, an IME composition. It now counts as Skip only for a
+  // visible bubble, when nothing else took it.
+  describe('Esc', () => {
+    function esc(init: KeyboardEventInit = {}, target: EventTarget = document.body): KeyboardEvent {
+      const e = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init })
+      target.dispatchEvent(e)
+      return e
+    }
+
+    it('is left alone once another handler took it', async () => {
+      addTarget('a')
+      const w = start()
+      await tick()
+      const taker = (e: KeyboardEvent): void => e.preventDefault()
+      document.body.addEventListener('keydown', taker)
+      esc()
+      document.body.removeEventListener('keydown', taker)
+      expect(w.emitted('finish')).toBeUndefined()
+    })
+
+    it('is left alone while an input method is composing', async () => {
+      addTarget('a')
+      const w = start()
+      await tick()
+      esc({ isComposing: true })
+      esc({ keyCode: 229 } as KeyboardEventInit)
+      expect(w.emitted('finish')).toBeUndefined()
+    })
+
+    it('is left alone while the focus is in a text field (a rename, a search)', async () => {
+      addTarget('a')
+      const input = document.createElement('input')
+      document.body.append(input)
+      const w = start()
+      await tick()
+      input.focus()
+      esc({}, input)
+      expect(w.emitted('finish')).toBeUndefined()
+    })
+
+    it('is left alone while the bubble is out of the way', async () => {
+      const a = addTarget('a')
+      const w = start()
+      await tick()
+      a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
+      await flushPromises()
+      esc()
+      expect(w.emitted('finish')).toBeUndefined()
+    })
+
+    it('is left alone while there is no bubble on screen at all', async () => {
+      const w = start()
+      await tick()
+      esc()
+      expect(w.emitted('finish')).toBeUndefined()
+    })
+
+    it('still skips the tour from a visible bubble when nothing else took it', async () => {
+      addTarget('a')
+      const w = start()
+      await tick()
+      esc()
+      expect(w.emitted('finish')).toEqual([[false]])
+    })
+  })
 })

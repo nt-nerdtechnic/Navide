@@ -168,10 +168,14 @@ function onPointerdown(e: PointerEvent | MouseEvent): void {
   }, COACH_ASIDE_MS)
 }
 
+// Esc is Skip only from a bubble on screen, and only when nothing else had a
+// use for it: a menu or a rename that closed on it, an input method composing,
+// a text field or a terminal (where Esc belongs to the CLI) holding the focus.
 function onKeydown(e: KeyboardEvent): void {
-  if (props.suspended || e.key !== 'Escape') return
+  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.keyCode === 229) return
+  if (!bubbleVisible.value) return
   const focus = document.activeElement
-  if (focus instanceof Element && focus.closest('.xterm')) return
+  if (focus instanceof Element && focus.closest('.xterm, input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return
   end(false)
 }
 
@@ -197,6 +201,8 @@ const BUBBLE_H = 140
 
 // A replay's bubble whose control is not on screen sits in the middle.
 const centred = computed(() => props.replay && !rect.value)
+/** Whether a bubble is on screen right now. */
+const bubbleVisible = computed(() => !props.suspended && !!step.value && !aside.value && (!!rect.value || centred.value))
 
 const ringStyle = computed((): Record<string, string> => {
   const r = rect.value
