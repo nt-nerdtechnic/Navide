@@ -1005,9 +1005,59 @@ class TestScripts:
         )
         assert "\n" not in command
         assert "if (-not $PORT) { exit 0 }" in command
-        assert "$BODY = & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 1860 -X POST" in command
-        assert command.endswith(
-            "if ($BODY) { [Console]::Error.WriteLine($BODY); exit 2 }; exit 0"
+        assert "& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m 1860 -o $TMP -X POST" in command
+        assert command.endswith("exit 2 }; exit 0")
+
+    def test_windows_rewake_hands_the_body_over_as_one_utf8_string(self):
+        """#147: PowerShell captures a multi-line curl output as object[], and
+        `[Console]::Error.WriteLine` printed that as `System.Object[]`; it also
+        decodes curl's UTF-8 with the console code page (cp950 on zh-TW), which
+        turned CJK into `?`. The body goes through a temp file read back as
+        UTF-8 and leaves as UTF-8 bytes on the raw stderr stream."""
+        from agent_team_backend.osplat import _windows
+
+        command = _windows.scripts.hook_rewake(
+            port_file="p", header_file="h", url_path="/hooks/claude/rewake", timeout_s=1860
+        )
+        assert "$BODY = &" not in command
+        assert "[Console]::Error.WriteLine" not in command
+        assert "[IO.File]::ReadAllLines($TMP, [Text.Encoding]::UTF8)" in command
+        assert "($BODY -join [Environment]::NewLine)" in command
+        assert "[Text.Encoding]::UTF8.GetBytes(" in command
+        assert "[Console]::OpenStandardError()" in command
+        # Setting the console's encoding and restoring it afterwards still left
+        # the parent console on 65001 when two hooks interleaved or one was
+        # killed mid-wait (#147), so the hook never touches it.
+        assert "OutputEncoding" not in command
+        assert "Remove-Item -LiteralPath $TMP" in command
+        # No temp file, no wakeup to deliver; a blank body wakes nobody.
+        assert "if (-not $TMP) { exit 0 }" in command
+        assert "if (($BODY -join '').Trim()) {" in command
+
+    def test_posix_rewake_keeps_the_exact_command_text(self, monkeypatch):
+        # #147 is a Windows fix; every installed POSIX settings.json holds this
+        # text and a changed one would rewrite them all on the next start.
+        from agent_team_backend.osplat import _posix_paths
+
+        monkeypatch.setattr(_posix_paths, "resolve_program", lambda name, *, path=None: "/usr/bin/curl")
+        command = _posix_paths.scripts.hook_rewake(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/claude/rewake",
+            timeout_s=1860,
+        )
+        assert command == (
+            "PORT=$(cat /tmp/navide.port 2>/dev/null); "
+            '[ -n "$PORT" ] || exit 0\n'
+            "BODY=$(curl -fsS -m 1860 -X POST "
+            "-H 'Content-Type: application/json' "
+            "-H 'X-Agent-Team-Event: rewake' "
+            "-H @/tmp/hook.header "
+            "--data-binary @- "
+            '"http://127.0.0.1:$PORT/hooks/claude/rewake" || true)\n'
+            '[ -n "$BODY" ] || exit 0\n'
+            "printf '%s\\n' \"$BODY\" >&2\n"
+            "exit 2"
         )
 
     def test_posix_confirm_then_run_asks_before_running(self):

@@ -9,7 +9,7 @@ import psutil
 import pytest
 
 from agent_team_backend import osplat
-from agent_team_backend.claude_hooks import _build_curl_command
+from agent_team_backend.claude_hooks import _build_curl_command, _build_rewake_command
 from tests import hook_shell
 
 
@@ -128,6 +128,55 @@ def test_qwens_stop_hook_keeps_discarding_the_response(tmp_path) -> None:
     _received, stdout = _run_hook(tmp_path, "stop", b'{"ok":true}', endpoint="qwen")
 
     assert stdout == ""
+
+
+def _run_rewake(tmp_path, body: bytes) -> subprocess.CompletedProcess[str]:
+    """Run the installed rewake waiter against a one-shot server answering `body`."""
+    port_file = tmp_path / "backend.port"
+    argv = hook_shell.shell_argv(osplat.scripts.hook_entry(_build_rewake_command(str(port_file))))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = 45
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    port_file.write_text(str(server.server_port), encoding="utf-8")
+    try:
+        return _run_to_completion(argv, '{"hook_event_name":"Stop"}', timeout=45)
+    finally:
+        thread.join(timeout=46)
+        server.server_close()
+
+
+def test_rewake_delivers_a_multiline_non_ascii_body_intact(tmp_path) -> None:
+    """#147: on Windows a multi-line body reached the agent as `System.Object[]`
+    and CJK as `?`, while the sender saw `delivered`. The envelope Navide sends
+    always has a header line, so multi-line is the normal case."""
+    message = "[Navide MSG] from: 指揮\n請修正 #147：多行中文、日本語、한국어 🚀\n第三行"
+
+    result = _run_rewake(tmp_path, message.encode("utf-8"))
+
+    assert result.returncode == 2
+    assert "System.Object[]" not in result.stderr
+    assert result.stderr.replace("\r\n", "\n") == message + "\n"
+
+
+def test_rewake_with_a_blank_body_wakes_nobody(tmp_path) -> None:
+    result = _run_rewake(tmp_path, b"\n\n")
+
+    assert result.returncode == 0
+    assert result.stderr == ""
 
 
 def test_without_curl_the_hook_still_delivers_and_prints_the_decision(tmp_path, monkeypatch) -> None:
@@ -309,4 +358,4 @@ def test_a_windows_install_writes_powershell_and_says_so(tmp_path, monkeypatch) 
 
     rewake = [h for h in entries if h.get("asyncRewake")]
     assert rewake, "the rewake waiter was not installed"
-    assert "[Console]::Error.WriteLine($BODY); exit 2" in rewake[0]["command"]
+    assert "[Console]::OpenStandardError()" in rewake[0]["command"]

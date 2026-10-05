@@ -1552,16 +1552,31 @@ class WindowsScripts:
     def hook_rewake(
         self, *, port_file: str, header_file: str, url_path: str, timeout_s: int
     ) -> str:
+        # The body never passes through PowerShell's native-output capture:
+        # that splits a multi-line body into object[] (which WriteLine printed
+        # as `System.Object[]`) and decodes it with the console code page, so
+        # CJK came out as `?` on a cp950 box (#147). curl writes it to a temp
+        # file, it is read back as UTF-8 and written to stderr as UTF-8 bytes.
+        # [Console]::OutputEncoding is left alone: set and restored, it still
+        # left the parent console on 65001 when two hooks interleaved or one
+        # was killed mid-wait.
         return (
             f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
             f"if (-not $PORT) {{ exit 0 }}; "
-            f"$BODY = & ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} -X POST "
+            f"$TMP = $null; try {{ $TMP = [IO.Path]::GetTempFileName() }} catch {{}}; "
+            f"if (-not $TMP) {{ exit 0 }}; "
+            f"& ($env:SystemRoot + '\\System32\\curl.exe') -fsS -m {timeout_s} -o $TMP -X POST "
             f"-H 'Content-Type: application/json' "
             f"-H 'X-Agent-Team-Event: rewake' "
             f"-H {_ps_quote('@' + header_file)} "
             f"--data-binary '@-' "
             f'"http://127.0.0.1:$PORT{url_path}" 2>$null; '
-            f"if ($BODY) {{ [Console]::Error.WriteLine($BODY); exit 2 }}; exit 0"
+            f"$BODY = $null; try {{ $BODY = [IO.File]::ReadAllLines($TMP, [Text.Encoding]::UTF8) }} catch {{}}; "
+            f"Remove-Item -LiteralPath $TMP -Force -ErrorAction SilentlyContinue; "
+            f"if (($BODY -join '').Trim()) {{ "
+            f"$ERRB = [Text.Encoding]::UTF8.GetBytes(($BODY -join [Environment]::NewLine) + [Environment]::NewLine); "
+            f"$ERRS = [Console]::OpenStandardError(); $ERRS.Write($ERRB, 0, $ERRB.Length); $ERRS.Flush(); "
+            f"exit 2 }}; exit 0"
         )
 
     def confirm_then_run(self, description: str, command: str) -> str:
