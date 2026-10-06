@@ -1581,6 +1581,7 @@ class ChannelManager:
             menu.message_id = await adapter.send_menu(binding.location(), redact.redact_text(body), rows)
         except Exception as exc:  # noqa: BLE001
             log.warning("channels: sending the quick menu on %s failed: %s", msg.platform, exc)
+            await self._reply(msg, quick_menu.text(lang, "send_failed", error=redact.redact_text(str(exc))))
 
     async def _quick_press(self, msg: InboundMessage) -> None:
         settings = await self._ui_settings()
@@ -1626,6 +1627,8 @@ class ChannelManager:
                 menu.message_id = await adapter.send_menu(loc, body, rows)
             except Exception as exc2:  # noqa: BLE001
                 log.warning("channels: sending the quick menu on %s failed: %s", msg.platform, exc2)
+                await self._reply(msg, quick_menu.text(menu.lang, "send_failed",
+                                                       error=redact.redact_text(str(exc2))))
 
     async def _watch_delivery(self, pane_id: str, msg_key: str, pending: _Pending) -> None:
         adapter = self._adapters.get((pending.loc.platform, pending.loc.account))

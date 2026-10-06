@@ -147,3 +147,21 @@ async def test_menu_for_another_bot_is_ignored(env: Env) -> None:
     assert env.tg.menus == []
     await env.inbound("/menu@navide_bot")
     assert len(env.tg.menus) == 1
+
+
+async def test_a_menu_the_platform_refuses_is_answered_with_why(env: Env) -> None:
+    env.fake.settings = {"prompt-skills": SAVED}
+    env.tg.fail_menus = True
+    await env.inbound("/menu")
+    assert env.tg.menus == []
+    assert env.tg.texts()[-1] == qm.text("zh-TW", "send_failed", error="Bad Request: BUTTON_DATA_INVALID")
+
+
+async def test_a_page_that_can_be_neither_edited_nor_resent_is_answered_with_why(env: Env) -> None:
+    env.fake.settings = {"prompt-skills": [{"id": f"p{i}", "name": f"P{i}", "prompt": f"do {i}"} for i in range(25)]}
+    await env.inbound("/menu")
+    env.tg.fail_edits = True
+    env.tg.fail_menus = True
+    await env.inbound("", callback=_press_data(env, "▶"))
+    assert len(env.tg.menus) == 1
+    assert env.tg.texts()[-1] == qm.text("zh-TW", "send_failed", error="Bad Request: BUTTON_DATA_INVALID")

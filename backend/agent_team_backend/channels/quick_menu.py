@@ -79,6 +79,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "expired": "⚠️ 這個選單已過期，請重新傳 /menu",
         "gone": "⚠️「{name}」已不存在或已停用，請重新傳 /menu",
         "sent": "▶ 已送出：{name}",
+        "send_failed": "⚠️ 無法顯示快捷選單：{error}",
     },
     "en-US": {
         "title": "⚡ Quick menu · pane \"{pane}\"",
@@ -93,6 +94,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "expired": "⚠️ This menu has expired. Send /menu again",
         "gone": "⚠️ \"{name}\" no longer exists or is turned off. Send /menu again",
         "sent": "▶ Sent: {name}",
+        "send_failed": "⚠️ The quick menu could not be shown: {error}",
     },
     "ja-JP": {
         "title": "⚡ クイックメニュー · pane「{pane}」",
@@ -107,6 +109,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "expired": "⚠️ このメニューは期限切れです。もう一度 /menu を送ってください",
         "gone": "⚠️「{name}」は存在しないか無効になっています。もう一度 /menu を送ってください",
         "sent": "▶ 送信しました：{name}",
+        "send_failed": "⚠️ クイックメニューを表示できませんでした：{error}",
     },
 }
 DEFAULT_LANGUAGE = "zh-TW"

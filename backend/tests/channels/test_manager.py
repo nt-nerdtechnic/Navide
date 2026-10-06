@@ -65,6 +65,8 @@ class FakeAdapter:
         self.edits.append((message_id, text))
 
     async def send_menu(self, loc: Location, text: str, rows: list) -> str:
+        if getattr(self, "fail_menus", False):
+            raise RuntimeError("Bad Request: BUTTON_DATA_INVALID")
         self.menus.append((loc, text, rows))
         return f"menu{len(self.menus)}"
 
