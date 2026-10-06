@@ -1700,8 +1700,9 @@ class TerminalService:
         if raw:
             self._absorb_output(session, b"".join(raw), nbytes)
         if close_reason is not None:
-            if close_reason == "exit" and session.pending_close_reason:
-                close_reason = session.pending_close_reason
+            pending = getattr(session, "pending_close_reason", None)
+            if close_reason == "exit" and pending:
+                close_reason = pending
             self._close(session, reason=close_reason)
 
     def _absorb_output(
