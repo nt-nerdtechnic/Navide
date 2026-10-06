@@ -215,7 +215,7 @@ pnpm test:infrastructure
 pnpm test:frontend
 pnpm build
 pnpm test:artifacts:ci
-uv --project backend run --locked pytest backend/tests --junitxml=test-results/ci/backend.xml --durations=30 --collection-report=test-results/ci/backend-collection.json
+uv --project backend run --locked pytest backend/tests --timeout=120 -o faulthandler_timeout=180 --junitxml=test-results/ci/backend.xml --durations=30 --collection-report=test-results/ci/backend-collection.json
 ```
 
 `pnpm test:run` remains the complete Vitest entrypoint. For a focused contract
