@@ -8260,6 +8260,8 @@ async def terminal_kill_surface(session: "Session", msg_id: str, msg_type: str, 
 
     surface = str(payload.get("surface") or "")
     ended: dict[str, str] = {}  # pane id -> workspace its panel ran in
+    # Panels whose kill raised: still running, so the caller is told which.
+    failed: list[dict[str, str]] = []
     for term_session_id, pane_id, workspace_path in session.terminals.live_ids_for_surface(
         surface, str(payload.get("workspace_path") or "")
     ):
@@ -8267,8 +8269,10 @@ async def terminal_kill_surface(session: "Session", msg_id: str, msg_type: str, 
         # session that names the surface is known to be a panel.
         try:
             await session.terminals.kill(term_session_id, force=True)
-        except Exception:  # noqa: BLE001 — one panel's failed kill must not leave the rest running
+        except Exception as exc:  # noqa: BLE001 — one panel's failed kill must not leave the rest running
             log.exception("terminal.kill_surface: killing %s (%s) failed", term_session_id, pane_id)
+            failed.append({"pane_id": pane_id, "terminal_session_id": term_session_id,
+                           "error": str(exc) or type(exc).__name__})
             continue
         app._PTY_OWNERS.pop(term_session_id, None)
         app.attribution.unregister_pane(pane_id)
@@ -8291,7 +8295,9 @@ async def terminal_kill_surface(session: "Session", msg_id: str, msg_type: str, 
                 app.project_store.record_manual_pane_unspawn(workspace_path, pane_id=pane_id)
         except Exception:  # noqa: BLE001 — the PTY is down; a lost record update must not fail the close
             log.exception("terminal.kill_surface: retiring %s in %s failed", pane_id, workspace_path)
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pane_ids": list(ended)}))
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "pane_ids": list(ended), "failed": failed})
+    )
 
 
 @handler("terminal.dock_record")

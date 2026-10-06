@@ -15040,6 +15040,38 @@ describe('FrontendPluginManager — ending a closed window\'s AI panels', () => 
     expect(() => mgr.endDockSurface('plans', '/ws/a')).not.toThrow()
   })
 
+  it('warns about panels the backend could not end', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const mgr = new FrontendPluginManager()
+      mgr.setBackendWsUrl('ws://dock-close-failed-test')
+      mgr.endDockSurface('git', '/ws/a')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const request = socket.sent
+        .map((raw) => JSON.parse(raw) as { id: string; type: string })
+        .find((sent) => sent.type === 'terminal.kill_surface')!
+      socket.receive({
+        id: request.id,
+        type: 'terminal.kill_surface',
+        ok: true,
+        payload: {
+          ok: true,
+          pane_ids: ['git-b'],
+          failed: [{ pane_id: 'git-a', terminal_session_id: 't-git-a', error: 'kill failed' }],
+        },
+        error: null,
+        timestamp: '',
+      })
+      await vi.waitFor(() => {
+        expect(warn.mock.calls.map((call) => String(call[0])).join('\n'))
+          .toContain('git-a (t-git-a): kill failed')
+      })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   // Removing a built-in plugin with nothing to take over ends its panels: their
   // PTYs are not in the AI-session ledger, so no other removal step reaches them.
   it('ends the panels of a removed built-in plugin that no fallback replaces', () => {

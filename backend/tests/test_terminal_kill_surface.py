@@ -262,4 +262,8 @@ async def test_one_failing_kill_does_not_stop_the_others(tmp_path: Path, store: 
     assert reply["type"] == "terminal.kill_surface.result"
     assert reply["payload"]["pane_ids"] == ["git-b"]
     assert terminals.killed == ["t-git-b"]
+    # The caller learns which panel is still running, and why.
+    assert reply["payload"]["failed"] == [
+        {"pane_id": "git-a", "terminal_session_id": "t-git-a", "error": "kill failed"}
+    ]
     assert [p.spawn_status for p in store.load_or_create(ws_b).panes] == ["removed"]

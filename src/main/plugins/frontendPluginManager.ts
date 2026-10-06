@@ -7686,7 +7686,19 @@ export class FrontendPluginManager {
     if (this.appQuitting()) return
     const client = this.ensureBackend()
     if (!client) return
-    void client.send('terminal.kill_surface', { surface, workspace_path: workspacePath }).catch((error) => {
+    void client.send('terminal.kill_surface', { surface, workspace_path: workspacePath }).then((response) => {
+      // A panel whose kill failed is still running; nothing here can retry it,
+      // but the log says which one outlived its window.
+      const failed = toPayload(response.payload).failed
+      if (!Array.isArray(failed)) return
+      for (const entry of failed) {
+        const item = toPayload(entry)
+        warnMain(
+          `[plugins] terminal.kill_surface for ${surface} could not end panel ` +
+          `${String(item.pane_id)} (${String(item.terminal_session_id)}): ${String(item.error)}`,
+        )
+      }
+    }, (error) => {
       // Nothing to undo: the panels linger until the backend's ownerless sweep.
       console.warn(`[plugins] terminal.kill_surface for ${surface} failed`, error)
     })
