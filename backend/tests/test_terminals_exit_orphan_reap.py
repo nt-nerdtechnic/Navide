@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import terminals
+from agent_team_backend import osplat, terminals
 from agent_team_backend.osplat import _posix
 from agent_team_backend.terminals import (
     TerminalService,
@@ -302,11 +302,12 @@ class _NotYetReapable:
 
 
 def _end(pid: int) -> None:
-    """Put the real child down: SIGTERM, or TerminateProcess on Windows."""
+    """Put the real child down through the platform seam (SIGKILL, or
+    TerminateProcess on Windows)."""
     try:
-        os.kill(pid, signal.SIGTERM)
+        osplat.process_tree.kill(pid, force=True)
     except OSError:
-        pass  # already gone (closing its PTY may have ended it)
+        pass  # already gone: closing its PTY (HUP, or the job on Windows) may have ended it
 
 
 async def _until(predicate: Any, timeout: float = 5.0) -> bool:
