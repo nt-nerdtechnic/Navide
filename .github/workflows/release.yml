@@ -78,6 +78,10 @@ jobs:
         run: pnpm release:check "${GITHUB_REF_NAME}"
 
       - name: Run release gates
+        env:
+          # vue-tsc on tsconfig.web.json outgrew Node's default ~2 GB heap and
+          # aborted here (OOM, exit 134); CI's test jobs already run with 4 GB.
+          NODE_OPTIONS: "--max-old-space-size=4096"
         run: |
           uv --project backend run ruff check backend
           pnpm typecheck
