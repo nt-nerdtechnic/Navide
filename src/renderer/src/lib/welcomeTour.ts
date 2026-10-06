@@ -134,8 +134,9 @@ export function welcomeActionAlreadyDone(action: WelcomeAction, f: WelcomeFacts)
 
 export type WelcomeTourMove = 'stop' | 'wait' | 'release' | 'cancel' | 'check' | 'mark-eligible' | 'start'
 
-/** Where the first-install check stands this session. */
-export type WelcomeTourDecision = 'unchecked' | 'checking' | 'first-install' | 'not-first-install'
+/** Where the first-install check stands this session. `gave-up`: every try
+ *  failed, so this session leaves the tour alone and the next launch asks again. */
+export type WelcomeTourDecision = 'unchecked' | 'checking' | 'first-install' | 'not-first-install' | 'gave-up'
 
 /**
  * Whether this is a first install, judged by the window as the check began:
@@ -164,8 +165,9 @@ const WELCOME_RECORD_BACKOFF_MS = [2_000, 5_000]
 /**
  * Ask for the recent-workspace list and judge "first install" from it (see
  * isFirstInstall), retrying a failed or thrown answer with a growing wait. One
- * slow launch-time request must not call the tour off for good: only when every
- * try fails is it given up on — safely, as "not a first install" — and logged.
+ * slow launch-time request must not call the tour off for good: when every try
+ * fails it is given up on, logged and left unanswered (`unchecked`), so the
+ * tour stays due and the next launch asks again.
  * The window is judged as the first try began, however late the answer.
  */
 export async function decideFirstInstall(s: {
@@ -174,7 +176,7 @@ export async function decideFirstInstall(s: {
   fetchRecents: () => Promise<{ ok: boolean; recent?: { last_opened_at?: string }[] }>
   sleep: (ms: number) => Promise<void>
   warn: (message: string) => void
-}): Promise<'first-install' | 'not-first-install'> {
+}): Promise<'first-install' | 'not-first-install' | 'unchecked'> {
   for (let attempt = 1; ; attempt++) {
     try {
       const resp = await s.fetchRecents()
@@ -191,8 +193,8 @@ export async function decideFirstInstall(s: {
       // Retried below, like a refused answer.
     }
     if (attempt >= WELCOME_RECORD_TRIES) {
-      s.warn(`[welcome-tour] the recent-workspace list failed ${attempt} times; leaving the first-run tour off`)
-      return 'not-first-install'
+      s.warn(`[welcome-tour] the recent-workspace list failed ${attempt} times; leaving the first-run tour for the next launch`)
+      return 'unchecked'
     }
     await s.sleep(WELCOME_RECORD_BACKOFF_MS[attempt - 1] ?? WELCOME_RECORD_BACKOFF_MS.at(-1)!)
   }
@@ -231,6 +233,8 @@ export function nextWelcomeTourMove(s: {
         return 'mark-eligible'
       case 'not-first-install':
         return 'cancel'
+      case 'gave-up':
+        return 'stop'
     }
   }
   return s.blocked ? 'wait' : 'start'

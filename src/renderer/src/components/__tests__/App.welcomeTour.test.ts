@@ -57,6 +57,8 @@ describe('first-run welcome tour', () => {
     expect(check).toContain('decideFirstInstall({')
     expect(check).toContain("backend.send<{ recent?: { last_opened_at?: string }[] }>('workspace.list_recent', {})")
     expect(check).toContain('warn: (message) => console.warn(message)')
+    // L2: a check that gave up is not asked again this session, and writes nothing.
+    expect(check).toContain("welcomeTourDecision = decision === 'unchecked' ? 'gave-up' : decision")
   })
 
   it('routes Help → First-Run Tour… to the replay', () => {

@@ -249,6 +249,9 @@ describe('nextWelcomeTourMove', () => {
   it('keeps the answer: eligible, or the tour called off', () => {
     expect(nextWelcomeTourMove({ ...base, blocked: true, decision: 'first-install' })).toBe('mark-eligible')
     expect(nextWelcomeTourMove({ ...base, decision: 'not-first-install' })).toBe('cancel')
+    // L2: a check that gave up stops this session's poll without cancelling.
+    expect(nextWelcomeTourMove({ ...base, decision: 'gave-up' })).toBe('stop')
+    expect(nextWelcomeTourMove({ ...base, eligible: true, decision: 'gave-up' })).toBe('start')
   })
 
   it('once eligible, only waits for a clear screen — nothing opened since counts against it', () => {
@@ -327,9 +330,11 @@ describe('decideFirstInstall', () => {
     expect(r.warnings).toEqual([])
   })
 
-  it('gives up, logging it, only after every try failed', async () => {
+  // L2: giving up is not an answer — the tour stays due and the next launch
+  // asks again, rather than calling it off for good.
+  it('gives up, logging it, only after every try failed, leaving the question open', async () => {
     const r = run([new Error('timeout')])
-    expect(await r.result).toBe('not-first-install')
+    expect(await r.result).toBe('unchecked')
     expect(r.calls()).toBe(WELCOME_RECORD_TRIES)
     expect(r.warnings).toHaveLength(1)
   })

@@ -705,7 +705,7 @@ async function checkWelcomeTourRecords(): Promise<void> {
   welcomeTourDecision = 'checking'
   // The window as the check begins: the recent list can take a while at
   // launch, and a folder picked meanwhile must not count against the person.
-  welcomeTourDecision = await decideFirstInstall({
+  const decision = await decideFirstInstall({
     workspaceOpenAtStart: workspaceSelected.value,
     checkStartedAt: Date.now(),
     fetchRecents: async () => {
@@ -715,6 +715,9 @@ async function checkWelcomeTourRecords(): Promise<void> {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     warn: (message) => console.warn(message),
   })
+  // No answer: not asked again this session, and nothing written, so the
+  // next launch decides.
+  welcomeTourDecision = decision === 'unchecked' ? 'gave-up' : decision
 }
 // The tour is for a first install only, and any workspace record means this
 // is not one: one open already (a restored window), or one in the recent
