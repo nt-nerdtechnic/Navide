@@ -750,8 +750,12 @@ class TerminalService:
 
     async def _drain_lifecycle(self) -> None:
         """Wait for registry work that could still touch the shared database."""
-        while self._lifecycle_futures:
-            await asyncio.gather(*tuple(self._lifecycle_futures), return_exceptions=True)
+        # Only the unfinished ones: a finished write stays in the set until its
+        # discard callback runs, and gather() over futures that are all done
+        # completes without yielding (Python 3.12), so re-gathering it would
+        # spin without ever letting that callback run.
+        while pending := [f for f in self._lifecycle_futures if not f.done()]:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def get(self, session_id: str) -> TerminalSession | None:
         """The session for ``session_id``, or None when unknown."""
