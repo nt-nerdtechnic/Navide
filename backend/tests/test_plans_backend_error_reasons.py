@@ -101,23 +101,46 @@ def test_a_write_the_guard_refuses_is_a_scope_violation(
 
 
 def test_a_write_failure_is_classified_without_matching_its_message(capsys: pytest.CaptureFixture[str]) -> None:
-    limit = plans_backend._WRITE_SIZE_LIMIT
-    # An error that merely says "too large" is not a size refusal.
-    failure = plans_backend._write_failure(
-        {"ok": False, "error": "part too large"}, rel_path=".agent-team/plans/a.html", size=10
-    )
-    assert failure.code == "BACKEND_UNAVAILABLE"
-    # Content past the write limit is a resource limit, not a result too large.
-    failure = plans_backend._write_failure(
-        {"ok": False, "error": "content too large (51200 KB; limit 50 MB)"},
-        rel_path=".agent-team/plans/a.html",
-        size=limit + 1,
-    )
-    assert failure.code == "RESOURCE_LIMIT"
-    conflict = plans_backend._write_failure({"ok": False, "conflict": True}, rel_path="x", size=1)
+    # Neither a message that says "too large" nor the size of the content
+    # makes a failure a resource limit: Plans writes have no size cap.
+    for error in ("part too large", "content too large (51200 KB; limit 50 MB)"):
+        failure = plans_backend._write_failure({"ok": False, "error": error}, rel_path=".agent-team/plans/a.html")
+        assert failure.code == "BACKEND_UNAVAILABLE"
+    conflict = plans_backend._write_failure({"ok": False, "conflict": True}, rel_path="x")
     assert conflict.code == "CONFLICT"
     err = capsys.readouterr().err
     assert "part too large" in err and "content too large" in err
+
+
+def _cap_write_limit(monkeypatch: pytest.MonkeyPatch, limit: int) -> None:
+    # Stand in for a document past the 50 MB write limit without writing one.
+    from agent_team_backend import fs_write
+
+    monkeypatch.setattr(fs_write, "_WRITE_SIZE_LIMIT", limit)
+    monkeypatch.setattr(plans_backend, "_WRITE_SIZE_LIMIT", limit, raising=False)
+
+
+def test_a_staged_write_past_the_size_limit_that_fails_is_not_a_resource_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _workspace(tmp_path)
+    _cap_write_limit(monkeypatch, 1024)
+    monkeypatch.setattr(
+        plans_backend, "write_part", lambda *args, **kwargs: {"ok": False, "error": "[Errno 28] No space left on device"}
+    )
+    monkeypatch.setattr(plans_backend, "write_abort", lambda *args, **kwargs: {"ok": True})
+    content = "x" * (plans_backend.SINGLE_WRITE_MAX_BYTES + 1)
+    code = _code(lambda: plans_backend._write(_origin(root), ".agent-team/plans/big_aaaaaa.html", content))
+    assert code == "BACKEND_UNAVAILABLE"
+    assert "No space left on device" in capsys.readouterr().err
+
+
+def test_a_write_past_the_size_limit_is_staged_not_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _workspace(tmp_path)
+    _cap_write_limit(monkeypatch, 1024)
+    content = "y" * (plans_backend.SINGLE_WRITE_MAX_BYTES + 1)
+    plans_backend._write(_origin(root), ".agent-team/plans/big_bbbbbb.html", content)
+    assert (root / ".agent-team" / "plans" / "big_bbbbbb.html").read_text(encoding="utf-8") == content
 
 
 # ── M3: a plan directory that cannot be read is reported, not dropped ───────

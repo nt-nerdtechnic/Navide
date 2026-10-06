@@ -28,7 +28,6 @@ from typing import Any
 import yaml
 from agent_team_backend.fs_write import (
     _WRITE_PART_MAX_BYTES,
-    _WRITE_SIZE_LIMIT,
     _resolve_mutation_safe,
     write_abort,
     write_commit,
@@ -686,18 +685,15 @@ def _read_text_chunk(origin: dict[str, Any], rel_path: str, offset: int) -> dict
     }
 
 
-def _write_failure(result: Any, *, rel_path: str | None = None, size: int | None = None) -> BridgeFailure:
+def _write_failure(result: Any, *, rel_path: str | None = None) -> BridgeFailure:
     """The failure the Host's filesystem service reported for a write.
 
-    Classified from the write itself, never from the wording of its message:
-    content past the write limit is a resource limit.
+    Classified from the write itself, never from the wording of its message.
     """
     if _is_record(result) and result.get("conflict") is True:
         return BridgeFailure("CONFLICT")
     reason = result.get("error") if _is_record(result) else None
     _log(f"write {rel_path}: {reason if isinstance(reason, str) else 'malformed write result'}")
-    if size is not None and size > _WRITE_SIZE_LIMIT:
-        return BridgeFailure("RESOURCE_LIMIT")
     return BridgeFailure("BACKEND_UNAVAILABLE")
 
 
@@ -708,6 +704,9 @@ def _write(origin: dict[str, Any], rel_path: str, content: str, expected_mtime: 
     atomic replace, and the ``expected_mtime`` conflict check. A document past
     SINGLE_WRITE_MAX_BYTES is staged in parts and swapped in, as before.
     """
+    # Plans writes deliberately have no size cap (user decision 2026-09-29:
+    # plans are never skipped or capped), which is why a large document goes
+    # through the staged path, and why no failure here is a size limit.
     root = _plan_root(origin)
     try:
         _resolve_mutation_safe(root, rel_path)
@@ -720,7 +719,7 @@ def _write(origin: dict[str, Any], rel_path: str, content: str, expected_mtime: 
     else:
         result = write_file(root, rel_path, content, expected_mtime=expected_mtime)
     if not _is_record(result) or result.get("ok") is not True:
-        raise _write_failure(result, rel_path=rel_path, size=len(data))
+        raise _write_failure(result, rel_path=rel_path)
     mtime = result.get("mtime")
     return float(mtime) if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else None
 
