@@ -130,8 +130,9 @@ async def test_snapshot_loop_persists_descendants_to_registry(monkeypatch):
     # runner itself). Stub the kill; the sweep is not what this test is about.
     monkeypatch.setattr(terminals, "_kill_breakaway", lambda pids: None)
     try:
-        await asyncio.sleep(0.2)  # first snapshot tick runs on the fake table
-        assert persisted and persisted[-1] == {pid: {900: "L900"}}
+        # The first snapshot tick runs on the fake table: a ps read off the
+        # loop, then a registry write. Wait for the write, not a fixed time.
+        assert await _until(lambda: persisted and persisted[-1] == {pid: {900: "L900"}}), persisted
     finally:
         await svc.kill_all(grace=0.3)
 
