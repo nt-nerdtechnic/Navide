@@ -236,7 +236,9 @@ def test_shards_partition_real_collection_without_omission(tmp_path):
 
 def test_failure_cleanup_reaps_a_tracked_orphan(tmp_path):
     backend = BackendProcess(tmp_path)
-    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    # The real interpreter: a Windows venv's python.exe is a launcher that runs
+    # it as a child, which track_child rightly adds to the owned tree.
+    child = subprocess.Popen([base_python_executable(), "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
     try:
         backend.track_child(child.pid)
         # Model a backend that has exited without reaping this known child.
@@ -263,7 +265,8 @@ def test_a_child_that_outlives_the_reap_window_is_still_reported(tmp_path):
     child, not merely the shell.
     """
     backend = BackendProcess(tmp_path)
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2)"])
+    # One process, not a venv launcher and its interpreter (see above).
+    child = subprocess.Popen([base_python_executable(), "-c", "import time; time.sleep(2)"])
     try:
         backend.track_child(child.pid)
         assert backend.process is None
