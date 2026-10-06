@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { findTourAnchor } from '../lib/tours'
 import {
-  COACH_ASIDE_MS,
   COACH_DONE_MS,
   COACH_MISSING_CENTRE_MS,
   COACH_MISSING_SKIP_MS,
@@ -33,9 +32,12 @@ import {
 // not on screen sits in the middle instead of waiting unseen. An action done
 // while a bubble is up still moves it on.
 //
-// Pressing the control a bubble points at — + opens its CLI menu right where
-// the bubble sits — steps the bubble aside (the ring stays) until the step is
-// done, or for COACH_ASIDE_MS if nothing comes of it.
+// From the moment a step comes up until it is judged done or the person
+// presses Skip, Next or Done, its bubble stays on screen: it is placed clear
+// of the control and of what the control opens (a menu, a popover), it keeps
+// its place while the control briefly goes, and only after
+// COACH_MISSING_CENTRE_MS without it moves to the middle. Only stepping aside
+// for a modal takes it away, and it is back the moment that closes.
 //
 // The last bubble never closes by itself, in either mode: its action — resting
 // the pointer on the quota badge — happens on the way to the bubble too, and
@@ -69,6 +71,9 @@ const isLast = computed(() => index.value === props.steps.length - 1)
 const enteredAt = ref(0)
 const doneShown = ref(false)
 const rect = ref<DOMRect | null>(null)
+// Where the bubble is placed from: the control, or where it last was while it
+// is briefly gone; null puts the bubble in the middle.
+const placeRect = ref<DOMRect | null>(null)
 const targetId = ref('')
 // What the control has opened (the step's `allow`), cut out of the mask too.
 const allowRects = ref<DOMRect[]>([])
@@ -84,14 +89,6 @@ const lost = ref(false)
 // The step's action was already done when it came up (a replay shows it
 // anyway): only Next moves it on, not the done-ness it arrived with.
 let doneAtEntry = false
-// The person is working the spotlit control: the bubble is out of the way.
-const aside = ref(false)
-let asideTimer: ReturnType<typeof setTimeout> | null = null
-function clearAside(): void {
-  if (asideTimer) clearTimeout(asideTimer)
-  asideTimer = null
-  aside.value = false
-}
 let ended = false
 
 function end(completed: boolean): void {
@@ -104,11 +101,11 @@ function enter(): void {
   if (doneTimer) clearTimeout(doneTimer)
   doneTimer = null
   doneShown.value = false
-  clearAside()
   missingSince = 0
   lost.value = false
   enteredAt.value = Date.now()
   rect.value = null
+  placeRect.value = null
   targetId.value = ''
   const current = step.value
   if (!current) {
@@ -148,6 +145,7 @@ function locate(): void {
   const el = findTourAnchor(current.anchor(props.facts()))
   if (el) {
     rect.value = el.getBoundingClientRect()
+    placeRect.value = rect.value
     targetId.value = el.id
     missingSince = 0
     lost.value = false
@@ -155,9 +153,11 @@ function locate(): void {
   }
   rect.value = null
   targetId.value = ''
-  if (doneShown.value || props.replay) return
   const now = Date.now()
   if (!missingSince) missingSince = now
+  // Briefly gone (a re-render, a move): the bubble keeps its place.
+  if (now - missingSince >= COACH_MISSING_CENTRE_MS) placeRect.value = null
+  if (doneShown.value || props.replay) return
   if (current.skipIfMissing) {
     if (now - missingSince >= COACH_MISSING_SKIP_MS) advance()
   } else if (now - missingSince >= COACH_MISSING_CENTRE_MS) {
@@ -179,18 +179,6 @@ watch(
   },
 )
 
-function onPointerdown(e: PointerEvent | MouseEvent): void {
-  const r = rect.value
-  if (props.suspended || ended || !r) return
-  if (e.clientX < r.left - PAD || e.clientX > r.right + PAD || e.clientY < r.top - PAD || e.clientY > r.bottom + PAD) return
-  clearAside()
-  aside.value = true
-  asideTimer = setTimeout(() => {
-    asideTimer = null
-    aside.value = false
-  }, COACH_ASIDE_MS)
-}
-
 // Esc is Skip only from a bubble on screen, and only when nothing else had a
 // use for it: a menu or a rename that closed on it, an input method composing,
 // a text field or a terminal (where Esc belongs to the CLI) holding the focus.
@@ -204,27 +192,24 @@ function onKeydown(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
-  window.addEventListener('pointerdown', onPointerdown, true)
   ticker = setInterval(locate, COACH_TICK_MS)
   enter()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
-  window.removeEventListener('pointerdown', onPointerdown, true)
   if (ticker) clearInterval(ticker)
-  clearAside()
   if (doneTimer) clearTimeout(doneTimer)
 })
 
 const PAD = 4
 const GAP = 10
 const BUBBLE_W = 280
-// A generous guess at the bubble's height: only used to decide above/below.
+// A generous guess at the bubble's height, for placing it.
 const BUBBLE_H = 140
 
-// A replay's bubble whose control is not on screen sits in the middle, and so
-// does a first-run bubble whose control stayed away (`lost`).
-const centred = computed(() => (props.replay || lost.value) && !rect.value)
+// A bubble with no control to sit beside — none yet, or gone for a while —
+// sits in the middle.
+const centred = computed(() => !placeRect.value)
 // The mask's holes, as x,y,width,height: the control (with the ring's padding)
 // and whatever it has opened.
 const holes = computed((): [number, number, number, number][] => {
@@ -245,7 +230,7 @@ const maskStyle = computed((): Record<string, string> => {
 })
 
 /** Whether a bubble is on screen right now. */
-const bubbleVisible = computed(() => !props.suspended && !!step.value && !aside.value && (!!rect.value || centred.value))
+const bubbleVisible = computed(() => !props.suspended && !!step.value)
 
 const ringStyle = computed((): Record<string, string> => {
   const r = rect.value
@@ -259,14 +244,31 @@ const ringStyle = computed((): Record<string, string> => {
   }
 })
 
+// Beside the control, clear of every hole — the control and what it opened —
+// so a menu the control opens is never under the bubble: below it, above it,
+// right of it, left of it, then a corner of the window.
 const bubbleStyle = computed((): Record<string, string> => {
-  const r = rect.value
+  const r = placeRect.value
   if (!r) return { pointerEvents: 'auto', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const left = Math.max(GAP, Math.min(r.left, vw - BUBBLE_W - GAP))
-  const below = r.bottom + PAD + GAP
-  const top = below + BUBBLE_H <= vh ? below : Math.max(GAP, r.top - PAD - GAP - BUBBLE_H)
+  const { width: vw, height: vh } = viewport.value
+  const w = BUBBLE_W
+  const h = BUBBLE_H
+  const x = (v: number): number => Math.max(GAP, Math.min(v, vw - w - GAP))
+  const y = (v: number): number => Math.max(GAP, Math.min(v, vh - h - GAP))
+  const spots: [number, number][] = [
+    [x(r.left), r.bottom + PAD + GAP],
+    [x(r.left), r.top - PAD - GAP - h],
+    [r.right + PAD + GAP, y(r.top)],
+    [r.left - PAD - GAP - w, y(r.top)],
+    [vw - w - GAP, vh - h - GAP],
+    [GAP, vh - h - GAP],
+    [vw - w - GAP, GAP],
+    [GAP, GAP],
+  ]
+  const fits = ([sx, sy]: [number, number]): boolean => sx >= GAP && sy >= GAP && sx + w <= vw - GAP && sy + h <= vh - GAP
+  const clear = ([sx, sy]: [number, number]): boolean =>
+    holes.value.every(([hx, hy, hw, hh]) => sx >= hx + hw || sx + w <= hx || sy >= hy + hh || sy + h <= hy)
+  const [left, top] = spots.find((p) => fits(p) && clear(p)) ?? spots.find(fits) ?? spots[0]
   return { pointerEvents: 'auto', top: `${top}px`, left: `${left}px` }
 })
 </script>
@@ -288,7 +290,6 @@ const bubbleStyle = computed((): Record<string, string> => {
       ></div>
       <div v-if="rect" class="coach-ring" data-testid="coach-ring" :data-target="targetId" :style="ringStyle"></div>
       <div
-        v-if="!aside && (rect || centred)"
         class="coach-bubble"
         :class="{ centred }"
         data-testid="coach-bubble"

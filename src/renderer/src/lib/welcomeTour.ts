@@ -98,9 +98,6 @@ export const COACH_MISSING_SKIP_MS = 3_000
 export const COACH_MISSING_CENTRE_MS = 2_000
 /** How often a bubble re-finds its control (it may move, appear or go). */
 export const COACH_TICK_MS = 250
-/** How long a bubble stays out of the way once the person presses the
- *  control it points at (a menu it opens would sit under the bubble). */
-export const COACH_ASIDE_MS = 15_000
 
 /** Whether a step's action happened since `since`. */
 export function welcomeActionDone(action: WelcomeAction, f: WelcomeFacts, since: number): boolean {

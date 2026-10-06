@@ -9,7 +9,6 @@ import { i18n } from '@navide/plugin-ui/foundation'
 
 import CoachMark from '../CoachMark.vue'
 import {
-  COACH_ASIDE_MS,
   COACH_DONE_MS,
   COACH_MISSING_CENTRE_MS,
   COACH_MISSING_SKIP_MS,
@@ -245,7 +244,9 @@ describe('CoachMark', () => {
     addTarget('b')
     const w = start()
     await tick()
-    expect(bubble()).toBeNull()
+    // Up at once, in the middle; it says the control is missing only after a while.
+    expect(stepId()).toBe('one')
+    expect(byTestId('coach-missing')).toBeNull()
     await tick(COACH_MISSING_CENTRE_MS)
     expect(stepId()).toBe('one')
     expect(bubble()!.classList.contains('centred')).toBe(true)
@@ -365,20 +366,81 @@ describe('CoachMark', () => {
     expect(coach).toBeLessThan(120)
   })
 
-  // Pressing + opens the CLI menu right where the bubble sits (below +). Once
-  // the person acts on the control, the bubble gets out of the way.
-  it('steps the bubble aside while the person works the spotlit control, keeping the ring', async () => {
+  // 09:34: "why does the hint disappear? Until the step is judged done or I
+  // press Skip it should stay". Pressing the control no longer hides the
+  // bubble; it moves clear of what the control opens instead.
+  it('keeps the bubble up when the control is pressed', async () => {
     const a = addTarget('a')
-    addTarget('b')
     start()
     await tick()
     a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
     await flushPromises()
-    expect(bubble()).toBeNull()
-    expect(byTestId('coach-ring')).not.toBeNull()
-    // Back if nothing comes of it.
-    await tick(COACH_ASIDE_MS)
     expect(stepId()).toBe('one')
+    await tick(30_000)
+    expect(stepId()).toBe('one')
+    expect(byTestId('coach-ring')).not.toBeNull()
+  })
+
+  it('moves the bubble clear of what the control opened, never hiding it', async () => {
+    const a = addTarget('a')
+    start({ steps: [{ ...STEPS[0], allow: ['.menu-it-opens'] }, STEPS[1]] })
+    await tick()
+    a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
+    // The menu opens right below the control — where the bubble was.
+    const menu = document.createElement('div')
+    menu.className = 'menu-it-opens'
+    vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue({
+      x: 100, y: 134, top: 134, left: 100, right: 340, bottom: 420, width: 240, height: 286,
+      toJSON: () => ({}),
+    } as DOMRect)
+    document.body.append(menu)
+    await tick()
+    const b = bubble()!
+    expect(b).not.toBeNull()
+    const top = parseFloat(b.style.top)
+    const left = parseFloat(b.style.left)
+    const overlaps = left < 340 && left + 280 > 100 && top < 420 && top + 140 > 134
+    expect(overlaps, `bubble at ${left},${top}`).toBe(false)
+  })
+
+  it('keeps the bubble where it was while its control briefly goes', async () => {
+    const a = addTarget('a')
+    start()
+    await tick()
+    const before = bubble()!.style.top
+    a.remove()
+    await tick(COACH_MISSING_CENTRE_MS / 2)
+    expect(stepId()).toBe('one')
+    expect(bubble()!.classList.contains('centred')).toBe(false)
+    expect(bubble()!.style.top).toBe(before)
+    // Gone for good: to the middle, saying so — still never hidden.
+    await tick(COACH_MISSING_CENTRE_MS)
+    expect(bubble()!.classList.contains('centred')).toBe(true)
+    expect(byTestId('coach-missing')).not.toBeNull()
+  })
+
+  it('comes straight back when the tour stops stepping aside for something else', async () => {
+    addTarget('a')
+    const w = start({ suspended: true })
+    await tick()
+    expect(bubble()).toBeNull()
+    await w.setProps({ suspended: false })
+    expect(stepId()).toBe('one')
+  })
+
+  it('keeps the bubble up while the step is judged done, until it moves on', async () => {
+    addTarget('a')
+    addTarget('b')
+    start()
+    await tick()
+    facts.workspaceOpen = true
+    await flushPromises()
+    expect(stepId()).toBe('one')
+    expect(byTestId('coach-done')).not.toBeNull()
+    await tick(COACH_DONE_MS / 2)
+    expect(stepId()).toBe('one')
+    await tick(COACH_DONE_MS)
+    expect(stepId()).toBe('two')
   })
 
   it('comes back for the next step once the action is done', async () => {
@@ -444,18 +506,9 @@ describe('CoachMark', () => {
       expect(w.emitted('finish')).toBeUndefined()
     })
 
-    it('is left alone while the bubble is out of the way', async () => {
-      const a = addTarget('a')
-      const w = start()
-      await tick()
-      a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
-      await flushPromises()
-      esc()
-      expect(w.emitted('finish')).toBeUndefined()
-    })
-
-    it('is left alone while there is no bubble on screen at all', async () => {
-      const w = start()
+    it('is left alone while the tour has stepped aside for something else', async () => {
+      addTarget('a')
+      const w = start({ suspended: true })
       await tick()
       esc()
       expect(w.emitted('finish')).toBeUndefined()
@@ -499,10 +552,10 @@ describe('CoachMark', () => {
       expect(bubble()!.style.pointerEvents).toBe('auto')
     })
 
-    it('is up even while a first-run step is still looking for its control', async () => {
+    it('is up, with the bubble in the middle, while a first-run step is still looking for its control', async () => {
       start()
       await tick()
-      expect(bubble()).toBeNull()
+      expect(bubble()!.classList.contains('centred')).toBe(true)
       expect(mask()).not.toBeNull()
       expect(holes()).toEqual([])
     })
@@ -545,7 +598,7 @@ describe('CoachMark', () => {
       } as DOMRect)
       document.body.append(menu)
       await tick()
-      expect(bubble()).toBeNull()
+      expect(bubble()).not.toBeNull()
       expect(mask()).not.toBeNull()
       expect(holes()).toEqual(['96,96,68,38', '100,140,200,260'])
     })
