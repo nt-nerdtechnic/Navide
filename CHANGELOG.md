@@ -40,7 +40,7 @@ All notable released changes to Navide will be documented in this file. The form
 - Account detection retries an unreadable or half-written identity instead of recording you as signed out, and the credential and Git watchers keep running after a failure and log it (#144).
 - Plans: a plan too large to fit one list page keeps its archive state and actions instead of being offered "Upgrade".
 - Quick add removes a bot it could not finish adding, including when the window closes mid-way or the 30 s limit runs out, and refuses a second quick add for the same bot. Creating a managed Telegram bot is refused up front when nobody is linked to the managing bot, and answered at once when its creator is not linked.
-- A Telegram group that is not a forum is no longer asked for child topics on every new child pane; it is asked again after 30 minutes, so turning topics on later takes effect without restarting Navide. Channels also applies its reconnect backoff to reconnect requests too, and logs a failing background task.
+- A Telegram group that is not a forum is no longer asked for child topics on every new child pane; it is asked again after 30 minutes, so turning topics on later takes effect without restarting Navide. Channels also applies its reconnect backoff to reconnect requests and logs a failing background task.
 - A schedule rebound to a rebuilt pane clears its red "target gone" marks, and asks to be switched back on only while it is still off.
 - Usage polling fails only the vendor whose credential store cannot be read, instead of stopping the whole cycle.
 - Windows hooks use a random temp file name, so leftover files can no longer silence every hook.
