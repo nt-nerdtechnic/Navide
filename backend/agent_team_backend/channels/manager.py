@@ -19,6 +19,7 @@ pipeline is testable with fakes; ``default_seams()`` wires the real ones.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import logging
@@ -267,6 +268,9 @@ class ChannelManager:
         self._quick_adding: set[BotKey] = set()  # bots a quick add is storing and verifying
         # Undos of half-added bots: apart from _tasks so stop() does not cut one short.
         self._quick_add_undos: dict[BotKey, asyncio.Task[None]] = {}
+        # Credential writes still running: a cancelled caller stops waiting for one,
+        # not the vault write itself, so an undo waits for it before deleting.
+        self._secret_writes: dict[BotKey, asyncio.Task[None]] = {}
         # Memory only: a backend restart forgets them, and a later managed_bot update is ignored.
         self._managed: dict[str, _ManagedRequest] = {}  # request_id -> open t.me/newbot request
         self.relay = relay.RelayTable(clock=clock, on_expired=self._relay_expired)
@@ -562,9 +566,15 @@ class ChannelManager:
                 holder = self._lease_holder(probe.token_fingerprint(), bot)
                 if holder:
                     return {"ok": False, "error": f"同一個 token 已被 {holder} 使用 (token already in use by {holder})"}
-                await self._seams.write_secret(
+                write = asyncio.ensure_future(self._seams.write_secret(
                     _secret_name(platform, account), json.dumps(secret, separators=(",", ":"), ensure_ascii=True)
+                ))
+                self._secret_writes[bot] = write
+                write.add_done_callback(
+                    lambda done, bot=bot: self._secret_writes.pop(bot, None)
+                    if self._secret_writes.get(bot) is done else None
                 )
+                await asyncio.shield(write)
             self.store.upsert_account(platform, config, account=account)
             err = None
             acct = self.store.accounts()[bot]
@@ -664,12 +674,19 @@ class ChannelManager:
         needs may be what held the quick add up. The bot stays reserved in _quick_adding
         until it is gone, so adding it again cannot race the undo; a second call is a no-op."""
         bot = (platform, account)
-        if bot in self._quick_add_undos or (bot not in self.store.accounts() and bot not in self._adapters):
+        pending_write = self._secret_writes.get(bot)
+        if bot in self._quick_add_undos or (
+            bot not in self.store.accounts() and bot not in self._adapters and pending_write is None
+        ):
             return
         self._quick_adding.add(bot)
 
         async def undo() -> None:
             try:
+                if pending_write is not None:
+                    # Cancelled mid-store: let the write land, then delete what it wrote.
+                    with contextlib.suppress(Exception):
+                        await pending_write
                 await self._discard_bot(platform, account)
             except Exception:  # noqa: BLE001
                 log.exception("channels: undoing the quick add of %s failed", _bot_label(bot))

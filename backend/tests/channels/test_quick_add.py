@@ -317,3 +317,29 @@ async def test_a_lock_held_while_the_login_waits_does_not_stretch_the_deadline(e
             break
         await asyncio.sleep(0.02)
     _no_trace(env)
+
+
+async def test_a_credential_still_being_stored_at_the_deadline_is_removed_too(env: Env, monkeypatch) -> None:
+    # The Keychain write runs in a thread: cancelled at the deadline, the call
+    # stops waiting but the write still lands, after the undo found nothing
+    # stored. That left the credential in the vault with no bot behind it.
+    import time
+
+    monkeypatch.setattr(mgr_mod, "QUICK_ADD_DEADLINE_S", 0.1)
+    _login_as(env, "ready")
+
+    async def slow_write(name: str, secret: str | None) -> None:
+        def work() -> None:
+            time.sleep(0.4)
+            env.fake.secrets[name] = secret
+
+        await asyncio.to_thread(work)
+
+    monkeypatch.setattr(env.m._seams, "write_secret", slow_write)
+    res = await asyncio.wait_for(env.m.quick_add("telegram", {}, {"token": "tok-K"}, ACCOUNT), 3)
+    assert not res["ok"] and res["reason"] == "timeout"
+    for _ in range(150):
+        if env.fake.secrets.get(f"channel-telegram-{ACCOUNT}", "") is None:
+            break
+        await asyncio.sleep(0.02)
+    _no_trace(env)
