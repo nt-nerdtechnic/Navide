@@ -153,6 +153,7 @@ import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './u
 import { PlanWindowRegistry } from './plan-windows'
 import { createTokenMonitorWindowOpener } from './token-monitor-window'
 import { warnMain } from './main-log'
+import { createPlansBackendStoppedRelay } from './plansBackendStoppedRelay'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
@@ -676,6 +677,8 @@ async function createWindow(
   }
   win.once('ready-to-show', showOnce)
   setTimeout(showOnce, 4000)
+  // A Plans notice that found no loaded main window is handed to this one.
+  win.webContents.on('did-finish-load', () => plansBackendStoppedRelay.flush(win))
   win.on('focus', () => { mainWindow = win })
   win.on('closed', () => {
     mainWindows.delete(win)
@@ -1353,15 +1356,18 @@ frontendPluginManager.setPlansBackendFailureHandler((failure) => {
     })
   }
 })
+// With no main window open, or one still loading, the notice waits for the
+// next main window to finish loading (createWindow flushes it).
+const plansBackendStoppedRelay = createPlansBackendStoppedRelay({
+  find: (workspacePath) => findMainWindowForWorkspace(workspacePath),
+  fallback: () => mainWindow,
+})
 frontendPluginManager.setPlansBackendStoppedHandler(({ workspacePath }) => {
   // A headless (agent) Plans child failed too often to be restarted. Nothing
   // on screen shows it, so the workspace's window tells the user how to bring
   // it back; the renderer owns the localized text.
   warnMain('[main] navide.plans agent backend stopped after repeated failures')
-  const target = findMainWindowForWorkspace(workspacePath) ?? mainWindow
-  if (target && !target.isDestroyed()) {
-    target.webContents.send('plans:backendStopped', { workspacePath })
-  }
+  plansBackendStoppedRelay.notify(workspacePath)
 })
 let approvedInstalledPluginActivations = [
   ...installedPluginLoad.activationCatalog,
