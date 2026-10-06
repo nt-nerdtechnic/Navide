@@ -60,6 +60,15 @@ describe('first-run welcome tour', () => {
     expect(functionBody('replayWelcomeTour')).toContain('welcomeTour.replay()')
   })
 
+  // The replay is asked for, so it always gets the screen: whatever would make
+  // it step aside — Settings, a What's New note — closes first.
+  it('clears Settings and a What\u2019s New note before a replay, so it can always start', () => {
+    const replay = functionBody('replayWelcomeTour')
+    expect(replay).toContain('showSettings.value = false')
+    expect(replay).toMatch(/if \(whatsNewEntry\.value\) closeWhatsNew\(\)/)
+    expect(replay.indexOf('closeWhatsNew()')).toBeLessThan(replay.indexOf('welcomeTour.replay()'))
+  })
+
   // M14/M15: no saved step — every start begins at the first bubble and passes
   // over what is done, so two windows have no progress to overwrite.
   it('mounts the coach marks with the steps, the facts and when to step aside, always from the first bubble', () => {

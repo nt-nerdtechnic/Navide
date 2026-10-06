@@ -790,9 +790,12 @@ function onWelcomeTourFinish(completed: boolean): void {
   if (completed) notifyRestore.toast(i18n.global.t('tour.welcome.finished'), { type: 'success' })
 }
 // Help → First-Run Tour…: the same bubbles, with Next to read them through,
-// recording nothing. Settings would cover every control, so it closes first.
+// recording nothing. It was asked for, so it always gets the screen: Settings
+// and a What's New note — either would make the bubbles step aside — close
+// first.
 function replayWelcomeTour(): void {
   showSettings.value = false
+  if (whatsNewEntry.value) closeWhatsNew()
   welcomeTour.replay()
 }
 // Announcements centre: the status-bar feed of release notes + updater news.
