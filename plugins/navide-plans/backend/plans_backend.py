@@ -27,6 +27,8 @@ from typing import Any
 import yaml
 from agent_team_backend.fs_write import (
     _WRITE_PART_MAX_BYTES,
+    _WRITE_SIZE_LIMIT,
+    _resolve_mutation_safe,
     write_abort,
     write_commit,
     write_file,
@@ -577,8 +579,9 @@ def _guarded_path(origin: dict[str, Any], rel_path: str, **options: bool) -> Pat
     """
     try:
         return _resolve_safe(_plan_root(origin), rel_path, **options)
-    except FsError:
-        raise BridgeFailure("BACKEND_UNAVAILABLE") from None
+    except FsError as exc:
+        _log(f"path {rel_path} refused: {exc}")
+        raise BridgeFailure("WORKSPACE_SCOPE_VIOLATION") from None
 
 
 def _read_bytes(
@@ -597,7 +600,8 @@ def _read_bytes(
             st = os.fstat(handle.fileno())
             handle.seek(start)
             data = handle.read() if want is None else handle.read(want)
-    except OSError:
+    except OSError as exc:
+        _log(f"read {rel_path}: {exc}")
         raise BridgeFailure("BACKEND_UNAVAILABLE") from None
     return data, st.st_size, st.st_mtime, start + len(data) >= st.st_size
 
@@ -607,7 +611,8 @@ def _read_text(origin: dict[str, Any], rel_path: str) -> tuple[str, float | None
     data, _size, mtime, _eof = _read_bytes(origin, rel_path, 0, None)
     try:
         return data.decode("utf-8"), mtime
-    except UnicodeDecodeError:
+    except UnicodeDecodeError as exc:
+        _log(f"read {rel_path}: {exc}")
         raise BridgeFailure("BACKEND_UNAVAILABLE") from None
 
 
@@ -639,7 +644,8 @@ def _list_names(origin: dict[str, Any], rel_path: str, *, discovery: bool = Fals
                 )
             else:
                 entries = sorted(it, key=lambda e: (not e.is_dir(), e.name.lower()))
-    except OSError:
+    except OSError as exc:
+        _log(f"list {rel_path}: {exc}")
         raise BridgeFailure("BACKEND_UNAVAILABLE") from None
     return [e.name for e in entries[:_MAX_DIRECTORY_ENTRIES] if not e.name.startswith(".")]
 
@@ -676,12 +682,18 @@ def _read_text_chunk(origin: dict[str, Any], rel_path: str, offset: int) -> dict
     }
 
 
-def _write_failure(result: Any) -> BridgeFailure:
-    """The failure the Host's filesystem service reported for a write."""
+def _write_failure(result: Any, *, rel_path: str | None = None, size: int | None = None) -> BridgeFailure:
+    """The failure the Host's filesystem service reported for a write.
+
+    Classified from the write itself, never from the wording of its message:
+    content past the write limit is a resource limit.
+    """
     if _is_record(result) and result.get("conflict") is True:
         return BridgeFailure("CONFLICT")
-    if _is_record(result) and isinstance(result.get("error"), str) and "too large" in result["error"].lower():
-        return BridgeFailure("RESULT_TOO_LARGE")
+    reason = result.get("error") if _is_record(result) else None
+    _log(f"write {rel_path}: {reason if isinstance(reason, str) else 'malformed write result'}")
+    if size is not None and size > _WRITE_SIZE_LIMIT:
+        return BridgeFailure("RESOURCE_LIMIT")
     return BridgeFailure("BACKEND_UNAVAILABLE")
 
 
@@ -693,13 +705,18 @@ def _write(origin: dict[str, Any], rel_path: str, content: str, expected_mtime: 
     SINGLE_WRITE_MAX_BYTES is staged in parts and swapped in, as before.
     """
     root = _plan_root(origin)
+    try:
+        _resolve_mutation_safe(root, rel_path)
+    except FsError as exc:
+        _log(f"write {rel_path} refused: {exc}")
+        raise BridgeFailure("WORKSPACE_SCOPE_VIOLATION") from None
     data = content.encode("utf-8")
     if len(data) > SINGLE_WRITE_MAX_BYTES:
         result = _write_staged(root, rel_path, data, expected_mtime)
     else:
         result = write_file(root, rel_path, content, expected_mtime=expected_mtime)
     if not _is_record(result) or result.get("ok") is not True:
-        raise _write_failure(result)
+        raise _write_failure(result, rel_path=rel_path, size=len(data))
     mtime = result.get("mtime")
     return float(mtime) if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else None
 

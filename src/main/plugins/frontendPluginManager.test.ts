@@ -4698,6 +4698,23 @@ describe('production Plans agent backend routing', () => {
         ok: false,
         error: { code: 'CAPABILITY_DENIED' },
       })
+
+      // A write past the child's size limit keeps its meaning instead of
+      // collapsing into the generic plugin failure.
+      call.mockRejectedValueOnce(new BackendPluginError(
+        'PLUGIN_ERROR',
+        'child limit',
+        { pluginCode: 'RESOURCE_LIMIT' },
+      ))
+      await expect(mgr.executeAgentBackendCallForWorkspace(
+        PLANS_PLUGIN_ID,
+        '/workspace',
+        { reqId: 'agent-limit-child-1', name: 'plans.list', args: {} },
+      )).resolves.toMatchObject({
+        reqId: 'agent-limit-child-1',
+        ok: false,
+        error: { code: 'RESOURCE_LIMIT', message: 'Backend resource limit reached.' },
+      })
     } finally {
       provision.mockRestore()
       call.mockRestore()

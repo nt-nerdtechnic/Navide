@@ -4654,6 +4654,9 @@ export class FrontendPluginManager {
         if (error.pluginCode === 'INVALID_ARGUMENT') {
           return buildError(reqId, 'INVALID_ARGUMENT', 'Backend call arguments are invalid.')
         }
+        if (error.pluginCode === 'RESOURCE_LIMIT') {
+          return buildError(reqId, 'RESOURCE_LIMIT', 'Backend resource limit reached.')
+        }
         return buildError(reqId, 'BACKEND_ERROR', 'Plugin request failed.')
       default:
         return buildError(reqId, 'BACKEND_UNAVAILABLE', 'Backend plugin is unavailable.')
