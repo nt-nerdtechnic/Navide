@@ -37,3 +37,37 @@ export function createQuitCancelWatch(deps: QuitCancelWatchDeps): QuitCancelWatc
   }
   return { arm, disarm }
 }
+
+export interface QuitCancelResetDeps {
+  /** dockQuitInProgress and quittingWindowsPrepared. */
+  clearQuitFlags(): void
+  clearCleanExit(): void
+  /** Whether the teardown stopped the backend for this quit; reading it
+   *  consumes it, so only one cancel brings the teardown back. */
+  takeTeardownRan(): boolean
+  restartBackend(): Promise<unknown>
+  reopenBackendPlugins(): void
+  /** Lifts the shutdown screen. */
+  broadcastCancelled(): void
+}
+
+/**
+ * Undoes a quit that did not happen, wherever it was cancelled. Telling the
+ * user why is left to the caller: a refusal has already said so itself.
+ */
+export function createQuitCancelReset(deps: QuitCancelResetDeps): () => Promise<void> {
+  return async () => {
+    deps.clearQuitFlags()
+    deps.clearCleanExit()
+    // The teardown stopped the backend and the plugin backends and put up the
+    // shutdown screen; the app is staying, so bring them back.
+    if (!deps.takeTeardownRan()) return
+    try {
+      await deps.restartBackend()
+    } catch (err) {
+      console.error('[main] restarting the backend after a cancelled quit failed', err)
+    }
+    deps.reopenBackendPlugins()
+    deps.broadcastCancelled()
+  }
+}

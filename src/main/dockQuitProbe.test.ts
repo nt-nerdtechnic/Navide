@@ -180,6 +180,8 @@ describe('embedded AI panels after a cancelled quit', () => {
 
   it('a plugin veto after the prompt said Quit leaves the app not quitting', { timeout: 60_000 }, async () => {
     const { beforeQuit, appQuitting } = await boot()
+    const { WindowRegistry } = await import('./window-registry')
+    const clearCleanExit = vi.spyOn(WindowRegistry.prototype, 'clearCleanExit')
     expect(appQuitting()).toBe(false)
 
     // Cmd+Q → prompt → Quit: the listener re-enters through app.quit().
@@ -192,6 +194,10 @@ describe('embedded AI panels after a cancelled quit', () => {
 
     // The app stays open, so closing a panel's window must end its panels.
     expect(appQuitting()).toBe(false)
+    // The same reset as any cancelled quit, but the refusal notice already
+    // told the user: no second "did not quit" notice on top of it.
+    expect(clearCleanExit).toHaveBeenCalled()
+    expect(dialogState.notices).toHaveLength(1)
 
     // quitConfirmed keeps its meaning: the next Cmd+Q does not prompt again.
     await beforeQuit({ preventDefault: vi.fn() })

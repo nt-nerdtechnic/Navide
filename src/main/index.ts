@@ -21,7 +21,7 @@ import { createWorkspaceFolder } from './workspace-create'
 import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, plansFactoryPackageSummary, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
 import { createWindowCloseCoordinator } from './plugins/windowCloseCoordinator'
-import { createQuitCancelWatch } from './quit-cancel-watch'
+import { createQuitCancelReset, createQuitCancelWatch } from './quit-cancel-watch'
 import { dockSurfaceProvided } from './dockSurfaceProvider'
 import {
   handlePluginFrameAssetRequest,
@@ -271,6 +271,22 @@ let quittingWindowsPreparation: Promise<boolean> | null = null
 // Set once teardownBackendAndQuit has stopped the backend and put up the
 // shutdown screen, so a quit cancelled after that can bring both back.
 let quitTeardownRan = false
+// Every path that cancels a quit undoes it through this one reset.
+const resetCancelledQuit = createQuitCancelReset({
+  clearQuitFlags: () => {
+    dockQuitInProgress = false
+    quittingWindowsPrepared = false
+  },
+  clearCleanExit: () => windowRegistry.clearCleanExit(),
+  takeTeardownRan: () => {
+    const ran = quitTeardownRan
+    quitTeardownRan = false
+    return ran
+  },
+  restartBackend: () => restartBackendNow(),
+  reopenBackendPlugins: () => frontendPluginManager.reopenBackendPlugins(),
+  broadcastCancelled: () => broadcastQuitStage('cancelled'),
+})
 // A quit that before-quit let through can still be cancelled while Electron
 // closes the windows, silently. Clear what the quit set and say which window
 // stopped it, as an abandoned update install does.
@@ -280,23 +296,10 @@ const quitCancelWatch = createQuitCancelWatch({
     .filter((window) => !window.isDestroyed())
     .map((window) => window.getTitle()),
   onCancelled: (titles) => {
-    dockQuitInProgress = false
-    quittingWindowsPrepared = false
-    windowRegistry.clearCleanExit()
     const windows = titles.length > 0 ? titles.join(', ') : quitConfirm.cancelledUnknownWindow
     void (async () => {
-      // The teardown stopped the backend and the plugin backends and put up the
-      // shutdown screen; the app is staying, so bring them back before saying why.
-      if (quitTeardownRan) {
-        quitTeardownRan = false
-        try {
-          await restartBackendNow()
-        } catch (err) {
-          console.error('[main] restarting the backend after a cancelled quit failed', err)
-        }
-        frontendPluginManager.reopenBackendPlugins()
-        broadcastQuitStage('cancelled')
-      }
+      // Bring the app back before saying why it stayed.
+      await resetCancelledQuit()
       await dialog.showMessageBox({
         type: 'warning',
         message: quitConfirm.cancelledMessage,
@@ -5676,8 +5679,9 @@ app.on('before-quit', async (e) => {
       const prepared = await quittingWindowsPreparation
       if (!prepared) {
         // Vetoed: the app stays open, so closing a window ends its AI panels
-        // again. quitConfirmed is left as it was.
-        dockQuitInProgress = false
+        // again. quitConfirmed is left as it was, and the refusal has already
+        // told the user why.
+        void resetCancelledQuit()
         return
       }
       quittingWindowsPrepared = true
