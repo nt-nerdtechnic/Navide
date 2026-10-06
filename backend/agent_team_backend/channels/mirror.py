@@ -648,7 +648,8 @@ class Mirror:
                 elif "not a forum" in str(exc).lower():
                     self._no_topic_chats[chat] = now + NO_TOPIC_RETRY_S
                     log.warning("channels: child topic for %s failed: %s; children of this chat use "
-                                "prefixed messages from now on", cname, exc)
+                                "prefixed messages; topics are tried again in %d minutes",
+                                cname, exc, NO_TOPIC_RETRY_S // 60)
                 else:
                     log.warning("channels: child topic for %s failed: %s", cname, exc)
             else:

@@ -482,6 +482,7 @@ async def test_a_chat_that_is_not_a_forum_is_asked_again_after_the_retry_window(
     # Still not a forum: one info line, no second warning, and the chat is remembered again.
     topic = [r for r in caplog.records if "topic" in r.getMessage()]
     assert [r.levelno for r in topic] == [logging.WARNING, logging.INFO]
+    assert f"tried again in {int(mirror_mod.NO_TOPIC_RETRY_S // 60)} minutes" in topic[0].getMessage()
     panes.append(_pane("pane-4", "fmt", "pane-1"))
     await env.m.mirror.sync_lineage()
     assert calls == ["↳ tester", "↳ linter"]
