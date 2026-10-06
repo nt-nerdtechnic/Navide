@@ -1050,6 +1050,34 @@ async def test_cancel_still_deletes_audio_when_the_budget_expires_mid_cleanup(
     assert not list(voice.glob("navide-voice-*.pcm"))
 
 
+async def test_audio_held_past_the_retry_window_is_deleted_once_released(
+    stream: Path, voice: Path, windows_delete: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Something holds the file longer than _remove retries for: the speech
+    # must still go once it is released, not wait for a sweep of old files.
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "5")
+    monkeypatch.setenv("FAKE_STT_HOLD_S", "1.0")
+    monkeypatch.setattr(voice_handlers, "_REMOVE_RETRY_S", 0.1)
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8), pause=0.0)
+    deadline = time.monotonic() + 30
+    while not list(voice.glob("navide-voice-*.pcm.held")):
+        if time.monotonic() > deadline:
+            pytest.fail("the sidecar never opened a partial's audio")
+        await asyncio.sleep(0.005)
+    partial = voice_handlers._active.partial
+    await _send(session, "voice.cancel", {"sessionId": sid})
+    with pytest.raises(asyncio.CancelledError):
+        await partial
+    deadline = time.monotonic() + 30
+    while list(voice.glob("navide-voice-*.pcm")):
+        if time.monotonic() > deadline:
+            pytest.fail("the audio stayed on disk after the sidecar let go of it")
+        await asyncio.sleep(0.05)
+    assert not list(voice.glob("navide-voice-*.pcm.held"))
+
+
 async def test_start_sweeps_audio_a_failed_delete_left_behind(voice: Path) -> None:
     stale = voice / "navide-voice-stale.pcm"
     fresh = voice / "navide-voice-fresh.pcm"
