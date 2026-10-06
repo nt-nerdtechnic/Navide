@@ -428,7 +428,14 @@ async def test_terminal_service_registers_and_unregisters() -> None:
     await _wait_registry_has(session.proc.pid)
 
     await svc.kill(session.id)
-    session.proc.wait(timeout=5)
+    # Poll on the loop rather than proc.wait(): a blocking wait starves the
+    # SIGKILL escalation task on this loop, so a child slow to die on SIGTERM
+    # (a loaded machine) outlasts the timeout and the test fails spuriously.
+    for _ in range(200):
+        await asyncio.sleep(0.05)
+        if session.proc.poll() is not None:
+            break
+    assert session.proc.poll() is not None, "child survived the kill"
     await _wait_registry_empty()
 
 
