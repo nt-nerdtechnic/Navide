@@ -1017,6 +1017,39 @@ async def test_cancel_deletes_audio_the_sidecar_still_holds_open(
     assert not list(voice.glob("navide-voice-*.pcm"))
 
 
+async def test_cancel_still_deletes_audio_when_the_budget_expires_mid_cleanup(
+    stream: Path, voice: Path, windows_delete: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The partial's budget timeout fires while its cleanup is still waiting
+    # for the sidecar to let go (a cold sidecar eats most of the budget): the
+    # partial must not end before the audio is gone.
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "5")
+    monkeypatch.setenv("FAKE_STT_HOLD_S", "1.0")
+    removing = threading.Event()
+    remove = voice_handlers._remove
+
+    def flag_remove(path: Path) -> None:
+        removing.set()
+        remove(path)
+
+    monkeypatch.setattr(voice_handlers, "_remove", flag_remove)
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8), pause=0.0)
+    deadline = time.monotonic() + 30
+    while not list(voice.glob("navide-voice-*.pcm.held")):
+        if time.monotonic() > deadline:
+            pytest.fail("the sidecar never opened a partial's audio")
+        await asyncio.sleep(0.005)
+    partial = voice_handlers._active.partial
+    await _send(session, "voice.cancel", {"sessionId": sid})
+    assert await asyncio.to_thread(removing.wait, 10)
+    partial.cancel()  # what the budget's asyncio.timeout does when it expires
+    with pytest.raises(asyncio.CancelledError):
+        await partial
+    assert not list(voice.glob("navide-voice-*.pcm"))
+
+
 async def test_start_sweeps_audio_a_failed_delete_left_behind(voice: Path) -> None:
     stale = voice / "navide-voice-stale.pcm"
     fresh = voice / "navide-voice-fresh.pcm"

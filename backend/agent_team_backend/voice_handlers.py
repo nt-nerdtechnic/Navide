@@ -666,7 +666,24 @@ async def _transcribe_window(rec: _Recording, end: int, pad: bool, segments: boo
             path, rec.language, _prompt_for(rec), segments=segments, script=rec.script,
         )
     finally:
-        await stt_service.run_blocking(_remove, path)
+        await _remove_before_returning(path)
+
+
+async def _remove_before_returning(path: Path) -> None:
+    """Run _remove and wait for it even through another cancel. A partial is
+    cancelled by voice.cancel/voice.stop and, separately, by its own budget
+    timeout; if the second lands while the delete is still retrying, a plain
+    await ends the task with the speech still on disk."""
+    removal = asyncio.ensure_future(stt_service.run_blocking(_remove, path))
+    cancelled = False
+    while not removal.done():
+        try:
+            await asyncio.shield(removal)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+    removal.result()
 
 
 def _partial_due(rec: _Recording) -> bool:
