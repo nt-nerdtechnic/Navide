@@ -197,6 +197,62 @@ def test_concurrent_writes_from_threads_land_exactly_once(tmp_path: Path, monkey
     _assert_exactly_one_writer_won(tmp_path, results, contents, before)
 
 
+def _coarse_clock(monkeypatch, target: Path) -> None:
+    """Every replacement lands with the mtime of the file it replaced, as on
+    a filesystem whose clock has not ticked since (Windows updates file times
+    in ~15.6 ms steps; a write in the same step as the last one reads back
+    the same mtime)."""
+    real_replace = os.replace
+
+    def same_tick_replace(src, dst):
+        old = Path(dst).stat().st_mtime_ns if Path(dst).exists() else None
+        real_replace(src, dst)
+        if old is not None and Path(dst) == target:
+            os.utime(dst, ns=(old, old))
+
+    monkeypatch.setattr(os, "replace", same_tick_replace)
+
+
+def test_a_write_in_the_same_clock_tick_still_moves_the_mtime(tmp_path: Path, monkeypatch) -> None:
+    # The mtime is the whole conflict check: a second writer holding the
+    # first one's starting mtime must be refused even when the first write
+    # finished before the clock ticked (the lost update the Windows arm64
+    # release gate caught: both of two racing writers reported ok).
+    target = tmp_path / "doc.html"
+    target.write_text("old", encoding="utf-8")
+    before = target.stat().st_mtime
+    _coarse_clock(monkeypatch, target)
+
+    first = fs_write.write_file(str(tmp_path), "doc.html", "first", expected_mtime=before)
+    second = fs_write.write_file(str(tmp_path), "doc.html", "second", expected_mtime=before)
+
+    assert first["ok"] is True
+    assert first["mtime"] != before
+    assert first["mtime"] == target.stat().st_mtime
+    assert second.get("conflict") is True, second
+    assert target.read_text(encoding="utf-8") == "first"
+    # The new mtime is still a token the next writer can use.
+    third = fs_write.write_file(str(tmp_path), "doc.html", "third", expected_mtime=first["mtime"])
+    assert third["ok"] is True, third
+
+
+def test_a_commit_in_the_same_clock_tick_still_moves_the_mtime(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "doc.html"
+    target.write_text("old", encoding="utf-8")
+    before = target.stat().st_mtime
+    _coarse_clock(monkeypatch, target)
+
+    assert _part(tmp_path, 0, b"first")["ok"] is True
+    first = fs_write.write_commit(str(tmp_path), "doc.html", _UPLOAD_ID, 5, before)
+    second = fs_write.write_file(str(tmp_path), "doc.html", "second", expected_mtime=before)
+
+    assert first["ok"] is True, first
+    assert first["mtime"] != before
+    assert first["mtime"] == target.stat().st_mtime
+    assert second.get("conflict") is True, second
+    assert target.read_text(encoding="utf-8") == "first"
+
+
 def test_a_write_leaves_a_sibling_named_like_its_old_temp_file_alone(tmp_path: Path) -> None:
     (tmp_path / "doc.html").write_text("old", encoding="utf-8")
     (tmp_path / "doc.html.tmp").write_text("the user's own file", encoding="utf-8")

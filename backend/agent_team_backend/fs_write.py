@@ -176,6 +176,30 @@ def _remove_orphan_temps(target: Path) -> None:
                 pass
 
 
+#: The conflict checks treat mtimes within 1e-4 s as the same (float st_mtime
+#: round-trips through JSON). A replacement must land further away than that.
+_MTIME_TOLERANCE_NS = 100_000
+#: Steps tried to push a replacement's mtime past the one it replaced: 1 ms,
+#: then 1 s and 2 s for filesystems that keep coarser times (HFS+, FAT).
+_MTIME_STEPS_NS = (1_000_000, 1_000_000_000, 2_000_000_000)
+
+
+def _advance_mtime(target: Path, replaced_ns: int) -> None:
+    """Make ``target``'s mtime tell it apart from the file it replaced.
+
+    The mtime is the only thing the conflict check compares. A replacement
+    written in the same clock tick as the file it replaced (Windows updates
+    file times in ~15.6 ms steps) reads back the same mtime, so a second
+    writer holding the old one would pass the check and overwrite the first:
+    a lost update. Called under the target lock, right after the replace.
+    """
+    for step_ns in _MTIME_STEPS_NS:
+        st = target.stat()
+        if st.st_mtime_ns - replaced_ns > _MTIME_TOLERANCE_NS:
+            return
+        os.utime(target, ns=(st.st_atime_ns, replaced_ns + step_ns))
+
+
 def write_file(
     workspace_path: str,
     rel_path: str,
@@ -208,9 +232,11 @@ def write_file(
         with _target_lock(target):
             _remove_orphan_temps(target)
             orig_mode: int | None = None
+            replaced_ns: int | None = None
             if target.exists():
                 st = target.stat()
                 orig_mode = st.st_mode
+                replaced_ns = st.st_mtime_ns
                 if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
                     return {
                         "ok": False,
@@ -232,6 +258,8 @@ def write_file(
             except Exception:
                 tmp.unlink(missing_ok=True)
                 raise
+            if replaced_ns is not None:
+                _advance_mtime(target, replaced_ns)
             return {"ok": True, "mtime": target.stat().st_mtime}
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
@@ -380,15 +408,19 @@ def write_commit(
         with _target_lock(target):
             _remove_orphan_temps(target)
             orig_mode: int | None = None
+            replaced_ns: int | None = None
             if target.exists():
                 st = target.stat()
                 orig_mode = st.st_mode
+                replaced_ns = st.st_mtime_ns
                 if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
                     staging.unlink(missing_ok=True)
                     return {"ok": False, "conflict": True, "mtime": st.st_mtime, "error": "file changed on disk"}
             if orig_mode is not None:
                 os.chmod(staging, stat_mod.S_IMODE(orig_mode))
             os.replace(staging, target)
+            if replaced_ns is not None:
+                _advance_mtime(target, replaced_ns)
             return {"ok": True, "mtime": target.stat().st_mtime}
     except (FsError, OSError) as exc:
         if staging is not None:
