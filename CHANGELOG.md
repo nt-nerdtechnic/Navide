@@ -4,6 +4,51 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.15] — 2026-10-06 — signed release
+
+### Added
+
+- **First-run tour**: a fresh install is walked through its first steps by a small bubble beside the real control, one action at a time: pick a workspace folder on Welcome, press + to open an agent, give it a first instruction, hand another pane a task with @, drag one pane into another, and check the account and quota on the quota badge. A grey mask covers the rest of the window so a stray click cannot end it; each bubble stays until its step is done or you press Next, and the last step always shows and waits for Done. Existing installs never get it on their own; Help → First-Run Tour… replays it, also from Welcome.
+- **Chat quick menu**: `/menu` (or a bare `/start`) in a bound Telegram, Discord or Slack chat shows the pane's prompts and skills as buttons; a press sends that item to the pane once. Unbound chats, offline panes and expired menus get a reply saying why.
+- **Create a Telegram bot in one step**: a connected Telegram bot with Bot Management Mode on gets "Create a new bot" in Settings → Channels. After you confirm what it does, a prefilled Telegram link opens; once you create the bot there, Navide adds it and opens its link guide. Other Telegram bots explain how to turn the mode on.
+- **Quick add a bot**: adding a new bot in Settings → Channels checks its credential, starts it and opens its link guide in one go, and keeps the bot only once the platform accepts the credential. A button fills the token from the clipboard when it matches the expected shape, and the Slack form links an app manifest template.
+- **Embedded AI panels act like panes**: the AI panel in the Pipeline Manager, Plan, Git and Editor windows records its history, can be messaged by other panes (where its window can deliver messages), and shows which window it lives in, in the @-mention menu, Agent History, the close-workspace confirmation and its own header. Closing the window ends its panel, and a panel resumes its session after Navide quits and restarts. `cli_list_targets` and `cli_whoami` report a panel's `surface` and `window_kind`.
+- Settings → Extensions lists the bundled Plans extension and shows the files each extension declares it reads and writes; Plans also says that its backend runs without a sandbox and which plan folders it reaches. Extension manifests can declare these file scopes (`permissions.scopes.fs`) as a disclosure; they never grant or limit access.
+
+### Changed
+
+- **Plans reads and writes plan files itself**: the Plans backend opens and saves plan files directly, under the same path checks Navide applies, instead of relaying every file through the app. Every access is still authorized by Navide per request, so an agent's Execution Policy and the Plans grant keep applying. The Plans list sends only the fields the view shows, so large libraries load faster.
+- The builtin prompt a fresh install starts with is known to the backend from the start, so agents and `/menu` see it before the Prompts page is saved.
+- Chat connections retry 5 s after a drop instead of 30 s; Telegram restarts its backoff after a successful poll, and a connection that drops right after it connects keeps backing off instead of retrying at the shortest delay.
+- The running status message in a chat no longer counts seconds; the final "done" message keeps them.
+- A message delivered to a busy embedded AI panel is reported as delivered while busy, and the message log notes it.
+- Repository hooks run the CI secret scan (gitleaks) before a commit and before a push.
+
+### Fixed
+
+- **Chat confirmation buttons finish cleanly**: a prompt answered at the computer or in the chat, replaced by a newer one, outlived by its turn, timed out, or left by a pane that went offline is edited to say so and loses its buttons, instead of answering "this confirmation has expired" when pressed.
+- **Schedules follow a rebuilt pane**: a job aimed at a pane that was rebuilt into the same session moves to the new pane. A job whose target stays gone for three runs in a row is turned off, shown in red in the Schedule panel, and you are told about it. "Retarget" is now "Rebind".
+- A CLI whose credential store no pane has verified yet (kilo, opencode) shows "open a pane" instead of an error, and is no longer polled or warned about every five minutes.
+- A first-party extension backend that fails restarts with backoff instead of staying down, with its own restart budget per window. Plans is marked available again once its backend is back, and when a workspace's agent Plans backend gives up, a notice names the folder and says how to restart it (open Plans there, or restart Navide).
+- Plans keeps the reason a file operation failed instead of showing "Plugin request failed.", lists a plan folder it cannot read as unreadable instead of dropping its plans, and a retry is no longer undone by a call still running on the discarded backend.
+- Concurrent writes to one file are serialised across processes, a held write lock fails the write after 10 s instead of hanging, and a failed upload part reports its real error.
+- **Quitting**: a quit cancelled while windows close, or refused by a window, brings the backend, extension backends and window services back and lifts the shutdown screen; an abandoned update install no longer leaves the app thinking it is quitting; and closing a window again ends its embedded AI panels afterwards.
+- Embedded AI panels: Stop or a clean `/exit` retires the panel's restore record instead of relaunching it next time, a panel whose extension was removed is ended, a refused roster registration is retried and explained, and one failed kill no longer leaves a window's other panels running.
+- MCP calls into an extension backend wait past the Host's own deadline, so you see the Host's timeout error instead of a generic "did not answer", and requests the Host cannot serve are answered right away instead of timing out after 30 s.
+- **Windows: messages in Chinese reach Claude panes intact**: a multi-line message to an idle Claude pane no longer arrives as `System.Object[]`, and non-ASCII text sent to an idle or busy pane is no longer garbled on a non-UTF-8 console (#147).
+- **Git keeps working on partial status**: a failed or truncated status read no longer shows a clean repo, a fake "not a repo", or reports an unstage as done; discarding changes refuses instead of acting on an incomplete list, and the Git pane says when its list is truncated (#144).
+- Account detection retries an unreadable or half-written identity instead of recording you as signed out, and the credential and Git watchers keep running after a failure and log it (#144).
+- Plans: a plan too large to fit one list page keeps its archive state and actions instead of being offered "Upgrade".
+- Quick add removes a bot it could not finish adding, including when the window closes mid-way or the 30 s limit runs out, and refuses a second quick add for the same bot. Creating a managed Telegram bot is refused up front when nobody is linked to the managing bot, and answered at once when its creator is not linked.
+- Channels stops asking a non-forum Telegram group for child topics on every new child pane, applies its reconnect backoff to reconnect requests too, and logs a failing background task.
+- A schedule rebound to a rebuilt pane clears its red "target gone" marks, and asks to be switched back on only while it is still off.
+- Usage polling fails only the vendor whose credential store cannot be read, instead of stopping the whole cycle.
+- Windows hooks use a random temp file name, so leftover files can no longer silence every hook.
+- A pane whose session the server already dropped is no longer retried and warned about on every sweep.
+- Security updates: tinypool, vue (@vue/server-renderer), source-map-js, dompurify and katex.
+- `cli_send` to a chat sender tells the agent to reply with an MSG block instead of failing with an unknown target.
+- Help covers voice input, Channels, Guard, the CLI Agents card grid and the other surfaces added since 0.2.10.
+
 ## [0.2.14] — 2026-10-02 — signed release
 
 ### Added

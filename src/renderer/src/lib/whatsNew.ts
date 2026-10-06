@@ -111,6 +111,56 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.15',
+    title: {
+      'zh-TW': '首次使用導覽、一鍵建立 Telegram bot、內嵌 AI 面板成為正式 pane',
+      'en-US': 'A First-Run Tour, One-Step Telegram Bots, and Embedded AI Panels That Act Like Panes',
+      'ja-JP': 'はじめてのツアー、Telegram ボットのワンステップ作成、内蔵 AI パネルがペインと同じように',
+    },
+    highlights: [
+      {
+        'zh-TW': '首次安裝後，導覽會用一個小提示框指著真正的按鈕，一次只請你做一件事：在 Welcome 挑工作區資料夾、按 + 開出第一個 Agent、在 pane 裡下第一個指令。導覽期間其他地方會蓋上灰色遮罩，誤點不會中斷導覽；提示框會一直留著，等你做完，或按「下一個」跳過這一步。',
+        'en-US': 'After a fresh install, a small bubble points at the real control and asks for one thing at a time: pick a workspace folder on Welcome, press + to open your first agent, and give it a first instruction in its pane. A grey mask covers the rest of the window so a stray click cannot end the tour, and each bubble stays until you have done its step or press Next to skip it.',
+        'ja-JP': '初回インストール後、小さな吹き出しが実際のボタンを指し、一度に 1 つだけ操作をお願いします。Welcome でワークスペースのフォルダーを選び、+ で最初のエージェントを開き、ペインで最初の指示を出します。ツアー中はほかの部分がグレーのマスクで覆われ、誤ってクリックしてもツアーは終わりません。吹き出しは、その手順を終えるか「次へ」でスキップするまで表示されたままです。',
+      },
+      {
+        'zh-TW': '接著陪你試一次讓 agent 互相合作：打 @ 選另一個 pane 叫它做事，或把一個 pane 拖進另一個帶入對話脈絡。最後一步一定會出現：把滑鼠停在額度徽章上看帳號與剩餘額度，需要時直接切換帳號；徽章還沒出現時，提示框會指著它之後出現的位置，按「完成」才結束。',
+        'en-US': 'Then it has you try agents working together: type @ to pick another pane and hand it a task, or drag one pane into another to bring its conversation along. The last step always comes: rest the pointer on the quota badge to see the account and what is left, with a switch right there. Before the badge appears, the bubble points at where it will show, and the tour ends only when you press Done.',
+        'ja-JP': '続いて、エージェント同士の連携を試します。@ でほかのペインを選んで作業を頼むか、ペインを別のペインにドラッグして会話の文脈を渡します。最後の手順は必ず表示されます。クォータバッジにマウスを重ねるとアカウントと残量が表示され、その場で切り替えられます。バッジがまだ表示されていないときは、表示される位置を吹き出しが指し、「完了」を押すまでツアーは終わりません。',
+      },
+      {
+        'zh-TW': '「設定 → Channels」新增 bot 一步完成：驗證憑證、啟動、開啟綁定引導，憑證被平台接受才會保留。已開啟 Bot Management Mode 的 Telegram bot 還能直接「建立新 bot」，在 Telegram 按下建立後 Navide 自動加入。',
+        'en-US': 'Adding a bot in Settings → Channels now checks its credential, starts it and opens its link guide in one go, keeping it only once the platform accepts it. A Telegram bot with Bot Management Mode on can also "Create a new bot": confirm it in Telegram and Navide adds it for you.',
+        'ja-JP': '「設定 → Channels」でのボット追加が一度で完了します。認証情報を確認して起動し、リンクガイドを開き、プラットフォームが受け入れた場合のみ保存します。Bot Management Mode を有効にした Telegram ボットからは「新しいボットを作成」もでき、Telegram で作成すると Navide が自動で追加します。',
+      },
+      {
+        'zh-TW': 'Pipeline Manager、Plan、Git、Editor 視窗裡的 AI 面板會記錄歷史、可以收其他 pane 的訊息，並標示自己在哪個視窗；關閉視窗會一併結束面板，重開 Navide 後會接續原本的對話。',
+        'en-US': 'The AI panel in the Pipeline Manager, Plan, Git and Editor windows keeps its history, can receive messages from other panes, and shows which window it lives in. Closing the window ends its panel, and it picks up its session again after Navide restarts.',
+        'ja-JP': 'Pipeline Manager・Plan・Git・Editor ウィンドウの AI パネルが履歴を記録し、他のペインからメッセージを受け取れ、どのウィンドウにあるかを表示します。ウィンドウを閉じるとパネルも終了し、Navide を再起動すると元のセッションを再開します。',
+      },
+      {
+        'zh-TW': 'Plans 直接讀寫計畫檔，大型計畫庫載入更快；每次存取仍由 Navide 授權，Execution Policy 照常生效。「設定 → 擴充套件」會列出 Plans，並揭露每個擴充套件宣告會讀寫的檔案範圍。',
+        'en-US': 'Plans reads and writes plan files directly, so large libraries load faster, while Navide still authorizes every access and Execution Policy keeps applying. Settings → Extensions now lists Plans and shows the files each extension declares it reads and writes.',
+        'ja-JP': 'Plans が計画ファイルを直接読み書きするようになり、大きなライブラリの読み込みが速くなりました。各アクセスは引き続き Navide が承認し、Execution Policy も適用されます。「設定 → 拡張機能」に Plans が表示され、各拡張機能が読み書きを宣言したファイル範囲も確認できます。',
+      },
+      {
+        'zh-TW': '聊天室：在已綁定的 Telegram、Discord、Slack 聊天室輸入 /menu，就能用按鈕把這個 pane 的提示詞與 skill 送給它；斷線 5 秒就重連（原本 30 秒）；確認按鈕在電腦上回答、被新提問取代、回合結束或逾時後會標示原因並收起，不會再按出「這個確認已失效」。',
+        'en-US': 'Chats: type /menu in a bound Telegram, Discord or Slack chat to send the pane one of its prompts or skills with a button. A dropped connection retries after 5 s instead of 30 s, and a confirmation answered at the computer, replaced by a newer one, outlived by its turn or timed out says why and drops its buttons, instead of answering "this confirmation has expired".',
+        'ja-JP': 'チャット：バインド済みの Telegram・Discord・Slack のチャットで /menu と入力すると、そのペインのプロンプトやスキルをボタンで送れます。切断後 5 秒で再接続します（以前は 30 秒）。コンピューターで回答された、新しい確認に置き換えられた、ターンが終わった、または期限切れになった確認は理由を表示してボタンを外し、「この確認は無効です」と返すことはなくなりました。',
+      },
+      {
+        'zh-TW': '其他：排程會跟著重建的 pane 走，目標一直不在會自動停用並通知你；某個工作區的 Plans 後端停止時會跳出通知並說明怎麼恢復；結束 Navide 時若被取消，後端與插件會自動回復；Windows 傳給 Claude pane 的中文與多行訊息不再亂碼（#147）；Git 狀態讀取失敗或被截斷時不再假裝乾淨（#144）；修補多個相依套件的安全性弱點。',
+        'en-US': 'Also: schedules follow a rebuilt pane and turn off with a notice when their target stays gone; you are told when a workspace’s Plans backend stops, and how to bring it back; a quit that gets cancelled brings the backend and extensions back; on Windows, Chinese and multi-line messages reach Claude panes intact (#147); Git no longer shows a failed or truncated status as clean (#144); and several dependency security advisories are patched.',
+        'ja-JP': 'そのほか：スケジュールは再構築されたペインに追従し、対象が見つからない状態が続くと通知して停止します。ワークスペースの Plans バックエンドが停止すると、通知で復旧方法をお知らせします。終了がキャンセルされた場合は、バックエンドと拡張機能が自動で元に戻ります。Windows で Claude ペインに送る中国語や複数行のメッセージが文字化けしなくなり（#147）、Git の状態読み取りが失敗または打ち切られてもクリーンと表示しなくなりました（#144）。依存パッケージのセキュリティ勧告にも対応しました。',
+      },
+    ],
+    note: {
+      'zh-TW': '已經用過 Navide 的人不會自動看到導覽，只有全新安裝才會出現；隨時可以按「略過導覽」整段結束。想再看一次（Welcome 畫面也可以）：輔助說明 → 首次使用導覽…',
+      'en-US': 'Existing installs never get the tour on their own — only a fresh install does — and Skip tour ends it at any point. To see it again, even from Welcome: Help → First-Run Tour…',
+      'ja-JP': 'すでに Navide を使っている環境では自動で表示されず、新規インストール時のみ表示されます。「ツアーをスキップ」でいつでも終了できます。もう一度見るには（Welcome 画面からも可）：ヘルプ → はじめてのツアー…',
+    },
+  },
+  {
     version: '0.2.14',
     title: {
       'zh-TW': '擴充套件自帶後端（沙盒）、更安全的 Windows Guard、綁定前先確認',
