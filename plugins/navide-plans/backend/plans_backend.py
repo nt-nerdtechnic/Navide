@@ -16,6 +16,7 @@ import math
 import os
 import queue
 import re
+import stat
 import sys
 import threading
 import uuid
@@ -647,7 +648,10 @@ def _list_names(origin: dict[str, Any], rel_path: str, *, discovery: bool = Fals
     except OSError as exc:
         _log(f"list {rel_path}: {exc}")
         raise BridgeFailure("BACKEND_UNAVAILABLE") from None
-    return [e.name for e in entries[:_MAX_DIRECTORY_ENTRIES] if not e.name.startswith(".")]
+    names = [e.name for e in entries if not e.name.startswith(".")]
+    if len(names) > _MAX_DIRECTORY_ENTRIES:
+        _log(f"list {rel_path}: {len(names)} entries, only the first {_MAX_DIRECTORY_ENTRIES} are used")
+    return names[:_MAX_DIRECTORY_ENTRIES]
 
 
 def _decode_chunk(data: bytes, final: bool) -> tuple[str, int]:
@@ -1132,15 +1136,49 @@ def _list_plans(origin: dict[str, Any]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
 
+    def _unreadable_dir(rel_dir: str, code: str, detail: Any) -> None:
+        # Listed in the shape of an unreadable document, so a plan directory
+        # the user cannot see into is not silently missing from the list.
+        _log(f"plan directory {rel_dir} could not be read: {detail}")
+        entries.append(
+            {
+                "rel_path": rel_dir,
+                "name": rel_dir.rsplit("/", 1)[-1],
+                "stage": None,
+                "overview": "",
+                "todos": {"total": 0, "by_status": {}},
+                "mtime": None,
+                "kind": "unreadable",
+                "meta": None,
+                "reason": f"plan directory could not be read ({code})",
+            }
+        )
+
     def _scan_dir(rel_dir: str) -> None:
+        # Only a directory that does not exist is skipped quietly.
         try:
-            if not _stat(origin, rel_dir)[0]:
-                return
-            names = _list_names(origin, rel_dir)
+            target = _guarded_path(origin, rel_dir, allow_internal_root=True, allow_mockups=True)
         except BridgeFailure as error:
-            if error.code == "BACKEND_UNAVAILABLE":
+            # A path the guard refuses does not exist for us; the guard logged it.
+            if error.code == "WORKSPACE_SCOPE_VIOLATION":
                 return
             raise
+        try:
+            mode = target.stat().st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            return
+        except OSError as exc:
+            _unreadable_dir(rel_dir, "BACKEND_UNAVAILABLE", exc)
+            return
+        if not stat.S_ISDIR(mode):
+            return
+        try:
+            names = _list_names(origin, rel_dir)
+        except BridgeFailure as error:
+            if error.code == "USER_CANCELLED" or _closing:
+                raise
+            _unreadable_dir(rel_dir, error.code, error.code)
+            return
         for name in sorted((n for n in names if isinstance(n, str)), key=lambda s: s.lower()):
             if not is_plan_doc_name(name):
                 continue

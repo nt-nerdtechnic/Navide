@@ -118,3 +118,97 @@ def test_a_write_failure_is_classified_without_matching_its_message(capsys: pyte
     assert conflict.code == "CONFLICT"
     err = capsys.readouterr().err
     assert "part too large" in err and "content too large" in err
+
+
+# ── M3: a plan directory that cannot be read is reported, not dropped ───────
+
+
+def _listed(root: Path) -> dict[str, dict[str, Any]]:
+    return {entry["rel_path"]: entry for entry in plans_backend._list_plans(_origin(root))}
+
+
+def _skip_if_modes_ignored(path: Path) -> None:
+    if os.access(path, os.R_OK):
+        pytest.skip("running with privileges that ignore file modes")
+
+
+def test_a_plan_directory_that_cannot_be_listed_is_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _workspace(tmp_path)
+    plans = root / ".agent-team" / "plans"
+    (plans / "hidden_aaaaaa.html").write_text("<html></html>", encoding="utf-8")
+    (root / "docs" / "plans").mkdir(parents=True)
+    (root / "docs" / "plans" / "kept_bbbbbb.html").write_text("<html></html>", encoding="utf-8")
+    plans.chmod(0)
+    try:
+        _skip_if_modes_ignored(plans)
+        listed = _listed(root)
+    finally:
+        plans.chmod(0o755)
+    entry = listed[".agent-team/plans"]
+    assert entry["kind"] == "unreadable"
+    assert entry["meta"] is None and entry["stage"] is None
+    assert "BACKEND_UNAVAILABLE" in entry["reason"]
+    assert listed["docs/plans/kept_bbbbbb.html"]["kind"] == "document"
+    err = capsys.readouterr().err
+    assert ".agent-team/plans" in err and "Permission denied" in err
+
+
+def test_a_plan_directory_that_cannot_be_stat_is_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _workspace(tmp_path)
+    parent = root / ".agent-team"
+    parent.chmod(0)
+    try:
+        _skip_if_modes_ignored(parent)
+        listed = _listed(root)
+    finally:
+        parent.chmod(0o755)
+    assert listed[".agent-team/plans"]["kind"] == "unreadable"
+    err = capsys.readouterr().err
+    assert ".agent-team/plans" in err and "Permission denied" in err
+
+
+def test_a_missing_plan_directory_stays_quiet(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _workspace(tmp_path)
+    assert _listed(root) == {}
+    assert capsys.readouterr().err == ""
+
+
+def test_a_plan_directory_the_guard_refuses_is_logged_not_listed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _workspace(tmp_path)
+    outside = tmp_path / "outside-plans"
+    outside.mkdir()
+    (outside / "secret_cccccc.html").write_text("<html></html>", encoding="utf-8")
+    (root / "docs").mkdir()
+    os.symlink(outside, root / "docs" / "plans")
+    assert _listed(root) == {}
+    assert "docs/plans" in capsys.readouterr().err
+
+
+def test_hidden_entries_do_not_use_up_the_listing_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _workspace(tmp_path)
+    plans = root / ".agent-team" / "plans"
+    for name in (".a", ".b", ".c", "x_111111.html", "y_222222.html"):
+        (plans / name).write_text("", encoding="utf-8")
+    monkeypatch.setattr(plans_backend, "_MAX_DIRECTORY_ENTRIES", 3)
+    assert plans_backend._list_names(_origin(root), ".agent-team/plans") == ["x_111111.html", "y_222222.html"]
+
+
+def test_a_truncated_listing_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _workspace(tmp_path)
+    plans = root / ".agent-team" / "plans"
+    for index in range(5):
+        (plans / f"p{index}_aaaaaa.html").write_text("", encoding="utf-8")
+    monkeypatch.setattr(plans_backend, "_MAX_DIRECTORY_ENTRIES", 3)
+    assert len(plans_backend._list_names(_origin(root), ".agent-team/plans")) == 3
+    err = capsys.readouterr().err
+    assert ".agent-team/plans" in err and "5" in err and "3" in err
