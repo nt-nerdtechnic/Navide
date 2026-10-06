@@ -44,6 +44,8 @@ All notable released changes to Navide will be documented in this file. The form
 - A schedule rebound to a rebuilt pane clears its red "target gone" marks, and asks to be switched back on only while it is still off.
 - Usage polling fails only the vendor whose credential store cannot be read, instead of stopping the whole cycle.
 - Windows hooks use a random temp file name, so leftover files can no longer silence every hook.
+- Quitting Navide no longer hangs at 100% CPU while it closes the terminals.
+- When a CLI exits on its own, its child processes, such as MCP servers, are cleaned up even when its terminal closes before the CLI has finished exiting.
 - A pane whose session the server already dropped is no longer retried and warned about on every sweep.
 - Security updates: tinypool, vue (@vue/server-renderer), source-map-js, dompurify and katex.
 - `cli_send` to a chat sender tells the agent to reply with an MSG block instead of failing with an unknown target.

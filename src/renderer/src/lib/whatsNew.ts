@@ -149,9 +149,9 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': 'チャット：バインド済みの Telegram・Discord・Slack のチャットで /menu と入力すると、そのペインのプロンプトやスキルをボタンで送れます。切断後 5 秒で再接続します（以前は 30 秒）。コンピューターで回答された、新しい確認に置き換えられた、ターンが終わった、または期限切れになった確認は理由を表示してボタンを外し、「この確認は無効です」と返すことはなくなりました。',
       },
       {
-        'zh-TW': '其他：排程會跟著重建的 pane 走，目標一直不在會自動停用並通知你；某個工作區的 Plans 後端停止時會跳出通知並說明怎麼恢復；結束 Navide 時若被取消，後端與插件會自動回復；Windows 傳給 Claude pane 的中文與多行訊息不再亂碼（#147）；Git 狀態讀取失敗或被截斷時不再假裝乾淨（#144）；修補多個相依套件的安全性弱點。',
-        'en-US': 'Also: schedules follow a rebuilt pane and turn off with a notice when their target stays gone; you are told when a workspace’s Plans backend stops, and how to bring it back; a quit that gets cancelled brings the backend and extensions back; on Windows, Chinese and multi-line messages reach Claude panes intact (#147); Git no longer shows a failed or truncated status as clean (#144); and several dependency security advisories are patched.',
-        'ja-JP': 'そのほか：スケジュールは再構築されたペインに追従し、対象が見つからない状態が続くと通知して停止します。ワークスペースの Plans バックエンドが停止すると、通知で復旧方法をお知らせします。終了がキャンセルされた場合は、バックエンドと拡張機能が自動で元に戻ります。Windows で Claude ペインに送る中国語や複数行のメッセージが文字化けしなくなり（#147）、Git の状態読み取りが失敗または打ち切られてもクリーンと表示しなくなりました（#144）。依存パッケージのセキュリティ勧告にも対応しました。',
+        'zh-TW': '其他：排程會跟著重建的 pane 走，目標一直不在會自動停用並通知你；某個工作區的 Plans 後端停止時會跳出通知並說明怎麼恢復；結束 Navide 時若被取消，後端與插件會自動回復；結束 Navide 時關閉終端機不再卡住、CPU 飆到 100%；CLI 自行結束時，它啟動的子行程（例如 MCP server）會一併清掉；Windows 傳給 Claude pane 的中文與多行訊息不再亂碼（#147）；Git 狀態讀取失敗或被截斷時不再假裝乾淨（#144）；修補多個相依套件的安全性弱點。',
+        'en-US': 'Also: schedules follow a rebuilt pane and turn off with a notice when their target stays gone; you are told when a workspace’s Plans backend stops, and how to bring it back; a quit that gets cancelled brings the backend and extensions back; quitting no longer hangs at 100% CPU while closing terminals; a CLI that exits on its own no longer leaves its child processes, such as MCP servers, running; on Windows, Chinese and multi-line messages reach Claude panes intact (#147); Git no longer shows a failed or truncated status as clean (#144); and several dependency security advisories are patched.',
+        'ja-JP': 'そのほか：スケジュールは再構築されたペインに追従し、対象が見つからない状態が続くと通知して停止します。ワークスペースの Plans バックエンドが停止すると、通知で復旧方法をお知らせします。終了がキャンセルされた場合は、バックエンドと拡張機能が自動で元に戻ります。終了時にターミナルを閉じる処理で止まって CPU が 100% になることはなくなりました。CLI が自分で終了したとき、起動した子プロセス（MCP サーバーなど）も片付けられます。Windows で Claude ペインに送る中国語や複数行のメッセージが文字化けしなくなり（#147）、Git の状態読み取りが失敗または打ち切られてもクリーンと表示しなくなりました（#144）。依存パッケージのセキュリティ勧告にも対応しました。',
       },
     ],
     note: {
