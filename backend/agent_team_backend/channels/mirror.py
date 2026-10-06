@@ -47,6 +47,7 @@ ECHO_MARKER_CHARS = 40
 ROW_SEEN_MAX = 2000
 DELEGATION_DEDUP_S = 60.0
 TOPIC_GRACE_S = 5.0  # a re-keyed (rebuilt/detached) pane re-registers within this
+NO_TOPIC_RETRY_S = 30 * 60.0  # a chat that is not a forum may turn topics on later
 DEFAULT_RATE_PER_MIN = 60
 DEFAULT_BURST = 5
 
@@ -359,8 +360,8 @@ class Mirror:
         self._seen_children: set[str] = set()
         self._topic_failed: set[str] = set()
         # Chats that said they cannot have topics (a Telegram group that is not a
-        # forum): not asked again while this process runs.
-        self._no_topic_chats: set[str] = set()
+        # forum), mapped to when they may be asked again.
+        self._no_topic_chats: dict[str, float] = {}
         self._rows_seen: OrderedDict[str, None] = OrderedDict()
         self._delegations: OrderedDict[str, float] = OrderedDict()
         self._sync_task: asyncio.Task[None] | None = None
@@ -630,8 +631,9 @@ class Mirror:
             return
         opened = MSG_CHILD_OPENED.format(parent=parent["name"], child=cname)
         chat = f"{root.platform}:{root.account}:{root.chat_id}"
+        now = self.m._clock()
         if adapter.capabilities.threads and adapter.capabilities.create_location \
-                and cid not in self._topic_failed and chat not in self._no_topic_chats \
+                and cid not in self._topic_failed and now >= self._no_topic_chats.get(chat, now) \
                 and not any(b.pane_id == cid for b in self.m.store.bindings()):
             try:
                 loc = await adapter.create_location(root.chat_id, f"↳ {cname}")
@@ -639,13 +641,18 @@ class Mirror:
                                   parent_pane_id=str(parent.get("pane_id") or root.pane_id), auto=True)
             except Exception as exc:  # noqa: BLE001 — falls back to prefixed messages in the parent chat
                 self._topic_failed.add(cid)
-                if "not a forum" in str(exc).lower():
-                    self._no_topic_chats.add(chat)
+                if "not a forum" in str(exc).lower() and chat in self._no_topic_chats:
+                    # The retry after NO_TOPIC_RETRY_S: one quiet line per chat per window.
+                    self._no_topic_chats[chat] = now + NO_TOPIC_RETRY_S
+                    log.info("channels: child topic for %s failed again: %s", cname, exc)
+                elif "not a forum" in str(exc).lower():
+                    self._no_topic_chats[chat] = now + NO_TOPIC_RETRY_S
                     log.warning("channels: child topic for %s failed: %s; children of this chat use "
                                 "prefixed messages from now on", cname, exc)
                 else:
                     log.warning("channels: child topic for %s failed: %s", cname, exc)
             else:
+                self._no_topic_chats.pop(chat, None)
                 await self.m._changed()
                 if shows(root.verbosity, "standard"):
                     self.post(root.location(), opened, root.pane_id)

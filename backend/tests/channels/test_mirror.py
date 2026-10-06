@@ -20,7 +20,7 @@ from agent_team_backend.channels.store import ChannelStore
 from agent_team_backend.db import Database
 
 from .test_manager import (  # noqa: F401 — fixtures and helpers shared with the manager suite
-    Env, _said, _until, env, fast_timers,
+    Env, _said, _until, clocked, env, fast_timers,
 )
 
 NO_THREADS = Capabilities(threads=False, create_location=False, edit=False, typing=False,
@@ -440,6 +440,67 @@ async def test_a_chat_that_is_not_a_forum_is_asked_for_a_topic_only_once(env: En
     assert len(warnings) == 1
     env.turn_complete("pane-3", "still reported")
     await _until(lambda: _said(env, "↳ linter ✅ 完成"))
+
+
+def _flaky_forum(env: Env) -> list[str]:
+    # A plain group until `env.forum_on` is set: then it can have topics.
+    calls: list[str] = []
+    env.forum_on = False  # type: ignore[attr-defined]
+
+    async def create(chat_id: str, title: str) -> Location:
+        calls.append(title)
+        if not env.forum_on:  # type: ignore[attr-defined]
+            raise ChannelSendError("這個群組沒有開啟主題功能 (the chat is not a forum)")
+        return Location(env.tg.platform, env.tg.account, chat_id, f"t-{len(calls)}")
+
+    env.tg.create_location = create  # type: ignore[method-assign]
+    return calls
+
+
+async def test_a_chat_that_is_not_a_forum_is_not_asked_again_within_the_retry_window(clocked) -> None:
+    env, clock = clocked
+    calls = _flaky_forum(env)
+    panes = _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
+    await env.m.mirror.sync_lineage()
+    clock.t += mirror_mod.NO_TOPIC_RETRY_S - 1
+    panes.append(_pane("pane-3", "linter", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    assert calls == ["↳ tester"]
+
+
+async def test_a_chat_that_is_not_a_forum_is_asked_again_after_the_retry_window(clocked, caplog) -> None:
+    # A group can turn topics on later; that used to need an app restart.
+    env, clock = clocked
+    calls = _flaky_forum(env)
+    caplog.set_level(logging.INFO, logger="agent_team_backend.channels.mirror")
+    panes = _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
+    await env.m.mirror.sync_lineage()
+    clock.t += mirror_mod.NO_TOPIC_RETRY_S + 1
+    panes.append(_pane("pane-3", "linter", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    assert calls == ["↳ tester", "↳ linter"]
+    # Still not a forum: one info line, no second warning, and the chat is remembered again.
+    topic = [r for r in caplog.records if "topic" in r.getMessage()]
+    assert [r.levelno for r in topic] == [logging.WARNING, logging.INFO]
+    panes.append(_pane("pane-4", "fmt", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    assert calls == ["↳ tester", "↳ linter"]
+
+
+async def test_a_chat_that_became_a_forum_gets_topics_after_the_retry_window(clocked) -> None:
+    env, clock = clocked
+    calls = _flaky_forum(env)
+    panes = _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
+    await env.m.mirror.sync_lineage()
+    env.forum_on = True  # type: ignore[attr-defined]
+    clock.t += mirror_mod.NO_TOPIC_RETRY_S + 1
+    panes.append(_pane("pane-3", "linter", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    panes.append(_pane("pane-4", "fmt", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    assert calls == ["↳ tester", "↳ linter", "↳ fmt"]
+    assert {b.pane_id for b in env.store.bindings() if b.auto} == {"pane-3", "pane-4"}
+    assert env.m.mirror._no_topic_chats == {}
 
 
 async def test_closed_child_releases_its_topic_and_says_so(env: Env) -> None:
