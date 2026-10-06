@@ -168,3 +168,18 @@ def test_agent_skills_follow_delivery() -> None:
     reads_root = FakeSkillStore([{"key": "codex", "state": "wired", "reads_shared_root": True}])
     assert qm.agent_skills(reads_root, "codex") == ["given", "shared-a", "shared-b", "theirs"]
     assert qm.agent_skills(wired, "opencode") == []  # no verified syntax
+
+
+def test_paging_back_and_forth_does_not_pile_up_tokens() -> None:
+    # Each render mints a page's buttons; only the last few renders keep theirs,
+    # instead of every one living out the menu's TTL.
+    menus = qm.QuickMenus(clock=Clock())
+    menu = _menu(menus, prompts=40)
+    _, first = menus.render(menu, 0)
+    per_page = sum(len(row) for row in first)
+    for page in [1, 0] * 50:
+        _, rows = menus.render(menu, page)
+    assert len(menus._tokens) <= (per_page + 1) * qm.MAX_RENDERS_PER_MENU
+    # The page on screen still works.
+    kind, token = qm.parse_callback(rows[0][0][1])
+    assert menus.press(kind, token, "telegram:default:-100:50") is not None

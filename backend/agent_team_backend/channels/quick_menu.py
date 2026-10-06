@@ -24,6 +24,10 @@ TOKEN_ALPHABET = "abcdefghijkmnopqrstuvwxyz23456789"
 TOKEN_LENGTH = 8
 MENU_TTL_S = 1800.0
 MAX_MENUS = 200
+# A menu's buttons stay pressable for its last few renders (a page edited away,
+# or left on a message a failed edit replaced); older ones are dropped, so
+# paging back and forth cannot pile tokens up for the menu's whole TTL.
+MAX_RENDERS_PER_MENU = 3
 
 _CALLBACK_RE = re.compile(rf"^nv2:([psg]):([{TOKEN_ALPHABET}]{{{TOKEN_LENGTH}}})$")
 _MENTION_RE = re.compile(r"^(?:<[@!][^>]*>\s*)+")
@@ -221,6 +225,7 @@ class QuickMenus:
     clock: Callable[[], float] = time.monotonic
     _menus: dict[str, Menu] = field(default_factory=dict)
     _tokens: dict[str, _Token] = field(default_factory=dict)
+    _renders: dict[str, list[list[str]]] = field(default_factory=dict)  # menu id -> tokens per render
 
     def create(self, *, platform: str, location_key: str, pane_id: str, pane_title: str,
                agent_key: str, lang: str, prompts: list[dict[str, Any]], skills: list[str]) -> Menu | None:
@@ -258,6 +263,11 @@ class QuickMenus:
             nav.append((text(menu.lang, "next"), self._mint(menu, "g", str(page + 1), "")))
         if nav:
             rows.append(nav)
+        renders = self._renders.setdefault(menu.id, [])
+        renders.append([data[len(CALLBACK_PREFIX) + 2:] for row in rows for _, data in row])
+        while len(renders) > MAX_RENDERS_PER_MENU:
+            for token in renders.pop(0):
+                self._tokens.pop(token, None)
         return "\n".join(lines), rows
 
     def press(self, kind: str, token: str, location_key: str) -> Press | None:
@@ -284,6 +294,7 @@ class QuickMenus:
 
     def _drop(self, menu_id: str) -> None:
         self._menus.pop(menu_id, None)
+        self._renders.pop(menu_id, None)
         for token in [t for t, e in self._tokens.items() if e.menu_id == menu_id]:
             del self._tokens[token]
 
