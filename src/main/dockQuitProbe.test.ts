@@ -399,6 +399,29 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
     }
   })
 
+  // The AI terminal storage owners and the file picker host take down their
+  // IPC listeners when they are disposed, for good. A quit stopped at
+  // will-quit keeps the app running, so they must still be there.
+  it('keeps the terminal storage owners and the file picker up until the quit is real', { timeout: 60_000 }, async () => {
+    const { beforeQuit, willQuit, quit } = await bootNativeQuit()
+    const { TerminalStorageOwnerService } = await import('./terminalStorageOwner')
+    const { FilePickerHostService } = await import('./filePicker')
+    const ownersDisposed = vi.spyOn(TerminalStorageOwnerService.prototype, 'dispose')
+    const pickerDisposed = vi.spyOn(FilePickerHostService.prototype, 'dispose')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await beforeQuit({ preventDefault: vi.fn() })
+      willQuit()
+      expect(ownersDisposed).not.toHaveBeenCalled()
+      expect(pickerDisposed).not.toHaveBeenCalled()
+      quit()
+      expect(ownersDisposed).toHaveBeenCalledTimes(1)
+      expect(pickerDisposed).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('leaves a quit that reached quit alone', { timeout: 60_000 }, async () => {
     const { beforeQuit, willQuit, quit, appQuitting } = await bootNativeQuit()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })

@@ -5612,10 +5612,10 @@ async function teardownBackendAndQuit(): Promise<void> {
 }
 
 // Not on will-quit: a will-quit listener can still prevent the quit, and only
-// 'quit' follows when none did.
-app.on('quit', () => quitCancelWatch.disarm())
-
-app.on('will-quit', () => {
+// 'quit' follows when none did. Disposing takes the services' IPC listeners
+// down for good, so it waits for the same signal.
+app.on('quit', () => {
+  quitCancelWatch.disarm()
   terminalStorageOwnerService.dispose()
   filePickerHostService.dispose()
 })
