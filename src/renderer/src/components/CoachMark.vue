@@ -5,7 +5,6 @@ import { findTourAnchor } from '../lib/tours'
 import {
   COACH_DONE_MS,
   COACH_MISSING_CENTRE_MS,
-  COACH_MISSING_SKIP_MS,
   COACH_TICK_MS,
   welcomeActionAlreadyDone,
   welcomeActionDone,
@@ -77,6 +76,13 @@ const rect = ref<DOMRect | null>(null)
 // is briefly gone; null puts the bubble in the middle.
 const placeRect = ref<DOMRect | null>(null)
 const targetId = ref('')
+// The step's control is not on screen and its fallback stands in: the bubble
+// points at where the control will appear, with the fallback's line.
+const onFallback = ref(false)
+// Where the bubble sits: which of the spots (see place()) and its position.
+// Kept from tick to tick while it still fits and overlaps nothing, so the
+// bubble does not hop between spots as the layout settles.
+const spot = ref<{ kind: number; left: number; top: number } | null>(null)
 // What the control has opened (the step's `allow`), cut out of the mask too.
 const allowRects = ref<DOMRect[]>([])
 const viewport = ref({ width: window.innerWidth, height: window.innerHeight })
@@ -108,6 +114,8 @@ function enter(): void {
   enteredAt.value = Date.now()
   rect.value = null
   placeRect.value = null
+  spot.value = null
+  onFallback.value = false
   targetId.value = ''
   const current = step.value
   if (!current) {
@@ -144,13 +152,16 @@ function locate(): void {
       .map((el) => el.getBoundingClientRect())
       .filter((r) => r.width > 0 && r.height > 0),
   )
-  const el = findTourAnchor(current.anchor(props.facts()))
+  const control = findTourAnchor(current.anchor(props.facts()))
+  const el = control ?? (current.fallback ? findTourAnchor(current.fallback.anchor) : null)
+  onFallback.value = !control && !!current.fallback
   if (el) {
     rect.value = el.getBoundingClientRect()
     placeRect.value = rect.value
     targetId.value = el.id
     missingSince = 0
     lost.value = false
+    place()
     return
   }
   rect.value = null
@@ -159,12 +170,9 @@ function locate(): void {
   if (!missingSince) missingSince = now
   // Briefly gone (a re-render, a move): the bubble keeps its place.
   if (now - missingSince >= COACH_MISSING_CENTRE_MS) placeRect.value = null
+  place()
   if (doneShown.value || props.replay) return
-  if (current.skipIfMissing) {
-    if (now - missingSince >= COACH_MISSING_SKIP_MS) advance()
-  } else if (now - missingSince >= COACH_MISSING_CENTRE_MS) {
-    lost.value = true
-  }
+  if (now - missingSince >= COACH_MISSING_CENTRE_MS) lost.value = true
 }
 
 // The step's action happened: say so, then move on.
@@ -248,10 +256,14 @@ const ringStyle = computed((): Record<string, string> => {
 
 // Beside the control, clear of every hole — the control and what it opened —
 // so a menu the control opens is never under the bubble: below it, above it,
-// right of it, left of it, then a corner of the window.
-const bubbleStyle = computed((): Record<string, string> => {
+// right of it, left of it, then a corner of the window. The spot it had is
+// tried first, so it only moves when that spot now overlaps or no longer fits.
+function place(): void {
   const r = placeRect.value
-  if (!r) return { pointerEvents: 'auto', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
+  if (!r) {
+    spot.value = null
+    return
+  }
   const { width: vw, height: vh } = viewport.value
   const w = BUBBLE_W
   const h = BUBBLE_H
@@ -270,8 +282,17 @@ const bubbleStyle = computed((): Record<string, string> => {
   const fits = ([sx, sy]: [number, number]): boolean => sx >= GAP && sy >= GAP && sx + w <= vw - GAP && sy + h <= vh - GAP
   const clear = ([sx, sy]: [number, number]): boolean =>
     holes.value.every(([hx, hy, hw, hh]) => sx >= hx + hw || sx + w <= hx || sy >= hy + hh || sy + h <= hy)
-  const [left, top] = spots.find((p) => fits(p) && clear(p)) ?? spots.find(fits) ?? spots[0]
-  return { pointerEvents: 'auto', top: `${top}px`, left: `${left}px` }
+  const ok = (i: number): boolean => fits(spots[i]) && clear(spots[i])
+  const kept = spot.value?.kind
+  let kind = kept !== undefined && ok(kept) ? kept : spots.findIndex((_, i) => ok(i))
+  if (kind < 0) kind = Math.max(0, spots.findIndex(fits))
+  spot.value = { kind, left: spots[kind][0], top: spots[kind][1] }
+}
+
+const bubbleStyle = computed((): Record<string, string> => {
+  const at = spot.value
+  if (!at) return { pointerEvents: 'auto', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
+  return { pointerEvents: 'auto', top: `${at.top}px`, left: `${at.left}px` }
 })
 </script>
 
@@ -301,8 +322,8 @@ const bubbleStyle = computed((): Record<string, string> => {
         aria-live="polite"
       >
         <p class="coach-progress">{{ t('tour.progress', { n: index + 1, total: steps.length }) }}</p>
-        <p class="coach-text">{{ t(step.textKey) }}</p>
-        <p v-if="lost && !rect" class="coach-missing" data-testid="coach-missing">{{ t('tour.welcome.missing') }}</p>
+        <p class="coach-text">{{ t(onFallback && step.fallback ? step.fallback.textKey : step.textKey) }}</p>
+        <p v-if="lost && !rect && !step.fallback" class="coach-missing" data-testid="coach-missing">{{ t('tour.welcome.missing') }}</p>
         <p v-if="doneShown" class="coach-done" data-testid="coach-done">{{ t('tour.welcome.doneFeedback') }}</p>
         <div class="coach-actions">
           <button type="button" class="coach-link" data-testid="coach-skip" @click="end(false)">

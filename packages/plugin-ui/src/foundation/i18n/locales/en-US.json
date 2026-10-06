@@ -9693,6 +9693,7 @@
       "talkMention": "Open one more pane, then type {'@'} in either pane and pick the other to give it a task.",
       "talkDrag": "Or drag one pane’s title bar onto another pane’s terminal to bring its conversation along.",
       "usageAccount": "Rest the pointer here to see the quota and account, and switch accounts right here if you need to.",
+      "usageAccountMissing": "The quota and account show up here, on the pane’s title bar. They are not there yet because this CLI’s quota has not been read (a new pane takes a moment; some CLIs have none). Once the badge appears, rest the pointer on it to see the quota and switch accounts.",
       "next": "Next",
       "doneFeedback": "✓ Done",
       "finished": "Tour complete. You can see it again from Help → First-Run Tour….",

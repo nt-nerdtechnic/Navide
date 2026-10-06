@@ -41,9 +41,10 @@ export interface CoachStep {
   textKey: string
   /** The action that ends the step. */
   waitFor: WelcomeAction
-  /** Pass over the step when its control stays away (a CLI with no quota
-   *  data shows no badge). Other steps wait for their control. */
-  skipIfMissing?: boolean
+  /** Where the control will appear, and the line to show there, while the
+   *  control itself is not on screen (the quota badge before the CLI's usage
+   *  is read, or for a CLI with none). The step is never passed over. */
+  fallback?: { anchor: string; textKey: string }
   /** What the control opens (its menu, its popover): left usable under the
    *  tour's mask, which otherwise takes every click outside the control. */
   allow?: string[]
@@ -84,15 +85,13 @@ export const WELCOME_STEPS: CoachStep[] = [
     anchor: () => '[data-tour="usage-badge"]',
     textKey: `${T}.usageAccount`,
     waitFor: 'usage',
-    skipIfMissing: true,
+    fallback: { anchor: '[data-tour="pane-header"]', textKey: `${T}.usageAccountMissing` },
     allow: ['.usage-pop'],
   },
 ]
 
 /** How long a bubble shows "done" before moving on. */
 export const COACH_DONE_MS = 800
-/** How long a skipIfMissing step waits for its control before passing over. */
-export const COACH_MISSING_SKIP_MS = 3_000
 /** How long a first-run bubble waits for a missing control before showing in
  *  the middle, saying so, with Next — never sitting unseen. */
 export const COACH_MISSING_CENTRE_MS = 2_000

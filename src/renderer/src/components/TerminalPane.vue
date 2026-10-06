@@ -605,6 +605,7 @@ onMounted(() => {
     <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
       :class="['pane-header', { 'drag-over': isReorderDragOver }]"
+      data-tour="pane-header"
       :draggable="!editingTitle"
       :title="skillMenuActive ? '' : $t('pane.terminal.drag-to-tab-tooltip')"
       @click="emit('set-focus', $event)"

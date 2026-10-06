@@ -77,8 +77,19 @@ describe('welcome tour steps', () => {
     expect(source('src/renderer/src/components/UsageBadge.vue')).toContain('class="usage-pop"')
   })
 
-  it('passes over the quota bubble when this CLI shows no quota badge, and only that one', () => {
-    expect(WELCOME_STEPS.filter((s) => s.skipIfMissing).map((s) => s.id)).toEqual(['usage-account'])
+  // 09:54: "why did the account and quota check never show?" The quota step
+  // was passed over when the badge was not there yet — on a fresh install it
+  // is not, until the CLI's usage is read — and as the last step that ended
+  // the tour without a word. No step is passed over any more: the quota
+  // bubble falls back to the pane's title bar, where the badge will appear,
+  // with a line saying so.
+  it('never passes over a step; the quota bubble falls back to where the badge will appear', () => {
+    for (const step of WELCOME_STEPS) expect('skipIfMissing' in step, step.id).toBe(false)
+    expect(WELCOME_STEPS.find((s) => s.id === 'usage-account')!.fallback).toEqual({
+      anchor: '[data-tour="pane-header"]',
+      textKey: 'tour.welcome.usageAccountMissing',
+    })
+    expect(WELCOME_STEPS.filter((s) => s.fallback).map((s) => s.id)).toEqual(['usage-account'])
   })
 
   it('points the @ bubble at + until there is a second pane, then at the terminal', () => {
@@ -98,6 +109,7 @@ describe('welcome tour steps', () => {
       'tour.welcome.doneFeedback',
       'tour.welcome.finished',
       'tour.welcome.missing',
+      'tour.welcome.usageAccountMissing',
     ].sort()
     for (const { code, messages } of LOCALES) {
       expect(leafKeys(lookup(messages, 'tour.welcome'), 'tour.welcome').sort(), code).toEqual(used)
@@ -117,6 +129,7 @@ describe('welcome tour steps', () => {
       'open-agent': 'src/renderer/src/components/ControlPane.vue',
       'pane-stage': 'src/renderer/src/App.vue',
       'usage-badge': 'src/renderer/src/components/TerminalPane.vue',
+      'pane-header': 'src/renderer/src/components/TerminalPane.vue',
     }
     const facts = [none, { ...none, agentPanes: 2 }]
     const used = new Set<string>()
@@ -126,6 +139,7 @@ describe('welcome tour steps', () => {
         expect(() => document.querySelectorAll(selector), step.id).not.toThrow()
         for (const [, name] of selector.matchAll(/\[data-tour="([^"]+)"\]/g)) used.add(name)
       }
+      for (const [, name] of (step.fallback?.anchor ?? '').matchAll(/\[data-tour="([^"]+)"\]/g)) used.add(name)
     }
     expect([...used].sort()).toEqual(Object.keys(where).sort())
     for (const name of used) expect(source(where[name]), name).toContain(`data-tour="${name}"`)
@@ -255,6 +269,7 @@ describe('welcome tour text, compiled by vue-i18n', () => {
       'tour.welcome.doneFeedback',
       'tour.welcome.finished',
       'tour.welcome.missing',
+      'tour.welcome.usageAccountMissing',
     ]
     for (const code of ['en-US', 'zh-TW', 'ja-JP']) {
       i18n.global.locale.value = code as typeof i18n.global.locale.value

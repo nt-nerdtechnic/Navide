@@ -11,7 +11,6 @@ import CoachMark from '../CoachMark.vue'
 import {
   COACH_DONE_MS,
   COACH_MISSING_CENTRE_MS,
-  COACH_MISSING_SKIP_MS,
   COACH_TICK_MS,
   type CoachStep,
   type WelcomeFacts,
@@ -300,13 +299,89 @@ describe('CoachMark', () => {
     expect(byTestId('coach-missing')).toBeNull()
   })
 
-  it('passes over a step that asks to when what it points at stays away', async () => {
-    addTarget('b')
-    const w = start({ steps: [{ ...STEPS[0], skipIfMissing: true }, STEPS[1]] })
-    await tick(COACH_MISSING_SKIP_MS - COACH_TICK_MS)
+  // 09:54: the quota step was passed over without its badge, and as the last
+  // step that ended the tour silently. A step with a fallback points at where
+  // its control will appear, saying so, and moves to the control once it shows.
+  const QUOTA: CoachStep = {
+    id: 'quota',
+    anchor: () => '#badge',
+    textKey: 'tour.next',
+    waitFor: 'usage',
+    fallback: { anchor: '#header', textKey: 'tour.welcome.usageAccountMissing' },
+  }
+
+  it('points at where the control will appear, saying so, and never passes the step over', async () => {
+    addTarget('header')
+    const w = start({ steps: [QUOTA] })
+    await tick(30_000)
+    expect(stepId()).toBe('quota')
+    expect(byTestId('coach-ring')!.dataset.target).toBe('header')
+    expect(bubble()!.textContent).toContain(i18n.global.t('tour.welcome.usageAccountMissing'))
+    expect(w.emitted('finish')).toBeUndefined()
     expect(w.emitted('progress')).toBeUndefined()
-    await tick(COACH_TICK_MS * 2)
-    expect(stepId()).toBe('two')
+  })
+
+  it('moves to the control once it shows, with the step\u2019s own line', async () => {
+    addTarget('header')
+    start({ steps: [QUOTA] })
+    await tick()
+    addTarget('badge')
+    await tick()
+    expect(byTestId('coach-ring')!.dataset.target).toBe('badge')
+    expect(bubble()!.textContent).toContain(i18n.global.t('tour.next'))
+    expect(bubble()!.textContent).not.toContain(i18n.global.t('tour.welcome.usageAccountMissing'))
+  })
+
+  it('ends only at Done, even when the last step\u2019s control and fallback never show', async () => {
+    const w = start({ steps: [QUOTA] })
+    await tick(60_000)
+    expect(w.emitted('finish')).toBeUndefined()
+    expect(bubble()!.classList.contains('centred')).toBe(true)
+    expect(bubble()!.textContent).toContain(i18n.global.t('tour.welcome.usageAccountMissing'))
+    byTestId('coach-finish')!.click()
+    expect(w.emitted('finish')).toEqual([[true]])
+  })
+
+  it('moves on from the drag step to the quota step, and stays there', async () => {
+    addTarget('stage')
+    addTarget('header')
+    const DRAG: CoachStep = { id: 'drag', anchor: () => '#stage', textKey: 'tour.back', waitFor: 'drop' }
+    const w = start({ steps: [DRAG, QUOTA] })
+    await tick()
+    facts.dropAt = Date.now() + 1
+    await flushPromises()
+    await tick(COACH_DONE_MS)
+    await tick(10_000)
+    expect(stepId()).toBe('quota')
+    expect(w.emitted('progress')).toEqual([[1]])
+    expect(w.emitted('finish')).toBeUndefined()
+  })
+
+  // "Why does it jump around after the drag?" Placement is redone every tick;
+  // the bubble keeps its spot unless that spot now overlaps a hole or no
+  // longer fits.
+  it('keeps the bubble where it is unless it would overlap or no longer fit', async () => {
+    addTarget('a')
+    start({ steps: [{ ...STEPS[0], allow: ['.menu-it-opens'] }, STEPS[1]] })
+    await tick()
+    const at = (): string => `${bubble()!.style.left},${bubble()!.style.top}`
+    const below = at()
+    const menu = document.createElement('div')
+    menu.className = 'menu-it-opens'
+    vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue({
+      x: 100, y: 134, top: 134, left: 100, right: 340, bottom: 420, width: 240, height: 286,
+      toJSON: () => ({}),
+    } as DOMRect)
+    document.body.append(menu)
+    await tick()
+    const moved = at()
+    expect(moved).not.toBe(below)
+    // The menu closes: the bubble stays where it went, rather than jumping back.
+    menu.remove()
+    await tick()
+    expect(at()).toBe(moved)
+    await tick(COACH_TICK_MS * 8)
+    expect(at()).toBe(moved)
   })
 
   it('follows a step whose target depends on the window', async () => {
@@ -362,7 +437,7 @@ describe('CoachMark', () => {
     it('shows the bubble in the middle, with Next, when what it is about is not on screen', async () => {
       addTarget('b')
       start({ replay: true })
-      await tick(COACH_MISSING_SKIP_MS * 2)
+      await tick(COACH_MISSING_CENTRE_MS * 2)
       expect(stepId()).toBe('one')
       expect(bubble()!.classList.contains('centred')).toBe(true)
       expect(byTestId('coach-ring')).toBeNull()
