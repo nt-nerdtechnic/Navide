@@ -1529,6 +1529,10 @@ export class FrontendPluginManager {
   /** Bound Plans instances whose child spent its restart budget. Agent calls
    *  for them are refused before dispatch until they are unbound. */
   private readonly plansAbandonedBackendInstances = new Set<string>()
+  /** Headless Plans instances a user retry unbound. Their in-flight calls fail
+   *  because of that unbind, not because the backend is unavailable, so they
+   *  must not withdraw v2 again. Instance ids are never reused. */
+  private readonly plansDiscardedBackendInstances = new Set<string>()
   private readonly pendingActivations = new Map<
     string,
     ReturnType<typeof setTimeout> | null
@@ -2131,6 +2135,7 @@ export class FrontendPluginManager {
     for (const [key, instanceId] of this.headlessBackendInstances) {
       if (!key.startsWith(`${PLANS_PLUGIN_ID}\u0000`)) continue
       this.headlessBackendInstances.delete(key)
+      this.plansDiscardedBackendInstances.add(instanceId)
       void this.pluginBackendHost.unbindView(instanceId).catch((error: unknown) => {
         warnMain(
           `[plugin-backend] unbind for ${instanceId} failed: ${
@@ -6527,8 +6532,9 @@ export class FrontendPluginManager {
       return buildError(record.reqId, 'BACKEND_UNAVAILABLE', 'Plans assets are unavailable')
     }
     let dispatched = false
+    let instanceId: string | undefined
     try {
-      const instanceId = await this.bindHeadlessPlansBackend(descriptor, activation, workspacePath)
+      instanceId = await this.bindHeadlessPlansBackend(descriptor, activation, workspacePath)
       const remainingTimeout = deadline - Date.now()
       if (remainingTimeout <= 0) return buildError(record.reqId, 'TIMEOUT', 'Plans request timed out')
       // Calling into the Host child marks a request as dispatched even if the
@@ -6547,7 +6553,10 @@ export class FrontendPluginManager {
       )
       return buildSuccess(record.reqId, result)
     } catch (error) {
-      if (this.isPlansBackendAvailabilityError(error)) {
+      if (
+        this.isPlansBackendAvailabilityError(error) &&
+        !(instanceId && this.plansDiscardedBackendInstances.has(instanceId))
+      ) {
         this.markPlansBackendUnavailable('child-unavailable')
       }
       if (!dispatched) {

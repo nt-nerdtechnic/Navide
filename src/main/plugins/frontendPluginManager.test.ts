@@ -2988,6 +2988,73 @@ describe('Plans private filesystem grant revalidation', () => {
     }
   })
 
+  it('does not let a call on a headless child the retry discarded withdraw Plans v2 again', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '2.0.0'
+    const workspacePath = process.cwd()
+    mgr.registerDescriptor({
+      id: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      requires: ['fs'],
+      devUrl: '',
+      entryFile: '/plugins/navide.plans/frontend/window/index.html',
+      views: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+    }, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID,
+      packageVersion,
+      packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['plans.list'],
+      agentMethods: ['plans.list'],
+      approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: ['fs'], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+    let stopInFlight: (error: unknown) => void = () => undefined
+    const bind = vi.spyOn(PluginBackendHost.prototype, 'bindWorkspace').mockResolvedValue('headless-old')
+    const call = vi.spyOn(PluginBackendHost.prototype, 'call').mockImplementation(
+      () => new Promise((_resolve, reject) => { stopInFlight = reject }),
+    )
+    // Unbinding a child rejects its in-flight calls, as the Host does.
+    const unbind = vi.spyOn(PluginBackendHost.prototype, 'unbindView').mockImplementation(async () => {
+      stopInFlight(new BackendPluginError('PLUGIN_STOPPING'))
+    })
+    try {
+      // An agent runs a long plans call on the headless child ...
+      const inFlight = mgr.executeAgentBackendCallForWorkspace(
+        PLANS_PLUGIN_ID,
+        workspacePath,
+        { reqId: 'agent-list-long', name: 'plans.list', args: {} },
+      )
+      await vi.waitFor(() => expect(call).toHaveBeenCalledOnce())
+
+      // ... while v2 is withdrawn for another reason and the user retries it.
+      mgr.markPlansBackendUnavailable('view-failure')
+      expect(mgr.clearPlansBackendUnavailable()).toBe(true)
+      expect(unbind).toHaveBeenCalledWith('headless-old')
+
+      // The discarded child's stop fails that call, but is not a sign that
+      // the backend is unavailable: the retry stays in effect.
+      await expect(inFlight).resolves.toMatchObject({ ok: false, error: { code: 'PLUGIN_STOPPING' } })
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+    } finally {
+      call.mockRestore()
+      unbind.mockRestore()
+      bind.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
   // A child that spent its restart budget is never restarted. Its workspace's
   // agent calls must fail before dispatch with the recovery steps, and the other
   // workspaces must keep using v2.
