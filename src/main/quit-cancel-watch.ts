@@ -3,8 +3,9 @@
  * and cancels the whole quit — silently, with no event — if any one of those
  * closes is prevented (a renderer's beforeunload, or a close participant that
  * showed up after the quit was prepared). The app then keeps running with its
- * quit flags still set. The only sign is that will-quit never comes, so the
- * quit is given a deadline to reach it.
+ * quit flags still set. The only sign is that 'quit' never comes (nor does it
+ * when a will-quit listener prevents the quit), so the quit is given a
+ * deadline to reach it.
  */
 export interface QuitCancelWatchDeps {
   timeoutMs: number
@@ -17,7 +18,7 @@ export interface QuitCancelWatchDeps {
 export interface QuitCancelWatch {
   /** before-quit let the native quit proceed. */
   arm(): void
-  /** will-quit: the quit got past closing the windows. */
+  /** 'quit': the quit got past closing the windows and will-quit. */
   disarm(): void
 }
 

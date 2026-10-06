@@ -282,7 +282,9 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
     vi.resetModules()
   })
 
-  async function bootNativeQuit(): Promise<{ beforeQuit: BeforeQuit; willQuit: () => void; appQuitting: () => boolean }> {
+  async function bootNativeQuit(): Promise<{
+    beforeQuit: BeforeQuit; willQuit: () => void; quit: () => void; appQuitting: () => boolean
+  }> {
     await import('./index')
     const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
     vi.spyOn(frontendPluginManager, 'hasWindowCloseParticipants').mockReturnValue(false)
@@ -295,9 +297,11 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
       cancelledUnknownWindow: 'a window that has closed since',
     })
     const willQuit = appListeners.filter(([event]) => event === 'will-quit')
+    const quit = appListeners.filter(([event]) => event === 'quit')
     return {
       beforeQuit: appListeners.find(([event]) => event === 'before-quit')![1] as unknown as BeforeQuit,
       willQuit: () => { for (const [, listener] of willQuit) (listener as () => void)() },
+      quit: () => { for (const [, listener] of quit) (listener as () => void)() },
       appQuitting: () => (frontendPluginManager as unknown as { appQuitting: () => boolean }).appQuitting(),
     }
   }
@@ -364,12 +368,29 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
     }
   })
 
-  it('leaves a quit that reached will-quit alone', { timeout: 60_000 }, async () => {
+  // A will-quit listener (ours or anyone's) can still prevent the quit, and
+  // then 'quit' never comes. Only 'quit' says the app is really going down.
+  it('clears the flags when will-quit comes but the quit is prevented there', { timeout: 60_000 }, async () => {
     const { beforeQuit, willQuit, appQuitting } = await bootNativeQuit()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       await beforeQuit({ preventDefault: vi.fn() })
       willQuit()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(appQuitting()).toBe(false)
+      expect(await panelEndingRuns()).toEqual({ endDockSurface: true, releaseAiTerminalOwner: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves a quit that reached quit alone', { timeout: 60_000 }, async () => {
+    const { beforeQuit, willQuit, quit, appQuitting } = await bootNativeQuit()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await beforeQuit({ preventDefault: vi.fn() })
+      willQuit()
+      quit()
       await vi.advanceTimersByTimeAsync(10_000)
       expect(appQuitting()).toBe(true)
       expect(dialogState.notices).toEqual([])
