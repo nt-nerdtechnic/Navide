@@ -35,7 +35,11 @@ describe('first-run welcome tour', () => {
     expect(poll).toContain('const settled = onboardingComplete.value === true && !onboardingCheckFailed.value')
     expect(poll).toContain('eligible: welcomeTour.eligible()')
     // M14: only the window that owns the tour runs it.
-    expect(poll).toContain('owned: settled && welcomeTour.claim()')
+    // L3: a tour that is not pending claims nothing, so a launch after the
+    // tour is over never writes the owner record.
+    expect(poll).toContain('const pending = welcomeTour.pending()')
+    expect(poll).toContain('pending,')
+    expect(poll).toContain('owned: pending && settled && welcomeTour.claim()')
     expect(poll).toMatch(/case 'release':\s+welcomeTour\.release\(\)/)
     expect(poll).toMatch(/case 'stop':\s+welcomeTour\.release\(\)\s+stopWelcomeTourPoll\(\)/)
     expect(poll).toContain('decision: welcomeTourDecision')

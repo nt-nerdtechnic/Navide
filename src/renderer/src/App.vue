@@ -722,13 +722,15 @@ async function checkWelcomeTourRecords(): Promise<void> {
 // (see nextWelcomeTourMove, isFirstInstall) — deciding later let a folder
 // picked meanwhile count against the person.
 function pollWelcomeTour(): void {
+  const pending = welcomeTour.pending()
   const settled = onboardingComplete.value === true && !onboardingCheckFailed.value
   switch (nextWelcomeTourMove({
-    pending: welcomeTour.pending(),
+    pending,
     active: !!welcomeTourActive.value,
     settled,
     // Several main windows share these settings: only the owner runs the tour.
-    owned: settled && welcomeTour.claim(),
+    // A tour that is not pending is not claimed, so no owner record is written.
+    owned: pending && settled && welcomeTour.claim(),
     eligible: welcomeTour.eligible(),
     decision: welcomeTourDecision,
     blocked: mainModalOpen() || !!cliHealthGuide.value,
