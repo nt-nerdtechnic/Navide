@@ -61,11 +61,17 @@ fi
 # changes, so a finding stops the commit here instead of failing on GitHub
 # after the push. False positives go in .gitleaksignore, as CI reads it too.
 if command -v gitleaks >/dev/null 2>&1; then
-  if ! gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn; then
+  # A finding exits 3; any other failure is gitleaks not running (an old
+  # version without `gitleaks git`, a bad config), which CI still catches.
+  gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn --exit-code 3
+  scan=$?
+  if [ $scan -eq 3 ]; then
     echo "" >&2
     echo "pre-commit: gitleaks found a possible secret in the staged changes (see above)." >&2
     echo "Remove it, or add its fingerprint to .gitleaksignore if it is not a secret." >&2
     exit 1
+  elif [ $scan -ne 0 ]; then
+    echo "pre-commit: the secret scan could not run (gitleaks exited $scan, see above), so it was skipped; CI still runs it." >&2
   fi
 else
   echo "pre-commit: gitleaks is not installed, so the secret scan was skipped (brew install gitleaks)." >&2

@@ -20,9 +20,15 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   else
     range="$remote_sha..$local_sha"
   fi
-  if ! gitleaks git --log-opts="$range" --config .gitleaks.toml --redact --no-banner --log-level warn; then
+  # Its stdin is the ref list this loop reads. A finding exits 3; any other
+  # failure is gitleaks not running, which CI still catches.
+  gitleaks git --log-opts="$range" --config .gitleaks.toml --redact --no-banner --log-level warn --exit-code 3 </dev/null
+  scan=$?
+  if [ $scan -eq 3 ]; then
     echo "pre-push: gitleaks found a possible secret in the commits for $remote_ref (see above)." >&2
     status=1
+  elif [ $scan -ne 0 ]; then
+    echo "pre-push: the secret scan could not run for $remote_ref (gitleaks exited $scan, see above), so it was skipped; CI still runs it." >&2
   fi
 done
 
