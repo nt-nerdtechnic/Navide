@@ -129,6 +129,35 @@ async function boot(): Promise<{ beforeQuit: BeforeQuit; appQuitting: () => bool
   }
 }
 
+/** Whether closing a window would end its embedded AI panels right now: both
+ *  places the probe gates — ending the window's dock surface and releasing an
+ *  AI terminal's storage owner — get past it. */
+async function panelEndingRuns(): Promise<{ endDockSurface: boolean; releaseAiTerminalOwner: boolean }> {
+  const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
+  const manager = frontendPluginManager as unknown as {
+    ensureBackend: () => unknown
+    terminalStorageHandler: unknown
+    terminalStorageRequest: () => Promise<unknown>
+    releaseAiTerminalOwner: (plugin: unknown, identity: { resumeKey: string }) => void
+  }
+  const ensureBackend = vi.spyOn(manager, 'ensureBackend').mockReturnValue(null)
+  const storageRequest = vi.spyOn(manager, 'terminalStorageRequest').mockResolvedValue(undefined)
+  const handler = manager.terminalStorageHandler
+  manager.terminalStorageHandler = () => undefined
+  try {
+    frontendPluginManager.endDockSurface('plans', '/ws')
+    manager.releaseAiTerminalOwner({}, { resumeKey: 'k' })
+    return {
+      endDockSurface: ensureBackend.mock.calls.length > 0,
+      releaseAiTerminalOwner: storageRequest.mock.calls.length > 0,
+    }
+  } finally {
+    manager.terminalStorageHandler = handler
+    ensureBackend.mockRestore()
+    storageRequest.mockRestore()
+  }
+}
+
 describe('embedded AI panels after a cancelled quit', () => {
   beforeEach(() => {
     appListeners.length = 0
@@ -167,6 +196,41 @@ describe('embedded AI panels after a cancelled quit', () => {
     await beforeQuit({ preventDefault: vi.fn() })
     expect(dialogState.prompts).toBe(1)
     expect(appQuitting()).toBe(false)
+  })
+
+  it('a plugin veto on a quit without the prompt leaves the app not quitting', { timeout: 60_000 }, async () => {
+    const { beforeQuit, appQuitting } = await boot()
+    const setQuitConfirm = ipcListeners.get('app:setQuitConfirm') as (event: unknown, cfg: unknown) => void
+    setQuitConfirm({}, { enabled: false })
+    const preventDefault = vi.fn()
+    await beforeQuit({ preventDefault })
+    expect(preventDefault).toHaveBeenCalled()
+    expect(dialogState.prompts).toBe(0)
+    expect(appQuitting()).toBe(false)
+    expect(await panelEndingRuns()).toEqual({ endDockSurface: true, releaseAiTerminalOwner: true })
+  })
+
+  it('a second Cmd+Q while the first is being prepared leaves the flags to the first', { timeout: 60_000 }, async () => {
+    const { beforeQuit, appQuitting } = await boot()
+    const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
+    let refuse: (value: never) => void = () => {}
+    vi.mocked(frontendPluginManager.prepareWindowClose).mockImplementation(
+      () => new Promise((resolve) => { refuse = resolve as (value: never) => void }),
+    )
+    // Prompt → Quit, then the re-entry starts preparing the windows.
+    await beforeQuit({ preventDefault: vi.fn() })
+    const first = beforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(frontendPluginManager.prepareWindowClose).toHaveBeenCalled())
+    // Another Cmd+Q lands mid-preparation: held back, flags untouched.
+    const second = vi.fn()
+    await beforeQuit({ preventDefault: second })
+    expect(second).toHaveBeenCalled()
+    expect(appQuitting()).toBe(true)
+
+    refuse({ ok: false, reason: 'refused' } as never)
+    await first
+    expect(appQuitting()).toBe(false)
+    expect(await panelEndingRuns()).toEqual({ endDockSurface: true, releaseAiTerminalOwner: true })
   })
 
   it('reports quitting while the confirmed quit is being prepared', { timeout: 60_000 }, async () => {
@@ -247,8 +311,11 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
       expect(preventDefault).not.toHaveBeenCalled()
       expect(appQuitting()).toBe(true)
 
+      expect(await panelEndingRuns()).toEqual({ endDockSurface: false, releaseAiTerminalOwner: false })
+
       await vi.advanceTimersByTimeAsync(10_000)
       expect(appQuitting()).toBe(false)
+      expect(await panelEndingRuns()).toEqual({ endDockSurface: true, releaseAiTerminalOwner: true })
       expect(dialogState.notices).toEqual([
         expect.objectContaining({ message: 'Navide did not quit', detail: 'Stopped by: Plans.' }),
       ])
