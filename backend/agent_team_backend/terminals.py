@@ -569,6 +569,9 @@ class TerminalService:
         self._lifecycle_futures: set[asyncio.Future[Any]] = set()
         self._pending_reaps: dict[int, str] = {}
         self._reap_task: "asyncio.Task[None] | None" = None
+        # Sessions closed by EOF while their child was not yet reapable; each
+        # task waits (bounded) for the child to die before its cleanup.
+        self._exit_settles: set[asyncio.Task[None]] = set()
         self._last_persisted: dict[int, dict[int, str]] = {}
 
     def create(
@@ -1645,6 +1648,11 @@ class TerminalService:
                 except subprocess.TimeoutExpired:
                     pass
             self._close(session, reason="shutdown")
+        # An EOF close still waiting for its child may yet queue a sweep and a
+        # registry write; let it settle first. Unfinished tasks only (see
+        # _drain_lifecycle).
+        if settling := [t for t in self._exit_settles if not t.done()]:
+            await asyncio.gather(*settling, return_exceptions=True)
         # Let the in-flight exit-orphan sweep finish: a CLI that EOF'd moments
         # before shutdown would otherwise leak its orphans when the loop
         # closes mid-grace.
@@ -2028,20 +2036,13 @@ class TerminalService:
         )
         self._loop.create_task(self._emit(event))
         self._sessions.pop(session.id, None)
+        child_gone = session.proc.poll() is not None
         # Child died on its own (no kill() ran, so no on-demand descendant
         # sweep happened) — queue its snapshot for the batch sweeper. The poll
         # gate skips the error path's still-alive child: its descendants are
         # not orphans, and killing under a live CLI would be wrong.
-        if (
-            reason in ("exit", "error")
-            and session.descendants
-            and session.proc.poll() is not None
-        ):
-            self._pending_reaps.update(session.descendants)
-            if self._reap_task is None or self._reap_task.done():
-                self._reap_task = self._loop.create_task(
-                    self._reap_pending_orphans()
-                )
+        if reason in ("exit", "error") and session.descendants and child_gone:
+            self._queue_exit_reap(session.descendants)
         # A read error closed the PTY while the child is still alive: it is
         # now unreachable (tty gone, session popped) — put it down, or it
         # escapes both terminal.kill and the shutdown sweep until the next
@@ -2053,7 +2054,44 @@ class TerminalService:
         # dead: a still-live child (e.g. a TERM-trapping CLI) must stay
         # visible to the next start's reap_stale. kill()'s escalation task
         # and kill_all() unregister the survivors they put down.
-        if session.proc.poll() is not None:
+        if child_gone:
             self._submit_lifecycle(
                 in_data_dir(self._data_dir, pty_registry.unregister, session.proc.pid),
             )
+        elif reason == "exit":
+            # EOF can arrive before the child is reapable: it has closed its
+            # end of the PTY but not finished exiting (seen under load). Both
+            # cleanups above need it confirmed dead, so wait for that, bounded.
+            task = self._loop.create_task(self._settle_exit(session))
+            self._exit_settles.add(task)
+            task.add_done_callback(self._exit_settles.discard)
+
+    def _queue_exit_reap(self, descendants: dict[int, str]) -> None:
+        self._pending_reaps.update(descendants)
+        if self._reap_task is None or self._reap_task.done():
+            self._reap_task = self._loop.create_task(self._reap_pending_orphans())
+
+    async def _settle_exit(self, session: TerminalSession) -> None:
+        """Finish an EOF close whose child was not yet reapable: once it is
+        confirmed dead, queue its descendant sweep and drop its registry
+        record. A child still alive after _EXIT_ORPHAN_GRACE_S kept running
+        without its PTY; it is left alone (never sweep under a live CLI), and
+        its record stays for the next start's reap_stale."""
+        deadline = self._loop.time() + _EXIT_ORPHAN_GRACE_S
+        # ASYNC110 suppressed: bounded poll with awaited sleeps, as in kill_all.
+        while (  # noqa: ASYNC110
+            session.proc.poll() is None and self._loop.time() < deadline
+        ):
+            await asyncio.sleep(0.05)
+        if session.proc.poll() is None:
+            log.warning(
+                "terminal session %s: EOF but pid %s still alive after %.1fs — "
+                "orphan sweep and registry cleanup skipped",
+                session.id, session.proc.pid, _EXIT_ORPHAN_GRACE_S,
+            )
+            return
+        if session.descendants:
+            self._queue_exit_reap(session.descendants)
+        self._submit_lifecycle(
+            in_data_dir(self._data_dir, pty_registry.unregister, session.proc.pid),
+        )

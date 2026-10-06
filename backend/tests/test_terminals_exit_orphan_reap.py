@@ -259,8 +259,9 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch, tmp_pat
             break
         await asyncio.sleep(0.05)
     assert s1.closed
-    await asyncio.sleep(0.1)  # let the batch sweeper's grace elapse and run
-    assert reaped == [[111]]
+    # The sweep runs once the child is confirmed dead and the batch grace has
+    # elapsed; wait for it rather than for a fixed time a loaded runner misses.
+    assert await _until(lambda: reaped == [[111]]), reaped
 
     # kill() path: must NOT queue for the exit reaper (it sweeps on its own).
     s2 = svc.create(
@@ -274,6 +275,111 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch, tmp_pat
     await asyncio.sleep(0.2)
     assert reaped == [[111]]
     await svc.kill_all(grace=0.3)
+
+
+#: Outlives the PTY master closing (_close sends it a HUP), as a child still
+#: finishing its exit when EOF arrives does.
+_SURVIVES_ITS_PTY = ["sh", "-c", 'trap "" HUP; sleep 30']
+
+
+async def _until(predicate: Any, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
+async def test_an_eof_before_the_child_is_reapable_still_sweeps_and_unregisters(
+    monkeypatch, tmp_path
+):
+    """The PTY can report EOF while the child is still finishing its exit:
+    it has closed its end of the tty but cannot be reaped yet. Its orphans
+    (MCP servers and the like) must still be swept and its crash-recovery
+    record dropped once it is confirmed dead."""
+    monkeypatch.setattr(terminals, "_EXIT_ORPHAN_GRACE_S", 1.0)
+    reaped: list[list[int]] = []
+    unregistered: list[int] = []
+
+    async def fake_reap(self, descendants):
+        reaped.append(sorted(descendants))
+
+    monkeypatch.setattr(TerminalService, "_reap_exit_orphans", fake_reap)
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})
+    monkeypatch.setattr(terminals.pty_registry, "unregister", unregistered.append)
+
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key=None, command=_SURVIVES_ITS_PTY, cwd=str(tmp_path)
+    )
+    session.descendants = {111: ""}
+    await asyncio.sleep(0.3)  # let the shell install its trap
+    svc._close(session, reason="exit")  # EOF first; the child is still alive
+    assert session.proc.poll() is None
+    session.proc.kill()  # ...and finishes exiting just after
+
+    assert await _until(
+        lambda: reaped == [[111]] and session.proc.pid in unregistered
+    ), (reaped, unregistered)
+    await svc.kill_all(grace=0.3)
+
+
+async def test_an_eof_whose_child_keeps_running_is_left_alone(
+    monkeypatch, tmp_path, caplog
+):
+    """A child that closed its PTY but is still alive when the settle window
+    ends is not ours to sweep under: its descendants are not orphans, and its
+    record must stay for the next start's reap_stale."""
+    monkeypatch.setattr(terminals, "_EXIT_ORPHAN_GRACE_S", 0.3)
+    reaped: list[list[int]] = []
+    unregistered: list[int] = []
+
+    async def fake_reap(self, descendants):
+        reaped.append(sorted(descendants))
+
+    monkeypatch.setattr(TerminalService, "_reap_exit_orphans", fake_reap)
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})
+    monkeypatch.setattr(terminals.pty_registry, "unregister", unregistered.append)
+
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key=None, command=_SURVIVES_ITS_PTY, cwd=str(tmp_path)
+    )
+    session.descendants = {111: ""}
+    await asyncio.sleep(0.3)  # let the shell install its trap
+    try:
+        svc._close(session, reason="exit")
+        settling = list(svc._exit_settles)
+        assert settling, "an EOF with a live child must wait for it"
+        await asyncio.gather(*settling)
+        assert session.proc.poll() is None
+        await asyncio.sleep(0.1)  # nothing may follow the settle either
+        assert reaped == []
+        assert session.proc.pid not in unregistered
+        assert "still alive" in caplog.text
+    finally:
+        session.proc.kill()
+        session.proc.wait(timeout=5)
+
+
+async def test_kill_all_waits_for_an_eof_still_settling(monkeypatch, tmp_path):
+    """Shutdown right after such an EOF: the app closes the database once
+    kill_all returns, so the settle's registry write must be done by then."""
+    monkeypatch.setattr(terminals, "_EXIT_ORPHAN_GRACE_S", 1.0)
+    unregistered: list[int] = []
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})
+    monkeypatch.setattr(terminals.pty_registry, "unregister", unregistered.append)
+
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key=None, command=_SURVIVES_ITS_PTY, cwd=str(tmp_path)
+    )
+    await asyncio.sleep(0.3)  # let the shell install its trap
+    svc._close(session, reason="exit")
+    session.proc.kill()
+    await svc.kill_all(grace=0.3)
+    assert session.proc.pid in unregistered
 
 
 async def test_queued_deaths_share_one_sweep(monkeypatch):
