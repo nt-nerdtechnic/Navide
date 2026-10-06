@@ -371,3 +371,36 @@ def test_a_part_at_the_wrong_offset_is_still_out_of_order(tmp_path: Path) -> Non
 
     assert result == {"ok": False, "error": "upload part out of order"}
     assert _part(tmp_path, 5, b"later")["ok"] is True
+
+
+# ── leftovers of a writer that died mid-write ────────────────────────────────
+#
+# A write's temp file has a unique name, so a writer killed between writing
+# it and renaming it leaves one behind that no later write overwrites. The
+# next write to the same file, holding its lock, removes them: no live writer
+# of that file can have one in flight. The lock file of a dead holder goes the
+# same way, as the next writer releases it.
+
+
+def test_a_write_removes_temp_files_left_by_a_dead_writer_of_that_file(tmp_path: Path) -> None:
+    (tmp_path / "doc.html").write_text("old", encoding="utf-8")
+    (tmp_path / f"doc.html.{'a' * 32}.tmp").write_text("half", encoding="utf-8")
+    (tmp_path / ".doc.html.lock").write_text("", encoding="utf-8")
+    other = tmp_path / f"other.html.{'b' * 32}.tmp"  # another file's: not this write's to judge
+    other.write_text("half", encoding="utf-8")
+
+    result = fs_service.write_file(str(tmp_path), "doc.html", "new")
+
+    assert result["ok"] is True
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["doc.html", other.name]
+
+
+def test_a_chunked_commit_removes_temp_files_left_by_a_dead_writer(tmp_path: Path) -> None:
+    (tmp_path / f"doc.html.{'c' * 32}.tmp").write_text("half", encoding="utf-8")
+    data = base64.b64encode(b"new").decode()
+    assert fs_write.write_part(str(tmp_path), "doc.html", "d" * 32, 0, data)["ok"] is True
+
+    result = fs_write.write_commit(str(tmp_path), "doc.html", "d" * 32, 3)
+
+    assert result["ok"] is True
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["doc.html"]

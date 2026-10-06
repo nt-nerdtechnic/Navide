@@ -156,6 +156,26 @@ def _target_lock(target: Path) -> Iterator[None]:
                 pass
 
 
+def _remove_orphan_temps(target: Path) -> None:
+    """Remove the temp files earlier writes of ``target`` left behind.
+
+    Called with ``target``'s lock held: every writer of it makes its temp file
+    under that lock, so one still there now belongs to a writer that died
+    between writing it and renaming it. A failed removal is left for the next
+    write."""
+    pattern = re.compile(re.escape(target.name) + r"\.[0-9a-f]{32}\.tmp")
+    try:
+        entries = list(os.scandir(target.parent))
+    except OSError:
+        return
+    for entry in entries:
+        if pattern.fullmatch(entry.name):
+            try:
+                os.unlink(entry.path)
+            except OSError:
+                pass
+
+
 def write_file(
     workspace_path: str,
     rel_path: str,
@@ -186,6 +206,7 @@ def write_file(
             raise FsError(f"content too large ({len(encoded) // 1024} KB; limit 50 MB)")
         target.parent.mkdir(parents=True, exist_ok=True)
         with _target_lock(target):
+            _remove_orphan_temps(target)
             orig_mode: int | None = None
             if target.exists():
                 st = target.stat()
@@ -357,6 +378,7 @@ def write_commit(
         if staging.stat().st_size != total_size:
             raise FsError("upload incomplete")
         with _target_lock(target):
+            _remove_orphan_temps(target)
             orig_mode: int | None = None
             if target.exists():
                 st = target.stat()
