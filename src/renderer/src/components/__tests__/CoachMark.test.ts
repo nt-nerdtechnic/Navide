@@ -471,33 +471,49 @@ describe('CoachMark', () => {
   })
 
   // 23:46: "no clicking anywhere else during the tour (a grey mask), so a
-  // stray click cannot end it". A spotlight: grey strips around the control
-  // take every click and do nothing; the control and the bubble stay usable.
+  // stray click cannot end it". 09:27: "why can I click elsewhere?" — the mask
+  // was gone whenever there was no control, once the control was pressed, or
+  // once a step was done. It is now there the whole time the tour is on screen:
+  // one shape over the window with holes cut for the control and for what the
+  // control opens (a menu, a popover). Clicks in a hole reach what is under
+  // it; anywhere else they land on the mask and do nothing.
   describe('mask', () => {
-    const strips = (): HTMLElement[] => [...document.body.querySelectorAll<HTMLElement>('[data-testid="coach-mask"]')]
+    const mask = (): SVGElement | null => document.body.querySelector<SVGElement>('[data-testid="coach-mask"]')
+    const holes = (): string[] => (mask()?.getAttribute('data-holes') ?? '').split(';').filter(Boolean)
 
-    it('covers everything but the control with grey strips that take the clicks', async () => {
+    it('is up with a hole for the control, the rest of the window taking the clicks', async () => {
       addTarget('a')
       start()
       await tick()
-      expect(strips()).toHaveLength(4)
-      for (const strip of strips()) expect(strip.style.pointerEvents).toBe('auto')
-      // The control itself lies in the gap between them.
-      const [top, bottom, left, right] = strips().map((el) => el.style)
-      expect(top.height).toBe('96px')
-      expect(bottom.top).toBe('134px')
-      expect(left.width).toBe('96px')
-      expect(right.left).toBe('164px')
+      expect(mask()).not.toBeNull()
+      expect((mask() as unknown as HTMLElement).style.pointerEvents).toBe('auto')
+      expect(holes()).toEqual(['96,96,68,38'])
+    })
+
+    it('covers the whole window when there is no control to point at, the bubble still usable', async () => {
+      start({ replay: true })
+      await tick()
+      expect(stepId()).toBe('one')
+      expect(mask()).not.toBeNull()
+      expect(holes()).toEqual([])
+      expect(bubble()!.style.pointerEvents).toBe('auto')
+    })
+
+    it('is up even while a first-run step is still looking for its control', async () => {
+      start()
+      await tick()
+      expect(bubble()).toBeNull()
+      expect(mask()).not.toBeNull()
+      expect(holes()).toEqual([])
     })
 
     it('does nothing when clicked: the tour neither ends nor moves on', async () => {
       addTarget('a')
       const w = start()
       await tick()
-      for (const strip of strips()) {
-        strip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 5, clientY: 5 }))
-        strip.click()
-      }
+      const shape = mask()!
+      shape.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 5, clientY: 5 }))
+      shape.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }))
       await tick()
       expect(w.emitted('finish')).toBeUndefined()
       expect(w.emitted('progress')).toBeUndefined()
@@ -513,38 +529,47 @@ describe('CoachMark', () => {
         toJSON: () => ({}),
       } as DOMRect)
       await tick()
-      expect(strips()[0].style.height).toBe('196px')
-      expect(strips()[2].style.width).toBe('296px')
+      expect(holes()).toEqual(['296,196,68,38'])
     })
 
-    it('lifts while the person works the control, so a menu it opens can be used', async () => {
+    it('stays up once the control is pressed, cutting a hole for what it opens', async () => {
       const a = addTarget('a')
-      start()
+      start({ steps: [{ ...STEPS[0], allow: ['.menu-it-opens'] }, STEPS[1]] })
       await tick()
       a.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 110 }))
-      await flushPromises()
-      expect(strips()).toHaveLength(0)
+      const menu = document.createElement('div')
+      menu.className = 'menu-it-opens'
+      vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue({
+        x: 100, y: 140, top: 140, left: 100, right: 300, bottom: 400, width: 200, height: 260,
+        toJSON: () => ({}),
+      } as DOMRect)
+      document.body.append(menu)
+      await tick()
+      expect(bubble()).toBeNull()
+      expect(mask()).not.toBeNull()
+      expect(holes()).toEqual(['96,96,68,38', '100,140,200,260'])
     })
 
-    it('lifts once the step is done, and comes back for the next one', async () => {
+    it('stays up once the step is done, and for the next one', async () => {
       addTarget('a')
       addTarget('b')
       start()
       await tick()
       facts.workspaceOpen = true
       await flushPromises()
-      expect(strips()).toHaveLength(0)
+      expect(mask()).not.toBeNull()
       await tick(COACH_DONE_MS)
       await tick()
       expect(stepId()).toBe('two')
-      expect(strips()).toHaveLength(4)
+      expect(mask()).not.toBeNull()
     })
 
-    it('is not drawn when there is no control to point at', async () => {
-      start({ replay: true })
+    it('is not drawn while something else has the screen', async () => {
+      addTarget('a')
+      start({ suspended: true })
       await tick()
-      expect(stepId()).toBe('one')
-      expect(strips()).toHaveLength(0)
+      expect(mask()).toBeNull()
     })
   })
+
 })

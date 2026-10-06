@@ -15,12 +15,13 @@ import {
 } from '../lib/welcomeTour'
 
 // Coach marks: a small bubble beside the real control, saying the one thing
-// to do there, the person doing the step in the real window. The rest of the
-// window is masked — grey strips around the control take every click and do
-// nothing, so a stray click cannot end or derail the tour — while the control
-// and the bubble stay usable, and no key is taken. Once the person presses
-// the control (+ opens a menu outside the gap) or the step is done, the mask
-// lifts until the next step. Once the host's facts say it
+// to do there, the person doing the step in the real window. For as long as
+// the tour is on screen the window is masked grey: one shape with holes cut
+// for the control and for what it opens (its `allow`: a menu, a popover).
+// Clicks in a hole reach what is under it; anywhere else they land on the
+// mask and do nothing, so a stray click cannot end or derail the tour. With
+// no control to point at the whole window is masked and only the bubble
+// answers. No key is taken. Once the host's facts say it
 // is done, the bubble says so for a moment and moves on to the next control.
 // A step already done when it comes up is passed over.
 //
@@ -69,6 +70,9 @@ const enteredAt = ref(0)
 const doneShown = ref(false)
 const rect = ref<DOMRect | null>(null)
 const targetId = ref('')
+// What the control has opened (the step's `allow`), cut out of the mask too.
+const allowRects = ref<DOMRect[]>([])
+const viewport = ref({ width: window.innerWidth, height: window.innerHeight })
 
 let doneTimer: ReturnType<typeof setTimeout> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
@@ -135,6 +139,12 @@ function advance(): void {
 function locate(): void {
   const current = step.value
   if (!current || ended) return
+  viewport.value = { width: window.innerWidth, height: window.innerHeight }
+  allowRects.value = (current.allow ?? []).flatMap((selector) =>
+    [...document.querySelectorAll<HTMLElement>(selector)]
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0),
+  )
   const el = findTourAnchor(current.anchor(props.facts()))
   if (el) {
     rect.value = el.getBoundingClientRect()
@@ -215,25 +225,23 @@ const BUBBLE_H = 140
 // A replay's bubble whose control is not on screen sits in the middle, and so
 // does a first-run bubble whose control stayed away (`lost`).
 const centred = computed(() => (props.replay || lost.value) && !rect.value)
-/** The rest of the window is masked: there is a control to work, and the
- *  person has not started on it nor finished it yet. */
-const masked = computed(() => !!rect.value && !aside.value && !doneShown.value)
-
-// The four strips around the control's gap.
-const maskStyles = computed((): Record<string, string>[] => {
+// The mask's holes, as x,y,width,height: the control (with the ring's padding)
+// and whatever it has opened.
+const holes = computed((): [number, number, number, number][] => {
   const r = rect.value
-  if (!r) return []
-  const top = Math.max(0, r.top - PAD)
-  const bottom = r.bottom + PAD
-  const left = Math.max(0, r.left - PAD)
-  const right = r.right + PAD
-  const strip = { pointerEvents: 'auto' }
-  return [
-    { ...strip, top: '0', left: '0', right: '0', height: `${top}px` },
-    { ...strip, top: `${bottom}px`, left: '0', right: '0', bottom: '0' },
-    { ...strip, top: `${top}px`, left: '0', width: `${left}px`, height: `${bottom - top}px` },
-    { ...strip, top: `${top}px`, left: `${right}px`, right: '0', height: `${bottom - top}px` },
-  ]
+  const cut: [number, number, number, number][] = r
+    ? [[r.left - PAD, r.top - PAD, r.width + PAD * 2, r.height + PAD * 2]]
+    : []
+  for (const a of allowRects.value) cut.push([a.left, a.top, a.width, a.height])
+  return cut
+})
+
+// One shape over the window, the holes cut out (even-odd). clip-path also
+// clips hit-testing, so a click in a hole goes to what is under it.
+const maskStyle = computed((): Record<string, string> => {
+  const { width, height } = viewport.value
+  const d = [`M0 0H${width}V${height}H0Z`, ...holes.value.map(([x, y, w, h]) => `M${x} ${y}h${w}v${h}h${-w}Z`)].join(' ')
+  return { pointerEvents: 'auto', clipPath: `path(evenodd, '${d}')` }
 })
 
 /** Whether a bubble is on screen right now. */
@@ -265,23 +273,22 @@ const bubbleStyle = computed((): Record<string, string> => {
 
 <template>
   <Teleport to="body">
-    <div v-if="!suspended && step && (rect || centred)" class="coach" data-testid="coach-layer" style="pointer-events: none">
-      <template v-if="masked">
-        <div
-          v-for="(m, i) in maskStyles"
-          :key="i"
-          class="coach-mask"
-          data-testid="coach-mask"
-          :style="m"
-          @pointerdown.stop.prevent
-          @mousedown.stop.prevent
-          @click.stop.prevent
-          @contextmenu.stop.prevent
-        ></div>
-      </template>
+    <div v-if="!suspended && step" class="coach" data-testid="coach-layer" style="pointer-events: none">
+      <div
+        class="coach-mask"
+        data-testid="coach-mask"
+        :data-holes="holes.map((h) => h.join(',')).join(';')"
+        :style="maskStyle"
+        @pointerdown.stop.prevent
+        @mousedown.stop.prevent
+        @click.stop.prevent
+        @dblclick.stop.prevent
+        @contextmenu.stop.prevent
+        @wheel.stop.prevent
+      ></div>
       <div v-if="rect" class="coach-ring" data-testid="coach-ring" :data-target="targetId" :style="ringStyle"></div>
       <div
-        v-if="!aside"
+        v-if="!aside && (rect || centred)"
         class="coach-bubble"
         :class="{ centred }"
         data-testid="coach-bubble"
@@ -321,8 +328,11 @@ const bubbleStyle = computed((): Record<string, string> => {
 }
 .coach-mask {
   position: absolute;
+  inset: 0;
   background: rgb(0 0 0 / 32%);
   backdrop-filter: grayscale(1);
+  /* Over the title bar too: no window drag from under the mask. */
+  -webkit-app-region: no-drag;
 }
 .coach-ring {
   position: absolute;

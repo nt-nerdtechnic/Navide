@@ -44,11 +44,15 @@ export interface CoachStep {
   /** Pass over the step when its control stays away (a CLI with no quota
    *  data shows no badge). Other steps wait for their control. */
   skipIfMissing?: boolean
+  /** What the control opens (its menu, its popover): left usable under the
+   *  tour's mask, which otherwise takes every click outside the control. */
+  allow?: string[]
 }
 
 const T = 'tour.welcome'
 const OPEN_AGENT = '[data-tour="open-agent"]'
 const TERMINAL = '.xterm-host[data-pane-id]'
+const ADD_MENU = '.ws-add-menu'
 
 export const WELCOME_STEPS: CoachStep[] = [
   {
@@ -57,7 +61,7 @@ export const WELCOME_STEPS: CoachStep[] = [
     textKey: `${T}.pickFolder`,
     waitFor: 'workspace-open',
   },
-  { id: 'open-agent', anchor: () => OPEN_AGENT, textKey: `${T}.openAgent`, waitFor: 'agent-pane' },
+  { id: 'open-agent', anchor: () => OPEN_AGENT, textKey: `${T}.openAgent`, waitFor: 'agent-pane', allow: [ADD_MENU] },
   { id: 'first-command', anchor: () => TERMINAL, textKey: `${T}.firstCommand`, waitFor: 'first-command' },
   {
     id: 'talk-mention',
@@ -65,6 +69,7 @@ export const WELCOME_STEPS: CoachStep[] = [
     anchor: (f) => (f.agentPanes < 2 ? OPEN_AGENT : TERMINAL),
     textKey: `${T}.talkMention`,
     waitFor: 'mention',
+    allow: [ADD_MENU, '.term-mention-card'],
   },
   {
     id: 'talk-drag',
@@ -80,6 +85,7 @@ export const WELCOME_STEPS: CoachStep[] = [
     textKey: `${T}.usageAccount`,
     waitFor: 'usage',
     skipIfMissing: true,
+    allow: ['.usage-pop'],
   },
 ]
 

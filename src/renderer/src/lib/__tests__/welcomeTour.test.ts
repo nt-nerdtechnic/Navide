@@ -62,6 +62,21 @@ describe('welcome tour steps', () => {
     ])
   })
 
+  it('keeps usable what each control opens, under the mask', () => {
+    const allow = Object.fromEntries(WELCOME_STEPS.map((s) => [s.id, s.allow ?? []]))
+    expect(allow).toEqual({
+      'pick-folder': [],
+      'open-agent': ['.ws-add-menu'],
+      'first-command': [],
+      'talk-mention': ['.ws-add-menu', '.term-mention-card'],
+      'talk-drag': [],
+      'usage-account': ['.usage-pop'],
+    })
+    expect(source('src/renderer/src/components/ControlPane.vue')).toContain('class="ws-add-menu"')
+    expect(source('packages/plugin-ui/src/terminalMentionMenu.ts')).toContain("card.className = 'term-mention-card'")
+    expect(source('src/renderer/src/components/UsageBadge.vue')).toContain('class="usage-pop"')
+  })
+
   it('passes over the quota bubble when this CLI shows no quota badge, and only that one', () => {
     expect(WELCOME_STEPS.filter((s) => s.skipIfMissing).map((s) => s.id)).toEqual(['usage-account'])
   })
