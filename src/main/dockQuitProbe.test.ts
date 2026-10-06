@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A window hosting embedded AI panels ends them when it closes, except while
 // the app quits (the panels restore next launch). The probe that says "the app
@@ -15,6 +15,15 @@ const ipcListeners = new Map<string, Listener>()
 const windowSends: Array<[string, unknown]> = []
 const dialogState = vi.hoisted(() => ({ response: 0, prompts: 0, notices: [] as Array<{ message?: string; detail?: string }> }))
 
+// The last-window quit only exists off macOS; null keeps the host's answer.
+const osState = vi.hoisted(() => ({ mac: null as boolean | null }))
+vi.mock('../shared/osplat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/osplat')>()
+  return { ...actual, isMac: () => osState.mac ?? actual.isMac() }
+})
+// app.quit() re-emits before-quit in Electron; here the test drives that
+// re-entry itself, so only count the calls.
+const appState = vi.hoisted(() => ({ quits: 0 }))
 // index.ts runs the Linux keyring preflight at import; never spawn dbus-send here.
 vi.mock('./linuxKeyring', () => ({ applyLinuxKeyringPreflight: () => false }))
 // A cancelled quit after the teardown restarts the backend; record it in place
@@ -44,7 +53,7 @@ vi.mock('electron', () => {
     on: (event: string, listener: Listener) => { appListeners.push([event, listener]) },
     once: () => {},
     setName: () => {},
-    quit: () => {},
+    quit: () => { appState.quits++ },
     // Never resolves: no window, no backend — the state this fast path is for.
     whenReady: () => new Promise(() => {}),
     requestSingleInstanceLock: () => true,
@@ -397,5 +406,111 @@ describe('embedded AI panels after a quit cancelled while closing windows', () =
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// Off macOS, closing the last window quits the app, so the quit prompt runs
+// from that window's close. A confirmed quit must then go the way Cmd+Q does:
+// every close participant gets its say before anything is torn down. Stopping
+// the backend first killed every PTY, shut the plugin backends and left the
+// shutdown screen up when a participant then refused.
+describe('the last window closing quits like Cmd+Q (Linux, Windows)', () => {
+  beforeEach(() => {
+    appListeners.length = 0
+    ipcListeners.clear()
+    windowSends.length = 0
+    dialogState.response = 0
+    dialogState.prompts = 0
+    dialogState.notices.length = 0
+    backendState.events.length = 0
+    appState.quits = 0
+    osState.mac = false
+    vi.resetModules()
+  })
+  afterEach(() => {
+    osState.mac = null
+  })
+
+  async function bootLastWindow(): Promise<{
+    beforeQuit: BeforeQuit
+    closeLastWindow: () => ReturnType<typeof vi.fn>
+    quit: () => void
+    markCleanExit: ReturnType<typeof vi.spyOn>
+    closeBackendPlugins: ReturnType<typeof vi.spyOn>
+    appQuitting: () => boolean
+  }> {
+    const booted = await boot()
+    const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
+    const { WindowRegistry } = await import('./window-registry')
+    const closeHandlers: Array<(event: unknown) => void> = []
+    const win = new Proxy({}, {
+      get: (_target, key) => key === 'on'
+        ? (event: string, handler: (event: unknown) => void) => { if (event === 'close') closeHandlers.push(handler) }
+        : () => undefined,
+    })
+    for (const [event, listener] of appListeners) {
+      if (event === 'browser-window-created') (listener as unknown as (e: unknown, w: unknown) => void)({}, win)
+    }
+    expect(closeHandlers).toHaveLength(1)
+    const quitListeners = appListeners.filter(([event]) => event === 'quit')
+    backendState.events.length = 0
+    return {
+      ...booted,
+      closeLastWindow: () => {
+        const preventDefault = vi.fn()
+        closeHandlers[0]!({ preventDefault })
+        return preventDefault
+      },
+      quit: () => { for (const [, listener] of quitListeners) (listener as () => void)() },
+      markCleanExit: vi.spyOn(WindowRegistry.prototype, 'markCleanExit'),
+      closeBackendPlugins: vi.spyOn(frontendPluginManager, 'closeBackendPlugins'),
+    }
+  }
+
+  it('a participant refusing leaves the backend, the plugin backends and the windows up', { timeout: 60_000 }, async () => {
+    const { beforeQuit, closeLastWindow, markCleanExit, closeBackendPlugins, appQuitting } = await bootLastWindow()
+    expect(closeLastWindow()).toHaveBeenCalled()
+    await vi.waitFor(() => expect(appState.quits).toBe(1))
+    expect(dialogState.prompts).toBe(1)
+
+    // app.quit() re-enters before-quit; the plugin refuses to let its window go.
+    const preventDefault = vi.fn()
+    await beforeQuit({ preventDefault })
+    expect(preventDefault).toHaveBeenCalled()
+
+    // Nothing was torn down: no shutdown screen, no backend or plugin backend
+    // stopped, and the run is not marked as a clean exit. The refusal notice
+    // is the only thing the user sees.
+    expect(backendState.events).toEqual(['notice'])
+    expect(closeBackendPlugins).not.toHaveBeenCalled()
+    expect(markCleanExit).not.toHaveBeenCalled()
+    expect(appQuitting()).toBe(false)
+  })
+
+  it('a confirmed quit tears down once, in the same order, and marks a clean exit', { timeout: 60_000 }, async () => {
+    const { beforeQuit, closeLastWindow, quit, markCleanExit, appQuitting } = await bootLastWindow()
+    const { frontendPluginManager } = await import('./plugins/frontendPluginManager')
+    vi.mocked(frontendPluginManager.prepareWindowClose).mockResolvedValue({ ok: true, id: 'w' } as never)
+    vi.spyOn(frontendPluginManager, 'commitWindowClose').mockImplementation(() => undefined as never)
+    const hasBackendActivity = vi.spyOn(frontendPluginManager, 'hasBackendActivity').mockReturnValue(true)
+
+    closeLastWindow()
+    await vi.waitFor(() => expect(appState.quits).toBe(1))
+    // Re-entry: the participants agree, and the quit goes round once more.
+    await beforeQuit({ preventDefault: vi.fn() })
+    expect(appState.quits).toBe(2)
+    // Re-entry: the teardown, ending in app.quit().
+    await beforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(appState.quits).toBe(3))
+    // Its re-entry finds nothing left to stop and lets the native quit go.
+    hasBackendActivity.mockReturnValue(false)
+    const preventDefault = vi.fn()
+    await beforeQuit({ preventDefault })
+    expect(preventDefault).not.toHaveBeenCalled()
+    quit()
+
+    expect(backendState.events).toEqual(['quit stage saving', 'quit stage stopping', 'quit stage closing'])
+    expect(markCleanExit).toHaveBeenCalled()
+    expect(appQuitting()).toBe(true)
   })
 })

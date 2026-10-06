@@ -5522,8 +5522,9 @@ app.on('window-all-closed', () => {
 // can still keep it (see last-window-close.ts). Every window counts as "last"
 // — a Plans or Git window left open after the main window is the one whose
 // close would quit — so the guard goes on each window as Electron creates it,
-// whichever factory made it. A confirmed quit goes through the same teardown
-// as before-quit; `quitConfirmed` then lets app.quit() close the windows.
+// whichever factory made it. A confirmed quit re-enters before-quit like
+// Cmd+Q, so the close participants get their say before anything is torn
+// down; `quitConfirmed` skips the prompt there and lets the windows close.
 app.on('browser-window-created', (_event, win) => {
   win.on('close', (e) => {
     guardLastWindowClose(e, {
@@ -5535,7 +5536,7 @@ app.on('browser-window-created', (_event, win) => {
       quit: () => {
         quitConfirmed = true
         dockQuitInProgress = true
-        void teardownBackendAndQuit()
+        app.quit()
       },
     })
   })
