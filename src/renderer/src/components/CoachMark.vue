@@ -24,12 +24,14 @@ import {
 // is done, the bubble says so for a moment and moves on to the next control.
 // A step already done when it comes up is passed over.
 //
-// Skip (or Esc, unless the focus is in a terminal, where Esc belongs to the
-// CLI) ends the tour. Steps are data (lib/welcomeTour.ts).
+// Next on every bubble but the last moves on without the step's action (the
+// step is not come back to); the last bubble offers Done. Skip (or Esc,
+// unless the focus is in a terminal, where Esc belongs to the CLI) ends the
+// tour. Steps are data (lib/welcomeTour.ts).
 //
 // A replay is asked for, so it shows every bubble in order: nothing is passed
-// over for being done already, each bubble has Next, and one whose control is
-// not on screen sits in the middle instead of waiting unseen. An action done
+// over for being done already, and one whose control is not on screen sits in
+// the middle instead of waiting unseen. An action done
 // while a bubble is up still moves it on.
 //
 // From the moment a step comes up until it is judged done or the person
@@ -306,7 +308,7 @@ const bubbleStyle = computed((): Record<string, string> => {
           <button type="button" class="coach-link" data-testid="coach-skip" @click="end(false)">
             {{ t('tour.skip') }}
           </button>
-          <button v-if="(replay || lost) && !isLast" type="button" class="coach-link" data-testid="coach-next" @click="advance">
+          <button v-if="!isLast" type="button" class="coach-link" data-testid="coach-next" @click="advance">
             {{ t('tour.welcome.next') }}
           </button>
           <button v-if="isLast" type="button" class="coach-link" data-testid="coach-finish" @click="end(true)">

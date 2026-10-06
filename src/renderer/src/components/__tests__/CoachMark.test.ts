@@ -86,7 +86,7 @@ afterEach(() => {
 })
 
 describe('CoachMark', () => {
-  it('shows a bubble beside the control, with the step count and Skip, and no Next or Back', async () => {
+  it('shows a bubble beside the control, with the step count, Skip and Next, and no Back', async () => {
     addTarget('a')
     start()
     await tick()
@@ -94,8 +94,41 @@ describe('CoachMark', () => {
     expect(bubble()?.textContent).toContain(i18n.global.t('tour.next'))
     expect(bubble()?.textContent).toContain(i18n.global.t('tour.progress', { n: 1, total: 2 }))
     expect(byTestId('coach-skip')).not.toBeNull()
-    expect(byTestId('coach-next')).toBeNull()
+    expect(byTestId('coach-next')?.textContent).toContain(i18n.global.t('tour.welcome.next'))
     expect(byTestId('tour-back')).toBeNull()
+  })
+
+  // 09:43: "why is there no skip-step, only skip the whole tour?" A first run
+  // offers Next on every bubble but the last, as a replay does: it moves on
+  // without the action. The last offers Done; Skip still ends the tour.
+  it('lets a first run skip a step with Next, without doing it', async () => {
+    addTarget('a')
+    addTarget('b')
+    const w = start()
+    await tick()
+    byTestId('coach-next')!.click()
+    await tick()
+    expect(stepId()).toBe('two')
+    expect(w.emitted('progress')).toEqual([[1]])
+    expect(w.emitted('finish')).toBeUndefined()
+    // The last step: Done, not Next.
+    expect(byTestId('coach-next')).toBeNull()
+    expect(byTestId('coach-finish')).not.toBeNull()
+  })
+
+  it('never goes back to a skipped step, whatever the window does next', async () => {
+    addTarget('a')
+    addTarget('b')
+    const w = start()
+    await tick()
+    byTestId('coach-next')!.click()
+    await tick()
+    // The skipped step's action happens after all, and the window changes.
+    facts.workspaceOpen = true
+    facts.agentPanes = 3
+    await tick(COACH_DONE_MS * 3)
+    expect(stepId()).toBe('two')
+    expect(w.emitted('progress')).toEqual([[1]])
   })
 
   it('takes no key, and lets clicks through the layer and the ring to the control', async () => {
