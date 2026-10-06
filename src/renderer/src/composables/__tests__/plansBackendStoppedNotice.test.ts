@@ -33,7 +33,10 @@ describe('plansBackendStoppedNotice', () => {
     const app = readFileSync(join(root, 'src/renderer/src/App.vue'), 'utf8')
     const preload = readFileSync(join(root, 'src/preload/index.ts'), 'utf8')
     const main = readFileSync(join(root, 'src/main/index.ts'), 'utf8')
-    expect(main).toContain("webContents.send('plans:backendStopped', { workspacePath })")
+    const relay = readFileSync(join(root, 'src/main/plansBackendStoppedRelay.ts'), 'utf8')
+    // main hands the report to the relay, which sends it to a loaded main window.
+    expect(main).toContain('plansBackendStoppedRelay.notify(workspacePath)')
+    expect(relay).toContain("webContents.send('plans:backendStopped', { workspacePath })")
     expect(preload).toContain("ipcRenderer.on('plans:backendStopped', listener)")
     expect(app).toMatch(
       /onPlansBackendStopped\?\.\(\(\{ workspacePath \}\) => \{\s*notifyRestore\.toast\(plansBackendStoppedNotice\(workspacePath\), \{ type: 'error' \}\)/,
