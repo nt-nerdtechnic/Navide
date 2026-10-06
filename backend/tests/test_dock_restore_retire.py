@@ -235,3 +235,48 @@ async def test_a_window_pane_ended_cleanly_keeps_its_record(tmp_path: Path, stor
         "payload": {"terminal_session_id": "t-main", "pane_id": "main-pane", "reason": "exit", "exit_code": 0, "uptime_ms": 1800},
     })
     assert _status(store, ws, "main-pane") == "spawned"
+
+
+# ── Off the event loop ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_retiring_on_an_exit_runs_off_the_event_loop(
+    recorded_panel: str, store: ProjectStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The record update reads and writes the project store on disk; on the loop
+    # it held up every other request while a burst of panel CLIs exited.
+    import threading
+
+    retire = ws_handlers._retire_dock_record
+    threads: list[threading.Thread] = []
+
+    def spy(*args: Any) -> None:
+        threads.append(threading.current_thread())
+        retire(*args)
+
+    monkeypatch.setattr(ws_handlers, "_retire_dock_record", spy)
+    await _exit("t-dock", reason="exit", exit_code=0, uptime_ms=1800)
+    assert threads and threads[0] is not threading.main_thread()
+    assert _status(store, recorded_panel) == "removed"
+
+
+@pytest.mark.asyncio
+async def test_retiring_on_stop_runs_off_the_event_loop(
+    tmp_path: Path, store: ProjectStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    ws = str(tmp_path)
+    _record_panel(store, ws)
+    retire = ws_handlers._retire_dock_record
+    threads: list[threading.Thread] = []
+
+    def spy(*args: Any) -> None:
+        threads.append(threading.current_thread())
+        retire(*args)
+
+    monkeypatch.setattr(ws_handlers, "_retire_dock_record", spy)
+    terminals = FakeTerminals([SimpleNamespace(id="t-dock", pane_id=_DOCK_PANE, metadata=_dock_meta(ws))])
+    await _kill(_session(terminals), "t-dock")
+    assert threads and threads[0] is not threading.main_thread()
+    assert _status(store, ws) == "removed"

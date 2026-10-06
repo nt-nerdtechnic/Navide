@@ -6847,19 +6847,33 @@ def note_terminal_exit(payload: dict) -> None:
     A crash after a working start (the panel restores it), a shutdown (the app
     quit — the panel restores next launch) and a kill (Stop and window close
     retire on their own paths) leave the record as it is."""
+    entry = _dock_record_to_retire(payload)
+    if entry is not None:
+        _retire_dock_record(*entry)
+
+
+async def note_terminal_exit_async(payload: dict) -> None:
+    """note_terminal_exit with the record update run off the event loop: it
+    reads and writes the project store on disk."""
+    entry = _dock_record_to_retire(payload)
+    if entry is not None:
+        await asyncio.to_thread(_retire_dock_record, *entry)
+
+
+def _dock_record_to_retire(payload: dict) -> tuple[str, str, str, str] | None:
+    """The panel record an exit retires (see note_terminal_exit), or None."""
     entry = _DOCK_PTYS.pop(str(payload.get("terminal_session_id") or ""), None)
     if entry is None or payload.get("reason") not in ("exit", "error"):
-        return
+        return None
     exit_code = payload.get("exit_code")
     uptime_ms = payload.get("uptime_ms")
     if payload.get("reason") == "exit" and exit_code == 0:
-        _retire_dock_record(*entry)
-        return
+        return entry
     if not isinstance(exit_code, int) or exit_code <= 0:
-        return
+        return None
     if not isinstance(uptime_ms, int) or uptime_ms > _DOCK_FAILED_START_MS:
-        return
-    _retire_dock_record(*entry)
+        return None
+    return entry
 
 
 def _record_dock_spawn(payload: dict, metadata: dict, agent_key: str, term_id: str = "") -> None:
@@ -7738,7 +7752,7 @@ async def _terminal_create_impl(
         # 'spawned' from its last run and be retried on every window open.
         dock = _dock_target(metadata, str(payload.get("cwd") or ""))
         if dock and isinstance(getattr(term, "exit_code", None), int) and term.exit_code > 0:
-            _retire_dock_record(dock[0], str(payload["pane_id"]), dock[1])
+            await asyncio.to_thread(_retire_dock_record, dock[0], str(payload["pane_id"]), dock[1])
         details = {
             "agent_key": agent_key,
             "binary_path": (startup_probe or {}).get("binary_path", ""),
@@ -8233,7 +8247,7 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
     # the killed session's own panel one (its metadata, not the payload).
     if dock and pane_id_for_unreg and payload.get("retire_restore") is True:
         _DOCK_PTYS.pop(term_session_id, None)
-        _retire_dock_record(dock[0], pane_id_for_unreg, dock[1])
+        await asyncio.to_thread(_retire_dock_record, dock[0], pane_id_for_unreg, dock[1])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
     # The process behind the pane is gone (idle reclaim comes through here
     # too): nothing can beat for it until a respawn, so close its intervals.
