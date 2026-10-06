@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { extractDropPaths, stabilizeDroppedPaths } from '../lib/drop'
+import { blockTourWhile } from '../composables/useTourBlockers'
 
 export interface QuestionItem {
   prompt: string
@@ -23,6 +24,8 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+// The welcome tour steps aside while a question is on screen.
+blockTourWhile(() => props.visible && props.questions.length > 0)
 
 const emit = defineEmits<{
   (e: 'answer', combined: string, answers: string[]): void

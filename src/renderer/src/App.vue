@@ -267,6 +267,7 @@ import { pickWhatsNew, pickWhatsNewOnDemand, type WhatsNewEntry } from './lib/wh
 import type { TourPrepare } from './lib/tours'
 import { useReleaseTour } from './composables/useReleaseTour'
 import { useWelcomeTour, welcomeActionTimes } from './composables/useWelcomeTour'
+import { tourBlocked } from './composables/useTourBlockers'
 import {
   WELCOME_STEPS,
   decideFirstInstall,
@@ -736,7 +737,7 @@ function pollWelcomeTour(): void {
     owned: pending && settled && welcomeTour.claim(),
     eligible: welcomeTour.eligible(),
     decision: welcomeTourDecision,
-    blocked: mainModalOpen() || !!cliHealthGuide.value,
+    blocked: mainModalOpen() || !!cliHealthGuide.value || tourBlocked.value,
   })) {
     case 'stop':
       welcomeTour.release()
@@ -792,8 +793,9 @@ function welcomeFacts(): WelcomeFacts {
   }
 }
 // The install dialog after +, Settings, a release note or tour, the CLI health
-// guide: the bubbles step aside until it is gone.
-const welcomeTourSuspended = computed(() => mainModalOpen() || !!cliHealthGuide.value)
+// guide, or an overlay that popped up by itself (useTourBlockers): the bubbles
+// step aside until it is gone.
+const welcomeTourSuspended = computed(() => mainModalOpen() || !!cliHealthGuide.value || tourBlocked.value)
 function onWelcomeTourFinish(completed: boolean): void {
   welcomeTour.finish(completed)
   if (completed) notifyRestore.toast(i18n.global.t('tour.welcome.finished'), { type: 'success' })

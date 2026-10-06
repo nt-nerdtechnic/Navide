@@ -43,7 +43,8 @@ describe('first-run welcome tour', () => {
     expect(poll).toMatch(/case 'release':\s+welcomeTour\.release\(\)/)
     expect(poll).toMatch(/case 'stop':\s+welcomeTour\.release\(\)\s+stopWelcomeTourPoll\(\)/)
     expect(poll).toContain('decision: welcomeTourDecision')
-    expect(poll).toContain('blocked: mainModalOpen() || !!cliHealthGuide.value')
+    // M4: an overlay that popped up by itself (a CLI question, the job editor) holds it too.
+    expect(poll).toContain('blocked: mainModalOpen() || !!cliHealthGuide.value || tourBlocked.value')
     expect(poll).toMatch(/case 'check':\s+void checkWelcomeTourRecords\(\)/)
     expect(poll).toMatch(/case 'cancel':\s+welcomeTour\.cancel\(\)/)
     expect(poll).toMatch(/case 'mark-eligible':\s+welcomeTour\.markEligible\(\)/)
@@ -84,7 +85,7 @@ describe('first-run welcome tour', () => {
     )
     const start = appSource.indexOf('const welcomeTourSuspended = computed(')
     expect(start).toBeGreaterThan(-1)
-    expect(appSource.slice(start, start + 200)).toMatch(/mainModalOpen\(\) \|\| !!cliHealthGuide\.value/)
+    expect(appSource.slice(start, start + 200)).toMatch(/mainModalOpen\(\) \|\| !!cliHealthGuide\.value \|\| tourBlocked\.value/)
   })
 
   it('reads a finished turn, not a keystroke, as a first instruction already given', () => {
