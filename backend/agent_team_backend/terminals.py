@@ -153,6 +153,9 @@ class TerminalSession:
     sequence: int = 0
     closed: bool = False
     close_reason: str | None = None
+    # Set by a shutdown or kill before it signals the child: a child that exits
+    # on that signal reaches EOF first, and its close must still say why.
+    pending_close_reason: str | None = None
     exit_code: int | None = None
     uptime_ms: int | None = None
     exit_signal: str | None = None
@@ -1321,6 +1324,7 @@ class TerminalService:
                 # escalation below still run so the session is unregistered
                 # and its crash-recovery record dropped.
                 pgid = 0
+            session.pending_close_reason = "killed"
             # Job control puts the CLI in a group the login shell's pgid does
             # not cover. Same guard as the direct path.
             for target in (pgid, fg_pgid if fg_pgid != pgid else 0):
@@ -1586,6 +1590,7 @@ class TerminalService:
                 # and its registry entry is dropped.
                 self._close(session, reason="shutdown")
         for session, pgid in targets:
+            session.pending_close_reason = "shutdown"
             try:
                 osplat.process_tree.kill_group(pgid, force=False)
             except (ProcessLookupError, PermissionError):
@@ -1695,6 +1700,8 @@ class TerminalService:
         if raw:
             self._absorb_output(session, b"".join(raw), nbytes)
         if close_reason is not None:
+            if close_reason == "exit" and session.pending_close_reason:
+                close_reason = session.pending_close_reason
             self._close(session, reason=close_reason)
 
     def _absorb_output(
