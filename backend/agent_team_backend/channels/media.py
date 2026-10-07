@@ -105,7 +105,7 @@ def human_size(n: int) -> str:
     size = float(n)
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024 or unit == "GB":
-            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f}".removesuffix(".0") + f" {unit}"
         size /= 1024
     return f"{n} B"
 
@@ -160,3 +160,69 @@ def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, st
             return None, "system"
         return real, ""
     return None, "outside"
+
+
+# Chat-side notices, in the languages quick_menu.STRINGS covers.
+STRINGS: dict[str, dict[str, str]] = {
+    "zh-TW": {
+        "unsupported": "此平台尚不支援媒體",
+        "too_large": "⚠️ 檔案「{name}」超過 {limit} 上限，沒有收下",
+        "download_failed": "⚠️ 檔案「{name}」下載失敗：{error}",
+        "refused": "⚠️ 不傳送「{name}」：{reason}",
+        "too_large_out": "⚠️ 不傳送「{name}」：{size} 超過這個平台 {limit} 的上限",
+        "send_failed": "⚠️ 檔案「{name}」傳送失敗：{error}",
+        "too_many": "⚠️ 一次最多傳 {max} 個檔案，其餘的沒有傳",
+        "reason.not_absolute": "必須是絕對路徑",
+        "reason.parent_ref": "路徑不可含 ..",
+        "reason.missing": "找不到這個檔案",
+        "reason.not_file": "不是一般檔案",
+        "reason.outside": "只能傳 workspace 或附件資料夾裡的檔案",
+        "reason.hidden": "不傳隱藏檔或隱藏資料夾裡的檔案",
+        "reason.denied_name": "這個檔名看起來是憑證或金鑰",
+        "reason.system": "不傳系統檔案",
+    },
+    "en-US": {
+        "unsupported": "This platform does not support media yet",
+        "too_large": "⚠️ \"{name}\" is over the {limit} limit, so it was not received",
+        "download_failed": "⚠️ \"{name}\" could not be downloaded: {error}",
+        "refused": "⚠️ Not sending \"{name}\": {reason}",
+        "too_large_out": "⚠️ Not sending \"{name}\": {size} is over this platform's {limit} limit",
+        "send_failed": "⚠️ \"{name}\" could not be sent: {error}",
+        "too_many": "⚠️ At most {max} files go out at once; the rest were not sent",
+        "reason.not_absolute": "it must be an absolute path",
+        "reason.parent_ref": "the path may not contain ..",
+        "reason.missing": "the file does not exist",
+        "reason.not_file": "it is not a regular file",
+        "reason.outside": "only files in the workspace or the attachments folder can be sent",
+        "reason.hidden": "hidden files and files in hidden folders are not sent",
+        "reason.denied_name": "the name looks like a credential or key",
+        "reason.system": "system files are not sent",
+    },
+    "ja-JP": {
+        "unsupported": "このプラットフォームはまだメディアに対応していません",
+        "too_large": "⚠️ ファイル「{name}」は上限 {limit} を超えているため、受け取りませんでした",
+        "download_failed": "⚠️ ファイル「{name}」をダウンロードできませんでした：{error}",
+        "refused": "⚠️「{name}」は送信しません：{reason}",
+        "too_large_out": "⚠️「{name}」は送信しません：{size} はこのプラットフォームの上限 {limit} を超えています",
+        "send_failed": "⚠️ ファイル「{name}」を送信できませんでした：{error}",
+        "too_many": "⚠️ 一度に送れるファイルは {max} 個までです。残りは送信していません",
+        "reason.not_absolute": "絶対パスで指定してください",
+        "reason.parent_ref": "パスに .. は使えません",
+        "reason.missing": "ファイルが見つかりません",
+        "reason.not_file": "通常のファイルではありません",
+        "reason.outside": "送れるのは workspace か添付ファイルフォルダ内のファイルだけです",
+        "reason.hidden": "隠しファイルや隠しフォルダ内のファイルは送信しません",
+        "reason.denied_name": "認証情報や鍵のようなファイル名です",
+        "reason.system": "システムファイルは送信しません",
+    },
+}
+DEFAULT_LANGUAGE = "zh-TW"
+
+
+def text(lang: str, key: str, **kw: object) -> str:
+    return STRINGS.get(lang, STRINGS[DEFAULT_LANGUAGE])[key].format(**kw)
+
+
+def attachment_line(kind: str, name: str, size: int, path: Path) -> str:
+    """What the pane is told about one received file."""
+    return f"[附件] {kind} {name} {human_size(size)} → {path}"

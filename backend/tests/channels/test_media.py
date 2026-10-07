@@ -146,4 +146,11 @@ def test_system_folders_are_refused_inside_a_workspace() -> None:
 
 
 def test_human_size() -> None:
-    assert [media.human_size(n) for n in (5, 2048, 3 * 1024 * 1024)] == ["5 B", "2.0 KB", "3.0 MB"]
+    assert [media.human_size(n) for n in (5, 2048, 3 * 1024 * 1024)] == ["5 B", "2 KB", "3 MB"]
+    assert media.human_size(1536) == "1.5 KB"
+
+
+def test_every_language_has_every_notice() -> None:
+    keys = set(media.STRINGS[media.DEFAULT_LANGUAGE])
+    assert all(set(table) == keys for table in media.STRINGS.values())
+    assert set(media.STRINGS) == {"zh-TW", "en-US", "ja-JP"}

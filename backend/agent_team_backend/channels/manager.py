@@ -29,13 +29,14 @@ import time
 import unicodedata
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
-from . import quick_menu, redact, relay
+from . import media, quick_menu, redact, relay
 from .. import prompt_skills
 from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summarize
-from .base import ChannelAdapter, InboundMessage, Location
+from .base import ChannelAdapter, InboundMessage, Location, MediaTooLarge
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
 from .store import DEFAULT_ACCOUNT, DEFAULT_VERBOSITY, VERBOSITIES, Binding, ChannelStore
@@ -153,6 +154,8 @@ class Seams:
     pane_agent: Callable[[str], str] = lambda _pane_id: ""
     # agent_key -> skill names that CLI can run (quick_menu.agent_skills); blocking
     agent_skills: Callable[[str], list[str]] = lambda _agent_key: []
+    # () -> where inbound chat files are kept (channels.media)
+    media_root: Callable[[], Path] = lambda: _default_media_root()
 
 
 AdapterFactory = Callable[[dict[str, Any], dict[str, Any], ChannelStore], ChannelAdapter]
@@ -241,6 +244,7 @@ class _Debounce:
     texts: list[str]
     first_at: float
     task: asyncio.Task[None] | None = None
+    attachments: list[Any] = field(default_factory=list)
 
 
 class ChannelManager:
@@ -281,6 +285,7 @@ class ChannelManager:
         self.relay = relay.RelayTable(clock=clock, on_expired=self._relay_expired)
         self.quick = quick_menu.QuickMenus(clock=clock)
         self._debounce: dict[tuple[str, str], _Debounce] = {}
+        self._media_pruned_at: float | None = None
         # One serial worker per location: order kept within a chat, chats never block each other.
         self._workers: dict[str, _Worker] = {}
         self._known_panes: set[str] = set()
@@ -1184,12 +1189,17 @@ class ChannelManager:
             await self._edit_status(adapter, pending, f"✅ 完成（{elapsed}s）", force=True)
         bodies = _chat_msg_bodies(text)
         if bodies:
-            if await self._post_reply(pending, "\n\n".join(bodies)):
+            reply, paths = media.split_attachments("\n\n".join(bodies))
+            # A reply that only sends files posts no "(no text output)" placeholder.
+            if (paths and not reply.strip()) or await self._post_reply(pending, reply):
+                if paths:
+                    await self._send_attachments(pending, paths)
                 return
             log.warning("channels: MSG reply to %s failed; posting the turn text instead", pending.loc.key())
         elif pending.silent:
             return
-        body = strip_msg_markers(text)
+        # Only an MSG block to the chat sends files; elsewhere the lines are dropped, not posted.
+        body = media.split_attachments(strip_msg_markers(text))[0]
         await self._post_reply(pending, summarize(body) if pending.summary and not bodies else body)
 
     async def _post_reply(self, pending: _Pending, body: str) -> bool:
@@ -1338,6 +1348,7 @@ class ChannelManager:
                                       reply_to_self=buf.msg.reply_to_self)
         buf.msg, buf.binding, buf.pane_id = msg, binding, pane_id
         buf.texts.append(msg.text)
+        buf.attachments.extend(msg.attachments)
         if buf.task is not None:
             buf.task.cancel()
         wait = max(0.0, min(DEBOUNCE_S, buf.first_at + DEBOUNCE_MAX_S - now))
@@ -1348,7 +1359,9 @@ class ChannelManager:
         if self._debounce.get(key) is not buf:
             return
         del self._debounce[key]
-        joined = dataclasses.replace(buf.msg, text="\n".join(buf.texts))
+        # An attachment-only line has no text: it adds a file, not a blank line.
+        joined = dataclasses.replace(buf.msg, text="\n".join(t for t in buf.texts if t),
+                                     attachments=list(buf.attachments))
         # Back onto the location's worker so it stays ordered with that chat's other jobs.
         self._enqueue(joined.location_key(), lambda: self._deliver(joined, buf.binding, buf.pane_id))
 
@@ -1516,6 +1529,92 @@ class ChannelManager:
         else:
             await self._reply(msg, f"⚠️ 中斷失敗：{result.get('error') or 'not sent'}")
 
+    async def _fetch_attachments(self, msg: InboundMessage, pane_id: str) -> list[str]:
+        """Download ``msg``'s files into the media folder; one ``[附件]`` line each.
+
+        Only an allowed sender's files are fetched (a stranger never reaches delivery, and
+        this checks again). A refused or failed file is reported to the chat and skipped.
+        """
+        if not msg.attachments:
+            return []
+        adapter = self._adapters.get((msg.platform, msg.account))
+        lang = prompt_skills.language(await self._ui_settings())
+        if adapter is None or not callable(getattr(adapter, "download", None)):
+            await self._reply(msg, media.text(lang, "unsupported"))
+            return []
+        if not self.gate.is_allowed(msg.platform, msg.sender_id, msg.account):
+            return []
+        root = self._seams.media_root()
+        await self._prune_media(root)
+        limit = media.human_size(media.INBOUND_MAX_BYTES)
+        lines: list[str] = []
+        for att in msg.attachments:
+            name = media.safe_name(att.name, att.kind, att.mime)
+            if att.size is not None and att.size > media.INBOUND_MAX_BYTES:
+                await self._reply(msg, media.text(lang, "too_large", name=name, limit=limit))
+                continue
+            dest = await asyncio.to_thread(media.new_inbound_path, root, pane_id, name)
+            try:
+                size = await adapter.download(att, dest, media.INBOUND_MAX_BYTES)
+            except MediaTooLarge:
+                dest.unlink(missing_ok=True)
+                await self._reply(msg, media.text(lang, "too_large", name=name, limit=limit))
+                continue
+            except Exception as exc:  # noqa: BLE001 — reported to the chat, the text still goes
+                dest.unlink(missing_ok=True)
+                await self._reply(msg, media.text(lang, "download_failed", name=name,
+                                                  error=redact.redact_text(str(exc))))
+                continue
+            lines.append(media.attachment_line(att.kind, name, size, dest))
+        return lines
+
+    async def _prune_media(self, root: Path) -> None:
+        now = time.monotonic()
+        if self._media_pruned_at is not None and now - self._media_pruned_at < media.PRUNE_EVERY_S:
+            return
+        self._media_pruned_at = now
+        try:
+            await asyncio.to_thread(media.prune, root)
+        except Exception as exc:  # noqa: BLE001 — a failed sweep must not drop the message
+            log.warning("channels: pruning %s failed: %s", root, exc)
+
+    async def _send_attachments(self, pending: _Pending, paths: list[str]) -> None:
+        """Send the files a reply named on ``---ATTACH---`` lines, each checked by
+        ``media.resolve_outbound`` against the replying pane's workspace and the media folder."""
+        loc = pending.loc
+        adapter = self._adapters.get((loc.platform, loc.account))
+        lang = prompt_skills.language(await self._ui_settings())
+
+        async def note(text: str) -> None:
+            with contextlib.suppress(Exception):
+                await self.mirror.send(loc, text)
+
+        if adapter is None or not callable(getattr(adapter, "send_file", None)):
+            await note(media.text(lang, "unsupported"))
+            return
+        roots = [self._seams.pane_workspace(pending.owner) if pending.owner else "", self._seams.media_root()]
+        limit = int(getattr(adapter, "upload_max_bytes", 0) or 0)
+        for raw in paths[: media.MAX_ATTACHMENTS_PER_REPLY]:
+            name = Path(raw.strip()).name or raw.strip()
+            real, reason = await asyncio.to_thread(media.resolve_outbound, raw, roots)
+            if real is None:
+                await note(media.text(lang, "refused", name=name, reason=media.text(lang, f"reason.{reason}")))
+                continue
+            size = real.stat().st_size
+            if limit and size > limit:
+                await note(media.text(lang, "too_large_out", name=real.name, size=media.human_size(size),
+                                      limit=media.human_size(limit)))
+                continue
+            try:
+                ids = await adapter.send_file(loc, real, real.name)
+            except Exception as exc:  # noqa: BLE001
+                await note(media.text(lang, "send_failed", name=real.name, error=redact.redact_text(str(exc))))
+                continue
+            if pending.owner:
+                self.mirror.owners.remember(loc.key(), ids, pending.owner)
+        if len(paths) > media.MAX_ATTACHMENTS_PER_REPLY:
+            await note(media.text(lang, "too_many", max=media.MAX_ATTACHMENTS_PER_REPLY))
+
     def _quote_trusted(self, msg: InboundMessage) -> bool:
         """The replied-to message may be quoted into the pane (see ``_with_reply_quote``)."""
         author = msg.reply_to_sender_id
@@ -1531,7 +1630,11 @@ class ChannelManager:
             await self._reply(msg, MSG_QUEUE_FULL)
             return False
         state = self._seams.pane_state(pane_id)
-        body = _with_reply_quote(msg, self._quote_trusted(msg))
+        files = await self._fetch_attachments(msg, pane_id)
+        text = "\n".join(part for part in (msg.text, *files) if part)
+        if msg.attachments and not text:
+            return False  # every file was refused, and the chat was told why
+        body = _with_reply_quote(dataclasses.replace(msg, text=text), self._quote_trusted(msg))
         try:
             result = await self._seams.deliver(pane_id, body, f"{msg.platform}:{msg.sender_name}")
         except Exception as exc:  # noqa: BLE001
@@ -1965,6 +2068,12 @@ def _bot_label(bot: BotKey) -> str:
     """How errors name a bot: the bare platform for "default", as they always have."""
     platform, account = bot
     return platform if account == DEFAULT_ACCOUNT else f"{platform}/{account}"
+
+
+def _default_media_root() -> Path:
+    from ..applog import app_data_dir
+
+    return media.media_root(app_data_dir())
 
 
 def _chat_msg_bodies(text: str) -> list[str]:
