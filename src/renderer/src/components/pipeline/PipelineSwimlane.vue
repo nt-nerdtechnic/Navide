@@ -4,7 +4,7 @@
 // forks and layer-skipping links become badges that jump to the canvas
 // (plan §6.1). Gestures are reported as intents — the editor turns them into
 // graph ops (pipelineGraphEdits) so both views share one history.
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { layerGraph, type GraphNode, type NodeRunState, type PipelineGraph } from '../../lib/pipelineGraph'
 import type { LaneBadge } from '../../lib/pipelineGraphEdits'
@@ -56,6 +56,15 @@ const lanes = computed(() => {
   return { columns, triggers: triggers.map((id) => byId.value.get(id)!).filter(Boolean) }
 })
 
+/** Run state of the link INTO a column: live while anything in it runs or
+ *  waits, done once every step in it has finished. */
+function flowState(col: { nodes: GraphNode[] }): '' | 'live' | 'done' {
+  const states = col.nodes.map((n) => props.runNodes[n.id]?.status)
+  if (states.some((s) => s === 'running' || s === 'awaiting')) return 'live'
+  if (states.length && states.every((s) => s === 'done' || s === 'skipped')) return 'done'
+  return ''
+}
+
 function columnTitle(col: { index: number; stage?: Stage; gateOnly: boolean }): string {
   if (col.gateOnly) return t('pipelineEditor.lane.checkpoint')
   return col.stage?.shortTitle || col.stage?.title || t('pipelineEditor.lane.layer', { n: col.index + 1 })
@@ -103,6 +112,35 @@ function onDrop(e: DragEvent, target: LaneTarget): void {
   try { emit('drop-item', JSON.parse(raw) as PaletteItem, target) } catch { /* not ours */ }
 }
 
+// ── Overflow cue: layers off to the right are announced, not just cut ───────
+const scroller = ref<HTMLElement | null>(null)
+const hiddenRight = ref(0)
+function measure(): void {
+  const el = scroller.value
+  if (!el) return
+  const edge = el.scrollLeft + el.clientWidth
+  // A layer counts as hidden once more than a sliver of it is cut off.
+  hiddenRight.value = Array.from(el.querySelectorAll<HTMLElement>('.lane'))
+    .filter((lane) => lane.offsetLeft + lane.offsetWidth > edge + 24).length
+}
+function showMore(): void {
+  const el = scroller.value
+  if (!el) return
+  const edge = el.scrollLeft + el.clientWidth
+  const next = Array.from(el.querySelectorAll<HTMLElement>('.lane')).find((lane) => lane.offsetLeft + lane.offsetWidth > edge + 24)
+  el.scrollTo({ left: Math.max(0, (next?.offsetLeft ?? el.scrollWidth) - 56), behavior: 'smooth' })
+}
+let resize: ResizeObserver | null = null
+onMounted(() => {
+  void nextTick(measure)
+  if (typeof ResizeObserver !== 'undefined' && scroller.value) {
+    resize = new ResizeObserver(() => measure())
+    resize.observe(scroller.value)
+  }
+})
+onBeforeUnmount(() => resize?.disconnect())
+watch(() => props.graph, () => { void nextTick(measure) })
+
 // ── Keyboard ─────────────────────────────────────────────────────────────────
 function onCardKey(e: KeyboardEvent, id: string, layer: number): void {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); emit('select', id); return }
@@ -124,7 +162,8 @@ function shiftColumn(index: number, delta: -1 | 1): void {
 </script>
 
 <template>
-  <div class="lane-scroll" @click.self="emit('select', null)">
+  <div class="lane-wrap">
+  <div ref="scroller" class="lane-scroll" :class="{ 'has-more': hiddenRight > 0 }" @click.self="emit('select', null)" @scroll.passive="measure">
     <div class="lanes" @click.self="emit('select', null)">
       <!-- Lead-in: where the run starts. -->
       <div class="lane-start">
@@ -139,7 +178,7 @@ function shiftColumn(index: number, delta: -1 | 1): void {
       <template v-for="col in lanes.columns" :key="col.index">
         <!-- Gutter: drop here (or press +) to insert a whole layer. -->
         <div
-          class="lane-gutter" :class="{ 'is-hot': hover === `g${col.index}` }"
+          class="lane-gutter" :class="[{ 'is-hot': hover === `g${col.index}` }, flowState(col) ? `is-${flowState(col)}` : '']"
           @dragover="onOver($event, `g${col.index}`)" @dragleave="onLeave($event, `g${col.index}`)"
           @drop="onDrop($event, { mode: 'newLayer', layer: col.index })"
         >
@@ -226,10 +265,22 @@ function shiftColumn(index: number, delta: -1 | 1): void {
       </button>
     </div>
   </div>
+  <button v-if="hiddenRight > 0" type="button" class="lane-more" @click="showMore">
+    {{ t('pipelineEditor.lane.more', { n: hiddenRight }, hiddenRight) }}
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+  </button>
+  </div>
 </template>
 
 <style scoped>
+.lane-wrap { position: relative; height: 100%; }
+/* Layers past the right edge fade out instead of being sliced off. */
+.lane-scroll.has-more {
+  -webkit-mask-image: linear-gradient(to right, rgb(0 0 0) calc(100% - 72px), transparent);
+  mask-image: linear-gradient(to right, rgb(0 0 0) calc(100% - 72px), transparent);
+}
 .lane-scroll {
+  position: relative;
   height: 100%;
   overflow: auto;
   /* A quiet engineering grid: the same dot field the canvas uses, so the two
@@ -254,7 +305,7 @@ function shiftColumn(index: number, delta: -1 | 1): void {
   flex-direction: column;
   gap: var(--space-3);
   --pnc-w: 100%;
-  width: 236px;
+  width: 248px;
   padding: var(--space-3) var(--space-3) var(--space-3);
   box-sizing: border-box;
   border-radius: var(--radius-lg);
@@ -376,11 +427,26 @@ function shiftColumn(index: number, delta: -1 | 1): void {
   cursor: pointer;
   transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out);
 }
+.lane-scroll:hover .lane-insert { opacity: 0.35; transform: translate(-50%, -50%) scale(0.8); }
 .lane-gutter:hover .lane-insert,
 .lane-insert:focus-visible,
 .lane-gutter.is-hot .lane-insert { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 .lane-insert:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; }
 .lane-gutter.is-hot .lane-flow { border-top-color: var(--accent-emphasis); }
+/* Run state on the link into a column: green once it finished, a flowing
+   accent line while it runs — the swimlane's version of the canvas edges. */
+.lane-gutter.is-done .lane-flow { border-top-color: var(--success-emphasis); }
+.lane-gutter.is-done .lane-flow::after { border-left-color: var(--success-emphasis); }
+.lane-gutter.is-live .lane-flow {
+  border-top: none;
+  height: 2px;
+  margin-top: -0.5px;
+  background: repeating-linear-gradient(90deg, var(--accent-emphasis) 0 6px, transparent 6px 11px);
+  background-size: 22px 2px;
+  animation: lane-flow 0.9s linear infinite;
+}
+.lane-gutter.is-live .lane-flow::after { border-left-color: var(--accent-emphasis); top: -3.5px; }
+@keyframes lane-flow { to { background-position: 22px 0; } }
 
 .lane-append {
   display: flex;
@@ -417,7 +483,33 @@ function shiftColumn(index: number, delta: -1 | 1): void {
 }
 .lane-append:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; }
 
+.lane-more {
+  position: absolute;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  animation: lane-more-in var(--motion-base) var(--ease-out) both;
+}
+.lane-more svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.lane-more:hover { border-color: var(--accent-emphasis); color: var(--accent-fg); }
+.lane-more:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; }
+@keyframes lane-more-in { from { opacity: 0; transform: translateX(8px); } }
 @media (prefers-reduced-motion: reduce) {
+  .lane-more { animation: none; }
   .lane, .lane-insert, .lane-append, .lane-add, .lane-tools { transition: none; }
+  .lane-gutter.is-live .lane-flow { animation: none; }
 }
 </style>

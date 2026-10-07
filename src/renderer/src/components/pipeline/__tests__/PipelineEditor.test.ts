@@ -231,6 +231,51 @@ describe('PipelineEditor', () => {
     expect(useNotify().toasts.value.slice(before).at(-1)?.message).toContain('ui.pipeline.gate_reject')
   })
 
+  it('shows a run strip with progress and what is running, in every editor view', async () => {
+    const now = Date.now()
+    const run: RunSnapshot = {
+      pipelineId: 'p1', state: 'running', gate: null,
+      nodes: {
+        plan: { status: 'done' },
+        fe: { status: 'running', startedAt: new Date(now - 30_000).toISOString() },
+        be: { status: 'running', startedAt: new Date(now - 10_000).toISOString() },
+      },
+    }
+    const { w } = await mountEditor({ run, locked: true })
+    const strip = w.find('.pe-run')
+    expect(strip.exists()).toBe(true)
+    expect(strip.text()).toContain('1 of 5 steps')
+    expect(strip.text()).toContain('Frontend')
+    expect(strip.text()).toContain('Backend')
+  })
+
+  it('turns the run strip into a call to review a waiting gate', async () => {
+    const run: RunSnapshot = { pipelineId: 'p1', state: 'running', gate: 'gate', nodes: { plan: { status: 'done' }, gate: { status: 'awaiting' } } }
+    const { w } = await mountEditor({ run, locked: true })
+    const strip = w.find('.pe-run')
+    expect(strip.classes()).toContain('is-gate')
+    expect(strip.text()).toContain('Approve')
+    await strip.find('.pe-run-act').trigger('click')
+    await flushPromises()
+    expect(w.find('.pi-title').text()).toBe('Approve')
+    expect(w.find('.pi-decision').exists()).toBe(true)
+  })
+
+  it('has no run strip for another pipeline\'s run', async () => {
+    const run: RunSnapshot = { pipelineId: 'other', state: 'running', gate: null, nodes: {} }
+    const { w } = await mountEditor({ run })
+    expect(w.find('.pe-run').exists()).toBe(false)
+  })
+
+  it('marks the swimlane link into a running layer as live and out of a finished one as done', async () => {
+    const run: RunSnapshot = { pipelineId: 'p1', state: 'running', gate: null, nodes: { plan: { status: 'done' }, fe: { status: 'running' }, be: { status: 'pending' } } }
+    const { w } = await mountEditor({ run, locked: true })
+    const gutters = w.findAll('.lane-gutter')
+    expect(gutters[1].classes()).toContain('is-live') // plan → (fe, be)
+    expect(gutters[0].classes()).toContain('is-done') // trigger → plan
+    expect(gutters[2].classes()).not.toContain('is-live')
+  })
+
   it('shows run state on the cards', async () => {
     const now = Date.now()
     const run: RunSnapshot = {
@@ -291,7 +336,7 @@ describe('PipelineInspector', () => {
   it('lists what feeds the step and offers prompt variables', () => {
     const w = mountInspector(slot('fe', 'Frontend'))
     expect(w.find('.pi-inputs').text()).toContain('Plan')
-    expect(w.findAll('.pi-var').map((b) => b.text())).toEqual(['{{task}}', '{{prev.summary}}'])
+    expect(w.findAll('.pi-vars .pi-var').map((b) => b.text())).toEqual(['{{task}}', '{{prev.summary}}'])
   })
 
   it('edits a layer through set_stage_meta with the previous value for undo', async () => {
@@ -398,5 +443,57 @@ describe('PipelineExecutions', () => {
     expect(w.find('.canvas-stub').text()).toContain('"plan"')
     expect(w.text()).toContain('1 older run(s)')
     scope.stop()
+  })
+})
+
+describe('PipelineInspector header', () => {
+  it('carries the card\'s glyph and run status, so the panel reads as that node', () => {
+    const mock = createMockBackend('connected')
+    const run: RunSnapshot = { pipelineId: 'p1', state: 'running', gate: null, nodes: { fe: { status: 'running' } } }
+    const w = mount(PipelineInspector, {
+      props: { backend: mock.backend, graph: seedGraph(), node: slot('fe', 'Frontend'), stage: null, roles, agentOptions: [], run, now: Date.now(), locked: true, workspacePath: '/ws' },
+      global: { plugins: [i18n] },
+    })
+    expect(w.find('.pi-glyph').text()).toBe('D') // Developer
+    expect(w.find('.pi-status').text()).toContain('Running')
+  })
+})
+
+describe('PipelineSwimlane overflow cue', () => {
+  it('says how many layers are off to the right and scrolls to them', async () => {
+    const graph = seedGraph()
+    const w = mount(PipelineSwimlane, {
+      props: { graph, stages: [], roleLabels: {}, agentLabels: {}, runNodes: {}, badges: new Map(), now: 0, selectedId: null, locked: false, canReorder: false },
+      global: { plugins: [i18n] }, attachTo: document.body,
+    })
+    const scroller = w.find('.lane-scroll').element as HTMLElement
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 600 })
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 1500 })
+    const lanes = w.findAll('.lane').map((l) => l.element as HTMLElement)
+    lanes.forEach((el, i) => { Object.defineProperty(el, 'offsetLeft', { configurable: true, value: 200 + i * 290 }) })
+    let scrolledTo = -1
+    scroller.scrollTo = ((opts: ScrollToOptions) => { scrolledTo = Number(opts.left) }) as typeof scroller.scrollTo
+    await w.find('.lane-scroll').trigger('scroll')
+    await flushPromises()
+    const more = w.find('.lane-more')
+    expect(more.text()).toContain('2 more layers') // layers starting past 600px: 3rd (780) and 4th (1070)
+    await more.trigger('click')
+    expect(scrolledTo).toBeGreaterThan(0)
+    w.unmount()
+  })
+})
+
+describe('PipelineInspector inputs', () => {
+  it('shows each upstream as its card and hands its output to the prompt', async () => {
+    const mock = createMockBackend('connected')
+    const w = mount(PipelineInspector, {
+      props: { backend: mock.backend, graph: seedGraph(), node: slot('fe', 'Frontend'), stage: null, roles, agentOptions: [], run: EMPTY_RUN, now: Date.now(), locked: false, workspacePath: '/ws' },
+      global: { plugins: [i18n] }, attachTo: document.body,
+    })
+    expect(w.find('.pi-input .pi-input-glyph').text()).toBe('P') // Planner
+    await w.find('.pi-handoff-chip').trigger('click')
+    const [, ops] = (w.emitted('edit') as [string, GraphOp[]][])[0]
+    expect(ops[0]).toMatchObject({ op: 'update_node', id: 'fe', slot: { kickoffBody: expect.stringContaining('{{prev.summary}}') } })
+    w.unmount()
   })
 })

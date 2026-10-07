@@ -9745,7 +9745,10 @@
       "loop-label": "↺ max {max}",
       "minimap": "Overview of the whole pipeline",
       "pass": "Continue when approved",
-      "reject-handle": "Drag to a step upstream to send work back"
+      "reject-handle": "Drag to a step upstream to send work back",
+      "zoom-in": "Zoom in",
+      "zoom-out": "Zoom out",
+      "zoom-level": "Zoom level"
     },
     "exec": {
       "abort": "Abort run",
@@ -9833,7 +9836,8 @@
       "tokens": "Tokens",
       "trigger-help": "Every run starts here — from the sidebar, a command, or a CLI through MCP. Link it to the first steps.",
       "unpin": "Unfreeze output",
-      "variables": "Insert:"
+      "variables": "Insert:",
+      "handoff": "Their output reaches this step as"
     },
     "lane": {
       "add-parallel": "+ Run in parallel",
@@ -9844,7 +9848,8 @@
       "move-left": "Move layer left",
       "move-right": "Move layer right",
       "parallel": "{n} in parallel",
-      "settings": "Layer settings"
+      "settings": "Layer settings",
+      "more": "{n} more layer | {n} more layers"
     },
     "node": {
       "commander": "Pipeline manager",
@@ -9954,6 +9959,11 @@
       "problem-name-invalid": "A name starts with a letter or _ and uses only letters, digits, _ and -.",
       "problem-options-empty": "A choice list needs at least one choice.",
       "problem-condition": "The visibility rule refers to “{field}”, which is not another field of this role."
+    },
+    "run": {
+      "running": "Running: {names}",
+      "gate": "Waiting for your approval at {name}",
+      "review": "Review"
     }
   }
 }

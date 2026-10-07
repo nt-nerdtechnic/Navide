@@ -9745,7 +9745,10 @@
       "loop-label": "↺ 最多 {max} 次",
       "minimap": "整條 pipeline 的縮圖",
       "pass": "核准後繼續",
-      "reject-handle": "拖到上游步驟，建立退回迴圈"
+      "reject-handle": "拖到上游步驟，建立退回迴圈",
+      "zoom-in": "放大",
+      "zoom-out": "縮小",
+      "zoom-level": "縮放比例"
     },
     "exec": {
       "abort": "中止執行",
@@ -9833,7 +9836,8 @@
       "tokens": "Token",
       "trigger-help": "每次執行都從這裡開始——側欄、指令，或 CLI 透過 MCP 啟動。把它連到第一個步驟。",
       "unpin": "取消凍結",
-      "variables": "插入："
+      "variables": "插入：",
+      "handoff": "它們的產出會以這個變數帶進這一步："
     },
     "lane": {
       "add-parallel": "＋ 並行步驟",
@@ -9844,7 +9848,8 @@
       "move-left": "層往左移",
       "move-right": "層往右移",
       "parallel": "{n} 個並行",
-      "settings": "層設定"
+      "settings": "層設定",
+      "more": "還有 {n} 層"
     },
     "node": {
       "commander": "pipeline 總指揮",
@@ -9954,6 +9959,11 @@
       "problem-name-invalid": "名稱須以英文字母或 _ 開頭，只能含英數字、_ 與 -。",
       "problem-options-empty": "選項清單至少要有一個選項。",
       "problem-condition": "顯示條件指向「{field}」，但它不是這個角色的其他欄位。"
+    },
+    "run": {
+      "running": "執行中：{names}",
+      "gate": "等待你在「{name}」核准",
+      "review": "前往核准"
     }
   }
 }

@@ -63,6 +63,7 @@ const upstream = computed(() => {
   const ids = upstreamOf(props.graph, n.value.id)
   return ids.map((id) => props.graph.nodes.find((x) => x.id === id)!).filter((x) => x && x.kind !== 'trigger')
 })
+const glyph = computed(() => (role.value?.label || title.value).trim().charAt(0).toUpperCase() || '?')
 const title = computed(() => {
   if (n.value) return nodeTitle(n.value)
   return props.stage?.shortTitle || props.stage?.title || ''
@@ -127,7 +128,8 @@ const valueOf = (e: Event): string => (e.target as HTMLInputElement).value
 
 // ── Prompt variables ─────────────────────────────────────────────────────────
 const promptEl = ref<HTMLTextAreaElement | null>(null)
-const VARIABLES = ['{{task}}', '{{prev.summary}}']
+const PREV_SUMMARY = '{{prev.summary}}'
+const VARIABLES = ['{{task}}', PREV_SUMMARY]
 async function insertVariable(v: string): Promise<void> {
   const el = promptEl.value
   const node = n.value
@@ -139,6 +141,19 @@ async function insertVariable(v: string): Promise<void> {
   await nextTick()
   el.focus()
   el.setSelectionRange(start + v.length, start + v.length)
+}
+/** Append a variable on its own line (the hand-off chip: the prompt need not
+ *  be focused). */
+function appendVariable(v: string): void {
+  const node = n.value
+  if (!node?.slot || props.locked) return
+  const body = node.slot.kickoffBody
+  editSlot('kickoffBody', body ? `${body.replace(/\s+$/, '')}\n${v}` : v, t('pipelineEditor.history.edit-prompt'))
+}
+function glyphOf(u: GraphNode): string {
+  if (u.kind === 'gate') return '◆'
+  const label = props.roles.find((r) => r.key === u.slot?.roleKey)?.label || nodeTitle(u)
+  return label.trim().charAt(0).toUpperCase() || '?'
 }
 function onVarDragStart(e: DragEvent, v: string): void {
   e.dataTransfer?.setData('text/plain', v)
@@ -204,8 +219,19 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
 <template>
   <aside class="pi" :aria-label="t('pipelineEditor.inspector.aria', { name: title })">
     <header class="pi-head">
+      <!-- The same tile as the node card, so the panel reads as that node. -->
+      <span v-if="n" class="pi-glyph" :class="`pi-glyph--${n.kind}`" aria-hidden="true">
+        <svg v-if="n.kind === 'trigger'" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z" /></svg>
+        <svg v-else-if="n.kind === 'gate'" viewBox="0 0 16 16"><path d="M8 1.8 14.2 8 8 14.2 1.8 8z" /></svg>
+        <template v-else>{{ glyph }}</template>
+      </span>
       <div class="pi-heading">
-        <span class="pi-kind">{{ kindLabel }}</span>
+        <span class="pi-kind">
+          {{ kindLabel }}
+          <span v-if="runState" class="pi-status" :class="`is-${runState.status}`">
+            <span class="pi-status-dot" aria-hidden="true"></span>{{ t(`pipelineEditor.status.${runState.status}`) }}
+          </span>
+        </span>
         <h2 class="pi-title">{{ title }}</h2>
       </div>
       <button type="button" class="pi-icon" :aria-label="t('action.close')" :title="t('action.close')" @click="emit('close')">
@@ -288,6 +314,7 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
           <h3 class="pi-section">{{ t('pipelineEditor.inspector.inputs') }}</h3>
           <ul>
             <li v-for="u in upstream" :key="u.id" class="pi-input">
+              <span class="pi-input-glyph" aria-hidden="true">{{ glyphOf(u) }}</span>
               <span class="pi-input-name">{{ nodeTitle(u) }}</span>
               <span class="pi-input-state" :class="`is-${run.nodes[u.id]?.status ?? 'idle'}`">
                 {{ run.nodes[u.id] ? t(`pipelineEditor.status.${run.nodes[u.id].status}`) : t('pipelineEditor.inspector.not-run') }}
@@ -295,6 +322,12 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
               <p v-if="run.nodes[u.id]?.summary" class="pi-input-summary">{{ run.nodes[u.id].summary }}</p>
             </li>
           </ul>
+          <!-- Where that output goes: into this step's prompt, one click away. -->
+          <p class="pi-handoff">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v6.5a2 2 0 0 0 2 2h5.5M10 8.5l2.5 2.5L10 13.5" /></svg>
+            <span>{{ t('pipelineEditor.inspector.handoff') }}</span>
+            <button type="button" class="pi-var pi-handoff-chip" :disabled="locked" @click="appendVariable(PREV_SUMMARY)" v-text="PREV_SUMMARY"></button>
+          </p>
         </section>
 
         <label class="pi-field">
@@ -441,7 +474,39 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
   padding: var(--space-4) var(--space-4) var(--space-3);
 }
 .pi-heading { flex: 1; min-width: 0; display: grid; gap: 2px; }
-.pi-kind { font-size: var(--font-xs); color: var(--text-muted); }
+.pi-kind { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-xs); color: var(--text-muted); }
+.pi-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+.pi-glyph svg { width: 16px; height: 16px; fill: currentColor; }
+.pi-glyph--trigger { background: color-mix(in srgb, var(--success-emphasis) 16%, transparent); color: var(--success-fg); }
+.pi-glyph--gate { background: color-mix(in srgb, var(--attention-emphasis) 18%, transparent); color: var(--attention-fg); }
+.pi-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  line-height: 18px;
+}
+.pi-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); }
+.pi-status.is-running .pi-status-dot { background: var(--accent-emphasis); }
+.pi-status.is-done .pi-status-dot, .pi-status.is-skipped .pi-status-dot { background: var(--success-emphasis); }
+.pi-status.is-awaiting { background: var(--attention-subtle); color: var(--attention-fg); }
+.pi-status.is-awaiting .pi-status-dot { background: var(--attention-emphasis); }
+.pi-status.is-failed .pi-status-dot, .pi-status.is-rejected .pi-status-dot, .pi-status.is-aborted .pi-status-dot { background: var(--danger-emphasis); }
 .pi-title {
   margin: 0;
   font-size: var(--font-lg);
@@ -516,7 +581,7 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
 }
 .pi-section { margin: 0 0 var(--space-2); font-size: var(--font-xs); font-weight: 600; color: var(--text-secondary); }
 .pi-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
-.pi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.pi-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 .pi-label { font-size: var(--font-xs); font-weight: 500; color: var(--text-secondary); }
 .pi-req { color: var(--danger-fg); margin-left: 2px; }
 .pi-help { font-size: var(--font-2xs); line-height: var(--lh-base); color: var(--text-muted); }
@@ -618,7 +683,8 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
 .pi-inputs ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
 .pi-input {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
   gap: 2px var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
@@ -629,7 +695,29 @@ const tokens = computed(() => formatTokens(runState.value?.tokens))
 .pi-input-state { font-size: var(--font-2xs); color: var(--text-muted); }
 .pi-input-state.is-done { color: var(--success-fg); }
 .pi-input-state.is-running { color: var(--accent-fg); }
-.pi-input-summary { grid-column: 1 / -1; margin: 0; font-size: var(--font-2xs); line-height: var(--lh-base); color: var(--text-secondary); }
+.pi-input-glyph {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+}
+.pi-handoff {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding-left: 6px;
+  font-size: var(--font-2xs);
+  color: var(--text-muted);
+}
+.pi-handoff svg { flex: none; width: 14px; height: 14px; fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.pi-input-summary { grid-column: 2 / -1; margin: 0; font-size: var(--font-2xs); line-height: var(--lh-base); color: var(--text-secondary); }
 .pi-props { display: flex; flex-direction: column; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-muted); }
 
 .pi-decision {

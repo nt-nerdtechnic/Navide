@@ -76,6 +76,8 @@ function badgeText(b: LaneBadge): string {
           <path d="M6 1.5h4l-.6 4.2L12 8.5H8.7V14L8 15l-.7-1V8.5H4l2.6-2.8z" />
         </svg>
       </span>
+      <!-- Title > role > CLI: when space runs out the role yields first, the
+           title never does. -->
       <span class="pnc-meta">
         <span class="pnc-sub">{{ subtitle }}</span>
         <span v-if="agentTag" class="pnc-agent" :title="agentLabel">{{ agentTag }}</span>
@@ -181,7 +183,7 @@ function badgeText(b: LaneBadge): string {
 .pnc-mark--pin { fill: var(--done-fg); }
 .pnc-meta { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .pnc-sub {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: var(--font-xs);
   color: var(--text-muted);

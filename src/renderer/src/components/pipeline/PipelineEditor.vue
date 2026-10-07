@@ -54,7 +54,7 @@ const props = defineProps<{
   locked: boolean
 }>()
 const emit = defineEmits<{ (e: 'leave'): void }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const notify = useNotify()
 
 const editor = usePipelineGraphEditor(props.backend, {
@@ -120,6 +120,32 @@ watch(
   { immediate: true }
 )
 onBeforeUnmount(() => { if (ticker !== null) window.clearInterval(ticker) })
+
+// ── Run strip: the live run, readable from any view ──────────────────────────
+const runLive = computed(() => props.run.state === 'running' && props.run.pipelineId === props.pipelineId)
+const runProgress = computed(() => {
+  const steps = (graph.value?.nodes ?? []).filter((n) => n.kind !== 'trigger')
+  const done = steps.filter((n) => ['done', 'skipped'].includes(props.run.nodes[n.id]?.status ?? '')).length
+  return { done, total: steps.length }
+})
+const runningNames = computed(() =>
+  (graph.value?.nodes ?? [])
+    .filter((n) => props.run.nodes[n.id]?.status === 'running')
+    .map((n) => nodeTitle(n))
+)
+const waitingGate = computed(() => {
+  const id = props.run.gate
+  return id && runLive.value ? byId.value.get(id) ?? null : null
+})
+/** "A, B and C" in the UI language's own list style. */
+function listNames(names: string[]): string {
+  try { return new Intl.ListFormat(String(locale.value), { style: 'short', type: 'conjunction' }).format(names) } catch { return names.join(', ') }
+}
+function reviewGate(): void {
+  if (!waitingGate.value) return
+  tab.value = 'editor'
+  select(waitingGate.value.id)
+}
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 function explain(err: EditorError): string {
@@ -497,7 +523,7 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
         <template v-if="view === 'canvas'">
           <span class="pe-divider" aria-hidden="true"></span>
           <button type="button" class="pe-text-btn" :disabled="locked" @click="tidy">{{ t('pipelineEditor.toolbar.tidy') }}</button>
-          <button type="button" class="pe-icon" :aria-label="t('pipelineEditor.toolbar.fit')" :title="t('pipelineEditor.toolbar.fit')" @click="canvasRef?.zoomToFit()">
+          <button type="button" class="pe-icon" :aria-label="t('pipelineEditor.toolbar.fit')" :title="t('pipelineEditor.toolbar.fit')" @click="canvasRef?.fitAll()">
             <svg viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" /></svg>
           </button>
         </template>
@@ -505,6 +531,28 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
       <template v-if="$slots.trail">
         <span class="pe-divider" aria-hidden="true"></span>
         <div class="pe-trail"><slot name="trail" /></div>
+      </template>
+    </div>
+
+    <!-- The live run, in one line, whichever view is open: progress, what is
+         running now, and — when a gate is waiting — the way to it. -->
+    <div
+      v-if="runLive && tab === 'editor' && graph" class="pe-run" :class="{ 'is-gate': waitingGate }"
+      role="status" aria-live="polite"
+    >
+      <span class="pe-run-meter" aria-hidden="true">
+        <span :style="{ width: runProgress.total ? `${(runProgress.done / runProgress.total) * 100}%` : '0%' }"></span>
+      </span>
+      <span class="pe-run-count">{{ t('pipelineEditor.exec.progress', runProgress) }}</span>
+      <template v-if="waitingGate">
+        <span class="pe-run-sep" aria-hidden="true"></span>
+        <span class="pe-run-text">{{ t('pipelineEditor.run.gate', { name: nodeTitle(waitingGate) }) }}</span>
+        <button type="button" class="pe-run-act" @click="reviewGate">{{ t('pipelineEditor.run.review') }}</button>
+      </template>
+      <template v-else-if="runningNames.length">
+        <span class="pe-run-sep" aria-hidden="true"></span>
+        <span class="pe-run-dot" aria-hidden="true"></span>
+        <span class="pe-run-text">{{ t('pipelineEditor.run.running', { names: listNames(runningNames) }) }}</span>
       </template>
     </div>
 
@@ -607,6 +655,44 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
   border-bottom: 1px solid var(--border-default);
   background: var(--bg-elevated);
 }
+.pe-run {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border-muted);
+  background: color-mix(in srgb, var(--accent-emphasis) 6%, var(--bg-elevated));
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  animation: pe-pop 200ms var(--ease-out) both;
+}
+.pe-run.is-gate {
+  background: var(--attention-subtle);
+  border-bottom-color: color-mix(in srgb, var(--attention-emphasis) 40%, transparent);
+  color: var(--attention-fg);
+}
+.pe-run-meter { position: relative; width: 96px; height: 4px; border-radius: var(--radius-pill); background: var(--bg-muted); overflow: hidden; }
+.pe-run-meter span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--success-emphasis); transition: width var(--motion-slow) var(--ease-out); }
+.pe-run-count { font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.pe-run-sep { width: 1px; height: 14px; background: var(--border-default); }
+.pe-run-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-emphasis); animation: pe-breathe 1.6s var(--ease-in-out) infinite; }
+.pe-run-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pe-run-act {
+  margin-left: auto;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--attention-emphasis) 60%, transparent);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  color: var(--attention-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pe-run-act:hover { background: color-mix(in srgb, var(--attention-emphasis) 12%, var(--bg-elevated)); }
+.pe-run-act:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
+@keyframes pe-breathe { 50% { opacity: 0.35; } }
 .pe-lead {
   display: flex;
   align-items: center;
@@ -807,7 +893,7 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 @keyframes pe-fade { from { opacity: 0; } }
 @keyframes pe-pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
 @media (prefers-reduced-motion: reduce) {
-  .pe-quick, .pe-view.is-entering :deep(*) { animation: none !important; }
+  .pe-quick, .pe-run, .pe-run-dot, .pe-view.is-entering :deep(*) { animation: none !important; }
   .pe-slide-enter-active, .pe-slide-leave-active, .pe-seg-btn { transition: none; }
 }
 </style>

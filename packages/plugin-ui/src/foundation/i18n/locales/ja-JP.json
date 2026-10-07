@@ -9745,7 +9745,10 @@
       "loop-label": "↺ 最大 {max} 回",
       "minimap": "パイプライン全体の縮小図",
       "pass": "承認されたら続行",
-      "reject-handle": "上流のステップへドラッグして差し戻しループを作成"
+      "reject-handle": "上流のステップへドラッグして差し戻しループを作成",
+      "zoom-in": "拡大",
+      "zoom-out": "縮小",
+      "zoom-level": "ズーム率"
     },
     "exec": {
       "abort": "実行を中止",
@@ -9833,7 +9836,8 @@
       "tokens": "トークン",
       "trigger-help": "すべての実行はここから始まります（サイドバー、コマンド、MCP 経由の CLI）。最初のステップに接続してください。",
       "unpin": "固定を解除",
-      "variables": "挿入："
+      "variables": "挿入：",
+      "handoff": "その出力はこの変数でこのステップに渡ります："
     },
     "lane": {
       "add-parallel": "＋ 並行ステップ",
@@ -9844,7 +9848,8 @@
       "move-left": "レイヤーを左へ",
       "move-right": "レイヤーを右へ",
       "parallel": "{n} 件並行",
-      "settings": "レイヤー設定"
+      "settings": "レイヤー設定",
+      "more": "あと {n} 層"
     },
     "node": {
       "commander": "パイプラインマネージャー",
@@ -9954,6 +9959,11 @@
       "problem-name-invalid": "名前は英字か _ で始め、英数字・_・- のみ使えます。",
       "problem-options-empty": "選択リストには選択肢が 1 つ以上必要です。",
       "problem-condition": "表示条件が「{field}」を参照していますが、このロールの別のフィールドではありません。"
+    },
+    "run": {
+      "running": "実行中：{names}",
+      "gate": "「{name}」で承認待ち",
+      "review": "確認する"
     }
   }
 }
