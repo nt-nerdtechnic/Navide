@@ -271,3 +271,17 @@ class TestTokensRunRecord:
         ts.end_run(ws)
         run2 = ts.snapshot(ws)["workspace"]["runs"][-1]
         assert "outcome" not in run2 and "pipeline_id" not in run2
+
+
+def test_start_index_records_skipped_stages_as_completed(tmp_path):
+    from agent_team_backend.projects import ProjectStore
+
+    ws = str(tmp_path)
+    store = ProjectStore()
+    bp = [{"stage_id": sid, "slots": []} for sid in ("01", "02", "03")]
+    store.start_pipeline(ws, task_description="t", total_stages=3, stage_blueprint=bp, start_index=2)
+    assert [s.status for s in ProjectStore().peek(ws).stages] == ["completed", "completed", "pending"]
+    _, nxt = store.resume_pipeline(ws)
+    assert nxt == 2
+    store.start_pipeline(ws, task_description="t", total_stages=3, stage_blueprint=bp)
+    assert [s.status for s in ProjectStore().peek(ws).stages] == ["pending"] * 3

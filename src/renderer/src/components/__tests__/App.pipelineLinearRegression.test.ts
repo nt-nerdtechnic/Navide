@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { transformWithEsbuild } from 'vite'
 import { MAX_KICKOFF_ATTEMPTS, runPipelineKickoff } from '../../lib/cliCoordination'
 import { registerStage } from '../../lib/stageTracker'
+import { linearPipelineDag } from './pipelineDagTestStub'
+import { usePipelineDag } from '../../composables/usePipelineDag'
+import { applyGraphOps, deriveGraphFromStages, type PipelineGraph } from '../../lib/pipelineGraph'
+import type { Stage as StageDef } from '../../data/stages'
 
 // Regression lock for the DAG engine: a legacy LINEAR pipeline (stages only,
 // no graph) must run exactly as it did before the engine learned gates,
@@ -63,6 +67,7 @@ async function load(extraDeps: Record<string, unknown> = {}) {
   const pipeline = { state: 'idle', workspacePath: '', task: '', stageIndex: -1, globalManager: null as unknown, log: [] as string[] }
   const panes = { value: [] as Array<Record<string, unknown>> }
   let paneSeq = 0
+  const { dag, sent: dagSent } = linearPipelineDag(() => pipeline.workspacePath)
   const deps: Record<string, unknown> = {
     pipeline,
     pipelinesApi: { activePipelineId: { value: 'pl-1' }, setActivePipeline: vi.fn(async () => true), error: { value: '' } },
@@ -127,6 +132,8 @@ async function load(extraDeps: Record<string, unknown> = {}) {
     waitForStagePanesSettled: async (i: number) => { events.push(`settle ${i}`) },
     stopGlobalManagerRouter: () => events.push('stopGlobalRouter'),
     reclaimCompletedStagePanes: async (i: number) => { events.push(`reclaim ${i}`) },
+    onStageSlotCompleted: (i: number, key: string) => events.push(`slotCompleted ${i} ${key}`),
+    pipelineDag: dag,
     ...extraDeps,
   }
   const factory = new Function(...Object.keys(deps), code)
@@ -134,7 +141,7 @@ async function load(extraDeps: Record<string, unknown> = {}) {
     onPipelineStart: (p: { task: string; workspacePath: string; pipelineId?: string }) => Promise<void>
     onPipelineNext: () => Promise<void>
   }
-  return { api, events, pipeline }
+  return { api, events, pipeline, dagSent, deps }
 }
 
 /** The exact event trace the pre-DAG engine produced for STAGES. */
@@ -170,7 +177,7 @@ const EXPECTED = [
 ]
 
 async function runLinear(extraDeps: Record<string, unknown> = {}) {
-  const { api, events, pipeline } = await load(extraDeps)
+  const { api, events, pipeline, dagSent } = await load(extraDeps)
   await api.onPipelineStart({ task: 'ship', workspacePath: '/ws' })
   await flush()
   events.push('// next')
@@ -179,7 +186,7 @@ async function runLinear(extraDeps: Record<string, unknown> = {}) {
   events.push('// next')
   await api.onPipelineNext()
   await flush()
-  return { events: events.filter((e) => !e.startsWith('// ')), pipeline }
+  return { events: events.filter((e) => !e.startsWith('// ')), pipeline, dagSent }
 }
 
 describe('a legacy linear pipeline runs exactly as before', () => {
@@ -188,5 +195,119 @@ describe('a legacy linear pipeline runs exactly as before', () => {
     expect(events).toEqual(EXPECTED)
     expect(pipeline.state).toBe('completed')
     expect(pipeline.stageIndex).toBe(1)
+  })
+})
+
+// ── The same run path with a graph: gates, reject loops, pins ──────────────
+
+const gateSource = block(
+  '/** Approve the gate the run is paused on and carry on with the hand-off. */',
+  '\nasync function onPipelineReset(',
+)
+
+async function loadGraphRun(graph: PipelineGraph) {
+  const { code } = await transformWithEsbuild(
+    `${sources.join('\n')}\n${gateSource}\nreturn { onPipelineStart, onPipelineNext, onPipelineGateApprove, onPipelineGateReject }`,
+    'AppPipelineDag.ts',
+    { loader: 'ts' },
+  )
+  const sent: Array<{ type: string; payload: Record<string, unknown> }> = []
+  let workspace = ''
+  const dag = usePipelineDag({
+    send: async (type, payload) => {
+      sent.push({ type, payload })
+      return type === 'pipelines.graph.get' ? { derived: false, graph } : {}
+    },
+    log: () => {},
+    workspacePath: () => workspace,
+  })
+  const base = await load({ pipelineDag: dag })
+  const deps = {
+    ...base.deps,
+    pipelineDag: dag,
+    tearDownPipelineOrchestration: () => { base.pipeline.state = 'aborted'; base.events.push('teardown') },
+    onWorkspaceCheck: async () => {},
+  }
+  const api = new Function(...Object.keys(deps), code)(...Object.values(deps)) as {
+    onPipelineStart: (p: { task: string; workspacePath: string; fromNodeId?: string }) => Promise<void>
+    onPipelineNext: () => Promise<void>
+    onPipelineGateApprove: (id: string) => Promise<boolean>
+    onPipelineGateReject: (id: string, comment?: string) => Promise<boolean>
+  }
+  const start = async (opts: { fromNodeId?: string } = {}) => {
+    workspace = '/ws'
+    await api.onPipelineStart({ task: 'ship', workspacePath: '/ws', ...opts })
+    await flush()
+  }
+  return { api, dag, sent, events: base.events, pipeline: base.pipeline, start }
+}
+
+/** STAGES as a graph with a gate between 01 and 02 that loops back to 01. */
+function gatedGraph(): PipelineGraph {
+  return applyGraphOps(deriveGraphFromStages(STAGES as unknown as StageDef[]), [
+    { op: 'add_node', node: { id: 'gate', kind: 'gate', label: 'OK?', position: { x: 0, y: 0 } }, after: ['n-01-0', 'n-01-1'], before: ['n-02-0'] },
+    { op: 'add_edge', edge: { id: 'rej', from: 'gate', to: 'n-01-0', kind: 'reject', maxLoops: 1 } },
+  ])
+}
+
+describe('a graph pipeline runs its gates, loops and pins', () => {
+  it('holds the hand-off at a gate until it is approved', async () => {
+    const run = await loadGraphRun(gatedGraph())
+    await run.start()
+    await run.api.onPipelineNext()
+    await flush()
+    expect(run.pipeline.stageIndex).toBe(0)
+    expect(run.dag.awaitingGate.value?.gateId).toBe('gate')
+    expect(run.events).not.toContain('reclaim 0')
+    // Next cannot walk past the gate.
+    await run.api.onPipelineNext()
+    expect(run.pipeline.stageIndex).toBe(0)
+    expect(await run.api.onPipelineGateApprove('gate')).toBe(true)
+    await flush()
+    expect(run.pipeline.stageIndex).toBe(1)
+    expect(run.events).toContain('reclaim 0')
+    const states = run.sent.filter((s) => s.type === 'pipeline.node_states').at(-1)!.payload.nodes as Record<string, { status: string }>
+    expect(states.gate.status).toBe('done')
+    expect(states['n-02-0'].status).toBe('running')
+  })
+
+  it('a reject loops back with a note, and a spent budget fails the run', async () => {
+    const run = await loadGraphRun(gatedGraph())
+    await run.start()
+    await run.api.onPipelineNext()
+    await flush()
+    const before = run.events.length
+    expect(await run.api.onPipelineGateReject('gate', 'tests are red')).toBe(true)
+    await flush()
+    const rerun = run.events.slice(before)
+    expect(run.pipeline.stageIndex).toBe(0)
+    // Stage 01's panes are alive, so the kickoff goes back into them with the
+    // reject note in front — and no twin panes are spawned.
+    expect(rerun.some((e) => e.startsWith('inject p1') && e.includes('tests are red'))).toBe(true)
+    expect(rerun.some((e) => e.startsWith('spawn 01/'))).toBe(false)
+    await run.api.onPipelineNext()
+    await flush()
+    expect(run.dag.awaitingGate.value?.gateId).toBe('gate')
+    await run.api.onPipelineGateReject('gate')
+    await flush()
+    expect(run.pipeline.state).toBe('aborted')
+    expect(run.events.some((e) => e.startsWith('send pipeline.abort') && e.includes('"reason":"failed"'))).toBe(true)
+  })
+
+  it('a pinned slot is not spawned and counts as done', async () => {
+    const graph = applyGraphOps(deriveGraphFromStages(STAGES as unknown as StageDef[]), [{ op: 'set_pin', id: 'n-01-1', pinned: true }])
+    const run = await loadGraphRun(graph)
+    await run.start()
+    expect(run.events.some((e) => e.startsWith('spawn 01/be'))).toBe(false)
+    expect(run.events).toContain('slotCompleted 0 pinned:be')
+  })
+
+  it('restart-from-node starts at that node\'s stage and tells the backend', async () => {
+    const run = await loadGraphRun(gatedGraph())
+    await run.start({ fromNodeId: 'n-02-0' })
+    expect(run.pipeline.stageIndex).toBe(1)
+    expect(run.events.some((e) => e.startsWith('send pipeline.start') && e.includes('"start_index":1'))).toBe(true)
+    expect(run.events.some((e) => e.startsWith('spawn 01/'))).toBe(false)
+    expect(run.events.some((e) => e.startsWith('inject') && e.includes('review'))).toBe(true)
   })
 })

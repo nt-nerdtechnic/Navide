@@ -552,7 +552,11 @@ class ProjectStore:
         stage_blueprint: list[dict[str, Any]],
         backend_version: str = "",
         pipeline_id: str = "",
+        start_index: int = 0,
     ) -> Project:
+        """start_index > 0 is a restart-from-node run: the stages before it
+        are not run again (their last output is reused) and are recorded as
+        completed, so a later resume does not walk back into them."""
         project = self.load_or_create(workspace_path, backend_version=backend_version)
         project.task_description = task_description
         project.total_stages = total_stages
@@ -575,6 +579,8 @@ class ProjectStore:
             )
             for s in stage_blueprint
         ]
+        for skipped in project.stages[: max(0, start_index)]:
+            skipped.status = "completed"
         # Clear stale pipeline panes from previous runs; preserve manual panes.
         project.panes = [p for p in project.panes if p.origin != "pipeline"]
         project.node_states = {}

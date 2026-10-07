@@ -91,6 +91,7 @@ import {
 } from './composables/useCliProfiles'
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
+import { usePipelineDag } from './composables/usePipelineDag'
 import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
 import { useWorkspaceAliases } from './composables/useWorkspaceAliases'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
@@ -386,6 +387,21 @@ const rolesApi = useRoles(backend)
 const cliProfilesApi = useCliProfiles(backend)
 const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
+// DAG run engine (gates, reject loops, pins, restart-from-node). Its hooks are
+// no-ops for a linear pipeline. It reports node states over its own requests,
+// not sendQuiet, so a run's pipeline.* call sequence stays what it was.
+const pipelineDag = usePipelineDag({
+  send: async (type, payload) => {
+    try {
+      const resp = await backend.send<Record<string, unknown>>(type, payload)
+      return resp.ok ? (resp.payload ?? {}) : null
+    } catch {
+      return null
+    }
+  },
+  log: (line) => pipelineLog(line),
+  workspacePath: () => pipeline.workspacePath,
+})
 const analyzerApi = useAnalyzer(backend)
 const { recent: recentWorkspaces, touch: touchRecentWorkspace } = useRecentWorkspaces(backend)
 // Every surface that names a workspace reads this instead of taking the last
@@ -9703,6 +9719,10 @@ registerCommand('ui.pipeline.next', async () => {
   // Advancing IS the stageIndex move: onPipelineNext sets it before it
   // activates the stage. Anything that made the function return early leaves
   // it where it was, and that must not read as ok.
+  const gate = pipelineDag.awaitingGate.value
+  if (gate && pipeline.stageIndex <= before) {
+    throw new Error(`ui.pipeline.next: the run is waiting on gate "${gate.gateId}" — pass or reject it (ui.pipeline.gate_pass / gate_reject)`)
+  }
   if (pipeline.stageIndex <= before) {
     throw new Error(
       `ui.pipeline.next: the run did not advance (still on stage ${pipeline.stageIndex}, state "${pipeline.state}") — see the pipeline log for why`
@@ -9792,6 +9812,47 @@ registerCommand('ui.pipeline.restart', async () => {
     state: restarted,
     stageIndex: pipeline.stageIndex,
   }
+})
+// DAG run control. Gates are decided here, where the run lives; MCP reaches
+// them through ui.invoke like ui.pipeline.next. "pass", not "approve": command
+// names matching /approve|trust|…/ are reserved — AccountModal.network.test.ts
+// keeps device-trust decisions out of this registry.
+registerCommand('ui.pipeline.gate_pass', async (args) => {
+  const nodeId = (args as { nodeId?: string } | undefined)?.nodeId ?? ''
+  const waiting = pipelineDag.awaitingGate.value
+  if (!waiting) throw new Error('ui.pipeline.gate_pass: the run is not waiting on a gate')
+  if (nodeId && nodeId !== waiting.gateId) {
+    throw new Error(`ui.pipeline.gate_pass: the run is waiting on gate "${waiting.gateId}", not "${nodeId}"`)
+  }
+  await onPipelineGateApprove(waiting.gateId)
+  return { gateId: waiting.gateId, state: pipeline.state, stageIndex: pipeline.stageIndex }
+})
+registerCommand('ui.pipeline.gate_reject', async (args) => {
+  const a = (args as { nodeId?: string; comment?: string } | undefined) ?? {}
+  const waiting = pipelineDag.awaitingGate.value
+  if (!waiting) throw new Error('ui.pipeline.gate_reject: the run is not waiting on a gate')
+  if (a.nodeId && a.nodeId !== waiting.gateId) {
+    throw new Error(`ui.pipeline.gate_reject: the run is waiting on gate "${waiting.gateId}", not "${a.nodeId}"`)
+  }
+  await onPipelineGateReject(waiting.gateId, a.comment ?? '')
+  return { gateId: waiting.gateId, state: pipeline.state, stageIndex: pipeline.stageIndex }
+})
+registerCommand('ui.pipeline.restart_from', async (args) => {
+  const a = (args as { nodeId?: string; task?: string } | undefined) ?? {}
+  if (!currentWorkspace.value) throw new Error('ui.pipeline.restart_from requires an open workspace')
+  if (!a.nodeId) throw new Error('ui.pipeline.restart_from requires nodeId')
+  const before: PipelineRun['state'] = pipeline.state
+  if (before === 'running') {
+    throw new Error('ui.pipeline.restart_from: a pipeline is already running in this workspace — abort it first')
+  }
+  const task = a.task || existingProject.value?.taskDescription || pipeline.task
+  if (!task) throw new Error('ui.pipeline.restart_from: no task — pass task or start the pipeline once first')
+  await onPipelineRestart({ task, workspacePath: currentWorkspace.value, fromNodeId: a.nodeId })
+  const restarted: PipelineRun['state'] = pipeline.state
+  if (restarted !== 'running') {
+    throw new Error(`ui.pipeline.restart_from: the run did not start (state "${restarted}") — see the pipeline log for why`)
+  }
+  return { workspacePath: pipeline.workspacePath, state: restarted, stageIndex: pipeline.stageIndex }
 })
 registerCommand('ui.workspace.open', async (args) => {
   const path = (args as { path?: string } | undefined)?.path
@@ -11791,7 +11852,7 @@ async function onRefreshAnalyzer(): Promise<void> {
 }
 
 
-async function onPipelineRestart(payload: { task: string; workspacePath: string }): Promise<void> {
+async function onPipelineRestart(payload: { task: string; workspacePath: string; fromNodeId?: string }): Promise<void> {
   // Cancel any running watchers / questions left from a previous attempt
   // before we overwrite project state.
   cancelAllWatchers()
@@ -11803,7 +11864,11 @@ async function onPipelineRestart(payload: { task: string; workspacePath: string 
   for (const p of [...panes.value]) {
     if (p.origin === 'pipeline') await onKill(p.id, { markRemoved: false })
   }
-  pipelineLog('↺ Start over — wiping previous stages and re-running from 01')
+  pipelineLog(
+    payload.fromNodeId
+      ? `↺ Restart from node ${payload.fromNodeId} — wiping previous stages`
+      : '↺ Start over — wiping previous stages and re-running from 01'
+  )
   await onPipelineStart(payload)
 }
 
@@ -11855,6 +11920,16 @@ async function runPipelineResume(): Promise<void> {
       pipelineLog(`Resume aborted: could not load that pipeline's stages — ${stagesApi.error.value}`)
       return
     }
+  }
+  // Gates before the resume stage count as passed; one after it still holds.
+  const dagStart = await pipelineDag.begin(
+    info.pipelineId || pipelinesApi.activePipelineId.value,
+    stagesApi.stages.value,
+    { startIndex: info.nextStageIndex },
+  )
+  if (dagStart === null) {
+    pipelineLog('Resume aborted: could not prepare the run graph — see the line above')
+    return
   }
   // What the lines below overwrite, so a refused resume can put it back. The
   // log is deliberately NOT in here: sendQuiet writes the reason a call failed
@@ -12233,7 +12308,14 @@ async function preSpawnStage(index: number): Promise<void> {
   if (!stage) return
   registerStage(stageCompletions, index, stage.slots.length)
   pipelineLog(`Stage ${stage.id} ⚡ pre-spawn ${stage.slots.length} slot(s) (role only)`)
+  const pinned = pipelineDag.pinnedLabels(index)
   await Promise.all(stage.slots.map(async (slot) => {
+    if (pinned.has(slot.label)) return
+    // A reject loop re-enters stages whose panes may still be alive; reuse
+    // them (activateStage injects the kickoff) instead of spawning twins.
+    if (pipelineDag.looped() && panes.value.some(
+      (p) => p.stageId === stage.id && p.slotLabel === slot.label && p.origin === 'pipeline' && p.realized
+    )) return
     pipelineLog(`Stage ${stage.id}/${slot.label} → pre-spawn ${slot.agentKey} as ${slot.roleKey}`)
     const paneId = await spawnPane({
       agentKey: slot.agentKey as AgentKey,
@@ -12380,10 +12462,19 @@ async function activateStage(index: number): Promise<void> {
   // Reset completion tracker in case it was partially consumed
   registerStage(stageCompletions, index, stage.slots.length)
 
+  // DAG: pinned slots reuse their frozen output (counted done at the end);
+  // a reject loop's note and outputs of nodes this run skipped go in front.
+  const pinned = pipelineDag.pinnedLabels(index)
+  const dagPrefix = pipelineDag.takeNote(index) + pipelineDag.frozenContext(index)
+
   await Promise.all(stage.slots.map(async (slot) => {
+    if (pinned.has(slot.label)) {
+      pipelineLog(`Stage ${stage.id}/${slot.label} 📌 pinned — reusing its frozen output`)
+      return
+    }
     // Per-slot cross-stage context: workers get summaries + paths, the Manager
     // gets the full prior-output file roster (it coordinates, needs everything).
-    const contextHeader = buildStageContext(index, slot === managerSlot)
+    const contextHeader = buildStageContext(index, slot === managerSlot) + dagPrefix
     // Find the pre-spawned pane for this slot
     const pane = panes.value.find(
       (p) => p.stageId === stage.id && p.slotLabel === slot.label && p.origin === 'pipeline'
@@ -12394,7 +12485,7 @@ async function activateStage(index: number): Promise<void> {
     if (!pane) {
       // Fallback: slot was never pre-spawned — spawn it now with kickoff
       pipelineLog(`Stage ${stage.id}/${slot.label} → not pre-spawned, spawning now`)
-      const kickoff =
+      const kickoff = pipelineDag.expandKickoff(
         docPrefix + contextHeader +
         renderSlotKickoff(slot, pipeline.task, {
           allowQuestions: stage.allowQuestions,
@@ -12402,7 +12493,8 @@ async function activateStage(index: number): Promise<void> {
           hasCommander: !!managerSlot && slot !== managerSlot,
           commanderLabel: managerSlot?.label,
           slotRoster: slot === managerSlot ? otherSlotsRoster : undefined,
-        })
+        }),
+        index, slot.label)
       const paneId = await spawnPane({
         agentKey: slot.agentKey as AgentKey,
         roleKey: slot.roleKey,
@@ -12415,6 +12507,7 @@ async function activateStage(index: number): Promise<void> {
         kickoffPrompt: kickoff
       })
       if (paneId) {
+        pipelineDag.slotStarted(index, slot.label, paneId)
         await sendQuiet<ProjectPayload>('pipeline.stage_spawn', {
           workspace_path: pipeline.workspacePath,
           stage_index: index,
@@ -12493,14 +12586,16 @@ async function activateStage(index: number): Promise<void> {
     }
 
     const kickoff =
-      docPrefix + contextHeader +
-      renderSlotKickoff(slot, pipeline.task, {
-        allowQuestions: stage.allowQuestions,
-        isCommander: slot === managerSlot,
-        hasCommander: !!managerSlot && slot !== managerSlot,
-        commanderLabel: managerSlot?.label,
-        slotRoster: slot === managerSlot ? otherSlotsRoster : undefined,
-      }) +
+      pipelineDag.expandKickoff(
+        docPrefix + contextHeader +
+        renderSlotKickoff(slot, pipeline.task, {
+          allowQuestions: stage.allowQuestions,
+          isCommander: slot === managerSlot,
+          hasCommander: !!managerSlot && slot !== managerSlot,
+          commanderLabel: managerSlot?.label,
+          slotRoster: slot === managerSlot ? otherSlotsRoster : undefined,
+        }),
+        index, slot.label) +
       sessionMarkerLine(pane.sessionMarker)
     pipelineLog(`${tag} ➜ injecting kickoff (${kickoff.length} chars)`)
     const kickoffResult = await runPipelineKickoff({
@@ -12544,6 +12639,7 @@ async function activateStage(index: number): Promise<void> {
     }
     pane.kickoffStatus = ok ? 'sent' : 'failed'
     syncViews()
+    pipelineDag.slotStarted(index, slot.label, pane.id)
     await sendQuiet('pipeline.slot_kickoff', {
       workspace_path: pipeline.workspacePath,
       stage_index: index,
@@ -12594,6 +12690,10 @@ async function activateStage(index: number): Promise<void> {
   // Warm the next stage only now that this one is running, so at most two
   // stages' CLIs are alive at once. Not awaited — see prewarmNextStage.
   prewarmNextStage(index)
+
+  // Last, so a stage made only of pinned slots hands off after everything
+  // above (the hand-off re-enters activateStage for the next stage).
+  for (const label of pinned) onStageSlotCompleted(index, `pinned:${label}`, 'pinned')
 }
 
 async function spawnPipelineStage(index: number): Promise<void> {
@@ -12685,7 +12785,7 @@ async function spawnPipelineStage(index: number): Promise<void> {
   }
 }
 
-async function onPipelineStart(payload: { task: string; workspacePath: string; pipelineId?: string }): Promise<void> {
+async function onPipelineStart(payload: { task: string; workspacePath: string; pipelineId?: string; fromNodeId?: string }): Promise<void> {
   // If a specific pipeline was requested and it's not currently active, switch first.
   if (payload.pipelineId && payload.pipelineId !== pipelinesApi.activePipelineId.value) {
     // Both calls fail SOFTLY — setActivePipeline returns false and refresh only
@@ -12712,11 +12812,24 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
     pipelineLog('Pipeline start skipped: stages not loaded yet. Please wait and try again.')
     return
   }
+  const stateBefore = pipeline.state
   pipeline.task = payload.task
   pipeline.workspacePath = payload.workspacePath
+  // 'running' before the graph await below, as before that await existed: it
+  // is what makes a second Start (double click, MCP) refuse meanwhile.
   pipelineRunWorkspace = payload.workspacePath
   pipeline.stageIndex = 0
   pipeline.state = 'running'
+  // The graph decides where the run starts (0, or a restart-from-node point).
+  const startIndex = await pipelineDag.begin(pipelinesApi.activePipelineId.value, stagesApi.stages.value, {
+    fromNodeId: payload.fromNodeId,
+  })
+  if (startIndex === null) {
+    pipelineLog('Pipeline start aborted: could not prepare the run graph — see the line above')
+    pipeline.state = stateBefore
+    return
+  }
+  pipeline.stageIndex = startIndex
   // Pipeline-created panes are grouped under a RunGroup tab named after the
   // Pipeline itself. Keep this separate from pipeline.task, which is the user's
   // task prompt and should not become a tab/group label.
@@ -12737,8 +12850,12 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
     total_stages: stagesApi.stages.value.length,
     stage_blueprint: stageBlueprint,
     pipeline_id: pipelinesApi.activePipelineId.value,
+    // Only a restart-from-node run carries it, so a normal start's request
+    // is unchanged; the backend records the skipped stages as completed.
+    ...(startIndex > 0 ? { start_index: startIndex } : {}),
   })
   applyProjectPaths(resp ?? undefined)
+  pipelineDag.adoptOutputs((resp?.project as { node_outputs?: unknown } | undefined)?.node_outputs)
   if (resp?.paths) {
     pipelineLog(`${resp.paths.project_file.split(/[\\/]/).pop()} → ${resp.paths.project_file}`)
     pipelineLog(`pipeline.log → ${resp.paths.pipeline_log}`)
@@ -12748,7 +12865,7 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   // Pre-spawn stage 01 only (role prompt, no kickoff). Every later stage is
   // warmed one ahead from activateStage — see stagePrewarms for why the whole
   // pipeline is no longer spawned here.
-  await preSpawnStage(0)
+  await preSpawnStage(startIndex)
   // Pre-spawn can end the run before it starts: when every slot of stage 01
   // fails to spawn (an agentKey that no longer ships, e.g. gemini),
   // releaseStageSlot's `expected === 0` branch sets state='aborted'. Without
@@ -12756,8 +12873,8 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   // same missing agents a second time, and the global router was armed on a
   // run that had already stopped.
   if (pipeline.state !== 'running') return
-  // Activate stage 0: build context + inject kickoffs + arm watchers.
-  await activateStage(0)
+  // Activate the first stage: build context + inject kickoffs + arm watchers.
+  await activateStage(startIndex)
   // Start the global Manager cross-stage router (if configured).
   if (pipeline.globalManager) startGlobalManagerRouter()
 }
@@ -12851,6 +12968,9 @@ async function onPipelineNext(): Promise<void> {
   }
   disposeStageRouter(currentIndex)
   const nextIndex = currentIndex + 1
+  // A DAG gate between this stage and the next pauses the hand-off here; the
+  // run resumes through onPipelineGateApprove / onPipelineGateReject.
+  if (pipelineDag.holdBeforeStage(nextIndex)) return
   if (nextIndex >= stagesApi.stages.value.length) {
     // Final stage finished. Wait for every pane in this stage to be raw-PTY
     // quiet before firing 🎉 so we don't claim "done" while a worker is
@@ -12861,6 +12981,8 @@ async function onPipelineNext(): Promise<void> {
     pipeline.state = 'completed'
     currentMode.value = 'completed'
     pipelineLog('🎉 Pipeline completed all stages')
+    // Final node states land before the run is archived with them.
+    await pipelineDag.end('completed')
     const resp = await sendQuiet<ProjectPayload>('pipeline.complete', {
       workspace_path: pipeline.workspacePath
     })
@@ -12904,6 +13026,7 @@ async function onPipelineAbort(): Promise<void> {
   if (pipeline.state !== 'running') return
   pipelineLog('Pipeline aborted by user')
   tearDownPipelineOrchestration()
+  await pipelineDag.end('aborted')
   // Abort = PAUSE, not kill: stop the orchestration (watchers/routers/questions)
   // but leave the spawned agents and their panes alive so the run can be
   // resumed later via the Resume banner. (Reset is the destructive one.)
@@ -12915,6 +13038,49 @@ async function onPipelineAbort(): Promise<void> {
   // Refresh existingProject so the Resume banner appears immediately in the
   // same session without requiring the user to switch workspaces and back.
   if (pipeline.workspacePath) await onWorkspaceCheck(pipeline.workspacePath)
+}
+
+/** Approve the gate the run is paused on and carry on with the hand-off. */
+async function onPipelineGateApprove(gateId: string): Promise<boolean> {
+  if (pipeline.state !== 'running') return false
+  if (!pipelineDag.approve(gateId)) return false
+  await onPipelineNext()
+  return true
+}
+
+/** Reject the gate the run is paused on: follow its reject edge back (bounded
+ *  by the edge's loop budget), or end the run as failed when it has none or
+ *  the budget is spent. */
+async function onPipelineGateReject(gateId: string, comment = ''): Promise<boolean> {
+  if (pipeline.state !== 'running') return false
+  const result = pipelineDag.reject(gateId, comment)
+  if (!result) return false
+  if (result.kind === 'loop') {
+    pipelineLog(`◆ Gate "${gateId}" ↺ rejected — re-running from stage ${result.targetIndex + 1} (loop ${result.count}/${result.max})`)
+    if (result.targetIndex >= stagesApi.stages.value.length) {
+      // The target sits after the last stage (a gate-only tail): nothing to
+      // re-run, so the hand-off is attempted again and holds on that gate.
+      await onPipelineNext()
+      return true
+    }
+    pipeline.stageIndex = result.targetIndex
+    await activateStage(result.targetIndex)
+    return true
+  }
+  pipelineLog(
+    result.kind === 'exhausted'
+      ? `◆ Gate "${gateId}" ✕ rejected and its loop budget (${result.max}) is spent — pipeline failed`
+      : `◆ Gate "${gateId}" ✕ rejected with no loop back — pipeline failed`
+  )
+  tearDownPipelineOrchestration()
+  await pipelineDag.end('failed')
+  const resp = await sendQuiet<ProjectPayload>('pipeline.abort', {
+    workspace_path: pipeline.workspacePath,
+    reason: 'failed'
+  })
+  applyProjectPaths(resp ?? undefined)
+  if (pipeline.workspacePath) await onWorkspaceCheck(pipeline.workspacePath)
+  return true
 }
 
 async function onPipelineReset(paneIds?: readonly string[]): Promise<void> {
@@ -14175,7 +14341,7 @@ window.addEventListener('unhandledrejection', (e) => {
 
 // How a slot was judged finished — recorded for history.jsonl auditing so a
 // stage_advance can be traced to N/N reliable signals (vs a forced advance).
-type SlotFinishReason = 'sentinel' | 'turn_complete' | 'analyzer' | 'cap-auto' | 'force'
+type SlotFinishReason = 'sentinel' | 'turn_complete' | 'analyzer' | 'cap-auto' | 'force' | 'pinned'
 
 // Build a SlotSignal per pipeline slot of a stage, for allSlotsFinished(). A
 // slot already counted as done is finished by definition; otherwise we read its
@@ -15158,6 +15324,13 @@ function onStageSlotCompleted(
   const stage = stagesApi.stages.value[stageIndex]
   const completedPane = panes.value.find((p) => p.id === paneId)
   const slotName = completedPane?.slotLabel || paneId.slice(0, 8)
+  if (completedPane) {
+    pipelineDag.slotFinished(
+      stageIndex,
+      completedPane.slotLabel,
+      (paneRefs[paneId]?.cleanBuffer as unknown as string) ?? '',
+    )
+  }
   // Audit trail (→ history.jsonl): every slot finish records its reason so a
   // stage advance can be verified as N/N reliable signals, not a blind push.
   pipelineLog(

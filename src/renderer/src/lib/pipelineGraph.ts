@@ -35,7 +35,7 @@
  *
  *   Run control lives in the renderer engine and is reachable as UI commands
  *   (MCP goes through ui.invoke, like ui.pipeline.next):
- *     ui.pipeline.gate_approve  {nodeId}
+ *     ui.pipeline.gate_pass  {nodeId}
  *     ui.pipeline.gate_reject   {nodeId, comment?}
  *     ui.pipeline.restart_from  {nodeId, task?}
  *   Pinning is a graph edit: op `set_pin` (persisted on the node).

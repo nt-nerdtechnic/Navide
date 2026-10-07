@@ -9483,6 +9483,7 @@ async def pipeline_start(session: "Session", msg_id: str, msg_type: str, payload
         stage_blueprint=payload.get("stage_blueprint", []),
         backend_version=app.__version__,
         pipeline_id=payload.get("pipeline_id", "") or app.stages_store.get_active_pipeline_id(),
+        start_index=int(payload.get("start_index", 0) or 0),
     )
     from .guard.taint import pipeline_run_started
 
