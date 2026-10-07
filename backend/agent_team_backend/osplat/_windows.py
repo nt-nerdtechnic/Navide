@@ -1026,21 +1026,27 @@ class WindowsLayout(WindowsPaths):
         return Path(configured) if configured else None
 
     def system_dirs(self) -> list[Path]:
+        # Each folder is listed both where its variable points and at its documented
+        # default: a changed variable can add a folder, never drop C:\Windows.
         env = os.environ
-        found = [Path(env.get(var) or default) for var, default in (
+        found: list[Path] = []
+        for var, default in (
             ("SystemRoot", r"C:\Windows"), ("ProgramFiles", r"C:\Program Files"),
             ("ProgramFiles(x86)", r"C:\Program Files (x86)"), ("ProgramData", r"C:\ProgramData"),
-        )]
-        # Credential Manager, DPAPI master keys and browser profiles (cookies, logins).
-        for var, rels in (
-            ("APPDATA", ("Microsoft/Credentials", "Microsoft/Protect", "Microsoft/Crypto",
-                         "Microsoft/SystemCertificates", "Mozilla/Firefox")),
-            ("LOCALAPPDATA", ("Microsoft/Credentials", "Microsoft/Vault", "Google/Chrome/User Data",
-                              "Microsoft/Edge/User Data", "BraveSoftware")),
         ):
-            base = env.get(var)
-            if base:
-                found += [Path(base).joinpath(*rel.split("/")) for rel in rels]
+            found += [Path(default)] + ([Path(env[var])] if env.get(var) else [])
+        home = Path.home()
+        # Credential Manager, DPAPI master keys and browser profiles (cookies, logins).
+        for var, default, rels in (
+            ("APPDATA", home / "AppData" / "Roaming",
+             ("Microsoft/Credentials", "Microsoft/Protect", "Microsoft/Crypto",
+              "Microsoft/SystemCertificates", "Mozilla/Firefox")),
+            ("LOCALAPPDATA", home / "AppData" / "Local",
+             ("Microsoft/Credentials", "Microsoft/Vault", "Google/Chrome/User Data",
+              "Microsoft/Edge/User Data", "BraveSoftware")),
+        ):
+            bases = [default] + ([Path(env[var])] if env.get(var) else [])
+            found += [base.joinpath(*rel.split("/")) for base in bases for rel in rels]
         return found
 
     def home_env_var(self) -> str:

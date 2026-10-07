@@ -30,7 +30,8 @@ MAX_ATTACHMENTS_PER_REPLY = 10
 NAME_MAX_CHARS = 100
 
 ATTACH_MARKER = "---ATTACH---"
-_ATTACH_RE = re.compile(r"^---ATTACH---[ \t]+(\S.*?)[ \t]*$")
+# Trailing whitespace, \r included, is dropped like the MSG markers' (CRLF output).
+_ATTACH_RE = re.compile(r"^---ATTACH---[ \t]+(\S.*?)[ \t\r]*$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 

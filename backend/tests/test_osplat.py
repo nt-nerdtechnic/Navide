@@ -260,6 +260,9 @@ class TestPaths:
         assert Path(r"C:\Program Files") in found  # the documented default when unset
         assert Path(r"D:\Users\me\AppData\Roaming") / "Microsoft" / "Credentials" in found
         assert Path(r"D:\Users\me\AppData\Local") / "Google" / "Chrome" / "User Data" in found
+        # An overridden variable adds its folder; it never removes the documented default.
+        assert Path(r"C:\Windows") in found and Path(r"C:\ProgramData") in found
+        assert Path.home() / "AppData" / "Roaming" / "Microsoft" / "Credentials" in found
 
     # A quoted path reaches a program through the platform's own shell
     # convention: POSIX apostrophes are literal characters to cmd.exe.

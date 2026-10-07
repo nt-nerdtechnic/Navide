@@ -361,3 +361,13 @@ def test_home_and_user_folders_match_whatever_case_the_path_uses(home: Path, mon
     f = _file(home / "Desktop" / "report.pdf")
     assert media.resolve_outbound(str(f), [home / "Desktop"]) == (None, "broad_workspace")
     assert media.resolve_outbound(str(f), [home]) == (None, "broad_workspace")
+
+
+# --- Review 4: CRLF output ----------------------------------------------------------
+
+
+def test_crlf_attach_lines_parse_like_the_msg_markers_around_them() -> None:
+    """MSG markers accept a trailing \\r (CRLF output on Windows); an attach line must too,
+    or the block parses while its path keeps the \\r."""
+    text, paths = media.split_attachments("hi\r\n---ATTACH--- C:\\ws\\a.png\r\n---ATTACH---\t/w/b.pdf \r")
+    assert paths == ["C:\\ws\\a.png", "/w/b.pdf"] and text == "hi\r"
