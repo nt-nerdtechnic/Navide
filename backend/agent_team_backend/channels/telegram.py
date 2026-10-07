@@ -484,9 +484,36 @@ def _reply_quote(msg: dict[str, Any], bot_id: str) -> tuple[str, str, str, bool]
     text = (msg.get("quote") or {}).get("text") or reply.get("text") or reply.get("caption") or ""
     if not text:
         return "", "", "", False
-    author = reply.get("from") or {}
+    author, own = _content_author(reply)
     author_id = str(author.get("id") or "")
-    return str(text), _display_name(author), author_id, bool(author_id) and author_id == bot_id
+    is_self = own and bool(author_id) and author_id == bot_id
+    return str(text), _display_name(author) if author else "", author_id, is_self
+
+
+# ``from`` ids that stand for many people: anonymous group admins, channel posts and
+# Telegram's service account. They identify no one, so they are never a quote's author.
+SHARED_SENDER_IDS = {1087968824, 136817688, 777000}
+
+
+def _content_author(reply: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """(who wrote the replied-to message's words, whether it is ``from`` itself).
+
+    A forward's ``from`` is whoever forwarded it, so the origin user is the author, and an
+    origin with no user id (hidden user, chat, channel) has none. A message sent on behalf
+    of a chat (``sender_chat``) or by a shared id has none either. No author means the
+    manager will not quote it.
+    """
+    origin = reply.get("forward_origin")
+    if origin is not None:
+        return (origin.get("sender_user") or {}) if origin.get("type") == "user" else {}, False
+    if reply.get("forward_from") is not None:
+        return reply.get("forward_from") or {}, False
+    if reply.get("forward_date") is not None or reply.get("sender_chat"):
+        return {}, False
+    author = reply.get("from") or {}
+    if author.get("id") in SHARED_SENDER_IDS:
+        return {}, False
+    return author, True
 
 
 def _describe_failure(exc: Exception) -> str:

@@ -26,6 +26,7 @@ import logging
 import re
 import secrets
 import time
+import unicodedata
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -62,6 +63,9 @@ STATUS_POLL_S = 1.0
 DEBOUNCE_S = 0.5  # lines from one sender to one location within this window become one message
 DEBOUNCE_MAX_S = 3.0
 REPLY_QUOTE_MAX_CHARS = 500  # a native reply's quoted message, cut before it reaches the pane
+REPLY_QUOTE_NAME_MAX_CHARS = 64
+# Fixed wording: an untrusted author's display name is attacker-controlled text too.
+REPLY_QUOTE_OMITTED = "[Replying to a message from a sender who is not allowed here; quote omitted]"
 
 MSG_RECEIVED_BUSY = "已收到，等 pane 空檔…"
 MSG_WORKING = "⏳ pane 處理中…"
@@ -1979,13 +1983,23 @@ def _with_reply_quote(msg: InboundMessage, trusted: bool) -> str:
     if not quoted:
         return msg.text
     if not trusted:
-        who = msg.reply_to_sender or "someone"
-        return f"[Replying to {who} (not an allowed sender; quote omitted)]\n{msg.text}"
+        return f"{REPLY_QUOTE_OMITTED}\n{msg.text}"
     if len(quoted) > REPLY_QUOTE_MAX_CHARS:
         quoted = quoted[:REPLY_QUOTE_MAX_CHARS] + "…"
-    header = f"[Replying to {msg.reply_to_sender}]" if msg.reply_to_sender else "[Replying to a message]"
-    lines = "\n".join(f"> {line}" for line in quoted.splitlines())
+    # Every line (splitlines also breaks on \r, \u2028 ...) starts with "> ", so a quoted
+    # MSG marker or "[Navide MSG]" prefix can never sit at the start of a line.
+    lines = "\n".join(f"> {_strip_controls(line)}" for line in quoted.splitlines())
+    name = " ".join(_strip_controls(msg.reply_to_sender, keep="").split())[:REPLY_QUOTE_NAME_MAX_CHARS]
+    header = f"[Replying to {name}]" if name else "[Replying to a message]"
     return f"{header}\n{lines}\n{msg.text}"
+
+
+def _strip_controls(text: str, keep: str = "\t") -> str:
+    """``text`` without C0/C1 control characters (ESC, ^C ...) other than ``keep``; a
+    line break or tab in ``keep=""`` mode becomes a space."""
+    return "".join(
+        ch if ch in keep or unicodedata.category(ch) != "Cc" else (" " if ch in "\t\n\r" else "")
+        for ch in text)
 
 
 def _is_stop_word(text: str) -> bool:

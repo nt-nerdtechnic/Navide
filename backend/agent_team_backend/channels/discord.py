@@ -291,9 +291,11 @@ class DiscordAdapter:
             self._known[chat_id] = {"chat_id": chat_id, "title": str(author.get("username") or chat_id),
                                     "kind": "dm", "supports_topics": False}
         self.status.last_inbound_at = time.time()
-        # A reply's gateway payload carries the message it answers.
-        quoted = d.get("referenced_message") or {}
-        quoted_author = quoted.get("author") or {}
+        # A reply's gateway payload carries the message it answers. A forward (reference
+        # type 1) is not a reply, and a webhook's author is whatever the webhook says.
+        reference = d.get("message_reference") or {}
+        quoted = (d.get("referenced_message") or {}) if (reference.get("type") or 0) == 0 else {}
+        quoted_author = {} if quoted.get("webhook_id") else (quoted.get("author") or {})
         await self._emit(InboundMessage(
             platform=self.platform, account=self.account, chat_id=chat_id, thread_id=thread_id,
             sender_id=str(author.get("id") or ""),
