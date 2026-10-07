@@ -25,6 +25,7 @@ lifespan task — safe for the anyio task group inside.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -3517,7 +3518,7 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
 
     `target` uses the same addressing as cli_send, and `pane_id` names one
     exact pane instead. Returns {ok, name,
-    agent_key, busy, last_activity?, usage?, git?, ui?}. `last_activity`, when known,
+    agent_key, busy, last_activity?, usage?, git?, ui?, prompt_fingerprint?}. `last_activity`, when known,
     is {type: "agent_active"|"turn_complete", text? (turn_complete only),
     age_seconds}. `ui`, when the owning Navide window answers in time, is
     {status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?,
@@ -3554,6 +3555,13 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     cli_list_targets gives it: branch, worktree, dirty count and drift against
     origin/main, cached for up to ~30 s. Absent outside a repository, when git
     did not answer in time, and for a remote target.
+
+    While `ui.status` is "awaiting", `ui` also carries what the pane is
+    waiting on, read off its screen: `awaitingPrompt` (the prompt text) and,
+    when the screen shows a numbered menu, `awaitingOptions` (its rows, option
+    1 first). The reply then has a top-level `prompt_fingerprint` naming that
+    exact prompt; pass it to cli_answer_prompt to answer the pane, which
+    refuses when the screen has moved on.
 
     `ui.kickoff` is how this pane's spawn-time task injection ended, and it is
     the authoritative answer to "did cli_open_agent's task actually arrive":
@@ -3632,6 +3640,11 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
         # One answer, not two that disagree: the badge only ever ADDS busy.
         if ui_result["result"].get("status") in ("running", "starting"):
             status["busy"] = True
+        prompt = ui_result["result"].get("awaitingPrompt")
+        if ui_result["result"].get("status") == "awaiting" and isinstance(prompt, str) and prompt.strip():
+            options = ui_result["result"].get("awaitingOptions")
+            status["prompt_fingerprint"] = _prompt_fingerprint(
+                prompt, [str(o) for o in options] if isinstance(options, list) else [])
     return status
 
 
@@ -4115,6 +4128,201 @@ async def cli_interrupt(target: str, ctx: Context, pane_id: str = "") -> dict[st
     if advisories:
         answer["advisories"] = advisories
     return answer
+
+
+# ── Answering another pane's prompt ──────────────────────────────────────
+#: The answer words cli_answer_prompt takes besides an option number, as the
+#: chat relay's choice letters (channels/relay.py).
+_ANSWER_WORDS = {"allow": "y", "deny": "n"}
+
+
+def _prompt_fingerprint(prompt: str, options: list[str]) -> str:
+    """A short id for what a pane is waiting on: its prompt text and its menu,
+    equal up to whitespace — the same rule the chat relay binds an answer to
+    its prompt with (relay.same_prompt), since a re-rendered screen re-wraps."""
+    text = " ".join((prompt or "").split()) + "\n" + "\n".join(" ".join(str(o).split()) for o in options)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _caller_label(caller: _Caller) -> str:
+    from agent_team_backend import agent_messaging
+
+    if caller.kind == "pane":
+        entry = agent_messaging.current(caller.pane_id)
+        return entry.qualified_name if entry is not None else caller.pane_id
+    return caller.kind
+
+
+def _record_agent_answer(pane: Any, who: str, what: str, decision: Any, action: str) -> None:
+    """Write an agent's answer into the pane's Navide Guard audit trail — who
+    answered, what it pressed, and Guard's verdict — so it can be traced back
+    to an agent rather than passing for the user's own keypress."""
+    from agent_team_backend.guard import runtime as guard_runtime
+
+    try:
+        guard_runtime.store().audit_add({
+            "ts": time.time(), "pane_id": pane.pane_id, "vendor": pane.agent_key or "",
+            "source": "agent", "tool": "answer_prompt",
+            "excerpt": f"answered by agent {who} via MCP: {what}"[:500],
+            "level": decision.level if decision is not None else "normal",
+            "action": action,
+            "rule_ids": list(decision.rule_ids) if decision is not None else [],
+            "tainted": bool(decision.tainted) if decision is not None else False,
+        })
+    except Exception:  # noqa: BLE001 — the answer itself already stands
+        _log.warning("cli_answer_prompt: audit write failed", exc_info=True)
+
+
+def _answer_refusal(pane: Any, code: str, error: str, **extra: Any) -> dict[str, Any]:
+    return {"ok": False, "target": pane.qualified_name, "sent": False,
+            "error": error, "error_code": code, **extra}
+
+
+@server.tool()
+async def cli_answer_prompt(
+    target: str, answer: str, prompt_fingerprint: str, ctx: Context, pane_id: str = ""
+) -> dict[str, Any]:
+    """Answer another CLI pane's permission prompt or option menu, as an agent.
+
+    For a pane parked on "awaiting" — claude's permission box or
+    AskUserQuestion menu, codex's approval menu, aider's (Y)es/(N)o line —
+    this presses the CLI's own key for one choice, instead of cli_send typing
+    prose the menu would not take. Read the prompt first: cli_get_status
+    returns it as `ui.awaitingPrompt` and `ui.awaitingOptions` (the numbered
+    menu rows), and `prompt_fingerprint` identifies exactly that screen.
+
+    `answer` is "allow" (the menu's "Yes", option 1), "deny" (its "No"), or
+    an option number "1".."9" from `ui.awaitingOptions`. aider takes only
+    allow / deny. `prompt_fingerprint` must be the one cli_get_status gave
+    for the prompt you decided on; when the screen has moved on since, the
+    answer is refused with `error_code` "prompt-changed" and the reply
+    carries the current `prompt`, `options` and `prompt_fingerprint` to
+    decide again with.
+
+    THIS IS DISCLOSED, NOT HIDDEN. Every answer is written to that pane's
+    Navide Guard audit trail (source "agent", tool "answer_prompt": who
+    answered, what was pressed, Guard's verdict), and the reply carries
+    `answered_by_agent: true` with a `disclosure` line to pass on to the
+    user. Approving a prompt is approving that pane's action on the user's
+    behalf.
+
+    Refused, each with its own `error_code` and nothing pressed:
+      - "permanent-allow-refused" — a "don't ask again" / "always allow" /
+        "for this session" option, or "allow" when option 1 is one: that
+        choice is the user's, at the computer.
+      - "guard-veto" — Navide Guard rates the prompt high or critical (or
+        cannot screen it); approving needs the user. `guard` says why.
+        Refusing ("deny", or a "No …" option) is never vetoed.
+      - "computer-only" — a multi-select menu or a free-text row.
+      - "unsupported-cli" — only claude, codex and aider have mapped keys.
+      - "not-awaiting", "prompt-changed", "invalid-answer".
+      - "answer-local-only" — a pane on another device: there is no relay.
+    The raw key action (ui_invoke "ui.pane.sendKeys") stays refused for
+    agents; this tool is the fenced way to the same keys.
+
+    Returns {ok, target, sent, answer, chosen?, answered_by_agent,
+    disclosure, guard?}. `sent` true means the keys were written into the
+    pane after the window re-checked its menu; it is not a receipt from the
+    CLI — cli_get_status or cli_wait_idle tells you what happened next.
+    """
+    from agent_team_backend import message_routing
+    from agent_team_backend.channels import relay
+
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    me = caller.pane_id if caller.kind == "pane" else ""
+    result, failure = _resolve_pane_target(caller, me, target, pane_id)
+    if failure is not None:
+        if not (pane_id or "").strip() and message_routing.route(me, target).remote is not None:
+            return {
+                "ok": False,
+                "error": (
+                    f'cannot answer "{target}": it names a pane on another device, and '
+                    f"an answer is keys written into a local PTY — there is no relay "
+                    f"for one. Only panes on this machine can be answered from here."
+                ),
+                "error_code": "answer-local-only",
+            }
+        return failure
+    pane = result.pane
+
+    word = (answer or "").strip().lower()
+    choice = _ANSWER_WORDS.get(word) or (word if len(word) == 1 and word in "123456789" else "")
+    if not choice:
+        return _answer_refusal(pane, "invalid-answer",
+                               f'answer must be "allow", "deny" or an option number 1-9, not {answer!r}')
+    if pane.agent_key not in relay.ANSWERABLE_AGENTS:
+        return _answer_refusal(
+            pane, "unsupported-cli",
+            f"Navide has no answer keys for {pane.agent_key or 'this CLI'}; only "
+            f"{', '.join(sorted(relay.ANSWERABLE_AGENTS))} can be answered. Answer it at the computer.")
+
+    reply = await _ui_request(pane.workspace_path, "invoke", caller=_pane_caller(pane.pane_id),
+                              action="ui.pane.getStatus", args={"paneId": pane.pane_id})
+    if not reply.get("ok") or not isinstance(reply.get("result"), dict):
+        return _answer_refusal(pane, str(reply.get("error_code") or "ui_action_failed"),
+                               str(reply.get("error") or "the window owning this pane did not answer"))
+    screen = reply["result"]
+    if screen.get("status") != "awaiting":
+        return _answer_refusal(pane, "not-awaiting",
+                               f"the pane is {screen.get('status') or 'not awaiting'}, not waiting on a prompt")
+    prompt = str(screen.get("awaitingPrompt") or "")
+    raw_options = screen.get("awaitingOptions")
+    options = [str(o) for o in raw_options] if isinstance(raw_options, list) else []
+    current = _prompt_fingerprint(prompt, options)
+    if (prompt_fingerprint or "").strip() != current:
+        return _answer_refusal(
+            pane, "prompt-changed",
+            "the prompt on screen is not the one prompt_fingerprint names; read it and decide again",
+            prompt=prompt, options=options, prompt_fingerprint=current)
+
+    request = relay.RelayRequest(
+        id="", pane_id=pane.pane_id, kind="question" if choice.isdigit() else "permission",
+        options=options, loc=relay.Location("mcp", "", ""), prompt=prompt)
+    if any(relay.is_multi_select(o) for o in options):
+        return _answer_refusal(pane, "computer-only", relay.COMPUTER_ONLY)
+    if relay.refuses_permanent(request, choice):
+        return _answer_refusal(pane, "permanent-allow-refused",
+                               "that choice allows more than this one prompt; only the user can make it")
+    if choice.isdigit() and int(choice) <= len(options) and relay.is_free_text(options[int(choice) - 1]):
+        return _answer_refusal(pane, "computer-only", relay.COMPUTER_ONLY)
+    payload = relay.answer_payload(request, choice)
+    if payload is None:
+        return _answer_refusal(pane, "invalid-answer",
+                               f"option {choice} is not on the menu (1-{len(options)})", options=options)
+    chosen = options[int(choice) - 1] if choice.isdigit() and options else ""
+    what = (f"option {choice} — {chosen}" if chosen else f"option {choice}") if choice.isdigit() else word
+    who = _caller_label(caller)
+
+    decision = None
+    if not relay.is_deny(request, payload):
+        decision = relay.screen_approval(pane.pane_id, prompt, pane.workspace_path)
+        if decision.action != "allow":
+            _record_agent_answer(pane, who, f"{what} (refused by Navide Guard)", decision, "deny")
+            return _answer_refusal(
+                pane, "guard-veto", "Navide Guard: approving this prompt needs the user at the computer",
+                guard={"level": decision.level, "reason": decision.reason, "rule_ids": list(decision.rule_ids)})
+
+    sent_reply = await _ui_request(pane.workspace_path, "invoke", caller=_pane_caller(pane.pane_id),
+                                   action="ui.pane.sendKeys", args={"paneId": pane.pane_id, "answer": payload})
+    keys = sent_reply.get("result") if isinstance(sent_reply.get("result"), dict) else {}
+    sent = bool(sent_reply.get("ok")) and keys.get("ok", True) is not False and bool(keys.get("sent"))
+    _record_agent_answer(pane, who, what if sent else f"{what} (not sent)", decision, "allow" if sent else "error")
+    out: dict[str, Any] = {
+        "ok": sent, "target": pane.qualified_name, "sent": sent, "answer": payload,
+        "answered_by_agent": True,
+        "disclosure": f"{pane.qualified_name}'s prompt was answered by agent {who}, not the user: {what}",
+    }
+    if chosen:
+        out["chosen"] = chosen
+    if decision is not None:
+        out["guard"] = {"level": decision.level, "reason": decision.reason}
+    if not sent:
+        out["error"] = str(keys.get("error") or sent_reply.get("error") or "not sent")
+        out["error_code"] = str(sent_reply.get("error_code") or "not-sent")
+    return out
 
 
 @server.tool()
