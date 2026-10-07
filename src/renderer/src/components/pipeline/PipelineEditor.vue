@@ -19,7 +19,6 @@ import {
   type GraphNode,
   type GraphOp,
   type GraphPosition,
-  type RoleProperty,
   type StageMetaPatch,
 } from '../../lib/pipelineGraph'
 import {
@@ -45,12 +44,10 @@ import PipelineInspector from './PipelineInspector.vue'
 import PipelineExecutions from './PipelineExecutions.vue'
 import { LIVE_STATUSES, nodeTitle, stagesByLayer, type PaletteItem, type RunSnapshot } from './pipelineEditorModel'
 
-type RoleWithProps = Role & { properties?: RoleProperty[] }
-
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
   pipelineId: string
-  roles: RoleWithProps[]
+  roles: Role[]
   workspacePath: string
   run: RunSnapshot
   /** A run in this workspace is using this pipeline: edits are refused. */
@@ -72,6 +69,15 @@ function readView(): 'swimlane' | 'canvas' {
   try { return localStorage.getItem(VIEW_KEY) === 'canvas' ? 'canvas' : 'swimlane' } catch { return 'swimlane' }
 }
 const view = ref<'swimlane' | 'canvas'>(readView())
+const PALETTE_KEY = 'pipeline-editor-palette-collapsed'
+function readCollapsed(): boolean {
+  try { return localStorage.getItem(PALETTE_KEY) === '1' } catch { return false }
+}
+const paletteCollapsed = ref(readCollapsed())
+function togglePalette(): void {
+  paletteCollapsed.value = !paletteCollapsed.value
+  try { localStorage.setItem(PALETTE_KEY, paletteCollapsed.value ? '1' : '0') } catch { /* private window */ }
+}
 const tab = ref<'editor' | 'executions'>('editor')
 const selectedId = ref<string | null>(null)
 const selectedLayer = ref<number | null>(null)
@@ -126,7 +132,7 @@ function explain(err: EditorError): string {
     return t('pipelineEditor.error.invalid', { detail: first })
   }
   if (err.code === 'TRANSPORT') return t('pipelineEditor.error.transport', { message: err.message })
-  return err.message
+  return err.message || t('pipelineEditor.error.unknown')
 }
 async function apply(label: string, ops: GraphOp[], undoOps?: GraphOp[]): Promise<boolean> {
   const result = await editor.execute(label, ops, undoOps)
@@ -298,6 +304,7 @@ async function openPane(paneId: string): Promise<void> {
 // and play each card from its old box to its new one (FLIP), so a node is
 // never lost in the switch — the one orchestrated motion in this editor.
 const entering = ref(false)
+const MORPH_MS = 620
 let canvasReady: (() => void) | null = null
 function onCanvasReady(): void { canvasReady?.(); canvasReady = null }
 
@@ -322,9 +329,12 @@ async function switchView(next: 'swimlane' | 'canvas'): Promise<void> {
   await nextTick()
   await ready
   await new Promise((r) => requestAnimationFrame(() => r(null)))
-  root.value?.querySelectorAll<HTMLElement>('.pe-view [data-node-id]').forEach((el) => {
-    const from = before.get(el.dataset.nodeId!)
-    if (!from) return
+  const els = Array.from(root.value?.querySelectorAll<HTMLElement>('.pe-view [data-node-id]') ?? [])
+    .filter((el) => before.has(el.dataset.nodeId!))
+  // Left-to-right stagger, so the flow reads in run order as it reassembles.
+  els.sort((a, b) => before.get(a.dataset.nodeId!)!.left - before.get(b.dataset.nodeId!)!.left)
+  els.forEach((el, i) => {
+    const from = before.get(el.dataset.nodeId!)!
     const to = el.getBoundingClientRect()
     if (!to.width) return
     const dx = from.left - to.left
@@ -335,10 +345,10 @@ async function switchView(next: 'swimlane' | 'canvas'): Promise<void> {
         { transform: `translate(${dx}px, ${dy}px) scale(${s})`, transformOrigin: 'top left' },
         { transform: 'none', transformOrigin: 'top left' },
       ],
-      { duration: 560, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+      { duration: MORPH_MS, delay: Math.min(i * 22, 180), easing: 'cubic-bezier(0.45, 0, 0.15, 1)', fill: 'backwards' }
     )
   })
-  window.setTimeout(() => { entering.value = false }, 560)
+  window.setTimeout(() => { entering.value = false }, MORPH_MS + 180)
 }
 
 // ── Keyboard ─────────────────────────────────────────────────────────────────
@@ -369,7 +379,20 @@ function closeTopLayer(): boolean {
   if (inspectorOpen.value) { selectedId.value = null; selectedLayer.value = null; return true }
   return false
 }
-defineExpose({ closeTopLayer })
+/** Select the step a stage slot became — the Roles tab's "go to usage". */
+let pendingFocus: [string, string] | null = null
+watch(graph, (g) => {
+  if (g && pendingFocus) { const [id, label] = pendingFocus; pendingFocus = null; focusSlot(id, label) }
+})
+function focusSlot(stageId: string, slotLabel: string): void {
+  if (!graph.value || editor.loading.value) { pendingFocus = [stageId, slotLabel]; return }
+  const nodes = graph.value.nodes
+  const hit = nodes.find((n) => n.stageId === stageId && n.slot?.label === slotLabel)
+    ?? nodes.find((n) => n.stageId === stageId)
+  tab.value = 'editor'
+  if (hit) select(hit.id)
+}
+defineExpose({ closeTopLayer, focusSlot, reload: () => editor.load() })
 
 function onDocPointer(e: PointerEvent): void {
   if (!quick.value) return
@@ -393,6 +416,15 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
   <div ref="root" class="pe" @keydown="onKey">
     <!-- Toolbar: view, tab, history, layout -->
     <div class="pe-bar">
+      <!-- The host's own controls (back, pipeline name) lead the one bar, so
+           the workspace has a single row of chrome instead of three. -->
+      <div v-if="$slots.lead" class="pe-lead"><slot name="lead" /></div>
+      <button
+        v-if="tab === 'editor'" type="button" class="pe-icon" :aria-pressed="!paletteCollapsed"
+        :aria-label="t(paletteCollapsed ? 'pipelineEditor.toolbar.show-palette' : 'pipelineEditor.toolbar.hide-palette')"
+        :title="t(paletteCollapsed ? 'pipelineEditor.toolbar.show-palette' : 'pipelineEditor.toolbar.hide-palette')"
+        @click="togglePalette"
+      ><svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M6 2.5v11" /></svg></button>
       <div class="pe-seg" role="tablist" :aria-label="t('pipelineEditor.toolbar.view')">
         <button
           type="button" role="tab" class="pe-seg-btn" :class="{ 'is-on': view === 'swimlane' && tab === 'editor' }"
@@ -424,7 +456,7 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
         <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg>
         {{ t('pipelineEditor.toolbar.locked') }}
       </span>
-      <span v-else class="pe-save" role="status" aria-live="polite">
+      <span v-else-if="graph" class="pe-save" role="status" aria-live="polite">
         {{ editor.pending.value ? t('pipelineEditor.toolbar.saving') : (editor.derived.value ? t('pipelineEditor.toolbar.derived') : t('pipelineEditor.toolbar.saved')) }}
       </span>
 
@@ -451,6 +483,10 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
           </button>
         </template>
       </template>
+      <template v-if="$slots.trail">
+        <span class="pe-divider" aria-hidden="true"></span>
+        <div class="pe-trail"><slot name="trail" /></div>
+      </template>
     </div>
 
     <!-- Body -->
@@ -461,8 +497,8 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
     </div>
     <div v-else-if="!graph" class="pe-state nv-loading nv-loading--inline">{{ t('label.loading-stages') }}</div>
 
-    <div v-else-if="tab === 'editor'" class="pe-main" :class="{ 'has-inspector': inspectorOpen }">
-      <aside class="pe-palette" :aria-label="t('pipelineEditor.palette.title')">
+    <div v-else-if="tab === 'editor'" class="pe-main" :class="{ 'has-inspector': inspectorOpen, 'no-palette': paletteCollapsed }">
+      <aside v-if="!paletteCollapsed" class="pe-palette" :aria-label="t('pipelineEditor.palette.title')">
         <PipelinePalette :roles="roles" :locked="locked" @pick="addFromPalette" />
       </aside>
 
@@ -484,7 +520,7 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
           @insert-on-edge="(edge, anchor) => openQuick({ kind: 'edge', edge }, anchor)"
           @drop-item="dropOnCanvas" @ready="onCanvasReady"
         />
-        <div v-if="stepCount === 0 && !locked" class="pe-empty" aria-live="polite">
+        <div v-if="stepCount === 0 && !locked && view === 'canvas'" class="pe-empty" aria-live="polite">
           <p class="pe-empty-title">{{ t('pipelineEditor.state.empty-title') }}</p>
           <p>{{ t('pipelineEditor.state.empty-body') }}</p>
         </div>
@@ -539,6 +575,17 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
   border-bottom: 1px solid var(--border-default);
   background: var(--bg-elevated);
 }
+.pe-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 34%;
+  padding-right: var(--space-3);
+  margin-right: var(--space-1);
+  border-right: 1px solid var(--border-default);
+}
+.pe-trail { display: flex; align-items: center; gap: var(--space-1); }
 .pe-seg {
   display: inline-flex;
   padding: 2px;
@@ -620,6 +667,8 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
   grid-template-columns: 248px minmax(0, 1fr);
 }
 .pe-main.has-inspector { grid-template-columns: 248px minmax(0, 1fr) auto; }
+.pe-main.no-palette { grid-template-columns: minmax(0, 1fr); }
+.pe-main.no-palette.has-inspector { grid-template-columns: minmax(0, 1fr) auto; }
 .pe-palette {
   min-height: 0;
   border-right: 1px solid var(--border-default);
@@ -628,13 +677,14 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 .pe-view { position: relative; min-width: 0; min-height: 0; }
 .pe-exec { flex: 1; min-height: 0; }
 
-/* The incoming view's chrome fades in while its cards morph into place. */
+/* The incoming view's chrome (links, lanes) waits for the cards: it fades in
+   as they land, so no link is ever drawn to where a card is not yet. */
 .pe-view.is-entering :deep(.lane),
 .pe-view.is-entering :deep(.lane-gutter),
 .pe-view.is-entering :deep(.lane-append),
 .pe-view.is-entering :deep(.vue-flow__edges),
 .pe-view.is-entering :deep(.vue-flow__edge-labels),
-.pe-view.is-entering :deep(.pcv-minimap) { animation: pe-fade 420ms var(--ease-out) both; }
+.pe-view.is-entering :deep(.pcv-minimap) { animation: pe-fade 320ms var(--ease-out) 420ms both; }
 .pe-view.is-entering :deep(.lane-card),
 .pe-view.is-entering :deep(.lane-trigger) { animation: none; }
 

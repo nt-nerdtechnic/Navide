@@ -12,6 +12,8 @@ import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import { useRoles, type Role } from '../../composables/useRoles'
 import { usePipelines, type PipelineSummary } from '../../composables/usePipelines'
 import { createTerminalDockStub } from '../../ports/__tests__/terminalDock.stub'
+import { applyGraphOps, deriveGraphFromStages, type GraphOp, type PipelineGraph } from '../../lib/pipelineGraph'
+import { stageDefToFrontend } from '../../data/stages'
 
 vi.mock('@navide/plugin-shell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@navide/plugin-shell')>()),
@@ -78,6 +80,32 @@ const HARD_CODED_ENGLISH = [
   'unassigned',
 ]
 
+/** Stand-in for the backend's graph handlers: one stored graph, ops applied
+ *  with the shared applyGraphOps, and a switch to refuse the next write. */
+function installGraphServer(mock: ReturnType<typeof createMockBackend>) {
+  let stored: PipelineGraph = deriveGraphFromStages([twoSlotStage, secondStage].map(stageDefToFrontend))
+  let refusal: { code: string; message: string } | Error | null = null
+  const send = mock.backend.send
+  ;(mock.backend as { send: unknown }).send = async (type: string, payload: Record<string, unknown> = {}, timeoutMs?: number) => {
+    if (!type.startsWith('pipelines.graph.')) return send(type, payload, timeoutMs)
+    await send(type, payload, timeoutMs)
+    const reply = (ok: boolean, p: unknown, error: unknown = null) => ({ id: 't', type, ok, payload: p, error, timestamp: '' })
+    if (type !== 'pipelines.graph.get' && refusal) {
+      const r = refusal
+      refusal = null
+      if (r instanceof Error) throw r
+      return reply(false, null, r)
+    }
+    if (type === 'pipelines.graph.apply') stored = applyGraphOps(stored, payload.ops as GraphOp[])
+    if (type === 'pipelines.graph.set') stored = payload.graph as PipelineGraph
+    return reply(true, { pipeline_id: payload.pipeline_id, graph: stored, derived: type === 'pipelines.graph.get', stages: [twoSlotStage, secondStage] })
+  }
+  return {
+    stored: () => stored,
+    refuseNext: (r: { code: string; message: string } | Error) => { refusal = r },
+  }
+}
+
 describe('PipelineManagerModal — pipelines tab', () => {
   let wrapper: VueWrapper | undefined
   let scope: EffectScope | undefined
@@ -107,6 +135,8 @@ describe('PipelineManagerModal — pipelines tab', () => {
       path: '/data/stages.json',
     })
 
+    const server = installGraphServer(mock)
+
     scope = effectScope()
     let rolesApi!: ReturnType<typeof useRoles>
     let pipelinesApi!: ReturnType<typeof usePipelines>
@@ -130,7 +160,7 @@ describe('PipelineManagerModal — pipelines tab', () => {
     })
     await flushPromises()
     wrapper = w
-    return { wrapper: w, mock, pipelinesApi }
+    return { wrapper: w, mock, pipelinesApi, server }
   }
 
   /** The pipelines tab body (index 0; index 1 is the roles tab). */
@@ -147,14 +177,14 @@ describe('PipelineManagerModal — pipelines tab', () => {
     }
   })
 
-  it('renders the stage detail view in the selected locale', async () => {
+  it('renders the pipeline editor in the selected locale', async () => {
     const { wrapper: w } = await open({ locale: 'zh-TW', initialPipelineId: 'default' })
 
     const text = tab(w).text()
-    expect(text).toContain(i18n.global.t('label.allow-questions'))
-    expect(text).toContain(i18n.global.t('hint.pause-for-user-answers'))
-    expect(text).toContain(i18n.global.t('label.parallel-slots', { count: 2 }))
-    expect(text).toContain(i18n.global.t('label.slots'))
+    expect(text).toContain(i18n.global.t('pipelineEditor.toolbar.swimlane'))
+    expect(text).toContain(i18n.global.t('pipelineEditor.toolbar.canvas'))
+    expect(text).toContain(i18n.global.t('pipelineEditor.lane.parallel', { n: 2 }))
+    expect(text).toContain(i18n.global.t('pipelineEditor.palette.agents'))
     for (const literal of HARD_CODED_ENGLISH) {
       expect(w.find('.app').text()).not.toContain(literal)
     }
@@ -164,8 +194,8 @@ describe('PipelineManagerModal — pipelines tab', () => {
     const { wrapper: w } = await open({ locale: 'en-US', initialPipelineId: 'default' })
 
     expect(w.find('.title').text()).toBe('Pipeline Manager')
-    expect(tab(w).text()).toContain('2 parallel slots')
-    expect(w.find('.app').text()).not.toMatch(/\b(label|action|hint|error)\.[a-z-]+/)
+    expect(tab(w).text()).toContain('2 in parallel')
+    expect(w.find('.app').text()).not.toMatch(/\b(label|action|hint|error|pipelineEditor)\.[a-z-]+/)
   })
 
   it('sends the host workspace with set-default so a running project can veto it', async () => {
@@ -240,49 +270,88 @@ describe('PipelineManagerModal — pipelines tab', () => {
     expect(last?.type).toBe('error')
     expect(last?.message).toContain('stages.json is read-only')
   })
-  // ── Stage CRUD carries the host workspace ─────────────────────────────────
-  // The backend refuses a stage edit whose pipeline is the one a run is using
-  // (ws_handlers._stage_edit_hits_running_pipeline). It can only do that when
-  // the request names a workspace, so every stage mutation has to send one.
+  // ── The detail view is the graph editor ───────────────────────────────────
+  // Every edit is a graph op that names the host workspace, which is what lets
+  // the backend refuse it while a run in that workspace uses this pipeline.
 
-  /** Open the detail view of `default` and hand back the stage editor helpers. */
   async function detail(workspacePath?: string) {
-    const opened = await open({ initialPipelineId: 'default', workspacePath })
-    return opened
+    return open({ initialPipelineId: 'default', workspacePath })
   }
 
   const sentPayload = (mock: ReturnType<typeof createMockBackend>, type: string) =>
     mock.sent.filter((s) => s.type === type).at(-1)?.payload
 
-  it('sends the workspace with a stage save', async () => {
+  /** The swimlane card for a node id. */
+  const card = (w: VueWrapper, id: string) => tab(w).find(`.lane-card[data-node-id="${id}"]`)
+
+  it('opens the pipeline as a graph and draws one column per stage', async () => {
     const { wrapper: w, mock } = await detail()
-    mock.setResponse('stages.upsert', { stage: twoSlotStage })
-
-    const titleInput = tab(w).findAll('.split-detail input')[2]
-    await titleInput.setValue('Specification v2')
-    await tab(w).find('.detail-head .primary').trigger('click')
-    await flushPromises()
-
-    expect(sentPayload(mock, 'stages.upsert')).toMatchObject({
-      pipeline_id: 'default',
-      workspace_path: WORKSPACE,
-    })
+    expect(sentPayload(mock, 'pipelines.graph.get')).toEqual({ pipeline_id: 'default' })
+    expect(tab(w).findAll('.lane')).toHaveLength(2)
+    expect(card(w, 'n-01-0').exists()).toBe(true)
+    expect(card(w, 'n-01-1').exists()).toBe(true)
+    expect(card(w, 'n-02-0').exists()).toBe(true)
   })
 
-  it('sends the workspace with a stage delete', async () => {
-    const { wrapper: w, mock } = await detail()
-    mock.setResponse('stages.delete', { stages: [secondStage] })
+  it('sends the workspace with a graph edit', async () => {
+    const { wrapper: w, mock, server } = await detail()
 
-    await tab(w).find('.detail-head .danger').trigger('click')
-    await flushPromises()
-    await w.find('.modal .modal-card .danger').trigger('click')
+    await card(w, 'n-02-0').trigger('keydown', { key: 'Delete' })
     await flushPromises()
 
-    expect(sentPayload(mock, 'stages.delete')).toEqual({
-      id: '01',
+    expect(sentPayload(mock, 'pipelines.graph.apply')).toEqual({
       pipeline_id: 'default',
+      ops: [{ op: 'remove_node', id: 'n-02-0', reconnect: true }],
       workspace_path: WORKSPACE,
     })
+    expect(server.stored().nodes.some((n) => n.id === 'n-02-0')).toBe(false)
+    expect(card(w, 'n-02-0').exists()).toBe(false)
+  })
+
+  it('still edits when no workspace is open (empty path, guard is a no-op)', async () => {
+    const { wrapper: w, mock } = await detail('')
+    await card(w, 'n-02-0').trigger('keydown', { key: 'Delete' })
+    await flushPromises()
+    expect(sentPayload(mock, 'pipelines.graph.apply')).toMatchObject({ workspace_path: '' })
+  })
+
+  it('undoes a delete by restoring the graph it replaced', async () => {
+    const { wrapper: w, mock, server } = await detail()
+    await card(w, 'n-02-0').trigger('keydown', { key: 'Delete' })
+    await flushPromises()
+
+    await tab(w).findAll('.pe-bar .pe-icon')[1].trigger('click') // [palette, undo, redo]
+    await flushPromises()
+
+    expect(sentPayload(mock, 'pipelines.graph.set')).toMatchObject({ pipeline_id: 'default', workspace_path: WORKSPACE })
+    expect(server.stored().nodes.some((n) => n.id === 'n-02-0')).toBe(true)
+    expect(card(w, 'n-02-0').exists()).toBe(true)
+  })
+
+  it('puts a refused edit back and says why in the UI language', async () => {
+    const { wrapper: w, server } = await detail()
+    server.refuseNext({ code: 'PIPELINE_RUNNING', message: 'Cannot edit stages while the active pipeline is running' })
+    const before = useNotify().toasts.value.length
+
+    await card(w, 'n-02-0').trigger('keydown', { key: 'Delete' })
+    await flushPromises()
+
+    expect(card(w, 'n-02-0').exists()).toBe(true)
+    const last = useNotify().toasts.value.slice(before).at(-1)
+    expect(last?.type).toBe('error')
+    expect(last?.message).toContain('This pipeline is running')
+  })
+
+  it('reports an edit that never reached the backend instead of swallowing it', async () => {
+    const { wrapper: w, server } = await detail()
+    server.refuseNext(new Error('ws not open'))
+    const before = useNotify().toasts.value.length
+
+    await card(w, 'n-02-0').trigger('keydown', { key: 'Delete' })
+    await flushPromises()
+
+    expect(card(w, 'n-02-0').exists()).toBe(true)
+    expect(useNotify().toasts.value.slice(before).at(-1)?.message).toContain('ws not open')
   })
 
   it('sends the workspace with a stage reset', async () => {
@@ -295,20 +364,6 @@ describe('PipelineManagerModal — pipelines tab', () => {
     await flushPromises()
 
     expect(sentPayload(mock, 'stages.reset')).toEqual({
-      pipeline_id: 'default',
-      workspace_path: WORKSPACE,
-    })
-  })
-
-  it('sends the workspace with a stage reorder', async () => {
-    const { wrapper: w, mock } = await detail()
-
-    // ▼ on the first row: [▲, ▼] per row, so index 1 is the first row's ▼.
-    await tab(w).findAll('.split-list li .icon-btn')[1].trigger('click')
-    await flushPromises()
-
-    expect(sentPayload(mock, 'stages.reorder')).toEqual({
-      ids: ['02', '01'],
       pipeline_id: 'default',
       workspace_path: WORKSPACE,
     })
@@ -351,54 +406,6 @@ describe('PipelineManagerModal — pipelines tab', () => {
     })
   })
 
-  it('still edits stages when no workspace is open (empty path, guard is a no-op)', async () => {
-    const { wrapper: w, mock } = await detail('')
-    mock.setResponse('stages.upsert', { stage: twoSlotStage })
-
-    const titleInput = tab(w).findAll('.split-detail input')[2]
-    await titleInput.setValue('Specification v2')
-    const save = tab(w).find('.detail-head .primary')
-    expect(save.attributes('disabled')).toBeUndefined()
-    await save.trigger('click')
-    await flushPromises()
-
-    // Empty is what the backend already treats as "no workspace to check", so
-    // the edit goes through exactly as it did before the workspace was wired.
-    expect(sentPayload(mock, 'stages.upsert')).toMatchObject({ workspace_path: '' })
-    expect(tab(w).find('.err-msg').exists()).toBe(false)
-  })
-  // wsClient resolves an ok:false response instead of rejecting, so the
-  // try/catch around reorder never saw a backend refusal: the row snapped back
-  // on the following refresh and nothing said why.
-  it('reports a vetoed stage reorder instead of silently snapping back', async () => {
-    const { wrapper: w, mock } = await detail()
-    mock.setResponse('stages.reorder', null, {
-      ok: false,
-      error: { code: 'PIPELINE_RUNNING', message: 'Cannot reorder stages while the active pipeline is running' },
-    })
-
-    const listsBefore = mock.sent.filter((s) => s.type === 'stages.list').length
-    await tab(w).findAll('.split-list li .icon-btn')[1].trigger('click')
-    await flushPromises()
-
-    expect(tab(w).find('.err-msg').text()).toContain('This pipeline is running, so it cannot be changed right now')
-    // The refusal stops the round trip: no refresh is issued for it.
-    expect(mock.sent.filter((s) => s.type === 'stages.list')).toHaveLength(listsBefore)
-  })
-
-  it('reports a vetoed move-up too', async () => {
-    const { wrapper: w, mock } = await detail()
-    mock.setResponse('stages.reorder', null, {
-      ok: false, error: { code: 'ERR', message: 'reorder refused' },
-    })
-
-    // ▲ on the second row: [▲, ▼] per row, so index 2 is the second row's ▲.
-    await tab(w).findAll('.split-list li .icon-btn')[2].trigger('click')
-    await flushPromises()
-
-    expect(tab(w).find('.err-msg').text()).toContain('reorder refused')
-  })
-
   it('names the first rejected stage on a partially failed import', async () => {
     const { wrapper: w, mock } = await detail()
     mock.setResponse('stages.upsert', null, {
@@ -419,76 +426,39 @@ describe('PipelineManagerModal — pipelines tab', () => {
     delete (window as any).agentTeam
   })
 
-  // ── Phase 0 regressions ────────────────────────────────────────────────────
-  const slotRows = (w: VueWrapper) => tab(w).findAll('.slots-section .slot-item')
-
-  it('asks before removing a slot, and writes nothing when the user cancels', async () => {
-    const { wrapper: w, mock } = await detail()
-    const upsertsBefore = mock.sent.filter((s) => s.type === 'stages.upsert').length
-
-    await slotRows(w)[0].find('.icon-btn.danger-icon').trigger('click')
-    await flushPromises()
-    expect(useNotify().dialog.value?.kind).toBe('confirm')
-    useNotify().resolveDialog(false)
-    await flushPromises()
-
-    expect(mock.sent.filter((s) => s.type === 'stages.upsert')).toHaveLength(upsertsBefore)
-    expect(slotRows(w)).toHaveLength(2)
-  })
-
-  it('puts a refused slot removal back instead of showing a layout the backend never stored', async () => {
-    const { wrapper: w, mock } = await detail()
-    mock.setResponse('stages.upsert', null, {
-      ok: false,
-      error: { code: 'PIPELINE_RUNNING', message: 'Cannot edit stages while the active pipeline is running' },
-    })
-
-    await slotRows(w)[0].find('.icon-btn.danger-icon').trigger('click')
-    await flushPromises()
-    useNotify().resolveDialog(true)
-    await flushPromises()
-
-    expect(mock.sent.filter((s) => s.type === 'stages.upsert').length).toBeGreaterThan(0)
-    expect(slotRows(w).map((r) => r.find('.item-label').text())).toEqual(['Lead', 'Second'])
-    expect(tab(w).find('.err-msg').text()).toContain('This pipeline is running')
-  })
-
-  it('keeps a successful slot removal', async () => {
-    const { wrapper: w, mock } = await detail()
-    mock.setResponse('stages.upsert', { stage: twoSlotStage })
-
-    await slotRows(w)[0].find('.icon-btn.danger-icon').trigger('click')
-    await flushPromises()
-    useNotify().resolveDialog(true)
-    await flushPromises()
-
-    const stage = sentPayload(mock, 'stages.upsert')?.stage as { slots: { label: string }[] }
-    expect(stage.slots.map((s) => s.label)).toEqual(['Second'])
-  })
-
-  it('reports a reorder that never reached the backend instead of swallowing it', async () => {
-    const { wrapper: w, mock } = await detail()
-    mock.setRejection('stages.reorder', 'ws not open')
-
-    await tab(w).findAll('.split-list li .icon-btn')[1].trigger('click')
-    await flushPromises()
-
-    expect(tab(w).find('.err-msg').text()).toContain('ws not open')
-  })
-
   it('releases the export button and says why when saving the file throws', async () => {
     const { wrapper: w } = await detail()
     const saveJson = vi.fn().mockRejectedValue(new Error('disk full'))
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(window as any).agentTeam = { saveJson }
 
-    const exportBtn = tab(w).findAll('.toolbar .ghost')[0]
-    await exportBtn.trigger('click')
+    await tab(w).findAll('.toolbar .ghost')[0].trigger('click')
     await flushPromises()
 
     expect(tab(w).findAll('.toolbar .ghost')[0].attributes('disabled')).toBeUndefined()
     expect(tab(w).find('.err-msg').text()).toContain('disk full')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).agentTeam
+  })
+
+  it('locks the editor while a run in this workspace uses the pipeline', async () => {
+    const { wrapper: w, mock } = await detail()
+    await w.setProps({ hostRun: { state: 'running', pipelineId: 'default', workspacePath: WORKSPACE } })
+    await flushPromises()
+
+    expect(tab(w).find('.pe-lock').exists()).toBe(true)
+    await card(w, 'n-02-0').trigger('keydown', { key: 'Delete' })
+    await flushPromises()
+    expect(mock.sent.some((s) => s.type === 'pipelines.graph.apply')).toBe(false)
+    expect(card(w, 'n-02-0').exists()).toBe(true)
+    // Stage-level writes are disabled up front too.
+    expect(tab(w).find('.toolbar .danger-link').attributes('disabled')).toBeDefined()
+  })
+
+  it('does not lock for a run of a different pipeline', async () => {
+    const { wrapper: w } = await detail()
+    await w.setProps({ hostRun: { state: 'running', pipelineId: 'custom', workspacePath: WORKSPACE } })
+    await flushPromises()
+    expect(tab(w).find('.pe-lock').exists()).toBe(false)
   })
 })

@@ -31,7 +31,7 @@ const props = defineProps<{
   node: GraphNode | null
   /** The stage behind the inspected layer (layer mode). */
   stage: Stage | null
-  roles: Array<Role & { properties?: RoleProperty[] }>
+  roles: Role[]
   agentOptions: Array<{ key: string; label: string }>
   run: RunSnapshot
   now: number

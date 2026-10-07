@@ -95,6 +95,7 @@ export function usePipelineGraphEditor(
     const details = resp.error?.details?.errors
     return {
       code: resp.error?.code ?? 'ERROR',
+      // '' when the backend gave no reason: the view words that itself.
       message: resp.error?.message ?? fallback,
       details: Array.isArray(details) ? details.map(String) : undefined,
     }
@@ -108,7 +109,7 @@ export function usePipelineGraphEditor(
     try {
       const resp = await backend.send<GraphPayload>('pipelines.graph.get', { pipeline_id: id })
       if (id !== opts.pipelineId()) return
-      if (!resp.ok || !resp.payload) { loadError.value = errorOf(resp, 'load failed'); return }
+      if (!resp.ok || !resp.payload) { loadError.value = errorOf(resp, ''); return }
       adopt(resp.payload)
       derived.value = !!resp.payload.derived
       undoStack.value = []
@@ -133,7 +134,7 @@ export function usePipelineGraphEditor(
         ops,
         workspace_path: opts.workspacePath(),
       })
-      if (!resp.ok || !resp.payload) return { ok: false, error: errorOf(resp, 'apply failed') }
+      if (!resp.ok || !resp.payload) return { ok: false, error: errorOf(resp, '') }
       return { ok: true, payload: resp.payload }
     } catch (err) {
       return { ok: false, error: { code: 'TRANSPORT', message: err instanceof Error ? err.message : String(err) } }
@@ -147,7 +148,7 @@ export function usePipelineGraphEditor(
         graph: target,
         workspace_path: opts.workspacePath(),
       })
-      if (!resp.ok || !resp.payload) return { ok: false, error: errorOf(resp, 'save failed') }
+      if (!resp.ok || !resp.payload) return { ok: false, error: errorOf(resp, '') }
       return { ok: true, payload: resp.payload }
     } catch (err) {
       return { ok: false, error: { code: 'TRANSPORT', message: err instanceof Error ? err.message : String(err) } }

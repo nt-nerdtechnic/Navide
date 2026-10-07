@@ -9753,14 +9753,10 @@
       "duplicate-edge": "この 2 つのステップはすでに接続されています。",
       "invalid": "この変更ではパイプラインが壊れます：{detail}",
       "reject-upstream": "差し戻し接続は前のステップを指す必要があります。",
-      "transport": "バックエンドに接続できません：{message}"
-    },
-    "confirm": {
-      "remove-slot-title": "スロットを削除",
-      "remove-slot-body": "このステージから「{label}」を削除しますか？変更はすぐに保存されます。"
+      "transport": "バックエンドに接続できません：{message}",
+      "unknown": "バックエンドが理由を示さずに変更を拒否しました。"
     },
     "badge": {
-      "branch": "承認／差し戻し",
       "open-canvas": "キャンバスでこの接続を表示",
       "reject": "↺ 第 {layer} 層へ差し戻し（最大 {max} 回）",
       "skip": "⤳ 第 {layer} 層へスキップ"
@@ -9922,7 +9918,12 @@
       "tidy": "整列",
       "undo": "元に戻す：{what}",
       "undo-none": "元に戻す操作はありません",
-      "view": "表示"
+      "view": "表示",
+      "show-palette": "ノードパネルを表示",
+      "hide-palette": "ノードパネルを隠す"
+    },
+    "controlPane": {
+      "open-in-canvas": "パイプラインキャンバスで開く"
     }
   }
 }

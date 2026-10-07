@@ -3428,6 +3428,11 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <span v-if="autoAnswerEnabled" class="prn-auto">{{ $t('label.full-auto') }} · {{ analyzerModelLocal }}</span>
             <span v-else class="prn-manual">{{ $t('label.manual-confirm') }}</span>
           </div>
+          <!-- Full run control (gates, rerun-from-step, per-step state) lives
+               in the Pipeline workspace; this card stays compact. -->
+          <button class="ghost prn-open" @click="openPipelineManager(activePipelineId || undefined)">
+            {{ $t('pipelineEditor.controlPane.open-in-canvas') }}
+          </button>
         </div>
         <div v-if="pipeline.state === 'running'" class="pipeline-running">
           <div class="progress">
@@ -5495,6 +5500,17 @@ button.icon-btn.muted:hover {
   font-size: var(--font-3xs);
   color: var(--text-secondary);
 }
+.prn-open {
+  margin-top: 4px;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-fg);
+  font-size: var(--font-2xs);
+  cursor: pointer;
+}
+.prn-open:hover { text-decoration: underline; }
+.prn-open:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; border-radius: var(--radius-xs); }
 .prn-auto {
   color: var(--attention-fg);
 }

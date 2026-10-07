@@ -9753,14 +9753,10 @@
       "duplicate-edge": "These two steps are already linked.",
       "invalid": "That change would break the pipeline: {detail}",
       "reject-upstream": "A reject link has to point back to an earlier step.",
-      "transport": "Could not reach the backend: {message}"
-    },
-    "confirm": {
-      "remove-slot-title": "Remove slot",
-      "remove-slot-body": "Remove “{label}” from this stage? The change is saved right away."
+      "transport": "Could not reach the backend: {message}",
+      "unknown": "The backend refused the change without saying why."
     },
     "badge": {
-      "branch": "Pass / reject",
       "open-canvas": "Show this link on the canvas",
       "reject": "↺ Back to layer {layer} (max {max})",
       "skip": "⤳ Skips to layer {layer}"
@@ -9922,7 +9918,12 @@
       "tidy": "Tidy up",
       "undo": "Undo {what}",
       "undo-none": "Nothing to undo",
-      "view": "View"
+      "view": "View",
+      "show-palette": "Show nodes panel",
+      "hide-palette": "Hide nodes panel"
+    },
+    "controlPane": {
+      "open-in-canvas": "Open in the pipeline canvas"
     }
   }
 }

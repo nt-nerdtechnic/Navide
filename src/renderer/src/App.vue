@@ -8533,6 +8533,14 @@ const showPipelineManager = ref(false)
 const pmRef = ref<{ closeTopLayer?: () => boolean } | null>(null)
 const pmEverOpened = ref(false)
 const pmInitialPipelineId = ref('')
+// What the Pipeline workspace needs to lock a pipeline while this window runs
+// it. The run's pipeline is the active one: onPipelineStart switches to the
+// requested pipeline before it marks the run 'running'.
+const pmHostRun = computed(() => ({
+  state: pipeline.state,
+  pipelineId: pipeline.state === 'running' ? pipelinesApi.activePipelineId.value : '',
+  workspacePath: pipeline.state === 'running' ? pipelineRunWorkspace : '',
+}))
 function openPipelineManager(pipelineId?: string): void {
   pmInitialPipelineId.value = pipelineId ?? ''
   pmEverOpened.value = true
@@ -20514,6 +20522,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :pipelines-api="pipelinesApi"
       :workspace-path="currentWorkspace"
       :initial-pipeline-id="pmInitialPipelineId"
+      :host-run="pmHostRun"
       @close="showPipelineManager = false"
     />
     <DebugModal

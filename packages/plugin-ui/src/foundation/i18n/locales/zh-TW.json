@@ -9753,14 +9753,10 @@
       "duplicate-edge": "這兩個步驟已經連在一起了。",
       "invalid": "這個修改會讓 pipeline 失效：{detail}",
       "reject-upstream": "退回連線必須指向更早的步驟。",
-      "transport": "無法連到後端：{message}"
-    },
-    "confirm": {
-      "remove-slot-title": "移除 slot",
-      "remove-slot-body": "要從這個 Stage 移除「{label}」嗎？變更會立即儲存。"
+      "transport": "無法連到後端：{message}",
+      "unknown": "後端拒絕了這個修改，但沒有說明原因。"
     },
     "badge": {
-      "branch": "通過／退回",
       "open-canvas": "在畫布上顯示這條連線",
       "reject": "↺ 退回第 {layer} 層（最多 {max} 次）",
       "skip": "⤳ 跳到第 {layer} 層"
@@ -9922,7 +9918,12 @@
       "tidy": "整理排版",
       "undo": "復原：{what}",
       "undo-none": "沒有可復原的操作",
-      "view": "檢視"
+      "view": "檢視",
+      "show-palette": "顯示節點面板",
+      "hide-palette": "隱藏節點面板"
+    },
+    "controlPane": {
+      "open-in-canvas": "在 pipeline 畫布中開啟"
     }
   }
 }

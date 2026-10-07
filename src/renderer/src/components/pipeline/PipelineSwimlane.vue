@@ -197,7 +197,7 @@ function shiftColumn(index: number, delta: -1 | 1): void {
             </li>
           </ul>
           <button
-            v-if="!locked" type="button" class="lane-add"
+            v-if="!locked && !col.gateOnly" type="button" class="lane-add"
             @click="emit('request-add', { mode: 'into', layer: col.index }, $event.currentTarget as HTMLElement)"
           >{{ t('pipelineEditor.lane.add-parallel') }}</button>
         </section>
@@ -212,13 +212,17 @@ function shiftColumn(index: number, delta: -1 | 1): void {
         <span class="lane-flow" aria-hidden="true"></span>
       </div>
       <button
-        v-if="!locked" type="button" class="lane-append" :class="{ 'is-hot': hover === 'append' }"
+        v-if="!locked" type="button" class="lane-append" :class="{ 'is-hot': hover === 'append', 'is-first': !lanes.columns.length }"
         @dragover="onOver($event, 'append')" @dragleave="onLeave($event, 'append')"
         @drop="onDrop($event, { mode: 'newLayer', layer: lanes.columns.length })"
         @click="emit('request-add', { mode: 'newLayer', layer: lanes.columns.length }, $event.currentTarget as HTMLElement)"
       >
         <span class="lane-append-plus" aria-hidden="true">+</span>
-        <span>{{ t('pipelineEditor.lane.append-layer') }}</span>
+        <template v-if="lanes.columns.length">{{ t('pipelineEditor.lane.append-layer') }}</template>
+        <template v-else>
+          <strong class="lane-append-title">{{ t('pipelineEditor.state.empty-title') }}</strong>
+          <span class="lane-append-body">{{ t('pipelineEditor.state.empty-body') }}</span>
+        </template>
       </button>
     </div>
   </div>
@@ -397,6 +401,15 @@ function shiftColumn(index: number, delta: -1 | 1): void {
   transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out);
 }
 .lane-append-plus { font-size: var(--font-xl); line-height: 1; }
+.lane-append.is-first {
+  width: 300px;
+  min-height: 184px;
+  padding: var(--space-5);
+  border-width: 1.5px;
+  text-align: center;
+}
+.lane-append-title { font-size: var(--font-sm); font-weight: 600; color: var(--text-primary); }
+.lane-append-body { font-size: var(--font-xs); line-height: var(--lh-base); }
 .lane-append:hover, .lane-append.is-hot {
   color: var(--accent-fg);
   border-color: var(--accent-emphasis);

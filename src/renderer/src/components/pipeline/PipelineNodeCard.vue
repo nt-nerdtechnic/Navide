@@ -237,6 +237,9 @@ function badgeText(b: LaneBadge): string {
 
 .pnc-badges { grid-area: badges; display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-2); }
 .pnc-badge {
+  max-width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
   border: 1px solid color-mix(in srgb, var(--done-emphasis) 45%, transparent);
   background: color-mix(in srgb, var(--done-emphasis) 10%, transparent);
   color: var(--done-fg);
