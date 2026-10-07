@@ -311,3 +311,36 @@ def test_a_different_file_swapped_in_after_the_check_is_not_opened(ws: Path, mon
 
     monkeypatch.setattr(media, "_check", racing)
     assert media.open_outbound(str(target), [ws]) == (None, "changed")
+
+
+# --- Review 2: user-data folders, the root's own path, resolved colons -----------------
+
+
+@pytest.mark.parametrize("folder", ["Desktop", "Documents", "Downloads", "Pictures", "Library", "OneDrive"])
+def test_a_user_data_folder_as_workspace_is_too_broad(home: Path, folder: str) -> None:
+    f = _file(home / folder / "report.pdf")
+    assert media.resolve_outbound(str(f), [home / folder]) == (None, "broad_workspace")
+
+
+def test_a_project_under_desktop_still_works(home: Path) -> None:
+    f = _file(home / "Desktop" / "app" / "out.png")
+    assert media.resolve_outbound(str(f), [home / "Desktop" / "app"]) == (f.resolve(), "")
+
+
+@pytest.mark.parametrize("parent, reason", [(".ssh", "hidden"), (".aws/profile", "hidden"),
+                                            ("secrets", "denied_name"), ("work/credentials", "denied_name")])
+def test_a_workspace_inside_a_hidden_or_secret_folder_sends_nothing(home: Path, parent: str, reason: str) -> None:
+    root = home / "code" / parent / "proj"
+    f = _file(root / "notes.txt")
+    assert media.resolve_outbound(str(f), [root]) == (None, reason)
+
+
+@needs_symlinks
+def test_a_colon_reached_through_a_symlink_is_refused(ws: Path) -> None:
+    target = ws / "out" / "a:b.txt"
+    try:
+        target.write_text("x")
+    except OSError:
+        pytest.skip("this filesystem cannot name a file with a colon")
+    (ws / "out" / "plain.txt").symlink_to(target)
+    assert media.resolve_outbound(str(ws / "out" / "plain.txt"), [ws]) == (None, "denied_name")

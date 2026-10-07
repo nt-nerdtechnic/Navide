@@ -152,14 +152,31 @@ def _system_dirs() -> list[Path]:
     return osplat.paths.system_dirs()
 
 
+# Folders right under home that hold a user's own files; none is a workspace to send from.
+USER_DATA_FOLDERS = frozenset({
+    "desktop", "documents", "downloads", "pictures", "movies", "music", "videos", "library",
+    "public", "onedrive", "dropbox", "icloud drive", "google drive", "applications",
+})
+
+
 def _too_broad(base: Path) -> bool:
     """A folder no pane may send from wholesale: a filesystem root or other shallow
-    folder (/Users, /Volumes, /opt), a mount point, or the home folder or one above it,
-    where everything a user keeps (Documents, Desktop, Downloads) would be in reach."""
+    folder (/Users, /Volumes, /opt), a mount point, the home folder or one above it, or
+    one of the user-data folders right under home (Desktop, Documents, Downloads ...)."""
     if base == type(base)(base.anchor) or len(base.parts) < 3 or os.path.ismount(base):
         return True
     home = _home()
-    return base == home or home.is_relative_to(base)
+    if base == home or home.is_relative_to(base):
+        return True
+    return base.parent == home and base.name.lower() in USER_DATA_FOLDERS
+
+
+def _scope(real: Path) -> tuple[str, ...]:
+    """The segments of ``real`` the name rules judge: everything below home (or below the
+    anchor, outside home), so a workspace that itself sits in ~/.ssh or a secrets/ folder
+    is caught, not only what lies below the workspace."""
+    home = _home()
+    return real.relative_to(home).parts if real.is_relative_to(home) else real.parts[1:]
 
 
 def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, str]:
@@ -199,10 +216,12 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
         if _too_broad(base):
             in_broad = True  # never usable; a narrower root later may still admit the file
             continue
-        rel = real.relative_to(base).parts
-        if any(part.startswith(".") for part in rel):
+        scope = _scope(real)
+        if any(part.startswith(".") for part in scope):
             return None, None, "hidden"
-        if any(fnmatch.fnmatch(part.lower(), pat) for part in rel for pat in DENIED_NAMES):
+        # A colon can also arrive through a symlink, after the raw path passed.
+        if any(":" in part for part in scope) or any(
+                fnmatch.fnmatch(part.lower(), pat) for part in scope for pat in DENIED_NAMES):
             return None, None, "denied_name"
         if any(_within(real, s) for s in _system_dirs()):
             return None, None, "system"

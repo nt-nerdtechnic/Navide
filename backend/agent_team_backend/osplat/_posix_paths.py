@@ -30,13 +30,24 @@ def roaming_app_data() -> Path | None:
 # One list for macOS and Linux: a folder that does not exist on one simply never matches.
 _POSIX_SYSTEM_DIRS = (
     "/etc", "/private/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec", "/boot",
-    "/proc", "/sys", "/dev", "/root", "/System", "/Library/Keychains", "/private/var/db",
-    "/var/db", "/var/lib",
+    "/proc", "/sys", "/dev", "/root", "/var/root", "/private/var/root", "/System",
+    "/Library/Keychains", "/private/var/db", "/var/db", "/var/lib",
+)
+# Per-user folders holding credentials, browser profiles (cookies, saved logins) and
+# private messages; macOS keeps them under ~/Library (Linux's are dot folders, refused
+# anyway). Absent folders simply never match.
+_POSIX_USER_SECRET_DIRS = (
+    "Library/Keychains", "Library/Cookies", "Library/Safari", "Library/Messages", "Library/Mail",
+    "Library/Accounts", "Library/Group Containers", "Library/Containers",
+    "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
+    "Library/Application Support/Microsoft Edge", "Library/Application Support/BraveSoftware",
+    "Library/Application Support/com.apple.TCC", "Library/Application Support/1Password",
 )
 
 
 def system_dirs() -> list[Path]:
-    return [Path(p) for p in _POSIX_SYSTEM_DIRS]
+    home = Path.home()
+    return [Path(p) for p in _POSIX_SYSTEM_DIRS] + [home / rel for rel in _POSIX_USER_SECRET_DIRS]
 
 
 def isolated_home_env(home_dir: Path) -> dict[str, str]:

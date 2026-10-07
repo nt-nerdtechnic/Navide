@@ -241,6 +241,11 @@ class TestPaths:
 
         assert Path("/etc") in _darwin.paths.system_dirs() and Path("/System") in _darwin.paths.system_dirs()
         assert Path("/etc") in _linux.paths.system_dirs() and Path("/boot") in _linux.paths.system_dirs()
+        home = Path.home()
+        for rel in ("Library/Keychains", "Library/Cookies", "Library/Application Support/Google/Chrome",
+                    "Library/Safari", "Library/Messages", "Library/Mail"):
+            assert home / rel in _darwin.paths.system_dirs(), rel
+        assert Path("/var/root") in _darwin.paths.system_dirs()
         monkeypatch.setenv("SystemRoot", r"D:\Win")
         monkeypatch.setenv("ProgramData", r"D:\PD")
         monkeypatch.delenv("ProgramFiles", raising=False)
