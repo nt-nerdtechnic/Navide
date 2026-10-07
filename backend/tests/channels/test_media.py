@@ -260,57 +260,116 @@ def test_open_outbound_reads_the_checked_file(ws: Path) -> None:
         assert (opened.fh.read(), opened.size, opened.path.name) == (b"x", 1, "chart.png")
 
 
-@needs_symlinks
-def test_a_file_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Path, ws: Path,
-                                                                     monkeypatch) -> None:
-    secret = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
-    target = ws / "out" / "chart.png"
-    checked = media._check
-
-    def racing(raw, roots):
-        result = checked(raw, roots)
-        target.unlink()
-        target.symlink_to(secret)  # swapped between the check and the open
-        return result
-
-    monkeypatch.setattr(media, "_check", racing)
-    assert media.open_outbound(str(target), [ws]) == (None, "changed")
-
-
-@needs_symlinks
-def test_a_folder_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Path, ws: Path,
-                                                                       monkeypatch) -> None:
-    _file(tmp_path / "elsewhere" / "chart.png", b"SECRET")
-    checked = media._check
-
-    def racing(raw, roots):
-        result = checked(raw, roots)
-        (ws / "out").rename(ws / "moved")
-        (ws / "out").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
-        return result
-
-    monkeypatch.setattr(media, "_check", racing)
-    assert media.open_outbound(str(ws / "out" / "chart.png"), [ws]) == (None, "changed")
-
-
 def test_an_inbound_path_never_leaves_the_pane_folder(tmp_path: Path) -> None:
     for name in ("../../x", "..\\..\\y", "/etc/passwd", "a/../../b", "\x00z"):
         dest = media.new_inbound_path(tmp_path, "pane-1", media.safe_name(name))
         assert dest.parent == media.pane_dir(tmp_path, "pane-1")
 
 
-def test_a_different_file_swapped_in_after_the_check_is_not_opened(ws: Path, monkeypatch) -> None:
-    target = ws / "out" / "chart.png"
+def _staged(monkeypatch, *, before_recheck=None, after_first=None, after_recheck=None) -> None:
+    """Run hooks around open_outbound's two checks: the first runs before the file is
+    opened, the recheck after. The open file pins its inode, so nothing here depends on
+    whether the filesystem would reuse an inode number."""
     checked = media._check
+    calls = []
 
-    def racing(raw, roots):
+    def staged(raw, roots):
+        calls.append(raw)
+        if len(calls) == 2 and before_recheck:
+            before_recheck()
         result = checked(raw, roots)
-        target.unlink()
-        target.write_bytes(b"OTHER")  # a new inode under the same, still-real path
+        if len(calls) == 1 and after_first:
+            after_first()
+        if len(calls) == 2 and after_recheck:
+            after_recheck()
         return result
 
-    monkeypatch.setattr(media, "_check", racing)
+    monkeypatch.setattr(media, "_check", staged)
+
+
+def test_a_file_replaced_between_the_open_and_the_recheck_is_caught(ws: Path, monkeypatch) -> None:
+    target = ws / "out" / "chart.png"
+
+    def swap() -> None:
+        target.unlink()
+        target.write_bytes(b"OTHER")  # a new file under the same, still-real path
+
+    _staged(monkeypatch, before_recheck=swap)
     assert media.open_outbound(str(target), [ws]) == (None, "changed")
+
+
+@needs_symlinks
+def test_a_file_opened_through_a_folder_swapped_and_back_is_caught(tmp_path: Path, ws: Path,
+                                                                   monkeypatch) -> None:
+    """The open follows a folder symlink to a secret, then the folder is put back so the
+    recheck passes: only comparing the open file with the path catches it."""
+    _file(tmp_path / "elsewhere" / "chart.png", b"SECRET")
+
+    def swap_out() -> None:
+        (ws / "out").rename(ws / "moved")
+        (ws / "out").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+
+    def swap_back() -> None:
+        (ws / "out").unlink()
+        (ws / "moved").rename(ws / "out")
+
+    _staged(monkeypatch, after_first=swap_out, before_recheck=swap_back)
+    assert media.open_outbound(str(ws / "out" / "chart.png"), [ws]) == (None, "changed")
+
+
+@needs_symlinks
+def test_a_symlink_swapped_in_before_the_recheck_is_refused(tmp_path: Path, ws: Path, monkeypatch) -> None:
+    secret = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
+    target = ws / "out" / "chart.png"
+
+    def swap() -> None:
+        target.unlink()
+        target.symlink_to(secret)
+
+    _staged(monkeypatch, before_recheck=swap)
+    assert media.open_outbound(str(target), [ws]) == (None, "outside")
+
+
+@needs_symlinks
+def test_a_swap_before_the_open_is_never_sent(tmp_path: Path, ws: Path, monkeypatch) -> None:
+    secret = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
+    target = ws / "out" / "chart.png"
+
+    def swap() -> None:
+        target.unlink()
+        target.symlink_to(secret)
+
+    _staged(monkeypatch, after_first=swap)
+    assert media.open_outbound(str(target), [ws]) == (None, "changed")
+
+
+def test_a_replacement_before_the_open_is_judged_by_the_recheck(tmp_path: Path, ws: Path,
+                                                                monkeypatch) -> None:
+    """On Linux an unlinked file's inode number is often given straight to the next file,
+    so the first check's stat cannot vouch for what gets opened; the recheck does."""
+    outside = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
+    target = ws / "out" / "chart.png"
+
+    def swap() -> None:
+        target.unlink()
+        os.link(outside, target)
+
+    _staged(monkeypatch, after_first=swap)
+    assert media.open_outbound(str(target), [ws]) == (None, "hard_link")
+
+
+def test_a_swap_after_the_recheck_still_sends_the_checked_file(ws: Path, monkeypatch) -> None:
+    target = ws / "out" / "chart.png"
+
+    def swap() -> None:
+        target.unlink()
+        target.write_bytes(b"OTHER")
+
+    _staged(monkeypatch, after_recheck=swap)
+    opened, reason = media.open_outbound(str(target), [ws])
+    assert reason == "" and opened is not None
+    with opened.fh:
+        assert opened.fh.read() == b"x"
 
 
 # --- Review 2: user-data folders, the root's own path, resolved colons -----------------

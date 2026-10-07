@@ -15,7 +15,6 @@ import mimetypes
 import os
 import re
 import secrets
-import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePath
@@ -264,15 +263,19 @@ class Outbound:
 
 
 def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, str]:
-    """``resolve_outbound``, then open the file so what is sent is what was checked.
+    """Check ``raw``, open it, then check it again, so what is sent is what was checked.
 
-    The open file must be the inode the check saw (a file swapped in afterwards), with one
-    link, and the path must still resolve to itself (a folder swapped for a symlink). The
-    last component is also opened without following a symlink, a second guard the realpath
-    check already covers. Any difference is reason "changed".
+    The recheck runs while the file is open, and an open file pins its inode: its number
+    cannot be handed to another file until we close it. So the path naming the same
+    (st_dev, st_ino) as the open file proves it is the same file,
+    on any filesystem, inode reuse included; a mere stat-then-open could not tell a
+    replacement that happened to get the old inode number. The last component is opened
+    without following a symlink, and any difference is reason "changed" (or the
+    recheck's own reason). A swap after the recheck
+    no longer matters: the open file is the checked one.
     """
-    real, seen, reason = _check(raw, roots)
-    if real is None or seen is None:
+    real, _seen, reason = _check(raw, roots)
+    if real is None:
         return None, reason
     try:
         fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
@@ -280,9 +283,12 @@ def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, s
         return None, "changed"
     try:
         st = os.fstat(fd)
-        same = (st.st_dev, st.st_ino) == (seen.st_dev, seen.st_ino)
-        if not (same and stat.S_ISREG(st.st_mode) and st.st_nlink == 1
-                and Path(os.path.realpath(real)) == real):
+        again, seen, reason = _check(raw, roots)
+        if again is None or seen is None:
+            os.close(fd)
+            return None, reason
+        # Same inode: the recheck's rules (regular file, one link ...) hold for the open file.
+        if (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino):
             os.close(fd)
             return None, "changed"
     except OSError:
