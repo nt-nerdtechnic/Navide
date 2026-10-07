@@ -325,3 +325,11 @@ async def test_a_failed_download_names_no_local_folder(media_env: Env) -> None:
     m.fail = PermissionError(13, "Permission denied", "/Users/someone/Library/channels-media/x")
     await _send(media_env, "caption", [PHOTO])
     assert _said(media_env, "Permission denied") and not _said(media_env, "/Users/someone")
+
+
+async def test_a_media_folder_that_cannot_be_made_still_delivers_the_text(media_env: Env, tmp_path: Path) -> None:
+    Media(media_env.tg)
+    (tmp_path / "media").write_text("a file where the folder should be")
+    await _send(media_env, "caption", [PHOTO])
+    assert media_env.fake.delivered[-1][1] == "caption"
+    assert _said(media_env, "photo.jpg")

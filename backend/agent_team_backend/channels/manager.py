@@ -1547,7 +1547,12 @@ class ChannelManager:
             if att.size is not None and att.size > media.INBOUND_MAX_BYTES:
                 await self._reply(msg, media.text(lang, "too_large", name=name, limit=limit))
                 continue
-            dest = await asyncio.to_thread(media.new_inbound_path, root, pane_id, name)
+            try:
+                dest = await asyncio.to_thread(media.new_inbound_path, root, pane_id, name)
+            except OSError as exc:  # the folder cannot be made: report it, the text still goes
+                await self._reply(msg, media.text(lang, "download_failed", name=name,
+                                                  error=_failure_text(exc)))
+                continue
             try:
                 size = await adapter.download(att, dest, media.INBOUND_MAX_BYTES)
             except MediaTooLarge:
