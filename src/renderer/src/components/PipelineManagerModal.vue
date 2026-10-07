@@ -727,7 +727,12 @@ async function rImport(): Promise<void> {
             if (!firstFailure) firstFailure = t('pipelineEditor.error.role-entry-invalid', { key: typeof e?.key === 'string' && e.key ? e.key : '?' })
             continue
           }
-          const saved = await rolesApi.upsert({ key: e.key, label: String(e.label ?? e.key), one_line: String(e.one_line ?? ''), system_prompt: e.system_prompt })
+          const saved = await rolesApi.upsert({
+            key: e.key, label: String(e.label ?? e.key), one_line: String(e.one_line ?? ''), system_prompt: e.system_prompt,
+            // Exports carry each role's declared fields; dropping them here
+            // made an imported role lose its step settings form.
+            ...(Array.isArray(e.properties) ? { properties: e.properties } : {}),
+          })
           if (saved) ok++
           else {
             failed++

@@ -272,4 +272,23 @@ describe('PipelineManagerModal — roles tab', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).agentTeam
   })
+
+  it('keeps a role\'s declared step fields through an import', async () => {
+    const { wrapper: w, mock } = await open()
+    const properties = [{ name: 'effort', type: 'options', options: [{ value: 'low' }, { value: 'high' }] }]
+    mock.setResponse('roles.upsert', { role: { ...dev, properties }, roles: [pm, { ...dev, properties }] })
+    const openJson = vi.fn().mockResolvedValue({ ok: true, content: JSON.stringify({ roles: [{ ...dev, properties }, pm] }) })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).agentTeam = { openJson }
+
+    await tab(w).findAll('.toolbar .ghost')[1].trigger('click')
+    await flushPromises()
+
+    const sent = mock.sent.filter((s) => s.type === 'roles.upsert')
+    expect(sent[0].payload.properties).toEqual(properties)
+    // A role exported without fields must not wipe the ones it has.
+    expect('properties' in sent[1].payload).toBe(false)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).agentTeam
+  })
 })
