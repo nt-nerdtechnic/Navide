@@ -461,4 +461,44 @@ describe('PipelineManagerModal — pipelines tab', () => {
     await flushPromises()
     expect(tab(w).find('.pe-lock').exists()).toBe(false)
   })
+
+  it('shows a run aborted at a gate as stopped, then waiting on that gate again after resume', async () => {
+    const { wrapper: w, mock } = await detail()
+    // The graph gets a gate after stage 01 so there is something to wait on.
+    const aborted = {
+      state: 'aborted', pipeline_id: 'default',
+      node_states: { 'n-01-0': { status: 'done' }, 'n-01-1': { status: 'done' } },
+      node_gate: { gateId: 'n-02-0', nextIndex: 1 },
+    }
+    mock.setResponse('project.peek', { project: aborted })
+    // The host's run ended (aborted); that state change makes the workspace
+    // re-read the project record.
+    await w.setProps({ hostRun: { state: 'running', pipelineId: 'default', workspacePath: WORKSPACE } })
+    await w.setProps({ hostRun: { state: 'aborted', pipelineId: '', workspacePath: '' } })
+    await flushPromises()
+
+    expect(tab(w).find('.pe-lock').exists()).toBe(false)
+    expect(card(w, 'n-01-0').classes()).toContain('is-done')
+    // Executions offers Resume for the stopped run of this pipeline.
+    await tab(w).findAll('.pe-seg-btn')[2].trigger('click')
+    await flushPromises()
+    expect(tab(w).find('.px-bar').text()).toContain('Resume')
+    expect(tab(w).find('.px-gate').exists()).toBe(false)
+
+    // Resume: the host run is live again and the engine reports the gate.
+    await w.setProps({ hostRun: { state: 'running', pipelineId: 'default', workspacePath: WORKSPACE } })
+    mock.emit('pipeline.node_states_changed', {
+      workspace_path: WORKSPACE, pipeline_id: 'default', state: 'running',
+      nodes: { ...aborted.node_states, 'n-02-0': { status: 'awaiting' } },
+      gate: { gateId: 'n-02-0', label: 'Build', prompt: '', nextIndex: 1 },
+    })
+    await flushPromises()
+    expect(tab(w).find('.pe-lock').exists()).toBe(true)
+    // VTU's teleport stub remounts the editor on every prop change (the real
+    // Teleport does not), so open the tab again before reading it.
+    await tab(w).findAll('.pe-seg-btn')[2].trigger('click')
+    await flushPromises()
+    expect(tab(w).find('.px-gate').exists()).toBe(true)
+    expect(tab(w).find('.px-bar').text()).toContain('Abort')
+  })
 })

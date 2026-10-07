@@ -190,7 +190,12 @@ watch(
 onBeforeUnmount(stopLive)
 
 const gateComment = ref('')
-const isAwaitingGate = computed(() => n.value?.kind === 'gate' && (runState.value?.status === 'awaiting' || props.run.gate === n.value?.id))
+// Only a live run can take a decision: a run aborted at a gate keeps the gate
+// recorded (resume waits on it again) but nothing is listening for an answer.
+const isAwaitingGate = computed(() =>
+  n.value?.kind === 'gate' && props.run.state === 'running' &&
+  (runState.value?.status === 'awaiting' || props.run.gate === n.value?.id)
+)
 
 const elapsed = computed(() => formatElapsed(elapsedOf(runState.value, props.now)))
 const tokens = computed(() => formatTokens(runState.value?.tokens))

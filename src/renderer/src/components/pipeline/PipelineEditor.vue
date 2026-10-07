@@ -432,7 +432,7 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 </script>
 
 <template>
-  <div ref="root" class="pe" @keydown="onKey">
+  <div ref="root" class="pe" :class="{ 'is-run-stopped': run.state !== 'running' }" @keydown="onKey">
     <!-- Toolbar: view, tab, history, layout -->
     <div class="pe-bar">
       <!-- The host's own controls (back, pipeline name) lead the one bar, so
@@ -770,6 +770,10 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 .pe-stepper button:disabled { opacity: 0.4; cursor: default; }
 .pe-stepper button:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: -2px; }
 .pe-stepper-value { min-width: 72px; padding: 0 var(--space-2); text-align: center; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+/* A stopped run still shows where it stopped, but nothing on it is live:
+   no pulsing dots, no flowing links. */
+.pe.is-run-stopped :deep(.pnc-dot),
+.pe.is-run-stopped :deep(.pcv-edge.is-live) { animation: none; }
 .pe-state {
   display: grid;
   place-content: center;

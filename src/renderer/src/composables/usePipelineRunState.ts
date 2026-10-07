@@ -17,7 +17,16 @@ interface NodeStatesPayload {
   pipeline_id?: string
   state?: string
   nodes?: Record<string, NodeRunState>
-  gate?: string | null
+  /** The engine reports the paused gate as {gateId, label, prompt, nextIndex},
+   *  or {} when none (project.node_gate has the same shape). */
+  gate?: unknown
+}
+
+/** Node id of the gate a run is paused on, from either wire shape. */
+export function gateIdOf(raw: unknown): string | null {
+  if (typeof raw === 'string') return raw || null
+  const id = (raw as { gateId?: unknown } | null | undefined)?.gateId
+  return typeof id === 'string' && id ? id : null
 }
 
 /**
@@ -45,7 +54,7 @@ export function usePipelineRunState(
         pipelineId: String(p.pipeline_id ?? ''),
         state: String(p.state ?? 'idle'),
         nodes: (p.node_states as Record<string, NodeRunState> | undefined) ?? {},
-        gate: (p.node_gate as string | null | undefined) ?? null,
+        gate: gateIdOf(p.node_gate),
       }
     } catch {
       // A transport blip leaves the last known state; the broadcast catches up.
@@ -59,7 +68,7 @@ export function usePipelineRunState(
       pipelineId: p.pipeline_id ?? snapshot.value.pipelineId,
       state: p.state ?? snapshot.value.state,
       nodes: p.nodes ?? {},
-      gate: p.gate ?? null,
+      gate: gateIdOf(p.gate),
     }
   })
   onScopeDispose(() => off())

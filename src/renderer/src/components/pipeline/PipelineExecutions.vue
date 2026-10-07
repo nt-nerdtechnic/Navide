@@ -76,7 +76,16 @@ onScopeDispose(() => off())
 /** A record belongs here when it names this pipeline. Records written before
  *  runs carried a pipeline id cannot be attributed and are listed apart. */
 const mine = (r: RunRecord): boolean => r.pipeline_id === props.pipelineId
-const liveRun = computed(() => (current.value && (mine(current.value) || !current.value.pipeline_id) && props.run.pipelineId === props.pipelineId ? current.value : null))
+/** Live is the run snapshot's word, not the token store's: a resumed run may
+ *  have no token record yet, and its gate still needs answering. */
+const isLive = computed(() => props.run.state === 'running' && props.run.pipelineId === props.pipelineId)
+const LIVE_ID = '__live__'
+const liveRun = computed<RunRecord | null>(() => {
+  if (!isLive.value) return null
+  const c = current.value
+  if (c && (mine(c) || !c.pipeline_id)) return c
+  return { run_id: LIVE_ID }
+})
 const runs = computed(() => past.value.filter(mine))
 const unattributed = computed(() => past.value.filter((r) => !r.pipeline_id).length)
 

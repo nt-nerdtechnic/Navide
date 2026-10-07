@@ -55,3 +55,21 @@ describe('usePipelineRunState', () => {
     expect(state.isRunning('p1')).toBe(false)
   })
 })
+
+describe('usePipelineRunState – gate shape', () => {
+  let scope: EffectScope | undefined
+  afterEach(() => { scope?.stop(); scope = undefined })
+
+  it('reads the paused gate from the engine\'s object shape, and {} as none', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('project.peek', { project: { state: 'aborted', pipeline_id: 'p1', node_gate: { gateId: 'g1', nextIndex: 2 } } })
+    scope = effectScope()
+    const state = scope.run(() => usePipelineRunState(mock.backend, () => '/ws'))!
+    await flushPromises()
+    expect(state.run.value.gate).toBe('g1')
+    mock.emit('pipeline.node_states_changed', { workspace_path: '/ws', pipeline_id: 'p1', state: 'running', nodes: {}, gate: {} })
+    expect(state.run.value.gate).toBeNull()
+    mock.emit('pipeline.node_states_changed', { workspace_path: '/ws', pipeline_id: 'p1', state: 'running', nodes: {}, gate: { gateId: 'g2', label: 'OK?', prompt: '', nextIndex: 3 } })
+    expect(state.run.value.gate).toBe('g2')
+  })
+})
