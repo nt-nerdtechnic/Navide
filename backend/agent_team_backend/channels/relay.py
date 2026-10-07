@@ -137,6 +137,22 @@ def is_deny(request: RelayRequest, answer: dict[str, Any]) -> bool:
     return 1 <= n <= len(request.options) and bool(_DENY_OPTION_RE.match(request.options[n - 1]))
 
 
+def screen_approval(pane_id: str, prompt: str, workspace: str) -> Any:
+    """Navide Guard on an approval made away from the computer (chat, or an
+    agent through MCP): the guard Decision, whose action is "allow" only when
+    the prompt may be approved remotely. High/critical, unscreenable or empty
+    prompts need someone at the computer. Deterministic, never an LLM."""
+    from .. import guard
+
+    if not prompt.strip():
+        # Nothing to screen: a remote approval fails closed.
+        return guard.Decision("deny", "normal", (), "no prompt on screen to screen", False)
+    return guard.evaluate(
+        pane_id=pane_id, vendor="", tool="prompt", tool_input={"text": prompt},
+        cwd=workspace, workspace=workspace, source="relay",
+    )
+
+
 def same_prompt(a: str, b: str) -> bool:
     """Equal up to whitespace (the probe re-renders the same screen)."""
     return " ".join((a or "").split()) == " ".join((b or "").split())

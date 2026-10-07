@@ -1452,19 +1452,13 @@ class ChannelManager:
     def _guard_vetoes(self, request: relay.RelayRequest) -> bool:
         """Navide Guard on a remote approval: high/critical (or unscreenable)
         prompts need someone at the computer. Deterministic, never an LLM."""
-        from .. import guard
-
         if not request.prompt.strip():
             return True  # nothing to screen: a chat approval fails closed
         try:
             workspace = self._seams.pane_workspace(request.pane_id)
         except Exception:  # noqa: BLE001
             workspace = ""
-        decision = guard.evaluate(
-            pane_id=request.pane_id, vendor="", tool="prompt", tool_input={"text": request.prompt},
-            cwd=workspace, workspace=workspace, source="relay",
-        )
-        return decision.action != "allow"
+        return relay.screen_approval(request.pane_id, request.prompt, workspace).action != "allow"
 
     async def _link_chat(self, msg: InboundMessage, code: str) -> None:
         # The invite is already spent, so every way out must reach the waiting UI.
