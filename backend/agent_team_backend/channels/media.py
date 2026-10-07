@@ -18,7 +18,7 @@ import secrets
 import stat
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import BinaryIO
 
 MEDIA_DIRNAME = "channels-media"
@@ -166,9 +166,9 @@ def _too_broad(base: Path) -> bool:
     if base == type(base)(base.anchor) or len(base.parts) < 3 or os.path.ismount(base):
         return True
     home = _home()
-    if base == home or home.is_relative_to(base):
+    if _inside(home, base):  # home itself or a folder above it
         return True
-    return base.parent == home and base.name.lower() in USER_DATA_FOLDERS
+    return _folded(base.parent) == _folded(home) and base.name.casefold() in USER_DATA_FOLDERS
 
 
 def _scope(real: Path) -> tuple[str, ...]:
@@ -176,7 +176,19 @@ def _scope(real: Path) -> tuple[str, ...]:
     anchor, outside home), so a workspace that itself sits in ~/.ssh or a secrets/ folder
     is caught, not only what lies below the workspace."""
     home = _home()
-    return real.relative_to(home).parts if real.is_relative_to(home) else real.parts[1:]
+    return real.parts[len(home.parts):] if _inside(real, home) else real.parts[1:]
+
+
+def _folded(path: PurePath) -> tuple[str, ...]:
+    return tuple(part.casefold() for part in path.parts)
+
+
+def _inside(path: PurePath, folder: PurePath) -> bool:
+    """``path`` is ``folder`` or below it, ignoring case: APFS and NTFS volumes are
+    case-insensitive, so /Users/me/library/keychains is ~/Library/Keychains. Used only
+    where a match refuses; where a match admits (the workspace), case must agree."""
+    inner, outer = _folded(path), _folded(folder)
+    return inner[: len(outer)] == outer
 
 
 def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, str]:
@@ -240,7 +252,7 @@ def _within(path: Path, folder: Path) -> bool:
         folder = folder.resolve()
     except (OSError, RuntimeError):
         pass
-    return path == folder or path.is_relative_to(folder)
+    return _inside(path, folder)
 
 
 @dataclass

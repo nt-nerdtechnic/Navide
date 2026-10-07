@@ -30,8 +30,8 @@ def roaming_app_data() -> Path | None:
 # One list for macOS and Linux: a folder that does not exist on one simply never matches.
 _POSIX_SYSTEM_DIRS = (
     "/etc", "/private/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec", "/boot",
-    "/proc", "/sys", "/dev", "/root", "/var/root", "/private/var/root", "/System",
-    "/Library/Keychains", "/private/var/db", "/var/db", "/var/lib",
+    "/proc", "/sys", "/dev", "/run", "/var/run", "/var/spool", "/root", "/var/root",
+    "/private/var/root", "/System", "/Library/Keychains", "/private/var/db", "/var/db", "/var/lib",
 )
 # Per-user folders holding credentials, browser profiles (cookies, saved logins) and
 # private messages; macOS keeps them under ~/Library (Linux's are dot folders, refused
@@ -42,6 +42,13 @@ _POSIX_USER_SECRET_DIRS = (
     "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
     "Library/Application Support/Microsoft Edge", "Library/Application Support/BraveSoftware",
     "Library/Application Support/com.apple.TCC", "Library/Application Support/1Password",
+    "Library/Application Support/Arc", "Library/Application Support/Vivaldi",
+    "Library/Application Support/com.operasoftware.Opera", "Library/Application Support/Chromium",
+    "Library/Application Support/Slack", "Library/Application Support/discord",
+    "Library/Application Support/Signal", "Library/Application Support/Telegram Desktop",
+    "Library/Application Support/Code/User/globalStorage", "Library/Preferences",
+    # Snap-packaged apps (Chromium, Firefox ...) keep their profiles under ~/snap on Linux.
+    "snap",
 )
 
 

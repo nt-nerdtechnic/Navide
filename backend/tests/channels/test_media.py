@@ -344,3 +344,20 @@ def test_a_colon_reached_through_a_symlink_is_refused(ws: Path) -> None:
         pytest.skip("this filesystem cannot name a file with a colon")
     (ws / "out" / "plain.txt").symlink_to(target)
     assert media.resolve_outbound(str(ws / "out" / "plain.txt"), [ws]) == (None, "denied_name")
+
+
+# --- Review 3: case-insensitive volumes ------------------------------------------------
+
+
+def test_a_system_folder_matches_whatever_case_the_path_uses(tmp_path: Path, monkeypatch) -> None:
+    """APFS and NTFS are case-insensitive: /etc/HOSTS and /ETC/hosts name the same file."""
+    f = _file(tmp_path / "deep" / "Sys" / "hosts")
+    monkeypatch.setattr(media, "_system_dirs", lambda: [tmp_path / "deep" / "SYS"])
+    assert media.resolve_outbound(str(f), [tmp_path / "deep"]) == (None, "system")
+
+
+def test_home_and_user_folders_match_whatever_case_the_path_uses(home: Path, monkeypatch) -> None:
+    monkeypatch.setattr(media, "_home", lambda: Path(str(home).upper()))
+    f = _file(home / "Desktop" / "report.pdf")
+    assert media.resolve_outbound(str(f), [home / "Desktop"]) == (None, "broad_workspace")
+    assert media.resolve_outbound(str(f), [home]) == (None, "broad_workspace")

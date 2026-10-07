@@ -246,6 +246,10 @@ class TestPaths:
                     "Library/Safari", "Library/Messages", "Library/Mail"):
             assert home / rel in _darwin.paths.system_dirs(), rel
         assert Path("/var/root") in _darwin.paths.system_dirs()
+        for rel in ("Library/Application Support/Slack", "Library/Application Support/discord",
+                    "Library/Application Support/Code/User/globalStorage", "Library/Preferences", "snap"):
+            assert home / rel in _linux.paths.system_dirs(), rel
+        assert Path("/run") in _linux.paths.system_dirs()
         monkeypatch.setenv("SystemRoot", r"D:\Win")
         monkeypatch.setenv("ProgramData", r"D:\PD")
         monkeypatch.delenv("ProgramFiles", raising=False)
