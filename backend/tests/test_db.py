@@ -212,11 +212,19 @@ def test_commits_are_not_blocked_by_a_reader_holding_the_journal(db, tmp_path):
     journal = tmp_path / "navide.db-journal"
     db.kv_set("seed", 0, now=0)
     journal.touch()  # DELETE mode has no journal between commits
+    # Measured against the same commits with no reader, not a fixed budget: a
+    # loaded runner's fsyncs alone took ~10s for 50 commits (a writer test with
+    # no reader ran as long), while a reader stalling deletes costs ~1.4s of
+    # SQLite retry sleeps per commit or fails it outright.
+    started = time.monotonic()
+    for i in range(50):
+        db.kv_set(f"base{i}", i, now=i)
+    unblocked = time.monotonic() - started
     started = time.monotonic()
     with open(journal, "rb"):
         for i in range(50):
             db.kv_set(f"k{i}", i, now=i)
-    assert time.monotonic() - started < 10
+    assert time.monotonic() - started < 2 * unblocked + 5
     assert db.kv_get("k49") == 49
 
 
