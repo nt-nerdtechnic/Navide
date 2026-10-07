@@ -2781,6 +2781,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         outputLogFile: opts.outputLogFile ?? null,
         loginProfileId: opts.loginProfileId ?? null,
         isLogin: opts.isLogin ?? false,
+        ...(opts.accountDirLogin ? { accountDirLogin: true } : {}),
         replacesTerminalId: replacesPtyId || null,
         quotaTransactionId: opts.quotaTransactionId,
         quotaOriginalPaneId: opts.quotaOriginalPaneId,

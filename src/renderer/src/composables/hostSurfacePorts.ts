@@ -284,6 +284,7 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
       output_log_file: request.outputLogFile,
       login_profile_id: request.loginProfileId,
       is_login: request.isLogin,
+      ...(request.accountDirLogin ? { account_dir_login: true } : {}),
       replaces_terminal_id: request.replacesTerminalId,
       ...(request.quotaTransactionId ? { quota_transaction_id: request.quotaTransactionId } : {}),
       ...(request.quotaOriginalPaneId ? { quota_original_pane_id: request.quotaOriginalPaneId } : {}),

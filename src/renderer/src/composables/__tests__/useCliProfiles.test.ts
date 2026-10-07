@@ -1117,3 +1117,44 @@ describe('runAccountRestartBatch', () => {
     scope.stop()
   })
 })
+
+describe('useCliProfiles – claude accounts with their own config dir', () => {
+  it('loads account dirs and pane defaults, and follows the broadcast', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', {
+      profiles: [profile('p1', 'claude', 'A'), profile('p2', 'claude', 'B')],
+      defaults: { claude: 'p1' },
+      supported_agents: SUPPORTED,
+      accountDirs: { claude: { p2: { signedIn: true, email: 'b@x.com' } } },
+      paneDefaults: { claude: 'p2' },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(result.accountDirFor('claude', 'p2')).toEqual({ signedIn: true, email: 'b@x.com' })
+    expect(result.accountDirFor('claude', 'p1')).toBe(null)
+    expect(result.accountDirFor('claude', '__default__')).toBe(null)
+    expect(result.newPaneProfileId('claude')).toBe('p2')
+
+    // Clearing the last choice broadcasts {} — it must not be ignored.
+    mock.emit('cli_profiles.changed', { paneDefaults: {}, accountDirs: {}, reason: 'set_pane_default' })
+    expect(result.newPaneProfileId('claude')).toBe('p1')
+    expect(result.accountDirFor('claude', 'p2')).toBe(null)
+    scope.stop()
+  })
+
+  it('setPaneDefault sends the choice and adopts the returned map', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.set_pane_default', { paneDefaults: { claude: 'p2' } })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    const res = await result.setPaneDefault('claude', 'p2')
+    expect(res).toEqual({ ok: true })
+    const call = mock.sent.find((s) => s.type === 'cli_profiles.set_pane_default')
+    expect(call?.payload).toEqual({ agent_key: 'claude', profile_id: 'p2' })
+    expect(result.newPaneProfileId('claude')).toBe('p2')
+    scope.stop()
+  })
+})

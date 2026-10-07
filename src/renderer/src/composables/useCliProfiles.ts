@@ -211,6 +211,22 @@ export interface CliAccountDuplicate {
 // agentKey -> slotId -> duplicate group. Rows that are unique are absent.
 export type CliProfileDuplicates = Record<string, Record<string, CliAccountDuplicate>>
 
+// A claude account's sign-in inside its own config dir (CLAUDE_CONFIG_DIR).
+// `signedIn` = its panes can run there, apart from the live credential the
+// account switch swaps. `email` is the identity Claude Code recorded there.
+export interface CliAccountDir {
+  signedIn: boolean
+  email: string | null
+}
+
+// agentKey -> slotId -> account dir. Only claude has them; the built-in
+// Default (the real ~/.claude) is never listed.
+export type CliProfileAccountDirs = Record<string, Record<string, CliAccountDir>>
+
+// agentKey -> the profile new panes start on, when chosen apart from the
+// live credential's owner. Absent = new panes follow `defaults`.
+export type CliProfilePaneDefaults = Record<string, string>
+
 const DEFAULT_SLOT_ID = '__default__'
 // Backend setting keys whose change invalidates the cloud view (mirrors
 // sync_scopes.SCOPES_SETTING and server_link.ACCOUNT_EMAIL_SETTING).
@@ -283,6 +299,8 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   const defaultNames = ref<CliProfileDefaultNames>({})
   const identities = ref<CliProfileIdentities>({})
   const duplicates = ref<CliProfileDuplicates>({})
+  const accountDirs = ref<CliProfileAccountDirs>({})
+  const paneDefaults = ref<CliProfilePaneDefaults>({})
   const supportedAgents = ref<string[]>([])
   const loaded = ref<boolean>(false)
   const loading = ref<boolean>(false)
@@ -313,6 +331,8 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
         defaultNames?: CliProfileDefaultNames
         identities?: CliProfileIdentities
         duplicates?: CliProfileDuplicates
+        accountDirs?: CliProfileAccountDirs
+        paneDefaults?: CliProfilePaneDefaults
         supported_agents: string[]
         portable_credentials?: CliPortableCredentials
         portable_supported?: string[]
@@ -327,6 +347,8 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
       defaultNames.value = resp.payload.defaultNames ?? {}
       identities.value = resp.payload.identities ?? {}
       duplicates.value = resp.payload.duplicates ?? {}
+      accountDirs.value = resp.payload.accountDirs ?? {}
+      paneDefaults.value = resp.payload.paneDefaults ?? {}
       supportedAgents.value = resp.payload.supported_agents
       portable.value = resp.payload.portable_credentials ?? {}
       portableSupported.value = resp.payload.portable_supported ?? []
@@ -578,6 +600,36 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     return identities.value[agentKey]?.[profileId ?? DEFAULT_SLOT_ID] ?? null
   }
 
+  /** The account's sign-in inside its own config dir, or null when it has
+   *  none (every non-claude row, and the built-in Default). */
+  function accountDirFor(agentKey: string, profileId: string | null | undefined): CliAccountDir | null {
+    if (!profileId || profileId === DEFAULT_SLOT_ID) return null
+    return accountDirs.value[agentKey]?.[profileId] ?? null
+  }
+
+  /** The profile new panes of this agent start on: the pane default when one
+   *  is chosen, else the live credential's owner (null = built-in Default). */
+  function newPaneProfileId(agentKey: string): string | null {
+    return paneDefaults.value[agentKey] || defaultProfileId(agentKey)
+  }
+
+  /** Start new panes on an account that signed in inside its own config dir,
+   *  without swapping anything; null clears the choice. */
+  async function setPaneDefault(
+    agentKey: string,
+    profileId: string | null,
+  ): Promise<{ ok: boolean; code?: string; message?: string }> {
+    const resp = await backend.send<{ paneDefaults: CliProfilePaneDefaults }>(
+      'cli_profiles.set_pane_default',
+      { agent_key: agentKey, profile_id: profileId },
+    )
+    if (!resp.ok || !resp.payload) {
+      return { ok: false, code: resp.error?.code, message: resp.error?.message }
+    }
+    paneDefaults.value = resp.payload.paneDefaults
+    return { ok: true }
+  }
+
   /** Duplicate group one account row belongs to, or null when it is unique.
    *  `profileId` null = built-in Default. */
   function duplicateFor(agentKey: string, profileId: string | null): CliAccountDuplicate | null {
@@ -770,6 +822,8 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
       defaultNames?: CliProfileDefaultNames
       identities?: CliProfileIdentities
       duplicates?: CliProfileDuplicates
+      accountDirs?: CliProfileAccountDirs
+      paneDefaults?: CliProfilePaneDefaults
       portable_credentials?: CliPortableCredentials
     }
     if (payload?.profiles) profiles.value = payload.profiles
@@ -787,6 +841,9 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     // broadcasts an empty map, and skipping falsy payloads would keep the
     // stale warning on screen.
     if (payload?.duplicates !== undefined) duplicates.value = payload.duplicates
+    if (payload?.accountDirs !== undefined) accountDirs.value = payload.accountDirs
+    // Presence, not truthiness: clearing the last choice broadcasts {}.
+    if (payload?.paneDefaults !== undefined) paneDefaults.value = payload.paneDefaults
   })
 
   // The cloud view depends on two settings besides the rows themselves: which
@@ -851,6 +908,11 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     aliasFor,
     identityFor,
     duplicateFor,
+    accountDirs,
+    paneDefaults,
+    accountDirFor,
+    newPaneProfileId,
+    setPaneDefault,
     portable,
     portableSupported,
     portableSupportedFor,
@@ -927,6 +989,19 @@ export type CliAccountSwitchHandler = (
 
 export const cliAccountSwitchKey: InjectionKey<CliAccountSwitchHandler> =
   Symbol('cli-account-switch')
+
+/** Per-pane account actions for claude accounts with their own config dir.
+ *  Provided by the main window, which owns the panes and the login flow. */
+export interface CliAccountDirActions {
+  /** Reopen `paneId` on `profileId`'s own config dir and resume its
+   *  conversation (asks first: the turn in progress stops). */
+  continueWith: (paneId: string, profileId: string) => Promise<void>
+  /** Sign `profileId` in inside its own config dir. */
+  signIn: (agentKey: string, profileId: string) => void
+}
+
+export const cliAccountDirActionsKey: InjectionKey<CliAccountDirActions> =
+  Symbol('cli-account-dir-actions')
 
 /** App-shell capabilities the switch flow needs but a component cannot own. */
 export interface CliAccountSwitchCaps {

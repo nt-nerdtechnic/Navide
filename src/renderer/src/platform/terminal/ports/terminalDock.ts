@@ -27,6 +27,9 @@ export interface TerminalSpawnOptions {
    *  `loginProfileId`, which only chooses an isolated home: a live login
    *  (signing in to the already-active account) sets this and not that. */
   isLogin?: boolean
+  /** A claude sign-in inside the pane's account's own config dir (the
+   *  account is the pane's `metadata.profile_id`). */
+  accountDirLogin?: boolean
 }
 
 export interface TerminalCreateRequest {
@@ -44,6 +47,7 @@ export interface TerminalCreateRequest {
   outputLogFile: string | null
   loginProfileId: string | null
   isLogin: boolean
+  accountDirLogin?: boolean
   replacesTerminalId: string | null
 }
 

@@ -82,6 +82,7 @@ import { createHostGitSettingsPort, createHostKeybindingsPort, createHostTermina
 import { useSettings } from './composables/useSettings'
 import { useRoles } from './composables/useRoles'
 import {
+  cliAccountDirActionsKey,
   cliAccountSwitchKey,
   createCliAccountSwitchHandler,
   forcedRestartAgentKey,
@@ -6566,6 +6567,8 @@ interface SpawnInternal {
    *  marker bootstrap, whose dismissStartupDialog + pasted marker + Enter
    *  would inject input into the CLI's interactive sign-in wizard. */
   isLogin?: boolean
+  /** With `isLogin`: a claude sign-in inside `profileId`'s own config dir. */
+  accountDirLogin?: boolean
   /** Runtime-only restore marker kept on replacement panes until first output. */
   restoring?: boolean
 }
@@ -6913,6 +6916,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       quotaOriginalPaneId: opts.quotaOriginalPaneId,
       loginProfileId: opts.loginProfileId,
       isLogin: opts.isLogin,
+      accountDirLogin: opts.accountDirLogin,
     })
 
     // The path above is derived from THIS pane's id, but a spawn that
@@ -7004,6 +7008,8 @@ async function onManualSpawn(payload: SpawnPayload, quota?: { transactionId: str
     runGroupId: spawnGroupId || undefined,
     loginProfileId: payload.loginProfileId,
     isLogin: payload.isLogin,
+    accountDirLogin: payload.accountDirLogin,
+    profileId: payload.profileId,
     quotaTransactionId: quota?.transactionId,
     quotaOriginalPaneId: quota?.originalPaneId,
   })
@@ -7066,18 +7072,27 @@ async function onManualSpawn(payload: SpawnPayload, quota?: { transactionId: str
 // window closes the pane and toasts when the harvest broadcast arrives.
 const pendingLoginPanes = new Map<string, { paneId: string; agentKey: string }>()
 
-async function onCliLoginSpawn(agentKey: string, loginProfileId?: string): Promise<void> {
+async function onCliLoginSpawn(
+  agentKey: string,
+  loginProfileId?: string,
+  opts?: { accountDirProfileId?: string },
+): Promise<void> {
   if (!currentWorkspace.value) {
     notifyRestore.toast(i18n.global.t('settings.accounts.cli.login-no-workspace'), { type: 'error' })
     return
   }
+  // A sign-in inside the account's own config dir runs as that account's pane
+  // (its pin), not in a login home: Claude Code keeps the login there.
+  const dirProfileId = opts?.accountDirProfileId
   const paneId = await onManualSpawn({
     agentKey,
     roleKey: '' as RoleKey,
     stageId: '' as StageId,
     workspacePath: currentWorkspace.value,
-    loginProfileId,
+    loginProfileId: dirProfileId ? undefined : loginProfileId,
     isLogin: true,
+    accountDirLogin: dirProfileId ? true : undefined,
+    profileId: dirProfileId,
   })
   const ref = paneId ? paneRefs[paneId] : null
   if (!paneId || (ref?.status as unknown as string) === 'error') {
@@ -7090,7 +7105,8 @@ async function onCliLoginSpawn(agentKey: string, loginProfileId?: string): Promi
     return
   }
   showSettings.value = false
-  if (loginProfileId) pendingLoginPanes.set(loginProfileId, { paneId, agentKey })
+  const pendingProfileId = dirProfileId ?? loginProfileId
+  if (pendingProfileId) pendingLoginPanes.set(pendingProfileId, { paneId, agentKey })
   // The user must see the pane that is waiting for the browser authorization.
   noteViewJump('account login spawn', { paneId })
   onFocusPane(paneId)
@@ -7746,6 +7762,9 @@ async function rebuildPaneViaResume(
     preserveScrollback?: boolean
     quotaCommit?: QuotaCommitEvent
     quotaOriginalPaneId?: string
+    /** Resume on this CLI account instead of the pane's own — "continue on
+     *  this account" for a claude account with its own config dir. */
+    profileId?: string
   }
 ): Promise<RebuildFailure | undefined> {
   const pane = panes.value.find((p) => p.id === paneId)
@@ -7921,7 +7940,7 @@ async function rebuildPaneViaResume(
       skipRoleInjection: true,
       restoreMode: 'fresh',
       sessionHomeId: snap.sessionHomeId,
-      profileId: opts?.quotaCommit?.toSlotId ?? snap.profileId,
+      profileId: opts?.quotaCommit?.toSlotId ?? opts?.profileId ?? snap.profileId,
       resumeSessionId: sessionId,
       model: snap.model,
       effort: snap.effort,
@@ -7956,6 +7975,9 @@ async function rebuildPaneViaResume(
           session_home_id: snap.sessionHomeId || '',
           run_group_id: snap.runGroupId || '',
           output_log_file: panes.value.find((p) => p.id === newId)?.outputLogFile ?? '',
+          // The account the replacement runs on — a "continue on this account"
+          // changed it — so a later restore comes back on the same one.
+          profile_id: revived?.profileId ?? '',
         })
       } else if (snap.stageIndex >= 0 && snap.slotLabel) {
         // Rebuild replaces the runtime pane id. Keep the stable pipeline slot
@@ -8036,6 +8058,29 @@ async function confirmBatchRebuild(count: number): Promise<boolean> {
 // restarts its own panes via restartAgentPanes below. Provided (not
 // prop-threaded) so any descendant switch surface picks it up; windows
 // without it fall back to a plain setDefault inside the components.
+// Per-pane actions for claude accounts with their own config dir (the usage
+// badge's account list): reopen one pane on another account, resuming its
+// conversation, or sign an account in inside its own dir. Neither touches the
+// live credential or any other pane.
+provide(cliAccountDirActionsKey, {
+  continueWith: async (paneId, profileId) => {
+    const label = accountLabel(cliProfilesApi, 'claude', profileId, i18n.global.t)
+    const ok = await notifyRestore.confirm(
+      i18n.global.t('usage.continue-with-confirm-body', { account: label }),
+      {
+        title: i18n.global.t('usage.continue-with-confirm-title', { account: label }),
+        confirmText: i18n.global.t('usage.continue-with-confirm-confirm'),
+        cancelText: i18n.global.t('usage.continue-with-confirm-cancel'),
+      }
+    )
+    if (!ok) return
+    await rebuildPaneViaResume(paneId, { profileId, forceWhenRunning: true })
+  },
+  signIn: (agentKey, profileId) => {
+    void onCliLoginSpawn(agentKey, undefined, { accountDirProfileId: profileId })
+  },
+})
+
 provide(
   cliAccountSwitchKey,
   createCliAccountSwitchHandler(cliProfilesApi, {
@@ -20758,6 +20803,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :preparing-label="panePreparationLabel(p)"
           :terminal-port="terminalPort"
           :cli-profiles="cliProfilesApi"
+          :profile-id="p.profileId"
           :workspace-path="p.workspacePath"
           :mention-candidates="mentionCandidatesFor"
           @mention-pick="rememberMentionPick"

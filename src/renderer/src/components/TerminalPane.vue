@@ -90,6 +90,8 @@ interface Props {
   continueAvailable?: boolean
   terminalPort: TerminalDockPort
   cliProfiles: ReturnType<typeof useCliProfiles>
+  /** The CLI account this pane was started on (its restore pin). */
+  profileId?: string
   workspacePath?: string
   /** Resolves the addresses offered by this pane's @-mention menu (self
    *  excluded), with the group and status words already translated by the host.
@@ -704,7 +706,14 @@ onMounted(() => {
           :style="statusBadgeVars"
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
-        <UsageBadge v-if="agentKey" data-tour="usage-badge" :agent-key="agentKey" :cli-profiles="cliProfiles" />
+        <UsageBadge
+          v-if="agentKey"
+          data-tour="usage-badge"
+          :agent-key="agentKey"
+          :cli-profiles="cliProfiles"
+          :pane-id="paneId"
+          :pane-profile-id="profileId"
+        />
         <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>

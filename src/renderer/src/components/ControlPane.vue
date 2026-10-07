@@ -252,6 +252,11 @@ export interface SpawnPayload {
    *  at an interactive sign-in wizard, so nothing may inject input into it.
    *  Only set by that flow — never by the control pane itself. */
   isLogin?: boolean
+  /** With `isLogin`: sign `profileId`'s claude account in inside its own
+   *  config dir. Only set by that flow. */
+  accountDirLogin?: boolean
+  /** The CLI account the pane starts on (its pin). */
+  profileId?: string
 }
 
 export interface ResumePayload {

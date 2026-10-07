@@ -15,7 +15,11 @@ import {
   usageFor,
   type UsageWindow
 } from '../composables/useUsage'
-import { cliAccountSwitchKey, type useCliProfiles } from '../composables/useCliProfiles'
+import {
+  cliAccountDirActionsKey,
+  cliAccountSwitchKey,
+  type useCliProfiles,
+} from '../composables/useCliProfiles'
 import {
   DEFAULT_PROFILE_ID,
   accountChipLabel,
@@ -33,9 +37,25 @@ import { i18n } from '@navide/plugin-ui/foundation'
 const props = defineProps<{
   agentKey: string
   cliProfiles: ReturnType<typeof useCliProfiles>
+  /** The pane this badge sits on, and the account it was started on. */
+  paneId?: string
+  paneProfileId?: string
 }>()
 
-const snap = computed(() => usageFor(props.agentKey))
+// A pane started on an account that signed in inside its own config dir runs
+// on that account, whatever the live credential is — so its badge shows that
+// account and that account's figure. Every other pane runs on the live
+// credential and keeps the badge it always had.
+const paneDirProfileId = computed(() => {
+  const id = props.paneProfileId ?? ''
+  return props.cliProfiles.accountDirFor?.(props.agentKey, id)?.signedIn ? id : ''
+})
+
+const snap = computed(() =>
+  paneDirProfileId.value
+    ? accountUsageFor(props.agentKey, paneDirProfileId.value)
+    : usageFor(props.agentKey)
+)
 const remaining = computed(() => remainingPercent(snap.value))
 const tier = computed(() => (remaining.value === null ? 'ok' : remainingTier(remaining.value)))
 const expired = computed(() => snap.value?.status === 'expired')
@@ -88,7 +108,9 @@ const visible = computed(
 // that needs the backend's per-pane profileId, which the renderer has no
 // access to yet.
 const chipProfileId = computed(
-  () => props.cliProfiles.defaultProfileId(props.agentKey) ?? DEFAULT_PROFILE_ID
+  () =>
+    paneDirProfileId.value ||
+    (props.cliProfiles.defaultProfileId(props.agentKey) ?? DEFAULT_PROFILE_ID)
 )
 const chipSlot = computed(() => (chipProfileId.value === DEFAULT_PROFILE_ID ? null : chipProfileId.value))
 const chipAlias = computed(() => props.cliProfiles.aliasFor?.(props.agentKey, chipSlot.value) ?? '')
@@ -133,7 +155,20 @@ const badgeSmall = computed(() => {
 // Account-switch block: only shown when this agent has ≥1 extra profile.
 const canSwitch = computed(() => props.cliProfiles.hasProfiles(props.agentKey))
 const switchProfiles = computed(() => props.cliProfiles.profilesForAgent(props.agentKey))
-const activeProfileId = computed(() => props.cliProfiles.defaultProfileId(props.agentKey) ?? '')
+// The account NEW panes start on — the pane default when one is chosen, else
+// the live credential's owner. The tick marks this; with no account dirs it
+// is exactly the active account it always was.
+const activeProfileId = computed(
+  () =>
+    props.cliProfiles.newPaneProfileId?.(props.agentKey) ??
+    props.cliProfiles.defaultProfileId(props.agentKey) ??
+    ''
+)
+// Some account runs on its own config dir: the list then chooses the account
+// for new panes rather than switching every pane, and says so.
+const anyAccountDir = computed(() =>
+  switchProfiles.value.some((p) => props.cliProfiles.accountDirFor?.(props.agentKey, p.id)?.signedIn)
+)
 // Prompt the account list when the quota is low OR gone. Exhausted is the
 // stronger case: switching is the only thing that gets work moving again, and
 // nothing here does it automatically — a swap exchanges live keychain
@@ -284,6 +319,25 @@ async function selectProfile(id: string): Promise<void> {
   const target = id || null
   switching.value = id
   try {
+    // An account with its own config dir is simply chosen for new panes:
+    // nothing is swapped and no running pane changes account.
+    if (accountDirSignedIn(id)) {
+      const chosen = await props.cliProfiles.setPaneDefault(props.agentKey, id)
+      if (!chosen.ok && chosen.message) {
+        void notifyAlert(chosen.message, { title: t('cli-account.switch-title') })
+      }
+      return
+    }
+    // Any other account goes through the live-credential switch, as before;
+    // new panes then follow it again.
+    if (props.cliProfiles.paneDefaults?.value?.[props.agentKey]) {
+      const cleared = await props.cliProfiles.setPaneDefault(props.agentKey, null)
+      if (!cleared.ok) {
+        if (cleared.message) void notifyAlert(cleared.message, { title: t('cli-account.switch-title') })
+        return
+      }
+      if ((props.cliProfiles.defaultProfileId(props.agentKey) ?? '') === id) return
+    }
     const res = switchAccount
       ? await switchAccount(props.agentKey, target)
       : await props.cliProfiles.setDefault(props.agentKey, target)
@@ -296,6 +350,43 @@ async function selectProfile(id: string): Promise<void> {
   } finally {
     switching.value = null
   }
+}
+
+// ── Accounts with their own config dir ──────────────────────────────────────
+const dirActions = inject(cliAccountDirActionsKey, null)
+
+function accountDirSignedIn(profileId: string): boolean {
+  return !!props.cliProfiles.accountDirFor?.(props.agentKey, profileId)?.signedIn
+}
+
+// "Continue on this account": offered for an account this pane is not on,
+// once that account can run on its own config dir.
+function canContinueWith(profileId: string): boolean {
+  return (
+    !!dirActions &&
+    !!props.paneId &&
+    accountDirSignedIn(profileId) &&
+    profileId !== (paneDirProfileId.value || props.paneProfileId)
+  )
+}
+
+// A claude account that has not signed in inside its own config dir yet still
+// runs on the swapped live credential. Say so on its row and offer the
+// sign-in; nothing about the old login is removed.
+function needsDirSignIn(profileId: string): boolean {
+  return !!dirActions && props.agentKey === 'claude' && !accountDirSignedIn(profileId)
+}
+
+function continueWith(profileId: string): void {
+  if (!dirActions || !props.paneId) return
+  closePop()
+  void dirActions.continueWith(props.paneId, profileId)
+}
+
+function signInDir(profileId: string): void {
+  if (!dirActions) return
+  closePop()
+  dirActions.signIn(props.agentKey, profileId)
 }
 
 // ── Renaming an account from the list ───────────────────────────────────────
@@ -570,7 +661,9 @@ function acctTitle(profileId: string | null): string {
       </div>
       <div class="usage-pop-switch">
         <div v-if="canSwitch" class="usage-pop-switch-title" :class="{ crit: critSwitch }">
-          {{ critSwitch ? $t('usage.switch-low') : $t('usage.switch-title') }}
+          {{ critSwitch
+            ? $t('usage.switch-low')
+            : anyAccountDir ? $t('usage.pane-default-title') : $t('usage.switch-title') }}
         </div>
         <div v-if="canSwitch" class="usage-acct-list" role="listbox">
           <!-- Each row is a button so a click anywhere on it switches; the
@@ -683,6 +776,22 @@ function acctTitle(profileId: string | null): string {
               >
               <span v-if="switching === p.id" class="usage-acct-spin" aria-hidden="true" />
               <span v-else-if="activeProfileId === p.id" class="usage-acct-tick">✓</span>
+            </button>
+            <button
+              v-if="renamingId !== p.id && canContinueWith(p.id)"
+              class="usage-acct-continue"
+              :title="$t('usage.continue-with-tooltip', { account: rowLabel(p.id) })"
+              @click.stop="continueWith(p.id)"
+            >
+              {{ $t('usage.continue-with') }}
+            </button>
+            <button
+              v-else-if="renamingId !== p.id && needsDirSignIn(p.id)"
+              class="usage-acct-signin"
+              :title="$t('usage.dir-sign-in-tooltip')"
+              @click.stop="signInDir(p.id)"
+            >
+              {{ $t('usage.dir-sign-in') }}
             </button>
             <button
               v-if="renamingId !== p.id"
@@ -958,6 +1067,28 @@ function acctTitle(profileId: string | null): string {
 }
 .usage-acct-edit:hover {
   color: var(--accent-fg);
+  background: var(--bg-hover);
+}
+/* Row actions for accounts with their own config dir. Always visible: the
+   sign-in hint is how the user learns an account still needs it. */
+.usage-acct-continue,
+.usage-acct-signin {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-fg);
+  font-size: var(--font-3xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.usage-acct-signin {
+  color: var(--attention-fg);
+}
+.usage-acct-continue:hover,
+.usage-acct-signin:hover {
   background: var(--bg-hover);
 }
 .usage-acct-rename {

@@ -113,6 +113,14 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
       expect(harness.sent[0].payload.metadata).toEqual({ origin: 'contract' })
     })
 
+    it('sends an account-dir sign-in as a top-level flag, and nothing when unset', async () => {
+      const harness = createHarness()
+      await harness.port.create({ ...createRequest(), accountDirLogin: true }, 22)
+      await harness.port.create(createRequest(), 22)
+      expect(harness.sent[0].payload).toMatchObject({ account_dir_login: true, is_login: true })
+      expect(harness.sent[1].payload).not.toHaveProperty('account_dir_login')
+    })
+
     it('registers the embedded panel only through the panel-only roster handlers', async () => {
       const harness = createHarness()
       const pane = {
