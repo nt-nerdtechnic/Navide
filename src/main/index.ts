@@ -153,6 +153,7 @@ import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './u
 import { PlanWindowRegistry } from './plan-windows'
 import { createTokenMonitorWindowOpener } from './token-monitor-window'
 import { warnMain } from './main-log'
+import { watchRendererCrashes } from './renderer-crash-reload'
 import { createPlansBackendStoppedRelay } from './plansBackendStoppedRelay'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
@@ -621,6 +622,7 @@ async function createWindow(
     }
   })
   mainWindows.add(win)
+  watchRendererCrashes(win, { kind: params.detached_group ? 'detached-group' : 'main', log: warnMain })
   // In-window plugin contributions attach as <webview> guests. Main overrides
   // their webPreferences here, so the tag the renderer wrote cannot widen what
   // a guest gets, and binds each guest to the identity reserved for it.
@@ -784,7 +786,10 @@ const requestTokenMonitor = createTokenMonitorWindowOpener({
   load: loadWindow,
   // Machine-wide: no workspace_path, so the restore filter reopens it without
   // asking which workspace came back.
-  onWindowCreated: (win) => trackAuxWindow(win, { kind: 'token-monitor' }),
+  onWindowCreated: (win) => {
+    watchRendererCrashes(win, { kind: 'token-monitor', log: warnMain })
+    trackAuxWindow(win, { kind: 'token-monitor' })
+  },
 })
 
 function backendInfoPayload() {
@@ -4043,6 +4048,7 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
     }
   })
   planWindows.set(workspacePath, win)
+  watchRendererCrashes(win, { kind: 'plans', log: warnMain })
   // Restored as a plain Plans window: which of the two implementations serves
   // it next launch is decided then, by the router, exactly as it is here.
   trackAuxWindow(win, { kind: 'plans', workspace_path: workspacePath })
