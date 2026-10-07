@@ -119,7 +119,8 @@ async def test_allow_presses_the_menu_and_is_disclosed_and_audited(monkeypatch, 
     assert result["ok"] is True and result["sent"] is True
     assert result["answered_by_agent"] is True
     assert "caller" in result["disclosure"]
-    assert window.sent == [{"paneId": "pw", "answer": {"kind": "permission", "choice": "allow"}}]
+    assert window.sent == [{"paneId": "pw", "answer": {"kind": "permission", "choice": "allow"},
+                            "expected": {"prompt": NORMAL, "options": MENU}}]
     (entry,) = _clean.audit_list(pane_id="pw")
     assert entry["source"] == "agent" and entry["tool"] == "answer_prompt"
     assert entry["action"] == "allow"
@@ -132,7 +133,8 @@ async def test_an_option_number_presses_that_option(monkeypatch) -> None:
     window = _window(monkeypatch, prompt="Which way?", options=options, kind="question")
     result = await plan_mcp.cli_answer_prompt("worker", "2", await _fingerprint(), _ctx())
     assert result["ok"] is True
-    assert window.sent == [{"paneId": "pw", "answer": {"kind": "question", "option": 2}}]
+    assert [a["answer"] for a in window.sent] == [{"kind": "question", "option": 2}]
+    assert window.sent[0]["expected"] == {"prompt": "Which way?", "options": options}
     assert result["chosen"] == "Ship as is"
 
 
@@ -182,7 +184,7 @@ async def test_guard_never_blocks_refusing_a_critical_prompt(monkeypatch) -> Non
     window = _window(monkeypatch, prompt=CRITICAL)
     result = await plan_mcp.cli_answer_prompt("worker", "deny", await _fingerprint(), _ctx())
     assert result["ok"] is True
-    assert window.sent == [{"paneId": "pw", "answer": {"kind": "permission", "choice": "deny"}}]
+    assert [a["answer"] for a in window.sent] == [{"kind": "permission", "choice": "deny"}]
 
 
 async def test_a_free_text_row_is_refused(monkeypatch) -> None:
@@ -240,6 +242,21 @@ async def test_a_window_that_refuses_the_keys_is_reported_unsent(monkeypatch) ->
     result = await plan_mcp.cli_answer_prompt("worker", "allow", await _fingerprint(), _ctx())
     assert result["ok"] is False and result["sent"] is False
     assert "no option menu" in result["error"]
+
+
+async def test_a_prompt_that_changes_before_the_keys_go_in_is_refused(monkeypatch, _clean) -> None:
+    """Guard screened prompt A; by the time the keys reach the window a riskier
+    prompt B is on screen. The window compares what it shows with the prompt
+    sent along, and its refusal comes back as prompt-changed, not as sent."""
+    _seed()
+    window = _window(monkeypatch)
+    window.send_reply = {"ok": True, "result": {
+        "ok": False, "sent": False, "error": "the prompt on screen changed", "error_code": "prompt-changed"}}
+    result = await plan_mcp.cli_answer_prompt("worker", "allow", await _fingerprint(), _ctx())
+    assert result["ok"] is False and result["sent"] is False
+    assert result["error_code"] == "prompt-changed"
+    (entry,) = _clean.audit_list(pane_id="pw")
+    assert entry["action"] == "error" and "not sent" in entry["excerpt"]
 
 
 async def test_the_raw_key_channel_stays_human_only() -> None:

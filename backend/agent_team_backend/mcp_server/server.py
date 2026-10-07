@@ -4221,9 +4221,11 @@ async def cli_answer_prompt(
     agents; this tool is the fenced way to the same keys.
 
     Returns {ok, target, sent, answer, chosen?, answered_by_agent,
-    disclosure, guard?}. `sent` true means the keys were written into the
-    pane after the window re-checked its menu; it is not a receipt from the
-    CLI — cli_get_status or cli_wait_idle tells you what happened next.
+    disclosure, guard?}. The window re-reads its screen right before pressing
+    and refuses with "prompt-changed" when the prompt checked here (and
+    screened by Guard) is no longer the one showing. `sent` true means the
+    keys were written into the pane; it is not a receipt from the CLI —
+    cli_get_status or cli_wait_idle tells you what happened next.
     """
     from agent_team_backend import message_routing
     from agent_team_backend.channels import relay
@@ -4306,7 +4308,11 @@ async def cli_answer_prompt(
                 guard={"level": decision.level, "reason": decision.reason, "rule_ids": list(decision.rule_ids)})
 
     sent_reply = await _ui_request(pane.workspace_path, "invoke", caller=_pane_caller(pane.pane_id),
-                                   action="ui.pane.sendKeys", args={"paneId": pane.pane_id, "answer": payload})
+                                   action="ui.pane.sendKeys",
+                                   # The window presses only while this same prompt is on screen: Guard
+                                   # screened it, and one that has replaced it since must not be answered.
+                                   args={"paneId": pane.pane_id, "answer": payload,
+                                         "expected": {"prompt": prompt, "options": options}})
     keys = sent_reply.get("result") if isinstance(sent_reply.get("result"), dict) else {}
     sent = bool(sent_reply.get("ok")) and keys.get("ok", True) is not False and bool(keys.get("sent"))
     _record_agent_answer(pane, who, what if sent else f"{what} (not sent)", decision, "allow" if sent else "error")
@@ -4321,7 +4327,7 @@ async def cli_answer_prompt(
         out["guard"] = {"level": decision.level, "reason": decision.reason}
     if not sent:
         out["error"] = str(keys.get("error") or sent_reply.get("error") or "not sent")
-        out["error_code"] = str(sent_reply.get("error_code") or "not-sent")
+        out["error_code"] = str(keys.get("error_code") or sent_reply.get("error_code") or "not-sent")
     return out
 
 

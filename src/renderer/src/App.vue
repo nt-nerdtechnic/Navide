@@ -9564,7 +9564,7 @@ registerCommand('ui.pane.getStatus', (args) => {
 // keys only (lib/paneAnswerKeys). Refusals are results, not throws, so the
 // backend can relay the reason to the chat.
 registerCommand('ui.pane.sendKeys', async (args) => {
-  const a = (args ?? {}) as { paneId?: string; answer?: PaneAnswer }
+  const a = (args ?? {}) as { paneId?: string; answer?: PaneAnswer; expected?: { prompt: string; options: string[] } }
   if (!a.paneId) throw new Error(`ui.pane.sendKeys requires ${PANE_ID_HINT}`)
   const pane = panes.value.find((p) => p.id === a.paneId)
   if (!pane) throw new Error(`ui.pane.sendKeys: pane "${a.paneId}" not found`)
@@ -9576,8 +9576,11 @@ registerCommand('ui.pane.sendKeys', async (args) => {
     awaitingKind: ref.awaitingKind as string | null | undefined,
     screen: (ref.readScreenTail?.(AWAITING_SCREEN_LINES) as string | undefined) ?? '',
     answer: a.answer,
+    expected: a.expected,
   })
-  if (!resolved.ok) return { ok: false, sent: false, error: resolved.error }
+  if (!resolved.ok) {
+    return { ok: false, sent: false, error: resolved.error, ...(resolved.errorCode ? { error_code: resolved.errorCode } : {}) }
+  }
   const resp = await backend.send('terminal.input', { terminal_session_id: ref.sessionId as string, data: resolved.keys })
   return resp.ok ? { ok: true, sent: true } : { ok: false, sent: false, error: resp.error?.message ?? 'terminal.input failed' }
 })
