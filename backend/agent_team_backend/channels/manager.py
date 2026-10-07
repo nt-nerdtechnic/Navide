@@ -1201,6 +1201,9 @@ class ChannelManager:
         # Only an MSG block to the chat sends files; elsewhere the lines are dropped, not posted.
         body = media.split_attachments(strip_msg_markers(text))[0]
         await self._post_reply(pending, summarize(body) if pending.summary and not bodies else body)
+        if bodies and paths:
+            # The text went as the turn text instead; the files the reply named still go.
+            await self._send_attachments(pending, paths)
 
     async def _post_reply(self, pending: _Pending, body: str) -> bool:
         """Chunk and send one reply; False when a chunk could not be sent."""

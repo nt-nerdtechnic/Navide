@@ -333,3 +333,20 @@ async def test_a_media_folder_that_cannot_be_made_still_delivers_the_text(media_
     await _send(media_env, "caption", [PHOTO])
     assert media_env.fake.delivered[-1][1] == "caption"
     assert _said(media_env, "photo.jpg")
+
+
+async def test_files_still_go_when_the_reply_text_falls_back_to_the_turn_text(
+        media_env: Env, ws: Path, monkeypatch) -> None:
+    real_post = media_env.m._post_reply
+    calls: list[str] = []
+
+    async def first_fails(pending, body):
+        calls.append(body)
+        return False if len(calls) == 1 else await real_post(pending, body)
+
+    monkeypatch.setattr(media_env.m, "_post_reply", first_fails)
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"here it is\n---ATTACH--- {ws}/out/chart.png"))
+    await _until(lambda: m.files)
+    assert m.files[0][2] == "chart.png" and len(calls) == 2
