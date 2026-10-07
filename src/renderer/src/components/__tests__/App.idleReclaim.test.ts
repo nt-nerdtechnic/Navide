@@ -169,7 +169,8 @@ describe('idle reclaim wiring', () => {
     const fn = block('async function reclaimPanesNow(', 'onMounted(() => {')
     expect(fn).toContain(': reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now())')
     expect(fn).toContain('? namedReclaimBlockedBy(reclaimCandidate(pane), Date.now())')
-    expect(fn).toContain('if (blocked !== null) continue')
+    // A blocked pane is skipped (and, when a caller collects outcomes, recorded).
+    expect(fn).toMatch(/if \(blocked !== null\) \{\n[^\n]*\n\s*continue\n/)
   })
 
   it('offers the same candidate list to every reclaim-now control', () => {
