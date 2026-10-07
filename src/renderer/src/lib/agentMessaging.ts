@@ -54,6 +54,9 @@ export const MSG_FORMAT_PREFIX = `${MSG_INJECTED_PREFIX} message not recognized`
  *  forwarded by Navide in its place. Its own prefix because the parent must be
  *  able to tell a stand-in from the child's own words before acting on it. */
 export const MSG_FALLBACK_PREFIX = `${MSG_INJECTED_PREFIX} fallback report`
+/** Told to a parent after a relaunch: which of its spawned panes were working
+ *  when the app closed, and which of them are back. */
+export const MSG_INTERRUPTED_PREFIX = `${MSG_INJECTED_PREFIX} children interrupted`
 
 /** True when a turn's text is something Navide injected rather than something
  *  the agent wrote — a CLI reader echoes an injection back as a user record,
@@ -533,6 +536,27 @@ export function renderFallbackReport(turnText: string): string {
   return (
     `${MSG_FALLBACK_PREFIX} — 這個 pane 的 turn 結束時沒有輸出 ${MSG_START} 區塊，` +
     `以下是它這個 turn 的最後輸出，由 Navide 代為轉交，不是它自己寫的回報：\n\n${tail}`
+  )
+}
+
+/** Notice for a parent whose spawned panes a relaunch interrupted. Resuming
+ *  only brings the conversation back — none of them was told to carry on, so
+ *  whether to continue or re-dispatch is the parent's decision. Returns '' for
+ *  no children. */
+export function renderInterruptedChildrenNotice(
+  children: readonly { name: string; resumed: boolean }[],
+): string {
+  if (children.length === 0) return ''
+  const lines = children.map((c) =>
+    c.resumed
+      ? `- ${c.name}：已接回（對話已恢復，停在提示字元）`
+      : `- ${c.name}：未接回（仍是還原佔位，超過自動接回上限或接回失敗）`,
+  )
+  return (
+    `${MSG_INTERRUPTED_PREFIX} — Navide 重新啟動時，你派出的以下 pane 正在工作中，回合被中斷：\n` +
+    `${lines.join('\n')}\n\n` +
+    `已接回的 pane 沒有自動續跑。要它繼續，用 cli_send 叫它繼續；也可以改派或重派。` +
+    `它被叫繼續之後，回合結束時仍會回報給你。`
   )
 }
 
