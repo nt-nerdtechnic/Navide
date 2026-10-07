@@ -16,7 +16,7 @@ function mountEditor(modelValue: RoleProperty[]): VueWrapper {
   })
   return w
 }
-const value = (w: VueWrapper) => w.props('modelValue') as RoleProperty[]
+const value = (w: VueWrapper) => (w.props() as { modelValue: RoleProperty[] }).modelValue
 
 describe('RolePropertiesEditor', () => {
   it('invites adding a first field when the role declares none', async () => {
