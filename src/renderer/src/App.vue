@@ -73,7 +73,7 @@ import {
 } from './lib/agentSpawnGate'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import RunGroupContextMenu from './components/RunGroupContextMenu.vue'
-import { rollupTabStatus, sameRenderedTabs } from './lib/tabStatus'
+import { countLivePanes, rollupTabStatus, sameRenderedTabs } from './lib/tabStatus'
 import { sameRenderedPaneViews } from './lib/paneViews'
 import { paneStatusLabelText } from './lib/paneStatusLabel'
 import { statusBadgeStyle } from './composables/useStatusBadgePrefs'
@@ -16739,7 +16739,7 @@ async function deleteRunGroup(id: string): Promise<void> {
  *  the structure alone, so a ticking status never re-runs pane filtering or grid
  *  sizing. Merging the two would make a quiet window recompute its whole grid
  *  2.5 times a second. */
-type StageTabShape = Omit<TabItem, 'status'> & { paneIds: string[] }
+type StageTabShape = Omit<TabItem, 'status' | 'live'> & { paneIds: string[] }
 
 /** The panes of the workspace currently on screen.
  *
@@ -16831,16 +16831,14 @@ const stageTabs = computed<TabItem[]>(() => {
   const disconnected = new Set(disconnectedPaneIds.value)
   const statusById = new Map(paneViews.value.map((v) => [v.id, v.status as string]))
   const realizedById = new Map(panes.value.map((p) => [p.id, p.realized]))
-  const next = stageTabShapes.value.map(({ paneIds, ...tab }) => ({
-    ...tab,
-    status: rollupTabStatus(
-      paneIds.map((id) =>
-        disconnected.has(id)
-          ? 'disconnected'
-          : (statusById.get(id) ?? (realizedById.get(id) ? 'starting' : 'waiting'))
-      )
+  const next = stageTabShapes.value.map(({ paneIds, ...tab }) => {
+    const statuses = paneIds.map((id) =>
+      disconnected.has(id)
+        ? 'disconnected'
+        : (statusById.get(id) ?? (realizedById.get(id) ? 'starting' : 'waiting'))
     )
-  }))
+    return { ...tab, live: countLivePanes(statuses), status: rollupTabStatus(statuses) }
+  })
   if (sameRenderedTabs(_lastStageTabs, next)) return _lastStageTabs
   _lastStageTabs = next
   return next
