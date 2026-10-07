@@ -1329,7 +1329,9 @@ class ChannelManager:
         if buf.msg.reply_to_text and not msg.reply_to_text:
             # A follow-up line keeps the quote an earlier line in the same message replied to.
             msg = dataclasses.replace(msg, reply_to_text=buf.msg.reply_to_text,
-                                      reply_to_sender=buf.msg.reply_to_sender)
+                                      reply_to_sender=buf.msg.reply_to_sender,
+                                      reply_to_sender_id=buf.msg.reply_to_sender_id,
+                                      reply_to_self=buf.msg.reply_to_self)
         buf.msg, buf.binding, buf.pane_id = msg, binding, pane_id
         buf.texts.append(msg.text)
         if buf.task is not None:
@@ -1510,6 +1512,12 @@ class ChannelManager:
         else:
             await self._reply(msg, f"⚠️ 中斷失敗：{result.get('error') or 'not sent'}")
 
+    def _quote_trusted(self, msg: InboundMessage) -> bool:
+        """The replied-to message may be quoted into the pane (see ``_with_reply_quote``)."""
+        author = msg.reply_to_sender_id
+        return msg.reply_to_self or (bool(author) and (
+            author == msg.sender_id or self.gate.is_allowed(msg.platform, author, msg.account)))
+
     async def _deliver(self, msg: InboundMessage, binding: Binding, pane_id: str) -> bool:
         """True when the text went to the pane; every refusal has already been replied to."""
         if await self._held_by_prompt(msg, pane_id):
@@ -1519,7 +1527,7 @@ class ChannelManager:
             await self._reply(msg, MSG_QUEUE_FULL)
             return False
         state = self._seams.pane_state(pane_id)
-        body = _with_reply_quote(msg)
+        body = _with_reply_quote(msg, self._quote_trusted(msg))
         try:
             result = await self._seams.deliver(pane_id, body, f"{msg.platform}:{msg.sender_name}")
         except Exception as exc:  # noqa: BLE001
@@ -1961,11 +1969,18 @@ def _chat_msg_bodies(text: str) -> list[str]:
             if target.split(":", 1)[0] in PLATFORMS and ":" in target]
 
 
-def _with_reply_quote(msg: InboundMessage) -> str:
-    """``msg.text`` under a quote of the message it natively replies to, when known."""
+def _with_reply_quote(msg: InboundMessage, trusted: bool) -> str:
+    """``msg.text`` under a quote of the message it natively replies to, when known.
+
+    An untrusted author's text is left out: the allowlist screens who may reach a pane,
+    and quoting would let anyone in the group speak through an allowed sender's reply.
+    """
     quoted = msg.reply_to_text.strip()
     if not quoted:
         return msg.text
+    if not trusted:
+        who = msg.reply_to_sender or "someone"
+        return f"[Replying to {who} (not an allowed sender; quote omitted)]\n{msg.text}"
     if len(quoted) > REPLY_QUOTE_MAX_CHARS:
         quoted = quoted[:REPLY_QUOTE_MAX_CHARS] + "…"
     header = f"[Replying to {msg.reply_to_sender}]" if msg.reply_to_sender else "[Replying to a message]"

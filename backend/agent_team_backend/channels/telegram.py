@@ -260,13 +260,13 @@ class TelegramAdapter:
             message_id=f"{chat.get('id')}:{msg.get('message_id')}",
             ts=float(msg.get("date") or time.time()),
             reply_to_id=str((msg.get("reply_to_message") or {}).get("message_id") or ""),
-            reply_quote=_reply_quote(msg),
+            reply_quote=_reply_quote(msg, self.bot_id),
         )
 
     async def _deliver(
         self, *, chat: dict[str, Any], sender: dict[str, Any], text: str, thread: str,
         message_id: str, ts: float, callback_data: str = "", reply_to_id: str = "",
-        reply_quote: tuple[str, str] = ("", ""),
+        reply_quote: tuple[str, str, str, bool] = ("", "", "", False),
     ) -> None:
         self.status.last_inbound_at = time.time()
         if self._emit is None:
@@ -277,6 +277,7 @@ class TelegramAdapter:
             text=text, message_id=message_id, is_direct=chat.get("type") == "private", ts=ts,
             callback_data=callback_data, reply_to_id=reply_to_id,
             reply_to_text=reply_quote[0], reply_to_sender=reply_quote[1],
+            reply_to_sender_id=reply_quote[2], reply_to_self=reply_quote[3],
         ))
 
     def _remember_chat(self, chat: dict[str, Any]) -> None:
@@ -472,15 +473,20 @@ def _display_name(user: dict[str, Any]) -> str:
     ) or str(user.get("id", ""))
 
 
-def _reply_quote(msg: dict[str, Any]) -> tuple[str, str]:
-    """(quoted text, its sender) for a native reply; the part the user selected wins."""
+def _reply_quote(msg: dict[str, Any], bot_id: str) -> tuple[str, str, str, bool]:
+    """(quoted text, its sender's name, id, written by this bot) for a native reply; the
+    part the user selected wins."""
     reply = msg.get("reply_to_message") or {}
     # A forum topic's messages all "reply" to the topic's creation message.
     if not reply or reply.get("forum_topic_created") or (
             msg.get("is_topic_message") and reply.get("message_id") == msg.get("message_thread_id")):
-        return "", ""
+        return "", "", "", False
     text = (msg.get("quote") or {}).get("text") or reply.get("text") or reply.get("caption") or ""
-    return (str(text), _display_name(reply.get("from") or {})) if text else ("", "")
+    if not text:
+        return "", "", "", False
+    author = reply.get("from") or {}
+    author_id = str(author.get("id") or "")
+    return str(text), _display_name(author), author_id, bool(author_id) and author_id == bot_id
 
 
 def _describe_failure(exc: Exception) -> str:

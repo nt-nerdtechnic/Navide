@@ -62,6 +62,10 @@ class InboundMessage:
     # ("" otherwise); the manager quotes them above the text it delivers to the pane.
     reply_to_text: str = ""
     reply_to_sender: str = ""
+    # Who wrote the replied-to message: only this bot's own messages, the sender's own and
+    # allowlisted senders' are quoted, so a reply cannot carry a stranger's text into a pane.
+    reply_to_sender_id: str = ""
+    reply_to_self: bool = False
 
     def location_key(self) -> str:
         return Location(self.platform, self.account, self.chat_id, self.thread_id).key()

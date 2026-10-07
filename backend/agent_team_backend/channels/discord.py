@@ -303,6 +303,8 @@ class DiscordAdapter:
             reply_to_id=str((d.get("message_reference") or {}).get("message_id") or ""),
             reply_to_text=str(quoted.get("content") or ""),
             reply_to_sender=str(quoted_author.get("global_name") or quoted_author.get("username") or ""),
+            reply_to_sender_id=str(quoted_author.get("id") or ""),
+            reply_to_self=bool(self._bot_id) and str(quoted_author.get("id") or "") == self._bot_id,
         ))
 
     async def _on_interaction(self, d: dict[str, Any]) -> None:
