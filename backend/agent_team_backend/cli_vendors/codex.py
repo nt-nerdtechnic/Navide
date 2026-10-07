@@ -835,7 +835,10 @@ class CodexHomeManager:
             tmp = None
 
             if skills_link.is_symlink():
-                if os.readlink(skills_link) != os.fspath(view):
+                # Imported here: credential_vault imports the vendor registry.
+                from ..credential_vault import _link_target
+
+                if _link_target(os.readlink(skills_link)) != os.fspath(view):
                     skills_link.unlink()
             elif skills_link.exists():
                 log.warning("leaving real Codex skills directory unmodified: %s", skills_link)

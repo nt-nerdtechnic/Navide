@@ -523,3 +523,31 @@ def test_seed_hook_trust_escapes_backslashes_in_toml_keys(tmp_path: Path) -> Non
     assert manager.seed_hook_trust(pane) == 1
     state = tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))["hooks"]["state"]
     assert state[f'{pane / "hooks.json"}:stop:0:0'] == {"trusted_hash": "sha256:aaaa"}
+
+
+def test_prepare_keeps_a_correct_skills_link_when_readlink_reports_an_extended_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows' os.readlink returns the target with a \\\\?\\ prefix. Compared
+    as a raw string, the already-correct skills link read as wrong and was
+    unlinked and recreated on every prepare."""
+    real = tmp_path / "real-codex"
+    (real / "skills" / "native").mkdir(parents=True)
+    manager = CodexHomeManager(real_home=real, panes_root=tmp_path / "panes")
+    home = manager.prepare("pane-1")
+    assert (home / "skills").is_symlink()
+
+    real_readlink = os.readlink
+    monkeypatch.setattr(os, "readlink", lambda p: "\\\\?\\" + real_readlink(p))
+    recreated: list[str] = []
+    real_symlink_to = Path.symlink_to
+
+    def spy(self, target, target_is_directory=False):
+        if self.name == "skills":
+            recreated.append(self.name)
+        return real_symlink_to(self, target, target_is_directory)
+
+    monkeypatch.setattr(Path, "symlink_to", spy)
+    manager.prepare("pane-1")
+    assert recreated == []
+    assert (home / "skills" / "native").exists()
