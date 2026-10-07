@@ -136,3 +136,32 @@ async def test_handler_persists_only_the_fields_sent(tmp_path: Path) -> None:
     assert reply["ok"] is True
     pane = ProjectStore().peek(ws).panes[0]
     assert (pane.report_to, pane.report_pending, pane.last_turn_state) == ("lead", True, "")
+
+
+@pytest.mark.asyncio
+async def test_handler_says_when_no_pane_took_the_write(tmp_path: Path) -> None:
+    """An unknown pane is not an error, but the caller must be able to tell a
+    write that landed from one that matched nothing."""
+    ws = str(tmp_path)
+    await app.handle_message(_session(), {
+        "id": "m0",
+        "type": "manual_pane.spawn",
+        "payload": {"workspace_path": ws, "pane_id": "P1", "agent": "claude", "command": "claude"},
+    })
+    session = _session()
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "project.set_pane_resume_state",
+        "payload": {"workspace_path": ws, "pane_id": "ghost", "last_turn_state": "working"},
+    })
+    hit = _session()
+    await app.handle_message(hit, {
+        "id": "m2",
+        "type": "project.set_pane_resume_state",
+        "payload": {"workspace_path": ws, "pane_id": "P1", "last_turn_state": "working"},
+    })
+    miss_reply = session.websocket.sent[0]  # type: ignore[attr-defined]
+    hit_reply = hit.websocket.sent[0]  # type: ignore[attr-defined]
+    assert miss_reply["ok"] is True
+    assert miss_reply["payload"] == {"ok": True, "applied": False}
+    assert hit_reply["payload"] == {"ok": True, "applied": True}

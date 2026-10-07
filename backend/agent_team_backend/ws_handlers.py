@@ -8640,15 +8640,18 @@ async def project_set_pane_resume_state(session: "Session", msg_id: str, msg_typ
     turn_state = payload.get("last_turn_state")
     report_to = payload.get("report_to")
     report_pending = payload.get("report_pending")
+    applied = False
     if ws_raw and pane_id:
-        app.project_store.set_pane_resume_state(
+        project = app.project_store.set_pane_resume_state(
             ws_raw,
             pane_id=pane_id,
             last_turn_state=turn_state if isinstance(turn_state, str) else None,
             report_to=report_to if isinstance(report_to, str) else None,
             report_pending=report_pending if isinstance(report_pending, bool) else None,
         )
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        # Not an error, but say so: a write that matched no record is lost.
+        applied = any(p.pane_id == pane_id for p in project.panes)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "applied": applied}))
 
 
 @handler("project.set_pane_collapsed")
