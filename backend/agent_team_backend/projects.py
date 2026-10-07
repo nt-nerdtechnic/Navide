@@ -207,6 +207,15 @@ class Project:
     # recent-workspaces store keeps a `name` mirror for drawing lists without
     # opening every project's db.
     display_name: str = ""
+    # DAG run state reported by the renderer engine (pipeline.node_states):
+    # graph node id -> NodeRunState dict (src/renderer/src/lib/pipelineGraph.ts).
+    # Reset when a run starts. `node_gate` is the gate the run is paused on
+    # ({} = none).
+    node_states: dict[str, Any] = field(default_factory=dict)
+    node_gate: dict[str, Any] = field(default_factory=dict)
+    # Last output summary per graph node, kept ACROSS runs so a pinned node
+    # can hand its frozen output to downstream nodes ({{prev.summary}}).
+    node_outputs: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -568,6 +577,8 @@ class ProjectStore:
         ]
         # Clear stale pipeline panes from previous runs; preserve manual panes.
         project.panes = [p for p in project.panes if p.origin != "pipeline"]
+        project.node_states = {}
+        project.node_gate = {}
         # Each pipeline run gets its own log file.
         project.log_file_name = _make_log_filename(task_description)
         self.save(project)
@@ -1563,6 +1574,29 @@ class ProjectStore:
         if pane:
             pane.kickoff_status = kickoff_status
             self.save(project)
+        return project
+
+    def record_node_states(
+        self,
+        workspace_path: str,
+        *,
+        nodes: dict[str, Any],
+        gate: dict[str, Any] | None = None,
+        outputs: dict[str, Any] | None = None,
+    ) -> Project:
+        """Merge per-node run states reported by the engine (a node absent from
+        `nodes` keeps its last state). gate=None leaves the paused gate as it
+        is; {} clears it. outputs merge into node_outputs."""
+        project = self.load_or_create(workspace_path)
+        for nid, state in nodes.items():
+            if isinstance(state, dict):
+                project.node_states[str(nid)] = state
+        if gate is not None:
+            project.node_gate = gate
+        for nid, out in (outputs or {}).items():
+            if isinstance(out, dict):
+                project.node_outputs[str(nid)] = out
+        self.save(project)
         return project
 
     def resume_pipeline(self, workspace_path: str) -> tuple[Project, int]:

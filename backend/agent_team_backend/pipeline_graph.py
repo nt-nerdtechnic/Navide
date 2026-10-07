@@ -50,23 +50,42 @@ def _is_main(e: dict[str, Any]) -> bool:
 
 
 def _slot_to_graph(slot: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out = {
         "agentKey": slot.get("agent_key", ""),
         "roleKey": slot.get("role_key", ""),
         "label": slot.get("label", ""),
         "kickoffBody": slot.get("kickoff_body", ""),
         "isCommander": bool(slot.get("is_commander", False)),
     }
+    if isinstance(slot.get("params"), dict):
+        out["params"] = copy.deepcopy(slot["params"])
+    return out
 
 
 def _slot_to_stage(slot: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out = {
         "agent_key": slot.get("agentKey", ""),
         "role_key": slot.get("roleKey", ""),
         "label": slot.get("label", ""),
         "kickoff_body": slot.get("kickoffBody", ""),
         "is_commander": bool(slot.get("isCommander", False)),
     }
+    if isinstance(slot.get("params"), dict):
+        out["params"] = copy.deepcopy(slot["params"])
+    return out
+
+
+# set_stage_meta field (camelCase, as on the wire) → stage key (snake_case).
+STAGE_META_FIELDS = {
+    "title": "title",
+    "shortTitle": "short_title",
+    "question": "question",
+    "description": "description",
+    "sentinel": "sentinel",
+    "allowQuestions": "allow_questions",
+    "docQuery": "doc_query",
+    "recommendedRoles": "recommended_roles",
+}
 
 
 def derive_graph_from_stages(stages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -155,9 +174,13 @@ def _blank_stage(sid: str, layer: int) -> dict[str, Any]:
 
 
 def derive_stages_from_graph(
-    graph: dict[str, Any], previous: list[dict[str, Any]] | None = None
+    graph: dict[str, Any], previous: list[dict[str, Any]] | None = None, *, stamp: bool = False
 ) -> list[dict[str, Any]]:
-    """One stage per layer holding its slot nodes (see the TS twin)."""
+    """One stage per layer holding its slot nodes (see the TS twin).
+
+    stamp=True writes the chosen stage id onto the layer's slot nodes that
+    have none (mutating `graph`), so a new layer keeps its L<n> id — and the
+    metadata stored under it — the next time stages are derived."""
     by_id = {n["id"]: n for n in graph.get("nodes", [])}
     prev_by_id = {s.get("id"): s for s in (previous or [])}
     used: set[str] = set()
@@ -175,6 +198,10 @@ def derive_stages_from_graph(
                 k += 1
             sid = f"L{k}"
         used.add(sid)
+        if stamp:
+            for n in slot_nodes:
+                if not n.get("stageId"):
+                    n["stageId"] = sid
         base = copy.deepcopy(prev_by_id.get(sid) or _blank_stage(sid, len(out)))
         base["id"] = sid
         base["slots"] = [_slot_to_stage(n["slot"]) for n in slot_nodes]
@@ -426,6 +453,9 @@ def apply_graph_ops(graph: dict[str, Any], ops: list[dict[str, Any]]) -> dict[st
                 n["pinned"] = True
             else:
                 n.pop("pinned", None)
+        elif kind == "set_stage_meta":
+            # Stage metadata is not part of the graph; StagesStore applies it.
+            pass
         else:
             raise GraphError([f"unknown graph op: {kind}"])
     return g

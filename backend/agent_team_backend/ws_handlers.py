@@ -57,6 +57,7 @@ from .mcp_settings import (
     restore_mcp_server_secrets,
 )
 from .plan_index import resolve_plan_root
+from .stages_store import GraphNonLinearError
 from .plan_provisioning import SPEC_FILENAME, TEMPLATE_FILENAME, ensure_plan_assets
 from .profiles_store import SUPPORTED_AGENT_KEYS as PROFILE_AGENT_KEYS
 from .skills_events import notify_skills_changed
@@ -5646,7 +5647,11 @@ async def stages_upsert(session: "Session", msg_id: str, msg_type: str, payload:
             make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot edit stages while the active pipeline is running")
         )
         return
-    stage = app.stages_store.upsert(payload["stage"], pipeline_id)
+    try:
+        stage = app.stages_store.upsert(payload["stage"], pipeline_id)
+    except GraphNonLinearError as err:
+        await session.send_json(make_error(msg_id, msg_type, "GRAPH_NONLINEAR", str(err)))
+        return
     effective_pipeline_id = pipeline_id or app.stages_store.get_active_pipeline_id()
     updated_stages = app.stages_store.list(pipeline_id)
     await session.send_json(
@@ -5671,7 +5676,11 @@ async def stages_reorder(session: "Session", msg_id: str, msg_type: str, payload
             make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot reorder stages while the active pipeline is running")
         )
         return
-    updated_stages = app.stages_store.reorder(payload["ids"], pipeline_id)
+    try:
+        updated_stages = app.stages_store.reorder(payload["ids"], pipeline_id)
+    except GraphNonLinearError as err:
+        await session.send_json(make_error(msg_id, msg_type, "GRAPH_NONLINEAR", str(err)))
+        return
     effective_pipeline_id = pipeline_id or app.stages_store.get_active_pipeline_id()
     await session.send_json(
         make_response(msg_id, msg_type, {"stages": updated_stages})
@@ -5695,7 +5704,11 @@ async def stages_delete(session: "Session", msg_id: str, msg_type: str, payload:
             make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot delete stages while the active pipeline is running")
         )
         return
-    updated_stages = app.stages_store.delete(payload["id"], pipeline_id)
+    try:
+        updated_stages = app.stages_store.delete(payload["id"], pipeline_id)
+    except GraphNonLinearError as err:
+        await session.send_json(make_error(msg_id, msg_type, "GRAPH_NONLINEAR", str(err)))
+        return
     effective_pipeline_id = pipeline_id or app.stages_store.get_active_pipeline_id()
     await session.send_json(
         make_response(msg_id, msg_type, {"stages": updated_stages})
@@ -5730,6 +5743,72 @@ async def stages_reset(session: "Session", msg_id: str, msg_type: str, payload: 
         "reason": "reset",
     }))
     await _broadcast_pipeline_summaries("stage_reset")
+
+
+# ── Pipeline graph (pipelines.graph.*) ──────────────────────────────────────
+# Contract: src/renderer/src/lib/pipelineGraph.ts (file header).
+@handler("pipelines.graph.get")
+async def pipelines_graph_get(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    out = app.stages_store.get_graph(payload.get("pipeline_id") or None)
+    await session.send_json(make_response(msg_id, msg_type, out))
+
+
+async def _write_graph(session: "Session", msg_id: str, msg_type: str, payload: dict, write: Any, reason: str) -> None:
+    from . import app
+    from .pipeline_graph import GraphError
+
+    pipeline_id = payload.get("pipeline_id") or None
+    ws_path = payload.get("workspace_path", "") or ""
+    if _stage_edit_hits_running_pipeline(ws_path, pipeline_id):
+        await session.send_json(
+            make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot edit the graph while the pipeline is running")
+        )
+        return
+    try:
+        out = write(pipeline_id)
+    except GraphError as err:
+        await session.send_json(make_error(msg_id, msg_type, "GRAPH_INVALID", str(err), {"errors": err.errors}))
+        return
+    await session.send_json(make_response(msg_id, msg_type, out))
+    await _broadcast_graph_change(out, reason)
+
+
+async def _broadcast_graph_change(out: dict, reason: str) -> None:
+    """graph_changed first (the canvas), then the two events every legacy
+    view already listens to, since the derived stages changed with it."""
+    from . import app
+
+    await app.broadcast(make_event("pipeline.graph_changed", {**out, "reason": reason}))
+    await app.broadcast(make_event("stages.changed", {
+        "stages": out["stages"],
+        "pipeline_id": out["pipeline_id"],
+        "reason": reason,
+    }))
+    await _broadcast_pipeline_summaries(reason)
+
+
+@handler("pipelines.graph.set")
+async def pipelines_graph_set(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    graph = payload["graph"]
+    await _write_graph(
+        session, msg_id, msg_type, payload,
+        lambda pid: app.stages_store.set_graph(pid, graph), "graph_set",
+    )
+
+
+@handler("pipelines.graph.apply")
+async def pipelines_graph_apply(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    ops = payload["ops"]
+    await _write_graph(
+        session, msg_id, msg_type, payload,
+        lambda pid: app.stages_store.apply_graph_ops(pid, ops), "graph_apply",
+    )
 
 
 # ── Analyzer (local LLM / Ollama) (analyzer.*) ──────────────────────────────
@@ -9418,6 +9497,7 @@ async def pipeline_start(session: "Session", msg_id: str, msg_type: str, payload
         run_id=run_dir or project.id,
         task=project.task_description,
         run_dir=run_dir,
+        pipeline_id=getattr(project, "pipeline_id", ""),
     )
     asyncio.create_task(
         app.broadcast(make_event("tokens.changed", app.tokens_store.snapshot(project.workspace_path)))
@@ -9573,7 +9653,7 @@ async def pipeline_complete(session: "Session", msg_id: str, msg_type: str, payl
 
     project = app.project_store.complete_pipeline(payload["workspace_path"])
     _mirror_pipeline_state(project)
-    app.tokens_store.end_run(project.workspace_path)
+    app.tokens_store.end_run(project.workspace_path, outcome="completed", node_states=project.node_states)
     asyncio.create_task(
         app.broadcast(make_event("tokens.changed", app.tokens_store.snapshot(project.workspace_path)))
     )
@@ -9586,17 +9666,50 @@ async def pipeline_complete(session: "Session", msg_id: str, msg_type: str, payl
 async def pipeline_abort(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    project = app.project_store.abort_pipeline(
-        payload["workspace_path"], reason=payload.get("reason", "user")
-    )
+    reason = payload.get("reason", "user")
+    project = app.project_store.abort_pipeline(payload["workspace_path"], reason=reason)
     _mirror_pipeline_state(project)
-    app.tokens_store.end_run(project.workspace_path)
+    app.tokens_store.end_run(
+        project.workspace_path,
+        # The engine aborts with reason "failed" when a run cannot go on (a
+        # reject loop out of budget); everything else is a stop.
+        outcome="failed" if reason == "failed" else "aborted",
+        node_states=project.node_states,
+    )
     asyncio.create_task(
         app.broadcast(make_event("tokens.changed", app.tokens_store.snapshot(project.workspace_path)))
     )
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
+
+
+@handler("pipeline.node_states")
+async def pipeline_node_states(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """The renderer engine reports per-graph-node run state; stored on the
+    project so MCP pipeline_status can read it, then broadcast for canvases in
+    every window. Contract: src/renderer/src/lib/pipelineGraph.ts."""
+    from . import app
+
+    nodes = payload.get("nodes", {})
+    gate = payload.get("gate")
+    outputs = payload.get("outputs")
+    if not isinstance(nodes, dict) or (gate is not None and not isinstance(gate, dict)) or (
+        outputs is not None and not isinstance(outputs, dict)
+    ):
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "nodes/gate/outputs must be objects"))
+        return
+    project = app.project_store.record_node_states(
+        payload["workspace_path"], nodes=nodes, gate=gate, outputs=outputs
+    )
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    await app.broadcast(make_event("pipeline.node_states_changed", {
+        "workspace_path": project.workspace_path,
+        "pipeline_id": project.pipeline_id,
+        "state": project.state,
+        "nodes": project.node_states,
+        "gate": project.node_gate,
+    }))
 
 
 @handler("pipeline.fetch_docs")

@@ -108,6 +108,15 @@ export type GraphOp =
   | { op: 'remove_edge'; id: string }
   | { op: 'set_gate'; id: string; prompt?: string }
   | { op: 'set_pin'; id: string; pinned: boolean }
+  | ({ op: 'set_stage_meta'; stageId: string } & StageMetaPatch)
+
+/** Layer (stage) metadata editable through set_stage_meta. The graph does not
+ *  store it: it lives on the derived stage and is kept across re-derivation
+ *  via the slot nodes' stageId, so applyGraphOps treats the op as a no-op and
+ *  the backend writes it onto the stage. */
+export type StageMetaPatch = Partial<
+  Pick<Stage, 'title' | 'shortTitle' | 'question' | 'description' | 'sentinel' | 'allowQuestions' | 'docQuery' | 'recommendedRoles'>
+>
 
 // ── Run state (per node) ─────────────────────────────────────────────────────
 export type NodeRunStatus =
@@ -295,7 +304,10 @@ function blankStage(id: string, layer: number): Stage {
  *  layer's slot nodes. Stage metadata comes from `previous` via the nodes'
  *  `stageId` (first claim wins; a layer with no claimable id gets `L<n>`).
  *  Layers with no slot node (gate-only) produce no stage — a stage must have
- *  a slot; the engine reads gates from the graph itself. */
+ *  a slot; the engine reads gates from the graph itself. On write the backend
+ *  also stamps the chosen id onto slot nodes without a stageId, so a new
+ *  layer keeps its L<n> id (and its metadata); the stored graph it returns
+ *  carries those stamps. */
 export function deriveStagesFromGraph(graph: PipelineGraph, previous: readonly Stage[] = []): Stage[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]))
   const prevById = new Map(previous.map((s) => [s.id, s]))
@@ -520,6 +532,8 @@ export function applyGraphOps(graph: PipelineGraph, ops: readonly GraphOp[]): Pi
         else delete n.pinned
         break
       }
+      case 'set_stage_meta':
+        break
       default:
         throw new Error(`unknown graph op: ${(op as { op: string }).op}`)
     }

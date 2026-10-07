@@ -923,17 +923,35 @@ class StagesStore:
             errors = pg.validate_graph(graph)
             if errors:
                 raise pg.GraphError(errors)
-            return self._store_graph(doc, pipeline, graph)
+            meta_ops = [op for op in ops if op.get("op") == "set_stage_meta"]
+            if not meta_ops:
+                return self._store_graph(doc, pipeline, graph)
+            # Derive first so a layer's new L<n> stage exists to receive its
+            # metadata, then patch and store.
+            self._store_graph(doc, pipeline, graph, write=False)
+            for op in meta_ops:
+                stage = next((s for s in pipeline["stages"] if s.get("id") == op.get("stageId")), None)
+                if stage is None:
+                    raise pg.GraphError([f"stage not found: {op.get('stageId')}"])
+                for field, key in pg.STAGE_META_FIELDS.items():
+                    if field in op:
+                        stage[key] = op[field]
+            self._write_doc(doc)
+            return {"pipeline_id": pipeline["id"], "graph": pipeline["graph"], "stages": pipeline["stages"]}
 
-    def _store_graph(self, doc: dict[str, Any], pipeline: dict[str, Any], graph: dict[str, Any]) -> dict[str, Any]:
-        stages = pg.derive_stages_from_graph(graph, [_migrate(s) for s in pipeline.get("stages", [])])
+    def _store_graph(
+        self, doc: dict[str, Any], pipeline: dict[str, Any], graph: dict[str, Any], *, write: bool = True
+    ) -> dict[str, Any]:
+        graph = {**graph, "nodes": [dict(n) for n in graph["nodes"]]}
+        stages = pg.derive_stages_from_graph(graph, [_migrate(s) for s in pipeline.get("stages", [])], stamp=True)
         for stage in stages:
             if not self._ID_RE.match(str(stage.get("id", ""))):
                 raise pg.GraphError([f"invalid stage id {stage.get('id')!r} on a slot node's stageId"])
         clean = {"version": pg.GRAPH_VERSION, "nodes": graph["nodes"], "edges": graph["edges"]}
         pipeline["graph"] = clean
         pipeline["stages"] = stages
-        self._write_doc(doc)
+        if write:
+            self._write_doc(doc)
         return {"pipeline_id": pipeline["id"], "graph": clean, "stages": stages}
 
 

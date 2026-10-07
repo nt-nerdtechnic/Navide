@@ -128,6 +128,14 @@ describe('applyGraphOps', () => {
     expect(g0.nodes).toHaveLength(3) // input untouched
   })
 
+  it('carries slot params and treats set_stage_meta as a graph no-op', () => {
+    const st = stage('01', ['a'])
+    st.slots[0].params = { doneWhen: 'message' }
+    const g = deriveGraphFromStages([st])
+    expect(g.nodes[1].slot?.params).toEqual({ doneWhen: 'message' })
+    expect(applyGraphOps(g, [{ op: 'set_stage_meta', stageId: '01', title: 'x' }])).toEqual(g)
+  })
+
   it('throws on a missing node', () => {
     expect(() => applyGraphOps(deriveGraphFromStages(legacy), [{ op: 'move_node', id: 'nope', position: { x: 0, y: 0 } }])).toThrow(/not found/)
   })

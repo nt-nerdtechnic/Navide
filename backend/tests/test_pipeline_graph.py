@@ -204,3 +204,70 @@ class TestRoleProperties:
         assert "properties" not in r.upsert(key="z", label="Z", one_line="", system_prompt="p")
         all_roles = r.replace_all(r.list())
         assert next(x for x in all_roles if x["key"] == "x")["properties"] == props
+
+
+class TestContractExtensions:
+    def test_slot_params_round_trip_between_stages_and_graph(self):
+        st = stage("01", ["plan"])
+        st["slots"][0]["params"] = {"doneWhen": "message", "n": 2}
+        g = pg.derive_graph_from_stages([st])
+        assert g["nodes"][1]["slot"]["params"] == {"doneWhen": "message", "n": 2}
+        assert pg.derive_stages_from_graph(g, [st]) == [st]
+
+    def test_set_stage_meta_writes_onto_the_derived_stage(self, tmp_path):
+        s = StagesStore(tmp_path / PIPELINES_FILE)
+        out = s.apply_graph_ops("default", [
+            {"op": "add_node", "node": slot_node("tail"), "after": [n for n in [
+                nid for nid in [x["id"] for x in s.get_graph("default")["graph"]["nodes"]]] if n.startswith("n-")][-1:]},
+        ])
+        new_id = out["stages"][-1]["id"]
+        out = s.apply_graph_ops("default", [{"op": "set_stage_meta", "stageId": new_id, "title": "Tail", "allowQuestions": True}])
+        assert out["stages"][-1]["title"] == "Tail"
+        assert out["stages"][-1]["allow_questions"] is True
+        assert s.list("default")[-1]["title"] == "Tail"
+        with pytest.raises(pg.GraphError):
+            s.apply_graph_ops("default", [{"op": "set_stage_meta", "stageId": "nope", "title": "x"}])
+
+
+class TestProjectNodeStates:
+    def test_node_states_merge_reset_on_start_and_outputs_survive(self, tmp_path):
+        from agent_team_backend.projects import Project, ProjectStore
+
+        ws = str(tmp_path)
+        store = ProjectStore()
+        store.start_pipeline(ws, task_description="t", total_stages=1, stage_blueprint=[{"stage_id": "01", "slots": []}])
+        store.record_node_states(ws, nodes={"a": {"status": "running"}}, gate={"nodeId": "g"},
+                                 outputs={"a": {"summary": "done a"}})
+        store.record_node_states(ws, nodes={"b": {"status": "done"}})
+        p = ProjectStore().peek(ws)
+        assert p.node_states == {"a": {"status": "running"}, "b": {"status": "done"}}
+        assert p.node_gate == {"nodeId": "g"}
+        store.start_pipeline(ws, task_description="t2", total_stages=1, stage_blueprint=[{"stage_id": "01", "slots": []}])
+        p = ProjectStore().peek(ws)
+        assert p.node_states == {} and p.node_gate == {}
+        assert p.node_outputs == {"a": {"summary": "done a"}}
+        # A project document written before these fields existed still loads.
+        d = p.to_dict()
+        for k in ("node_states", "node_gate", "node_outputs"):
+            d.pop(k)
+        assert Project.from_dict(d).node_outputs == {}
+
+
+class TestTokensRunRecord:
+    def test_run_record_carries_pipeline_outcome_and_node_states(self, tmp_path):
+        from agent_team_backend.tokens_store import TokensStore
+
+        ts = TokensStore(global_path=tmp_path / "tokens.json", workspace_base_dir=tmp_path / "workspaces")
+        (tmp_path / "ws").mkdir()
+        ws = str(tmp_path / "ws")
+        ts.start_run(ws, run_id="r1", task="t", run_dir="runs/r1", pipeline_id="p1")
+        ts.end_run(ws, outcome="failed", node_states={"a": {"status": "failed"}})
+        run = ts.snapshot(ws)["workspace"]["runs"][-1]
+        assert run["pipeline_id"] == "p1"
+        assert run["outcome"] == "failed"
+        assert run["node_states"] == {"a": {"status": "failed"}}
+        # Old call shape still works and adds nothing.
+        ts.start_run(ws, run_id="r2", task="t", run_dir="runs/r2")
+        ts.end_run(ws)
+        run2 = ts.snapshot(ws)["workspace"]["runs"][-1]
+        assert "outcome" not in run2 and "pipeline_id" not in run2
