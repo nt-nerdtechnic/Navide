@@ -9818,7 +9818,8 @@
       "reorder": "Reorder layers",
       "tidy": "Tidy up",
       "unlink": "Remove link",
-      "unpin": "Unfreeze output"
+      "unpin": "Unfreeze output",
+      "loop-budget": "Change retry limit"
     },
     "inspector": {
       "aria": "Settings for {name}",
@@ -9924,6 +9925,14 @@
     },
     "controlPane": {
       "open-in-canvas": "Open in the pipeline canvas"
+    },
+    "edge": {
+      "title": "Reject loop",
+      "desc": "{from} sends work back to {to}",
+      "max": "at most {n}×",
+      "fewer": "Allow fewer retries",
+      "more": "Allow more retries",
+      "remove": "Remove loop"
     }
   }
 }

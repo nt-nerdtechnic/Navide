@@ -36,7 +36,7 @@ import {
   uniqueLabel,
   type LaneBadge,
 } from '../../lib/pipelineGraphEdits'
-import { applyGraphOps } from '../../lib/pipelineGraph'
+import { applyGraphOps, DEFAULT_MAX_LOOPS, MAX_LOOPS_CEILING } from '../../lib/pipelineGraph'
 import PipelineSwimlane, { type LaneTarget } from './PipelineSwimlane.vue'
 import PipelineCanvas from './PipelineCanvas.vue'
 import PipelinePalette from './PipelinePalette.vue'
@@ -253,6 +253,24 @@ async function removeNode(id: string): Promise<void> {
 async function removeEdge(id: string): Promise<void> {
   await apply(t('pipelineEditor.history.unlink'), [{ op: 'remove_edge', id }])
 }
+const selectedEdgeId = ref<string | null>(null)
+const selectedRejectEdge = computed(() => {
+  const e = graph.value?.edges.find((x) => x.id === selectedEdgeId.value)
+  return e && e.kind === 'reject' ? e : null
+})
+const loopsOf = (e: GraphEdge): number => e.maxLoops ?? DEFAULT_MAX_LOOPS
+const edgeEndName = (id: string): string => { const n = byId.value.get(id); return n ? nodeTitle(n) : id }
+/** The contract has no edge update, so a new budget is the same link removed
+ *  and re-added — one command, one undo. */
+async function setLoops(e: GraphEdge, n: number): Promise<void> {
+  const next = Math.min(MAX_LOOPS_CEILING, Math.max(1, n))
+  if (next === loopsOf(e)) return
+  await apply(t('pipelineEditor.history.loop-budget'), [
+    { op: 'remove_edge', id: e.id },
+    { op: 'add_edge', edge: { ...e, maxLoops: next } },
+  ])
+}
+
 async function connect(edge: GraphEdge): Promise<void> {
   if (graph.value?.edges.some((e) => e.id === edge.id)) return
   await apply(t(edge.kind === 'reject' ? 'pipelineEditor.history.loop' : 'pipelineEditor.history.link'), [{ op: 'add_edge', edge }])
@@ -317,6 +335,7 @@ function rects(): Map<string, DOMRect> {
 }
 async function switchView(next: 'swimlane' | 'canvas'): Promise<void> {
   if (view.value === next) return
+  selectedEdgeId.value = null
   const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   const before = reduce ? new Map<string, DOMRect>() : rects()
   const ready = next === 'canvas'
@@ -519,7 +538,20 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
           @select="select" @move="moveOnCanvas" @connect="connect" @remove-node="removeNode" @remove-edge="removeEdge"
           @insert-on-edge="(edge, anchor) => openQuick({ kind: 'edge', edge }, anchor)"
           @drop-item="dropOnCanvas" @ready="onCanvasReady"
+          @select-edge="(id) => { selectedEdgeId = id }"
         />
+        <!-- A selected reject loop: its retry budget is the one property a
+             link has, so it is edited right where the link is. -->
+        <div v-if="view === 'canvas' && selectedRejectEdge" class="pe-edge-panel" role="group" :aria-label="t('pipelineEditor.edge.title')">
+          <span class="pe-edge-title">{{ t('pipelineEditor.edge.title') }}</span>
+          <span class="pe-edge-desc">{{ t('pipelineEditor.edge.desc', { from: edgeEndName(selectedRejectEdge.from), to: edgeEndName(selectedRejectEdge.to) }) }}</span>
+          <span class="pe-stepper">
+            <button type="button" :disabled="locked || loopsOf(selectedRejectEdge) <= 1" :aria-label="t('pipelineEditor.edge.fewer')" @click="setLoops(selectedRejectEdge, loopsOf(selectedRejectEdge) - 1)">−</button>
+            <span class="pe-stepper-value" aria-live="polite">{{ t('pipelineEditor.edge.max', { n: loopsOf(selectedRejectEdge) }) }}</span>
+            <button type="button" :disabled="locked || loopsOf(selectedRejectEdge) >= MAX_LOOPS_CEILING" :aria-label="t('pipelineEditor.edge.more')" @click="setLoops(selectedRejectEdge, loopsOf(selectedRejectEdge) + 1)">+</button>
+          </span>
+          <button type="button" class="pe-text-btn" :disabled="locked" @click="removeEdge(selectedRejectEdge.id)">{{ t('pipelineEditor.edge.remove') }}</button>
+        </div>
         <div v-if="stepCount === 0 && !locked && view === 'canvas'" class="pe-empty" aria-live="polite">
           <p class="pe-empty-title">{{ t('pipelineEditor.state.empty-title') }}</p>
           <p>{{ t('pipelineEditor.state.empty-body') }}</p>
@@ -705,6 +737,39 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 .pe-empty p { margin: 0; font-size: var(--font-xs); line-height: var(--lh-base); color: var(--text-muted); }
 .pe-empty .pe-empty-title { margin-bottom: var(--space-1); font-size: var(--font-sm); font-weight: 600; color: var(--text-primary); }
 
+.pe-edge-panel {
+  position: absolute;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-popover);
+  border: 1px solid color-mix(in srgb, var(--done-emphasis) 45%, var(--border-default));
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--font-xs);
+  animation: pe-pop 160ms var(--ease-out) both;
+}
+.pe-edge-title { font-weight: 600; color: var(--done-fg); white-space: nowrap; }
+.pe-edge-desc { color: var(--text-secondary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pe-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-default); border-radius: var(--radius-control); overflow: hidden; }
+.pe-stepper button {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.pe-stepper button:hover:not(:disabled) { background: var(--bg-hover); }
+.pe-stepper button:disabled { opacity: 0.4; cursor: default; }
+.pe-stepper button:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: -2px; }
+.pe-stepper-value { min-width: 72px; padding: 0 var(--space-2); text-align: center; font-variant-numeric: tabular-nums; color: var(--text-primary); }
 .pe-state {
   display: grid;
   place-content: center;

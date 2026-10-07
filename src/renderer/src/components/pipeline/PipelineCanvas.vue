@@ -49,6 +49,7 @@ const emit = defineEmits<{
   (e: 'insert-on-edge', edge: GraphEdge, anchor: HTMLElement): void
   (e: 'drop-item', item: PaletteItem, position: GraphPosition): void
   (e: 'ready'): void
+  (e: 'select-edge', id: string | null): void
 }>()
 const { t } = useI18n()
 
@@ -56,6 +57,7 @@ const flowId = props.flowId ?? 'pipeline-canvas'
 const { fitView, screenToFlowCoordinate, onInit } = useVueFlow(flowId)
 
 const selectedEdge = ref<string | null>(null)
+watch(selectedEdge, (id) => emit('select-edge', id))
 const hoverEdge = ref<string | null>(null)
 
 const byId = computed(() => new Map(props.graph.nodes.map((n) => [n.id, n])))
@@ -309,10 +311,14 @@ function mainPath(p: EdgeProps): { path: string; labelX: number; labelY: number 
           :interaction-width="22"
         />
         <EdgeLabelRenderer>
-          <span
-            class="pcv-loop-label nodrag nopan"
+          <!-- The label is the loop's handle: a dashed line is a thin target,
+               the pill is easy to hit and opens the retry-limit panel. -->
+          <button
+            type="button" class="pcv-loop-label nodrag nopan" :class="{ 'is-selected': p.selected }"
             :style="{ transform: `translate(-50%, -50%) translate(${rejectPath(p).labelX}px, ${rejectPath(p).labelY}px)` }"
-          >{{ t('pipelineEditor.canvas.loop-label', { max: p.data.edge.maxLoops ?? 2 }) }}</span>
+            :aria-label="t('pipelineEditor.edge.title')"
+            @click.stop="selectedEdge = p.id; emit('select', null)"
+          >{{ t('pipelineEditor.canvas.loop-label', { max: p.data.edge.maxLoops ?? 2 }) }}</button>
         </EdgeLabelRenderer>
       </template>
 
@@ -388,7 +394,7 @@ function mainPath(p: EdgeProps): { path: string; labelX: number; labelY: number 
   stroke: var(--done-emphasis);
   stroke-dasharray: 5 5;
 }
-.pcv :deep(.pcv-edge--reject.is-selected) { stroke-width: 2.4; }
+.pcv :deep(.pcv-edge--reject.is-selected) { stroke: var(--done-emphasis); stroke-width: 2.4; }
 .pcv :deep(.vue-flow__connection-path) { stroke: var(--accent-emphasis); stroke-width: 1.6; }
 
 .pcv-insert {
@@ -413,7 +419,9 @@ function mainPath(p: EdgeProps): { path: string; labelX: number; labelY: number 
 
 .pcv-loop-label {
   position: absolute;
-  pointer-events: none;
+  pointer-events: all;
+  cursor: pointer;
+  font: inherit;
   padding: 1px var(--space-2);
   border-radius: var(--radius-pill);
   background: var(--bg-elevated);
@@ -422,6 +430,9 @@ function mainPath(p: EdgeProps): { path: string; labelX: number; labelY: number 
   font-size: var(--font-2xs);
   white-space: nowrap;
 }
+.pcv-loop-label:hover,
+.pcv-loop-label.is-selected { background: color-mix(in srgb, var(--done-emphasis) 14%, var(--bg-elevated)); border-color: var(--done-emphasis); }
+.pcv-loop-label:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; }
 
 /* Minimap */
 .pcv :deep(.pcv-minimap) {

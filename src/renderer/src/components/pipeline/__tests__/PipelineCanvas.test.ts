@@ -66,4 +66,13 @@ describe('PipelineCanvas', () => {
     expect(w.emitted('remove-node')).toHaveLength(1)
     w.unmount()
   })
+
+  it('selects a reject loop from its label', async () => {
+    const w = mountCanvas()
+    await flushPromises()
+    await w.find('.pcv-loop-label').trigger('click')
+    await flushPromises()
+    expect(w.emitted('select-edge')?.at(-1)).toEqual(['r-g-a'])
+    w.unmount()
+  })
 })

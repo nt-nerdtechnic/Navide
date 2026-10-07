@@ -249,7 +249,10 @@ const gateComment = ref('')
   cursor: pointer;
 }
 .px-run:hover { background: var(--bg-hover); }
-.px-run.is-selected { background: var(--bg-selected); border-color: var(--border-default); }
+.px-run.is-selected {
+  background: color-mix(in srgb, var(--accent-emphasis) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-emphasis);
+}
 .px-run:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: -2px; }
 .px-dot { grid-area: dot; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--border-strong); }
 .px-dot--running { background: var(--accent-emphasis); animation: px-pulse 1.6s var(--ease-in-out) infinite; }

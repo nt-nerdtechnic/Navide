@@ -98,7 +98,7 @@ describe('PipelineEditor', () => {
     scope = effectScope()
     const w = scope.run(() => mount(PipelineEditor, {
       props: { backend: server.mock.backend, pipelineId: 'p1', roles, workspacePath: '/ws', run: opts.run ?? EMPTY_RUN, locked: !!opts.locked },
-      global: { plugins: [i18n], stubs: { PipelineCanvas: { template: '<div class="canvas-stub" />' } } },
+      global: { plugins: [i18n], stubs: { PipelineCanvas: { name: 'PipelineCanvas', template: '<div class="canvas-stub" />' } } },
       attachTo: document.body,
     }))!
     wrapper = w
@@ -180,6 +180,22 @@ describe('PipelineEditor', () => {
     await flushPromises()
     expect(w.find('.canvas-stub').exists()).toBe(true)
     expect(localStorage.getItem('pipeline-editor-view')).toBe('canvas')
+  })
+
+  it('changes a reject loop\'s retry limit as one undoable command', async () => {
+    const { w, server } = await mountEditor()
+    await w.findAll('.pe-seg-btn')[1].trigger('click') // canvas
+    await flushPromises()
+    w.findComponent({ name: 'PipelineCanvas' }).vm.$emit('select-edge', 'r-review-fe')
+    await flushPromises()
+    expect(w.find('.pe-edge-panel').text()).toContain('Review sends work back to Frontend')
+    await w.findAll('.pe-stepper button')[1].trigger('click') // +
+    await flushPromises()
+    expect(server.lastOps()).toEqual([
+      { op: 'remove_edge', id: 'r-review-fe' },
+      { op: 'add_edge', edge: { id: 'r-review-fe', from: 'review', to: 'fe', kind: 'reject', maxLoops: 3 } },
+    ])
+    expect(w.find('.pe-stepper-value').text()).toBe('at most 3×')
   })
 
   it('locks every edit while the pipeline runs', async () => {

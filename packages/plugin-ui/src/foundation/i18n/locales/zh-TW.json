@@ -9818,7 +9818,8 @@
       "reorder": "調整層的順序",
       "tidy": "整理排版",
       "unlink": "移除連線",
-      "unpin": "取消凍結"
+      "unpin": "取消凍結",
+      "loop-budget": "修改重試上限"
     },
     "inspector": {
       "aria": "{name} 的設定",
@@ -9924,6 +9925,14 @@
     },
     "controlPane": {
       "open-in-canvas": "在 pipeline 畫布中開啟"
+    },
+    "edge": {
+      "title": "退回迴圈",
+      "desc": "{from} 把工作退回給 {to}",
+      "max": "最多 {n} 次",
+      "fewer": "減少重試次數",
+      "more": "增加重試次數",
+      "remove": "移除迴圈"
     }
   }
 }

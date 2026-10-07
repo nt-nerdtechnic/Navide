@@ -9818,7 +9818,8 @@
       "reorder": "レイヤーを並べ替え",
       "tidy": "整列",
       "unlink": "接続を削除",
-      "unpin": "固定を解除"
+      "unpin": "固定を解除",
+      "loop-budget": "再試行上限を変更"
     },
     "inspector": {
       "aria": "{name} の設定",
@@ -9924,6 +9925,14 @@
     },
     "controlPane": {
       "open-in-canvas": "パイプラインキャンバスで開く"
+    },
+    "edge": {
+      "title": "差し戻しループ",
+      "desc": "{from} が {to} に作業を差し戻します",
+      "max": "最大 {n} 回",
+      "fewer": "再試行を減らす",
+      "more": "再試行を増やす",
+      "remove": "ループを削除"
     }
   }
 }
