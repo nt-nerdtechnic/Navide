@@ -1557,7 +1557,7 @@ class ChannelManager:
             except Exception as exc:  # noqa: BLE001 — reported to the chat, the text still goes
                 dest.unlink(missing_ok=True)
                 await self._reply(msg, media.text(lang, "download_failed", name=name,
-                                                  error=redact.redact_text(str(exc))))
+                                                  error=_failure_text(exc)))
                 continue
             lines.append(media.attachment_line(att.kind, name, size, dest))
         return lines
@@ -2071,6 +2071,16 @@ def _bot_label(bot: BotKey) -> str:
     """How errors name a bot: the bare platform for "default", as they always have."""
     platform, account = bot
     return platform if account == DEFAULT_ACCOUNT else f"{platform}/{account}"
+
+
+def _failure_text(exc: BaseException) -> str:
+    """What the chat is told about a failed file: an OS error's reason only (its message
+    names a folder on this computer), anything else redacted."""
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    if isinstance(exc, OSError):
+        return type(exc).__name__
+    return redact.redact_text(str(exc))
 
 
 def _default_media_root() -> Path:

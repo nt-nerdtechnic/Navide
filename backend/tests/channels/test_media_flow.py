@@ -318,3 +318,10 @@ async def test_a_file_that_fails_to_open_is_refused_and_the_next_still_goes(
     await _until(lambda: m.files)
     assert [f[2] for f in m.files] == ["b.png"]
     await _until(lambda: _said(media_env, "chart.png"))
+
+
+async def test_a_failed_download_names_no_local_folder(media_env: Env) -> None:
+    m = Media(media_env.tg)
+    m.fail = PermissionError(13, "Permission denied", "/Users/someone/Library/channels-media/x")
+    await _send(media_env, "caption", [PHOTO])
+    assert _said(media_env, "Permission denied") and not _said(media_env, "/Users/someone")
