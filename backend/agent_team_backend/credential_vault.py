@@ -149,6 +149,53 @@ LOGIN_HOME_DIRNAME = "login-home"
 # ``login_pending`` is the one predicate covering both kinds of login.
 _PRE_LOGIN_SNAPSHOT_FILE = ".pre-login-live.json"
 
+# A claude account's own CLAUDE_CONFIG_DIR, inside the profile's slot dir.
+# The account signs in there once and Claude Code keeps, refreshes and locks
+# that login itself; Navide only points panes at the directory and never
+# reads, copies or writes the token. A different name from the legacy profile
+# home (``PROFILE_HOME_DIRNAME``) on purpose: the legacy promotion and the
+# login harvest read that home and may delete its Keychain item.
+ACCOUNT_DIR_DIRNAME = "config-dir"
+
+# Entries of ~/.claude an account dir shares with the real home by symlink, so
+# sessions, settings (Navide's hooks) and the user's skills follow the user,
+# not the account. ``(name, is_dir)``. Runtime state (daemon, locks, ide,
+# session-env, shell snapshots) is deliberately not shared: it belongs to the
+# process tree of one config dir. Linked only when the real entry exists,
+# except ``_CLAUDE_ALWAYS_SHARED``, which a pane may create first.
+CLAUDE_SHARED_ENTRIES: tuple[tuple[str, bool], ...] = (
+    ("projects", True),
+    ("file-history", True),
+    ("todos", True),
+    ("tasks", True),
+    ("history.jsonl", False),
+    ("settings.json", False),
+    ("settings.local.json", False),
+    ("CLAUDE.md", False),
+    ("skills", True),
+    ("plugins", True),
+    ("agents", True),
+    ("commands", True),
+    ("output-styles", True),
+    ("keybindings.json", False),
+)
+_CLAUDE_ALWAYS_SHARED = frozenset({"projects", "settings.json"})
+
+# Top-level ``~/.claude.json`` keys copied into a new account dir's own
+# ``.claude.json`` so its first pane skips onboarding and keeps folder trust
+# and user MCP servers. Never ``oauthAccount`` or any API-key field: the
+# account's identity comes from its own sign-in. ``mcpServers`` is re-synced
+# on every prepare so MCP edits keep reaching every account.
+_CLAUDE_SEED_KEYS = (
+    "hasCompletedOnboarding",
+    "lastOnboardingVersion",
+    "theme",
+    "editorMode",
+    "projects",
+    "mcpServers",
+    "bypassPermissionsModeAccepted",
+)
+
 # Where each CLI writes its secret inside an isolated login home, relative to
 # the login-home dir. Env vars and layouts mirror the pre-refactor config-home
 # isolation (verified in commit 0bcfcf8^): claude uses CLAUDE_CONFIG_DIR (macOS
@@ -1416,6 +1463,95 @@ class CredentialVault:
             self.write_slot(agent_key, slot_id, LiveCredentials(secret=secret), scope=scope)
         shutil.rmtree(home, ignore_errors=True)
         return True
+
+    # ---- per-account config dirs (claude) ----
+
+    def account_dir_path(self, slot_id: str) -> Path:
+        """The claude account's own ``CLAUDE_CONFIG_DIR``. Byte-for-byte
+        stable: Claude Code names the Keychain item after a hash of this exact
+        string. The built-in Default account is the real ``~/.claude`` and has
+        none."""
+        if not slot_id or slot_id == DEFAULT_SLOT_ID:
+            raise ValueError("the Default account uses the real ~/.claude")
+        return Path(canonical_path_str(self.slot_dir("claude", slot_id) / ACCOUNT_DIR_DIRNAME))
+
+    def _keychain_item_exists(self, service: str) -> bool:
+        """Whether a generic-password item exists, asking for its attributes
+        only — the secret is never read (no ``-g``/``-w``)."""
+        try:
+            rc, out = self._security(["find-generic-password", "-s", service], None)
+        except Exception as err:  # noqa: BLE001
+            log.warning("keychain lookup %s failed: %s", service, err)
+            return False
+        return rc == 0
+
+    def account_dir_signed_in(self, slot_id: str) -> bool:
+        """Whether the account has signed in inside its own config dir. A
+        presence check only: Claude Code owns the credential and refreshes it,
+        so Navide never reads it. Blocking (a ``security`` call on macOS)."""
+        directory = self.account_dir_path(slot_id)
+        if not directory.is_dir():
+            return False
+        if self._is_macos:
+            return self._keychain_item_exists(legacy_claude_keychain_service(directory))
+        return (directory / ".credentials.json").is_file()
+
+    def account_dir_identity(self, slot_id: str) -> dict | None:
+        """The ``oauthAccount`` Claude Code recorded in the account dir's own
+        ``.claude.json`` (display only, not a secret), or None."""
+        try:
+            directory = self.account_dir_path(slot_id)
+        except ValueError:
+            return None
+        parsed = _parse_json_dict(_read_text(directory / ".claude.json"))
+        account = parsed.get("oauthAccount") if parsed else None
+        return account if isinstance(account, dict) else None
+
+    def prepare_account_dir(self, slot_id: str) -> Path:
+        """Create or refresh the account dir and return it: owner-only, the
+        shared ``~/.claude`` entries linked in, and its ``.claude.json`` seeded
+        once from the real one (user MCP servers re-synced every time).
+        Credentials are never touched. Blocking — call off the event loop."""
+        directory = self.account_dir_path(slot_id)
+        secret_files.make_private_dir(directory)
+        real = self._real_home / ".claude"
+        for name, is_dir in CLAUDE_SHARED_ENTRIES:
+            target = real / name
+            if name in _CLAUDE_ALWAYS_SHARED or target.exists() or target.is_symlink():
+                self._link_shared(directory / name, target, is_dir=is_dir)
+        self._seed_account_dir_config(directory)
+        return directory
+
+    def _seed_account_dir_config(self, directory: Path) -> None:
+        real = _parse_json_dict(_read_text(self._claude_config_json())) or {}
+        path = directory / ".claude.json"
+        raw = _read_text(path)
+        if raw is None:
+            seed = {key: real[key] for key in _CLAUDE_SEED_KEYS if key in real}
+            try:
+                _write_live_file(path, json.dumps(seed, indent=2))
+            except OSError as err:
+                log.warning("cannot seed %s: %s", path, err)
+            return
+        current = _parse_json_dict(raw)
+        if current is None or "mcpServers" not in real:
+            return
+        if current.get("mcpServers") == real["mcpServers"]:
+            return
+        current["mcpServers"] = real["mcpServers"]
+        try:
+            _write_live_file(path, json.dumps(current, indent=2))
+        except OSError as err:
+            log.warning("cannot sync MCP servers into %s: %s", path, err)
+
+    def account_dir_spawn_env(self, slot_id: str) -> tuple[dict[str, str], list[str]]:
+        """``(env_set, env_remove)`` that runs claude on the account's own
+        config dir. The API-key overrides are removed for the same reason a
+        login pane removes them: they would outrank the account's login."""
+        return (
+            {"CLAUDE_CONFIG_DIR": os.fspath(self.account_dir_path(slot_id))},
+            list(CLAUDE_ENV_OVERRIDES),
+        )
 
     # ---- legacy persistent isolated homes ----
 
