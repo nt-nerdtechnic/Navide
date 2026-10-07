@@ -5694,6 +5694,7 @@ function startPaneHealthWatcher(paneId: string): void {
     // Consume the matched region so a later poll can't re-match the same text.
     watcher.baseline = bytes
     pane.loginExpired = true
+    if (onAccountDirLoginExpired(pane)) return
     sysNotify.notifyPaneState(
       paneId,
       'attention',
@@ -5702,6 +5703,26 @@ function startPaneHealthWatcher(paneId: string): void {
     )
   }, PANE_HEALTH_POLL_MS)
   paneHealthWatchers.set(paneId, watcher)
+}
+
+/** A claude pane on its account's own config dir hit "Login expired": that
+ *  account's login in its folder is dead (Claude Code empties the tokens in
+ *  place). Tell the backend, so new panes stop opening on it and the account
+ *  list offers the sign-in again, and name the account in the notification.
+ *  Returns false for every other pane, which keeps the generic notice. */
+function onAccountDirLoginExpired(pane: ActivePane): boolean {
+  if (pane.agentKey !== 'claude' || !pane.profileId) return false
+  if (!cliProfilesApi.accountDirFor('claude', pane.profileId)?.signedIn) return false
+  void cliProfilesApi.reportAccountDirExpired(pane.profileId)
+  sysNotify.notifyPaneState(
+    pane.id,
+    'attention',
+    i18n.global.t('pane.terminal.login-expired-notify-title'),
+    i18n.global.t('pane.terminal.login-expired-account-dir-notify-body', {
+      account: accountLabel(cliProfilesApi, 'claude', pane.profileId, i18n.global.t),
+    })
+  )
+  return true
 }
 
 /** Login-expired badge clicked: send the CLI's login command into the pane.

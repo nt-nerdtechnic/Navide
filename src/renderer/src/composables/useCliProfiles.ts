@@ -634,6 +634,17 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     return { ok: true }
   }
 
+  /** A pane on `profileId`'s own config dir reported "Login expired". The
+   *  backend stops counting that login until it changes (a new sign-in), so
+   *  new panes go back to the live credential. True when it was marked. */
+  async function reportAccountDirExpired(profileId: string): Promise<boolean> {
+    const resp = await backend.send<{ marked?: boolean }>(
+      'cli_profiles.account_dir_expired',
+      { profile_id: profileId },
+    )
+    return !!(resp.ok && resp.payload?.marked)
+  }
+
   /** Duplicate group one account row belongs to, or null when it is unique.
    *  `profileId` null = built-in Default. */
   function duplicateFor(agentKey: string, profileId: string | null): CliAccountDuplicate | null {
@@ -917,6 +928,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     accountDirFor,
     newPaneProfileId,
     setPaneDefault,
+    reportAccountDirExpired,
     portable,
     portableSupported,
     portableSupportedFor,

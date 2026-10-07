@@ -259,3 +259,26 @@ async def test_deleting_an_account_in_use_by_an_account_dir_pane_is_refused(
     assert reply["error"]["details"]["count"] == 1
     assert store.get(profile["id"]) is not None
     assert real_vault.account_dir_signed_in(profile["id"]) is True
+
+
+async def test_a_pane_reporting_its_dir_login_expired_sends_new_panes_back_to_live(
+    store: CliProfilesStore,
+    spawn_stubs: FakeAttribution,
+    real_vault: CredentialVault,
+    events: list[dict[str, Any]],
+) -> None:
+    profile = store.create(agent_key="claude", name="B")
+    _sign_in_dir(real_vault, profile["id"])
+    session = _session()
+    reply = await _send(session, "cli_profiles.account_dir_expired", {"profile_id": profile["id"]})
+    assert reply["ok"] is True
+    assert events[-1]["payload"]["accountDirs"]["claude"][profile["id"]]["signedIn"] is False
+    created = await _spawn(_session(), metadata={"profile_id": profile["id"]})
+    assert "CLAUDE_CONFIG_DIR" not in (created["env"] or {})
+
+
+async def test_account_dir_expired_needs_a_claude_profile(
+    store: CliProfilesStore, real_vault: CredentialVault
+) -> None:
+    reply = await _send(_session(), "cli_profiles.account_dir_expired", {"profile_id": "nope"})
+    assert reply["ok"] is False

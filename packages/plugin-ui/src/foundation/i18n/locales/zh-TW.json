@@ -625,6 +625,7 @@
       "login-expired-tooltip": "CLI 登入已過期 — 點擊送出其登入指令重新登入",
       "login-expired-notify-title": "CLI 登入已過期",
       "login-expired-notify-body": "CLI 回報登入已過期 — 點擊該 pane 的標籤重新登入",
+      "login-expired-account-dir-notify-body": "{account} 在自己資料夾的登入已失效。請點這個 pane 的登入徽章重新登入，或在額度徽章的帳號清單按「登入」。在那之前，新開的 pane 會改用共用的登入。",
       "skill-picker": {
         "label": "Prompt 技能",
         "hint": "把游標移到技能上，這裡會顯示它實際會送出的內容。",

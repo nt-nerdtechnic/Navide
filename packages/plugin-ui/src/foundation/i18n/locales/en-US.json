@@ -625,6 +625,7 @@
       "login-expired-tooltip": "The CLI's login has expired — click to send its login command",
       "login-expired-notify-title": "CLI login expired",
       "login-expired-notify-body": "The CLI reported an expired login — click the pane's badge to re-login",
+      "login-expired-account-dir-notify-body": "{account} is no longer signed in inside its own folder. Click this pane's login badge to sign in again, or use Sign in in the usage badge's account list. Until then, new panes use the shared login.",
       "skill-picker": {
         "label": "Prompt skills",
         "hint": "Point at a skill to see exactly what it will send.",

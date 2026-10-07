@@ -184,3 +184,68 @@ def test_deleting_the_account_removes_its_config_dir_login(tmp_path: Path) -> No
     vault.delete_slot_secrets("claude", "p1")
     assert service not in sec.items
     assert sec.items["Claude Code-credentials"] == "live"
+
+
+class _StampedSecurity(FakeSecurity):
+    """FakeSecurity that also answers an attributes-only lookup the way
+    `security find-generic-password -s` does: a modification date, no
+    password. `stamps` is what each item's mdat currently reads."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stamps: dict[str, str] = {}
+
+    def __call__(self, args, input_text=None):
+        if args and args[0] == "find-generic-password" and "-g" not in args and "-w" not in args:
+            self.calls.append(list(args))
+            service = args[args.index("-s") + 1]
+            if service not in self.items:
+                return 44, ""
+            stamp = self.stamps.get(service, "20261008000000Z")
+            return 0, (
+                'keychain: "/x/login.keychain-db"\nattributes:\n'
+                f'    "mdat"<timedate>=0x00  "{stamp}\\000"\n'
+            )
+        return super().__call__(args, input_text)
+
+
+def test_an_expired_dir_login_stops_counting_until_the_account_signs_in_again(tmp_path: Path) -> None:
+    """Claude Code empties the tokens in place after invalid_grant; the item
+    still exists, so a presence check alone kept reporting the account signed
+    in and its panes kept opening on a dead login. Once a pane reports it
+    expired, the dir stops counting — until the item changes, which is what a
+    new sign-in does. The password is never read."""
+    sec = _StampedSecurity()
+    vault = CredentialVault(
+        root=tmp_path / "root", real_home=tmp_path / "home",
+        security_runner=sec, platform="darwin",
+    )
+    _real_claude(tmp_path)
+    directory = vault.prepare_account_dir("p1")
+    service = legacy_claude_keychain_service(directory)
+    sec.items[service] = '{"claudeAiOauth": {"accessToken": "", "refreshToken": ""}}'
+    sec.stamps[service] = "20261008010000Z"
+    assert vault.account_dir_signed_in("p1") is True
+
+    vault.mark_account_dir_expired("p1")
+    assert vault.account_dir_signed_in("p1") is False
+
+    sec.stamps[service] = "20261008020000Z"  # signed in again: the item changed
+    assert vault.account_dir_signed_in("p1") is True
+    vault.mark_account_dir_expired("p1")
+    assert vault.account_dir_signed_in("p1") is False
+    for call in sec.calls:
+        assert "-g" not in call and "-w" not in call
+
+
+def test_an_expired_dir_login_on_file_platforms_clears_when_the_file_changes(tmp_path: Path) -> None:
+    vault, _ = _vault(tmp_path, platform="linux")
+    _real_claude(tmp_path)
+    directory = vault.prepare_account_dir("p1")
+    creds = directory / ".credentials.json"
+    creds.write_text("{}", encoding="utf-8")
+    os.utime(creds, ns=(1_000_000_000, 1_000_000_000))
+    vault.mark_account_dir_expired("p1")
+    assert vault.account_dir_signed_in("p1") is False
+    os.utime(creds, ns=(2_000_000_000, 2_000_000_000))
+    assert vault.account_dir_signed_in("p1") is True

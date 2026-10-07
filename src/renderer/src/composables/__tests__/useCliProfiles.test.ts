@@ -1183,3 +1183,18 @@ describe('useCliProfiles – deleting an account its own-dir panes still use', (
     scope.stop()
   })
 })
+
+describe('useCliProfiles – a pane reports its account dir login expired', () => {
+  it('sends the profile to the backend and reports whether it was marked', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.account_dir_expired', { ok: true, marked: true })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(await result.reportAccountDirExpired('p2')).toBe(true)
+    const call = mock.sent.find((s) => s.type === 'cli_profiles.account_dir_expired')
+    expect(call?.payload).toEqual({ profile_id: 'p2' })
+    scope.stop()
+  })
+})

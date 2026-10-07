@@ -2422,6 +2422,30 @@ def _slot_login_reason(agent_key: str, slot_id: str) -> str | None:
     return None
 
 
+@handler("cli_profiles.account_dir_expired")
+async def cli_profiles_account_dir_expired(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    """A pane running on a claude account's own config dir reported "Login
+    expired". The dir stops counting as signed in until its login changes, so
+    new panes fall back to the live credential and the account list offers
+    the sign-in again. ``marked`` is False when the login carries no change
+    stamp to clear the mark by — then only the pane's own hint applies."""
+    from . import app
+
+    profile_id = str(payload.get("profile_id") or "")
+    profile = app.cli_profiles_store.get(profile_id) if profile_id else None
+    if profile is None or profile.get("agentKey") != "claude":
+        await session.send_json(make_error(
+            msg_id, msg_type, "NOT_FOUND", f"claude profile not found: {profile_id}",
+        ))
+        return
+    marked = await vault_to_thread(app.credential_vault.mark_account_dir_expired, profile_id)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "marked": marked}))
+    if marked:
+        await _broadcast_profiles_changed("account_dir_expired")
+
+
 @handler("cli_profiles.set_pane_default")
 async def cli_profiles_set_pane_default(
     session: "Session", msg_id: str, msg_type: str, payload: dict

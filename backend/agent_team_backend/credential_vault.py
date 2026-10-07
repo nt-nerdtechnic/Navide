@@ -405,6 +405,9 @@ class CredentialVault:
         self._platform = platform or sys.platform
         self._switch_locks: dict[str, asyncio.Lock] = {}
         self.stores = stores
+        # Account dirs whose login a pane reported expired, keyed to the
+        # login's change stamp at that moment (see mark_account_dir_expired).
+        self._expired_dir_logins: dict[str, str] = {}
 
     def switch_lock(self, agent_key: str) -> asyncio.Lock:
         """Per-agent lock serializing credential swaps and opportunistic
@@ -1485,23 +1488,69 @@ class CredentialVault:
     def _keychain_item_exists(self, service: str) -> bool:
         """Whether a generic-password item exists, asking for its attributes
         only — the secret is never read (no ``-g``/``-w``)."""
+        return self._keychain_item_stamp(service)[0]
+
+    def _keychain_item_stamp(self, service: str) -> tuple[bool, str | None]:
+        """``(exists, modification stamp)`` of a generic-password item, from
+        its attributes only — the secret is never read (no ``-g``/``-w``).
+        The stamp is the raw ``mdat`` value, or None when it is not printed."""
         try:
             rc, out = self._security(["find-generic-password", "-s", service], None)
         except Exception as err:  # noqa: BLE001
             log.warning("keychain lookup %s failed: %s", service, err)
-            return False
-        return rc == 0
+            return False, None
+        if rc != 0:
+            return False, None
+        for line in out.splitlines():
+            marker = '"mdat"<timedate>='
+            if marker in line:
+                return True, line.split(marker, 1)[1].strip() or None
+        return True, None
+
+    def _account_dir_login_stamp(self, slot_id: str) -> tuple[bool, str | None]:
+        """``(present, change stamp)`` of the login inside the account dir:
+        the Keychain item's modification date on macOS, the credentials
+        file's mtime elsewhere. Never the credential itself."""
+        directory = self.account_dir_path(slot_id)
+        if not directory.is_dir():
+            return False, None
+        if self._is_macos:
+            return self._keychain_item_stamp(legacy_claude_keychain_service(directory))
+        try:
+            return True, str((directory / ".credentials.json").stat().st_mtime_ns)
+        except OSError:
+            return False, None
 
     def account_dir_signed_in(self, slot_id: str) -> bool:
         """Whether the account has signed in inside its own config dir. A
         presence check only: Claude Code owns the credential and refreshes it,
-        so Navide never reads it. Blocking (a ``security`` call on macOS)."""
-        directory = self.account_dir_path(slot_id)
-        if not directory.is_dir():
+        so Navide never reads it. A login a pane reported expired does not
+        count until it changes — a new sign-in rewrites it. Blocking (a
+        ``security`` call on macOS)."""
+        present, stamp = self._account_dir_login_stamp(slot_id)
+        if not present:
             return False
-        if self._is_macos:
-            return self._keychain_item_exists(legacy_claude_keychain_service(directory))
-        return (directory / ".credentials.json").is_file()
+        expired_at = self._expired_dir_logins.get(slot_id)
+        if expired_at is None:
+            return True
+        if stamp is not None and stamp != expired_at:
+            self._expired_dir_logins.pop(slot_id, None)
+            return True
+        return False
+
+    def mark_account_dir_expired(self, slot_id: str) -> bool:
+        """A pane on this account dir reported its login expired. Claude Code
+        empties the tokens in place after ``invalid_grant`` and the item stays,
+        so presence alone would keep sending panes to a dead login. Until the
+        login changes the dir no longer counts as signed in, and panes fall
+        back to the live credential. Returns False when no change stamp can be
+        read — nothing could ever clear the mark, so none is set. In memory:
+        a restart re-learns it from the next pane that hits it."""
+        present, stamp = self._account_dir_login_stamp(slot_id)
+        if not present or stamp is None:
+            return False
+        self._expired_dir_logins[slot_id] = stamp
+        return True
 
     def account_dir_identity(self, slot_id: str) -> dict | None:
         """The ``oauthAccount`` Claude Code recorded in the account dir's own
