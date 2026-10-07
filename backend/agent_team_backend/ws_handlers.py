@@ -5334,6 +5334,7 @@ async def roles_upsert(session: "Session", msg_id: str, msg_type: str, payload: 
         label=payload.get("label", ""),
         one_line=payload.get("one_line", ""),
         system_prompt=payload.get("system_prompt", ""),
+        properties=payload.get("properties"),
     )
     await session.send_json(
         make_response(msg_id, msg_type, {"role": role, "roles": app.roles_store.list()})
@@ -5377,11 +5378,16 @@ async def roles_rename(session: "Session", msg_id: str, msg_type: str, payload: 
             )
         )
         return
+    # A rename must not drop the role's declarative properties.
+    properties = payload.get("properties")
+    if properties is None:
+        properties = (app.roles_store.get(old_key) or {}).get("properties")
     role = app.roles_store.upsert(
         key=new_key,
         label=payload.get("label", ""),
         one_line=payload.get("one_line", ""),
         system_prompt=payload.get("system_prompt", ""),
+        properties=properties,
     )
     touched = app.stages_store.repoint_role_references(old_key, new_key)
     if new_key != old_key:
