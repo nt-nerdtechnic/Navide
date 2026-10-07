@@ -461,6 +461,24 @@ the head: a turn that was going to be a report ends with its conclusion.
 None of this makes the report a completion signal. To be sure a spawned pane has
 finished, check its state yourself with `cli_get_status` / `cli_wait_idle`.
 
+### Releasing a finished pane
+
+Once a child has reported and its work is done, the parent can free its memory
+without taking it away from the user:
+
+```
+ui_invoke(action="ui.pane.reclaim", args={"paneId": "<child pane_id>"})
+```
+
+`paneId` also takes an array. Each CLI process ends and the pane stays where it
+was as a click-to-resume card with its conversation intact — the same "reclaim
+now" the status bar offers, so the user can open it and check the work. The
+status bar's guards apply: a pane that is busy or awaiting an answer, the one
+the user has focused, one with unsent input or queued messages, and one whose
+session cannot be resumed are refused. The answer lists
+`{reclaimed, refused: [{paneId, reason, detail}]}`. Prefer this to
+`cli_close_agent`, which ends the conversation for good.
+
 ---
 
 ## How delivery actually works

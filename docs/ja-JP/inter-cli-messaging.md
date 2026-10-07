@@ -443,6 +443,23 @@ task: Review the diff on this branch and report blocking issues.
 完了したことを確かめるには、`cli_get_status` / `cli_wait_idle` で自分で状態を確認して
 ください。
 
+### 作業を終えた Pane の回収
+
+子 Pane が報告を終え作業が完了したら、親 Pane はユーザーから取り上げずにそのリソー
+スを解放できます：
+
+```
+ui_invoke(action="ui.pane.reclaim", args={"paneId": "<子の pane_id>"})
+```
+
+`paneId` は配列も受け付けます。各 CLI プロセスは終了し、Pane はその場に会話を保った
+ままクリックで再開できるカードとして残ります — ステータスバーの「今すぐ回収」と同じ
+動作なので、ユーザーは開いて成果を確認できます。ステータスバーのガードはそのまま適用
+され、ビジーまたは回答待ちの Pane、ユーザーがフォーカスしている Pane、未送信の入力や
+キュー中のメッセージがある Pane、セッションを再開できない Pane は拒否されます。戻り値は
+`{reclaimed, refused: [{paneId, reason, detail}]}` です。会話を完全に終わらせる
+`cli_close_agent` よりこちらを優先してください。
+
 ---
 
 ## 配信の実際の仕組み

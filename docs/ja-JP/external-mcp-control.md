@@ -386,6 +386,7 @@ Host Wiring — だけです。Navide の CLI Pane から、その Pane 自身�
 | `ui.pane.open` | `{paneId}` | 復元用の placeholder（`cli_list_targets` で `realized: false` の Pane）を開き、完了を待つ。`{realized, reason, paneId}` を返す — `paneId` は開いた後の Pane の id、`reason` は `opened`、`fresh`（新しいセッション。以前の会話は覚えていない）、`already-open`、または開けなかった理由。Resume 動作が `ask` でもモーダルは出ません |
 | `ui.pane.getStatus` | `{paneId}` | その Pane の `{status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?, effort?, profileId?, loginExpired?, usageLimitUntil?}` を返す — アイデンティティ系のキーは Pane に値がある場合のみ |
 | `ui.pane.interrupt` | `{paneId}` | その Pane の割り込みキーを押す。`{sent, status, advisories?}` を返す — `status` は押す**前**に読まれます。押すこと自体が、報告しようとしているその状態を変えてしまうためです |
+| `ui.pane.reclaim` | `{paneId}`（単一 id または配列） | 作業を終えた Pane のリソースを解放する：CLI プロセスは終了し、Pane はクリックで再開できるカードとして残る（ステータスバーの「今すぐ回収」と同じ）。ビジーまたは回答待ち、フォーカス中、未送信の入力あり、キュー中のメッセージあり、再開不可の Pane は拒否される。`{reclaimed, refused: [{paneId, reason, detail}]}` を返す |
 | `ui.tab.switch` | `{tabId}` | Active な Stage/Run-group タブを切り替え |
 | `ui.preview.show` | `{kind, …}` | 右レールのプレビューパネルにファイル・diff・インラインスニペットを表示 |
 | `ui.window.openPlans` | `{rel_path?}` | Plan ウィンドウを開く。`rel_path`（`.agent-team/plans/<name>.html`、相対パス、`..` 不可）を渡すとその Plan 1 件に絞って開く |

@@ -338,6 +338,7 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 | `ui.pane.open` | `{paneId}` | 打開一個還原用的 placeholder（`cli_list_targets` 列出 `realized: false` 的 Pane）並等它開完。回傳 `{realized, reason, paneId}`——`paneId` 是開完後這個 Pane 的 id，`reason` 是 `opened`、`fresh`（全新 session，不記得先前對話）、`already-open`，或它沒開起來的原因。Resume 行為設為 `ask` 時不會彈出 modal |
 | `ui.pane.getStatus` | `{paneId}` | 回傳該 Pane 的 `{status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?, effort?, profileId?, loginExpired?, usageLimitUntil?}`——身分類欄位只在該 Pane 有值時出現 |
 | `ui.pane.interrupt` | `{paneId}` | 對該 Pane 按下它的中斷鍵。回傳 `{sent, status, advisories?}` —— `status` 是在按下**之前**讀的，因為這一按會改變它自己要回報的那個狀態 |
+| `ui.pane.reclaim` | `{paneId}`（單一 id 或陣列） | 回收做完的 Pane 的資源：CLI 行程結束、Pane 留成可點擊接續的卡片，等同狀態列的「立即回收」。忙碌或等待回答、被聚焦、有未送出輸入、有排隊訊息、無法接續的 Pane 會被拒絕。回傳 `{reclaimed, refused: [{paneId, reason, detail}]}` |
 | `ui.tab.switch` | `{tabId}` | 切換作用中的 Stage／Run-group 分頁 |
 | `ui.preview.show` | `{kind, …}` | 在右側 rail 的預覽面板顯示檔案、diff 或內嵌片段 |
 | `ui.window.openPlans` | `{rel_path?}` | 開啟 Plan 視窗；帶 `rel_path`（`.agent-team/plans/<name>.html`，相對路徑、不含 `..`）則聚焦開啟該份 plan |
