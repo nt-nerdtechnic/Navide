@@ -15462,6 +15462,8 @@ function releaseStageSlot(stageIndex: number, slotKey: string, why: string): voi
     disposeStageRouter(stageIndex)
     stopGlobalManagerRouter()
     stageCompletions.delete(stageIndex)
+    // Close the run's nodes too, or the canvas shows them running forever.
+    void pipelineDag.end('aborted')
     return
   }
   pipelineLog(`Stage ${stageLabel} ✓ every remaining slot finished — advancing`)

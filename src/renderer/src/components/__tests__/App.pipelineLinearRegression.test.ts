@@ -311,3 +311,53 @@ describe('a graph pipeline runs its gates, loops and pins', () => {
     expect(run.events.some((e) => e.startsWith('inject') && e.includes('review'))).toBe(true)
   })
 })
+
+// ── Run endings the engine must close out ───────────────────────────────────
+
+const releaseSource = block(
+  'function releaseStageSlot(stageIndex: number, slotKey: string, why: string): void {',
+  '\nfunction startStageWatcher(',
+)
+
+describe('a run that loses every slot', () => {
+  it('closes its running nodes as aborted', async () => {
+    const { code } = await transformWithEsbuild(`${releaseSource}\nreturn { releaseStageSlot }`, 'AppRelease.ts', { loader: 'ts' })
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const dag = usePipelineDag({
+      send: async (type, payload) => {
+        sent.push({ type, payload })
+        return type === 'pipelines.graph.get' ? { derived: true } : {}
+      },
+      log: () => {},
+      workspacePath: () => '/ws',
+    })
+    await dag.begin('pl-1', STAGES as unknown as StageDef[])
+    dag.slotStarted(0, 'fe', 'p1')
+    dag.slotStarted(0, 'be', 'p2')
+    const pipeline = { state: 'running', stageIndex: 0, log: [] as string[] }
+    const stageCompletions = new Map()
+    registerStage(stageCompletions, 0, 2)
+    const deps: Record<string, unknown> = {
+      releaseSlot: (await import('../../lib/stageTracker')).releaseSlot,
+      stageCompletions,
+      stagesApi: { stages: { value: STAGES } },
+      pipelineLog: (l: string) => pipeline.log.push(l),
+      pipeline,
+      cancelStageWatchers: vi.fn(),
+      disposeStageRouter: vi.fn(),
+      stopGlobalManagerRouter: vi.fn(),
+      onPipelineNext: vi.fn(),
+      pipelineDag: dag,
+    }
+    const api = new Function(...Object.keys(deps), code)(...Object.values(deps)) as {
+      releaseStageSlot: (i: number, key: string, why: string) => void
+    }
+    api.releaseStageSlot(0, 'p1', 'closed')
+    api.releaseStageSlot(0, 'p2', 'closed')
+    await flush()
+    expect(pipeline.state).toBe('aborted')
+    const nodes = sent.filter((s) => s.type === 'pipeline.node_states').at(-1)!.payload.nodes as Record<string, { status: string }>
+    expect(nodes['n-01-0'].status).toBe('aborted')
+    expect(nodes['n-01-1'].status).toBe('aborted')
+  })
+})
