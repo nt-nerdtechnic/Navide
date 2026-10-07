@@ -1704,6 +1704,7 @@ def _profile_account_view() -> dict:
     doc = app.cli_profiles_store.list()
     identities: dict[str, dict] = {}
     duplicates: dict[str, dict] = {}
+    account_dirs: dict[str, dict] = {}
     for agent_key in PROFILE_AGENT_KEYS:
         active = doc["defaults"].get(agent_key) or DEFAULT_SLOT_ID
         slot_ids = [DEFAULT_SLOT_ID] + [
@@ -1725,6 +1726,22 @@ def _profile_account_view() -> dict:
             key = email.casefold()
             groups.setdefault(key, []).append(sid)
             labels.setdefault(key, email)
+        if agent_key == "claude":
+            # Accounts that signed in inside their own config dir: their row
+            # shows that login — the one their panes run on — whatever the
+            # swap slot still holds.
+            dirs: dict[str, dict] = {}
+            for sid in slot_ids:
+                if sid == DEFAULT_SLOT_ID:
+                    continue
+                signed_in = app.credential_vault.account_dir_signed_in(sid)
+                account = app.credential_vault.account_dir_identity(sid) if signed_in else None
+                email = account.get("emailAddress") if isinstance(account, dict) else None
+                email = email if isinstance(email, str) and email else None
+                dirs[sid] = {"signedIn": signed_in, "email": email}
+                if signed_in:
+                    rows[sid] = {"email": email or rows[sid].get("email"), "signedIn": True}
+            account_dirs[agent_key] = dirs
         identities[agent_key] = rows
         dupes = {
             sid: {"email": labels[key], "slotIds": ids}
@@ -1734,7 +1751,7 @@ def _profile_account_view() -> dict:
         }
         if dupes:
             duplicates[agent_key] = dupes
-    return {"identities": identities, "duplicates": duplicates}
+    return {"identities": identities, "duplicates": duplicates, "accountDirs": account_dirs}
 
 
 def _profile_pin_for_spawn(agent_key: str, payload_profile_id: object) -> str:
@@ -1753,8 +1770,59 @@ def _profile_pin_for_spawn(agent_key: str, payload_profile_id: object) -> str:
     pin = str(payload_profile_id or "")
     if pin:
         return pin
+    pane_default = _pane_default_profile_id(agent_key)
+    if pane_default:
+        return pane_default
     active = app.cli_profiles_store.get_default_profile(agent_key)
     return active["id"] if active else DEFAULT_SLOT_ID
+
+
+#: Terminal metadata key naming the claude account whose own config dir the
+#: pane runs on (CLAUDE_CONFIG_DIR). Set by the backend only; such a pane does
+#: not use the live credential, so an account switch never touches it.
+ACCOUNT_DIR_METADATA_KEY = "account_dir_profile_id"
+
+
+def _pane_default_profile_id(agent_key: str) -> str:
+    """The account new panes start on when one was chosen apart from the
+    live credential's owner (``paneDefaults``), or "". A choice whose profile
+    is gone reads as none."""
+    from . import app
+
+    getter = getattr(app.cli_profiles_store, "get_pane_default", None)
+    chosen = getter(agent_key) if callable(getter) else None
+    if chosen and app.cli_profiles_store.get(chosen) is not None:
+        return str(chosen)
+    return ""
+
+
+def _account_dir_for_spawn(
+    agent_key: str, payload_profile_id: object, *, login: bool
+) -> str:
+    """The claude account whose own config dir this spawn runs on, or "" for
+    the live credential (the swap model, unchanged). A sign-in into the dir
+    (``login``) prepares it for the named profile even before it holds a
+    login; any other spawn uses a dir only once its account signed in there,
+    so an account that never did keeps running exactly as before. Blocking
+    (directory I/O and, on macOS, a Keychain presence check)."""
+    from . import app
+
+    if agent_key != "claude":
+        return ""
+    if login:
+        slot = str(payload_profile_id or "")
+    else:
+        slot = _profile_pin_for_spawn(agent_key, payload_profile_id)
+    if not slot or slot == DEFAULT_SLOT_ID:
+        return ""
+    profile = app.cli_profiles_store.get(slot)
+    if profile is None or profile.get("agentKey") != agent_key:
+        return ""
+    vault = app.credential_vault
+    if not login and not vault.account_dir_signed_in(slot):
+        return ""
+    vault.prepare_account_dir(slot)
+    return slot
 
 
 #: Terminal metadata key carrying the portable slot a launch was injected
@@ -1818,6 +1886,10 @@ async def _broadcast_profiles_changed(
         # Account rows storing the same login as another row of the same agent
         # — the Accounts pane flags them so the user can delete the spare.
         "duplicates": view["duplicates"],
+        # claude accounts' own config-dir logins: {"claude": {slotId:
+        # {signedIn, email}}}, and the account new panes start on.
+        "accountDirs": view["accountDirs"],
+        "paneDefaults": doc["paneDefaults"],
         # Pasted portable credentials, metadata only (never the value):
         # {"<agentKey>/<slotId>": {configured, enabled, kind, updatedAt, ...}}.
         "portable_credentials": portable,
@@ -1861,6 +1933,8 @@ async def cli_profiles_list(session: "Session", msg_id: str, msg_type: str, payl
                 "defaultNames": doc["defaultNames"],
                 "identities": view["identities"],
                 "duplicates": view["duplicates"],
+                "accountDirs": view["accountDirs"],
+                "paneDefaults": doc["paneDefaults"],
                 "supported_agents": list(PROFILE_AGENT_KEYS),
                 "portable_credentials": portable,
                 "portable_supported": portable_credentials.supported_agent_keys(),
@@ -2315,6 +2389,46 @@ def _slot_login_reason(agent_key: str, slot_id: str) -> str | None:
     ):
         return "expired"
     return None
+
+
+@handler("cli_profiles.set_pane_default")
+async def cli_profiles_set_pane_default(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    """Choose the claude account new panes start on, by its own config dir.
+    Nothing is swapped and no running pane changes account — that is what
+    ``set_default`` (the live-credential switch) is for. Only an account that
+    signed in inside its config dir can be chosen; ``profile_id`` null/""
+    clears the choice so new panes follow the live credential again."""
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    profile_id = str(payload.get("profile_id") or "")
+    if agent_key != "claude":
+        await session.send_json(make_error(
+            msg_id, msg_type, "BAD_REQUEST",
+            f"per-account config dirs are claude-only, not {agent_key!r}",
+        ))
+        return
+    if profile_id:
+        profile = app.cli_profiles_store.get(profile_id)
+        if profile is None or profile.get("agentKey") != agent_key:
+            await session.send_json(make_error(
+                msg_id, msg_type, "NOT_FOUND", f"profile not found: {profile_id}",
+            ))
+            return
+        if not await vault_to_thread(app.credential_vault.account_dir_signed_in, profile_id):
+            await session.send_json(make_error(
+                msg_id, msg_type, "ACCOUNT_DIR_SIGNED_OUT",
+                "this account has not signed in inside its own config dir yet",
+                {"agent_key": agent_key, "profile_id": profile_id},
+            ))
+            return
+    pane_defaults = app.cli_profiles_store.set_pane_default(agent_key, profile_id or None)
+    await session.send_json(make_response(
+        msg_id, msg_type, {"ok": True, "paneDefaults": pane_defaults},
+    ))
+    await _broadcast_profiles_changed("set_pane_default")
 
 
 @handler("cli_profiles.set_default")
@@ -7049,7 +7163,8 @@ async def _terminal_create_impl(
     # These are server attestations, never renderer-provided metadata.
     for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch",
                 "credential_store_verified", "credential_store_id", "credential_store_error",
-                "credential_launch_term_id", "guard_pane_token"):
+                "credential_launch_term_id", "guard_pane_token",
+                ACCOUNT_DIR_METADATA_KEY, "account_dir_login"):
         metadata.pop(key, None)
     agent_key = payload.get("agent_key") or ""
     # The window's per-vendor env settings, first in the chain on purpose: the
@@ -7220,6 +7335,47 @@ async def _terminal_create_impl(
                     )
                     return
                 metadata["live_login"] = True
+    # A claude account that signed in inside its own config dir runs there:
+    # Claude Code owns that login, refreshes it under the dir's own locks, and
+    # an account switch (which swaps only the live credential) never reaches
+    # it. ``account_dir_login`` is the sign-in that puts the login there.
+    account_dir_slot = ""
+    if agent_key == "claude" and not login_profile_id:
+        account_dir_login = bool(payload.get("account_dir_login"))
+        try:
+            account_dir_slot = await vault_to_thread(functools.partial(
+                _account_dir_for_spawn, agent_key, metadata.get("profile_id"),
+                login=account_dir_login,
+            ))
+        except Exception as err:  # noqa: BLE001 — the dir could not be prepared
+            if account_dir_login:
+                await session.send_json(make_error(
+                    msg_id, msg_type, "LOGIN_UNAVAILABLE", _profile_error(err),
+                    {"agent_key": agent_key, "profile_id": str(metadata.get("profile_id") or "")},
+                ))
+                return
+            app.log.warning("claude account dir unavailable; using the live login: %s", err)
+            account_dir_slot = ""
+        if account_dir_login and not account_dir_slot:
+            await session.send_json(make_error(
+                msg_id, msg_type, "BAD_REQUEST",
+                f"invalid account for a claude sign-in: {metadata.get('profile_id')!r}",
+            ))
+            return
+        if account_dir_slot:
+            dir_set, dir_remove = app.credential_vault.account_dir_spawn_env(account_dir_slot)
+            env.update(dir_set)
+            env_remove = list(env_remove or []) + dir_remove
+            metadata[ACCOUNT_DIR_METADATA_KEY] = account_dir_slot
+            metadata["profile_id"] = account_dir_slot
+            if account_dir_login:
+                is_login = True
+                metadata["account_dir_login"] = True
+        elif not metadata.get("profile_id") and _pane_default_profile_id(agent_key):
+            # The chosen account has no usable dir login: this pane runs on
+            # the live credential, so file it under that credential's owner.
+            active = app.cli_profiles_store.get_default_profile(agent_key)
+            metadata["profile_id"] = active["id"] if active else DEFAULT_SLOT_ID
     # True only when the rewrite below really turns the command into an auth
     # SUBCOMMAND. That, not `is_login` on its own, is what makes the spawn
     # wiring inapplicable further down — a subcommand takes none of the
@@ -7236,7 +7392,7 @@ async def _terminal_create_impl(
         login_spec = cli_vendor(agent_key)
         login_subcommand = bool(login_spec is not None and login_spec.login_command_args)
         payload["command"] = app._login_spawn_command(agent_key, payload["command"])
-    elif app._agent_signed_out(agent_key):
+    elif not account_dir_slot and app._agent_signed_out(agent_key):
         # Installed, but with no credentials to run on — the counterpart to
         # cli.missing, which only ever fires for a CLI that is not there at
         # all. Advisory: unlike cli.missing the spawn is perfectly valid and
@@ -7535,7 +7691,10 @@ async def _terminal_create_impl(
                 # A login pane — isolated (login_profile_id, which does not
                 # reach this branch) or live (is_login alone) — exists to
                 # sign in; the token would make the CLI skip exactly that.
-                injection = None if is_login else await vault_to_thread(
+                # An account-dir pane already runs on its account's own
+                # login; a portable token would outrank it and switch the
+                # identity silently.
+                injection = None if is_login or account_dir_slot else await vault_to_thread(
                     functools.partial(
                         portable_credentials.spawn_env, agent_key,
                         home=Path.home(), cwd=Path(str(payload.get("cwd") or "")),
@@ -7584,6 +7743,7 @@ async def _terminal_create_impl(
             provenance = quota_failover.pane_auth_scope(
                 agent_key, launch_profile, env=env, env_remove=env_remove or (),
                 portable_slot_id=injection.slot_id if injection else None,
+                account_dir=bool(account_dir_slot),
             )
             metadata["launch_profile_id"] = provenance["profileId"]
             metadata["profile_scope"] = provenance["scope"]
@@ -7859,6 +8019,13 @@ async def _terminal_create_impl(
         from .usage_service import start_login_watch
 
         start_login_watch(agent_key, login_profile_id)
+    elif metadata.get("account_dir_login") and account_dir_slot:
+        # Same fast feedback for a sign-in into an account's own config dir:
+        # nothing is harvested (Claude Code keeps that login), the watch only
+        # reports the moment the dir holds it.
+        from .usage_service import start_account_dir_login_watch
+
+        start_account_dir_login_watch(account_dir_slot)
     response_payload = {
         "terminal_session_id": term.id,
         "pane_id": term.pane_id,

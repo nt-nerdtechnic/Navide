@@ -579,6 +579,53 @@ async def _kill_completed_login_panes(agent_key: str, profile_id: str) -> None:
             pass
 
 
+def start_account_dir_login_watch(profile_id: str) -> None:
+    """Watch a claude sign-in into the account's own config dir and announce
+    it as a completed login (idempotent per profile)."""
+    key = ("claude-account-dir", profile_id)
+    task = _login_watches.get(key)
+    if task is not None and not task.done():
+        return
+    task = asyncio.create_task(_account_dir_login_watch(profile_id))
+    _login_watches[key] = task
+    task.add_done_callback(
+        lambda t, key=key: _login_watches.pop(key, None)
+        if _login_watches.get(key) is t
+        else None
+    )
+
+
+async def _account_dir_login_watch(profile_id: str) -> None:
+    """Poll until the account dir holds a login, then broadcast the same
+    ``login-harvest`` event an isolated login sends, so the window that
+    opened the sign-in closes its pane and confirms the identity. Nothing is
+    read from or copied out of the dir: Claude Code owns that credential."""
+    deadline = time.monotonic() + LOGIN_WATCH_TIMEOUT_SEC
+    while time.monotonic() < deadline:
+        await asyncio.sleep(LOGIN_WATCH_INTERVAL_SEC)
+        vault = _get_credential_vault()
+        if vault is None:
+            continue
+        try:
+            signed_in = await vault_to_thread(vault.account_dir_signed_in, profile_id)
+            identity = await vault_to_thread(vault.account_dir_identity, profile_id)
+        except Exception:  # noqa: BLE001 — retry on the next tick
+            continue
+        # The Keychain item can appear a moment before Claude Code records
+        # the account; wait for both so the confirmation can name it.
+        if not signed_in or identity is None:
+            continue
+        try:
+            from .ws_handlers import _broadcast_profiles_changed
+
+            await _broadcast_profiles_changed(
+                "login-harvest", harvested_profile_ids=[profile_id]
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+
 async def _login_watch(agent_key: str, profile_id: str) -> None:
     deadline = time.monotonic() + LOGIN_WATCH_TIMEOUT_SEC
     while time.monotonic() < deadline:

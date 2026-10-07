@@ -2166,6 +2166,13 @@ class _RecordingVault:
         # (de-duplication has its own suite: test_login_dedupe.py).
         return {"email": None, "signedIn": False}
 
+    # No claude account has signed in inside its own config dir.
+    def account_dir_signed_in(self, slot_id: str) -> bool:
+        return False
+
+    def account_dir_identity(self, slot_id: str) -> dict | None:
+        return None
+
     def restore(self, agent_key: str, slot_id: str) -> None:
         self.restored.append((agent_key, slot_id))
 
