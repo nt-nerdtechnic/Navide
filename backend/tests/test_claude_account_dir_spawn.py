@@ -231,3 +231,31 @@ def test_account_dir_panes_are_not_counted_as_vault_panes() -> None:
     scope = quota_failover.pane_auth_scope(
         "claude", None, env={"CLAUDE_CONFIG_DIR": "/x"}, account_dir=True)
     assert scope["credentialSource"] == "account-dir"
+
+
+async def test_deleting_an_account_in_use_by_an_account_dir_pane_is_refused(
+    store: CliProfilesStore, real_vault: CredentialVault, events: list[dict[str, Any]]
+) -> None:
+    """A pane running on the account's own config dir would lose that dir
+    when the slot is archived and fall into "Login expired"; refuse instead,
+    with a code the UI can explain."""
+    from types import SimpleNamespace
+
+    profile = store.create(agent_key="claude", name="B")
+    _sign_in_dir(real_vault, profile["id"])
+    session = _session()
+    term = SimpleNamespace(
+        id="t-dir", agent_key="claude", closed=False,
+        metadata={"account_dir_profile_id": profile["id"]},
+    )
+    session.terminals.registry["t-dir"] = term  # type: ignore[attr-defined]
+    app._PTY_OWNERS["t-dir"] = session
+    try:
+        reply = await _send(session, "cli_profiles.delete", {"id": profile["id"]})
+    finally:
+        app._PTY_OWNERS.pop("t-dir", None)
+    assert reply["ok"] is False
+    assert reply["error"]["code"] == "ACCOUNT_DIR_IN_USE"
+    assert reply["error"]["details"]["count"] == 1
+    assert store.get(profile["id"]) is not None
+    assert real_vault.account_dir_signed_in(profile["id"]) is True

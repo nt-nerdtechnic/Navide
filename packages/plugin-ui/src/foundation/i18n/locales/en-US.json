@@ -7040,6 +7040,7 @@
         "unsupported": "This agent does not support multiple accounts.",
         "active-error": "This account is currently active and cannot be deleted. Switch to another account first.",
         "login-in-progress-error": "A sign-in for this account is still running. Finish or close its login pane first.",
+        "account-dir-in-use-error": "{count} running pane(s) use this account's own folder. Close them before deleting the account.",
         "portable-label": "Portable credential",
         "portable-present": "Set",
         "portable-absent": "Not set",

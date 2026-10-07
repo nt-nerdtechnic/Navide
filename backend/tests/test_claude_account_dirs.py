@@ -169,3 +169,18 @@ def test_account_dir_never_touches_live_or_slot_credentials(tmp_path: Path) -> N
     assert sec.items[legacy_claude_keychain_service(directory)] == "dir"
     for call in sec.calls:
         assert call[0] != "-i", "no Keychain writes"
+
+
+def test_deleting_the_account_removes_its_config_dir_login(tmp_path: Path) -> None:
+    """The dir's login lives in a Keychain item named after the dir. The
+    store archives the slot dir by renaming it, which would leave that item —
+    a working refresh token — behind with nothing able to reach it."""
+    vault, sec = _vault(tmp_path)
+    _real_claude(tmp_path)
+    directory = vault.prepare_account_dir("p1")
+    service = legacy_claude_keychain_service(directory)
+    sec.items[service] = '{"claudeAiOauth": {}}'
+    sec.items["Claude Code-credentials"] = "live"
+    vault.delete_slot_secrets("claude", "p1")
+    assert service not in sec.items
+    assert sec.items["Claude Code-credentials"] == "live"

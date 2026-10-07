@@ -2186,6 +2186,19 @@ async def cli_profiles_delete(session: "Session", msg_id: str, msg_type: str, pa
                 )
             )
             return
+        # A pane running on the account's own config dir would lose that dir
+        # when the slot is archived below and drop to "Login expired".
+        dir_panes = _running_account_dir_terminals(profile_id)
+        if dir_panes:
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "ACCOUNT_DIR_IN_USE",
+                    f"{len(dir_panes)} running {agent_key} pane(s) use this "
+                    "account's own config dir; close them before deleting it",
+                    {"count": len(dir_panes), "agent_key": agent_key},
+                )
+            )
+            return
         # Remove secrets the archived slot dir cannot carry (claude's slot
         # Keychain item + oauth-account.json) and any leftover login home,
         # BEFORE the store renames the slot dir away. Cleanup failures must
@@ -2213,6 +2226,24 @@ async def cli_profiles_delete(session: "Session", msg_id: str, msg_type: str, pa
             {"profiles": doc["profiles"], "defaults": doc["defaults"]},
         )
     )
+
+
+def _running_account_dir_terminals(profile_id: str) -> list[str]:
+    """Terminal ids of the live panes running on ``profile_id``'s own claude
+    config dir (``ACCOUNT_DIR_METADATA_KEY``)."""
+    from . import app
+
+    running: list[str] = []
+    for tid, owner in list(app._PTY_OWNERS.items()):
+        lookup = getattr(getattr(owner, "terminals", None), "get", None)
+        term = lookup(tid) if callable(lookup) else None
+        if (
+            term is not None
+            and not getattr(term, "closed", False)
+            and getattr(term, "metadata", {}).get(ACCOUNT_DIR_METADATA_KEY) == profile_id
+        ):
+            running.append(tid)
+    return running
 
 
 def _live_login_pending(agent_key: str) -> bool:

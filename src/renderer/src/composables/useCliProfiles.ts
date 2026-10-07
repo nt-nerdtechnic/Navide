@@ -432,7 +432,11 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
             ? i18n.global.t('settings.accounts.cli.active-error')
             : code === 'LOGIN_IN_PROGRESS'
               ? i18n.global.t('settings.accounts.cli.login-in-progress-error')
-              : (resp.error?.message ?? 'delete failed')
+              : code === 'ACCOUNT_DIR_IN_USE'
+                ? i18n.global.t('settings.accounts.cli.account-dir-in-use-error', {
+                    count: Number(resp.error?.details?.count ?? 1),
+                  })
+                : (resp.error?.message ?? 'delete failed')
         return false
       }
       profiles.value = resp.payload.profiles

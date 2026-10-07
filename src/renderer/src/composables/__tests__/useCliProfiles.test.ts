@@ -10,6 +10,7 @@ import {
   type SetDefaultResult,
 } from '../useCliProfiles'
 import { createMockBackend, withScope, flush } from './mockBackend'
+import { i18n } from '@navide/plugin-ui/foundation'
 
 function profile(id: string, agentKey: string, name: string): CliProfile {
   return { id, agentKey, name, createdAt: '2026-07-01T00:00:00Z' }
@@ -1155,6 +1156,30 @@ describe('useCliProfiles – claude accounts with their own config dir', () => {
     const call = mock.sent.find((s) => s.type === 'cli_profiles.set_pane_default')
     expect(call?.payload).toEqual({ agent_key: 'claude', profile_id: 'p2' })
     expect(result.newPaneProfileId('claude')).toBe('p2')
+    scope.stop()
+  })
+})
+
+describe('useCliProfiles – deleting an account its own-dir panes still use', () => {
+  it('explains ACCOUNT_DIR_IN_USE in the UI language, with the pane count', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.delete', null as unknown as object, {
+      ok: false,
+      error: {
+        code: 'ACCOUNT_DIR_IN_USE',
+        message: "2 running claude pane(s) use this account's own config dir; close them before deleting it",
+        details: { count: 2, agent_key: 'claude' },
+      },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(await result.remove('p1')).toBe(false)
+    expect(result.error.value).toBe(
+      i18n.global.t('settings.accounts.cli.account-dir-in-use-error', { count: 2 }),
+    )
+    expect(result.error.value).not.toContain('config dir')
     scope.stop()
   })
 })

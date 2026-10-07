@@ -7040,6 +7040,7 @@
         "unsupported": "此 agent 不支援多帳號。",
         "active-error": "此帳號目前使用中，請先切換到其他帳號再刪除。",
         "login-in-progress-error": "此帳號的登入程序仍在進行中，請先完成或關閉其登入 pane。",
+        "account-dir-in-use-error": "有 {count} 個執行中的 pane 正在使用這個帳號自己的資料夾，請先關閉它們再刪除帳號。",
         "portable-label": "可攜憑證",
         "portable-present": "已設定",
         "portable-absent": "未設定",

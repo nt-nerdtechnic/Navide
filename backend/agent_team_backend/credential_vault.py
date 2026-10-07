@@ -1133,6 +1133,13 @@ class CredentialVault:
         if agent_key == "claude":
             if self._is_macos:
                 self._keychain_delete(self._slot_service(agent_key, slot_id))
+                if slot_id != DEFAULT_SLOT_ID:
+                    # The account's own config-dir login is a Keychain item
+                    # named after the dir; once the slot dir is archived by
+                    # rename nothing can reach it, so it goes with the account.
+                    self._keychain_delete(
+                        legacy_claude_keychain_service(self.account_dir_path(slot_id))
+                    )
             (self.slot_dir(agent_key, slot_id) / _OAUTH_ACCOUNT_SLOT_FILE).unlink(
                 missing_ok=True
             )
