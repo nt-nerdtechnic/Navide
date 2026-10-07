@@ -127,6 +127,7 @@ import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
 import { reclaimBlockedBy, namedReclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
+import { reclaimRefusalReason, reclaimRequestPaneIds, type ReclaimRefusal } from './lib/paneReclaimRequest'
 import { findConsecutiveQuestionBlocks, findSentinel } from '@navide/terminal'
 import {
   buildCliPaneBufferReply,
@@ -9334,6 +9335,21 @@ registerCommand('ui.pane.focus', (args) => {
   noteViewJump('mcp ui.pane.focus', { paneId })
   onFocusPane(paneId)
 })
+// The status bar's "reclaim now" for named panes: each CLI process ends and its
+// pane stays as the click-to-resume placeholder a restart shows. Same path and
+// same guards as the status bar — `named` stays false, so the focused pane is
+// refused too: an agent naming a pane is not the user picking it out. Refusals
+// are part of the answer, not an error, because a batch can half succeed.
+registerCommand('ui.pane.reclaim', async (args) => {
+  const ids = reclaimRequestPaneIds(args)
+  if (!ids.length) throw new Error(`ui.pane.reclaim requires ${PANE_ID_HINT} (or an array of them)`)
+  const outcome: ReclaimOutcome = { reclaimed: [], refused: [] }
+  await reclaimPanesNow(ids, false, outcome)
+  return {
+    reclaimed: outcome.reclaimed,
+    refused: outcome.refused.map((r) => ({ paneId: r.paneId, reason: r.reason, detail: reclaimRefusalReason(r.reason) })),
+  }
+})
 // Where a pane sits: its tab group and its parent. Both halves are optional
 // and independent — pass only what should change; a key that is absent is
 // left alone, and '' is a real value for each (the ungrouped 手動 tab, and
@@ -16131,11 +16147,19 @@ const reclaimableNowIds = computed<string[]>(() => {
  *  does measure, never uses this. */
 const RECLAIM_ESTIMATE_BYTES_PER_CLI = 250 * 1024 * 1024
 
+/** Per-pane result of reclaimPanesNow, for a caller that has to answer for
+ *  each pane it named (ui.pane.reclaim) rather than just count. */
+interface ReclaimOutcome {
+  reclaimed: string[]
+  refused: { paneId: string; reason: ReclaimRefusal }[]
+}
+
 /** Reclaim now, by explicit request. Returns how many actually went.
  *
  *  `named` marks panes the user picked out one by one, which may include the
- *  focused one (see namedReclaimBlockedBy). */
-async function reclaimPanesNow(paneIds?: string[], named = false): Promise<number> {
+ *  focused one (see namedReclaimBlockedBy). `outcome`, when given, is filled
+ *  with what happened to each pane; it changes nothing about the decision. */
+async function reclaimPanesNow(paneIds?: string[], named = false, outcome?: ReclaimOutcome): Promise<number> {
   const targets = paneIds ?? reclaimableNowIds.value
   let reclaimed = 0
   for (const paneId of targets) {
@@ -16143,12 +16167,23 @@ async function reclaimPanesNow(paneIds?: string[], named = false): Promise<numbe
     // kill between candidates, and the user can focus or type into the next one
     // while it runs.
     const pane = panes.value.find((p) => p.id === paneId)
-    if (!pane) continue
+    if (!pane) {
+      outcome?.refused.push({ paneId, reason: 'not-found' })
+      continue
+    }
     const blocked = named
       ? namedReclaimBlockedBy(reclaimCandidate(pane), Date.now())
       : reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now())
-    if (blocked !== null) continue
-    if (await reclaimIdlePane(paneId)) reclaimed++
+    if (blocked !== null) {
+      outcome?.refused.push({ paneId, reason: blocked })
+      continue
+    }
+    if (await reclaimIdlePane(paneId)) {
+      reclaimed++
+      outcome?.reclaimed.push(paneId)
+    } else {
+      outcome?.refused.push({ paneId, reason: 'not-found' })
+    }
   }
   if (reclaimed > 0) {
     pipelineLog(`♻ reclaimed ${reclaimed} CLI pane(s) on request — click to resume`)
