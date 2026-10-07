@@ -113,7 +113,10 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     const built = await loadPlan(pipelineId, stages)
     if (!built) return null
     let startIndex = opts.startIndex ?? 0
-    let startLayer: number | undefined
+    // A fresh start owes every gate a decision, even one before stage 01
+    // (right after the trigger); a resume counts the gates before its stage
+    // as passed.
+    let startLayer: number | undefined = opts.startIndex === undefined ? -Infinity : undefined
     if (opts.fromNodeId) {
       const point = restartPointFor(built, opts.fromNodeId)
       if (!point) {

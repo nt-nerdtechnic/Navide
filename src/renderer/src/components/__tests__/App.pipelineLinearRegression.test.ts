@@ -433,3 +433,49 @@ describe('a run aborted while paused at a gate', () => {
     expect(run.pipeline.stageIndex).toBe(1)
   })
 })
+
+// ── Gates the run reaches before its first stage ────────────────────────────
+
+describe('a run that starts behind a gate', () => {
+  it('restarting AT a gate waits on it before the stage after it runs', async () => {
+    const run = await loadGraphRun(gatedGraph())
+    await run.start({ fromNodeId: 'gate' })
+    expect(run.pipeline.state).toBe('running')
+    expect(run.dag.awaitingGate.value?.gateId).toBe('gate')
+    // Review must not have been kicked off before the gate is decided.
+    expect(run.events.some((e) => e.startsWith('inject') && e.includes('review'))).toBe(false)
+    expect(run.events.some((e) => e.startsWith('send pipeline.start') && e.includes('"start_index":1'))).toBe(true)
+    expect(await run.api.onPipelineGateApprove('gate')).toBe(true)
+    await flush()
+    expect(run.pipeline.stageIndex).toBe(1)
+    expect(run.events.some((e) => e.startsWith('spawn 02/rv') || (e.startsWith('inject') && e.includes('review')))).toBe(true)
+  })
+
+  it('restarting at a gate after the last stage waits on it, then completes', async () => {
+    const graph = applyGraphOps(deriveGraphFromStages(STAGES as unknown as StageDef[]), [
+      { op: 'add_node', node: { id: 'tail', kind: 'gate', label: 'Ship?', position: { x: 0, y: 0 } }, after: ['n-02-0'] },
+    ])
+    const run = await loadGraphRun(graph)
+    await run.start({ fromNodeId: 'tail' })
+    expect(run.pipeline.state).toBe('running')
+    expect(run.dag.awaitingGate.value?.gateId).toBe('tail')
+    expect(await run.api.onPipelineGateApprove('tail')).toBe(true)
+    await flush()
+    expect(run.pipeline.state).toBe('completed')
+    expect(run.events.some((e) => e.startsWith('send pipeline.complete'))).toBe(true)
+  })
+
+  it('a gate right after the trigger holds a fresh start before stage 01', async () => {
+    const graph = applyGraphOps(deriveGraphFromStages(STAGES as unknown as StageDef[]), [
+      { op: 'add_node', node: { id: 'head', kind: 'gate', label: 'Go?', position: { x: 0, y: 0 } }, after: ['trigger'], before: ['n-01-0', 'n-01-1'] },
+    ])
+    const run = await loadGraphRun(graph)
+    await run.start()
+    expect(run.dag.awaitingGate.value?.gateId).toBe('head')
+    expect(run.events.some((e) => e.startsWith('spawn 01/'))).toBe(false)
+    expect(await run.api.onPipelineGateApprove('head')).toBe(true)
+    await flush()
+    expect(run.pipeline.stageIndex).toBe(0)
+    expect(run.events.some((e) => e.startsWith('spawn 01/fe'))).toBe(true)
+  })
+})

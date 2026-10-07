@@ -12955,6 +12955,15 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   }
   // Clear any stale Resume banner since we just overwrote project state.
   existingProject.value = null
+  // A gate before the first stage to run (one right after the trigger, or a
+  // restart AT a gate) is decided before anything spawns. The run waits at the
+  // end of the stage before it, as a resume paused at a gate does; passing it
+  // hands off through onPipelineNext.
+  if (pipelineDag.holdBeforeStage(startIndex)) {
+    pipeline.stageIndex = startIndex - 1
+    if (pipeline.globalManager) startGlobalManagerRouter()
+    return
+  }
   // Pre-spawn stage 01 only (role prompt, no kickoff). Every later stage is
   // warmed one ahead from activateStage — see stagePrewarms for why the whole
   // pipeline is no longer spawned here.
