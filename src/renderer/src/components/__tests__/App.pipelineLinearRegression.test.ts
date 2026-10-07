@@ -479,3 +479,45 @@ describe('a run that starts behind a gate', () => {
     expect(run.events.some((e) => e.startsWith('spawn 01/fe'))).toBe(true)
   })
 })
+
+const restartSource = block(
+  'async function onPipelineRestart(payload: { task: string; workspacePath: string; fromNodeId?: string }): Promise<void> {',
+  '\n/** Serializes resumes.',
+)
+
+describe('restart from a node', () => {
+  it('a node id that is not in the pipeline is refused before any pane is closed', async () => {
+    const { code } = await transformWithEsbuild(`${restartSource}\nreturn { onPipelineRestart }`, 'AppRestart.ts', { loader: 'ts' })
+    const dag = usePipelineDag({
+      send: async (type) => (type === 'pipelines.graph.get' ? { derived: false, graph: gatedGraph() } : {}),
+      log: () => {},
+      workspacePath: () => '/ws',
+    })
+    const onKill = vi.fn()
+    const onPipelineStart = vi.fn()
+    const log: string[] = []
+    const deps: Record<string, unknown> = {
+      cancelAllWatchers: vi.fn(),
+      stageCompletions: new Map(),
+      activeQuestion: { value: null },
+      panes: { value: [{ id: 'p1', origin: 'pipeline' }] },
+      onKill,
+      pipelineLog: (l: string) => log.push(l),
+      onPipelineStart,
+      pipelineDag: dag,
+      pipelinesApi: { activePipelineId: { value: 'pl-1' } },
+      stagesApi: { stages: { value: STAGES } },
+    }
+    const api = new Function(...Object.keys(deps), code)(...Object.values(deps)) as {
+      onPipelineRestart: (p: { task: string; workspacePath: string; fromNodeId?: string }) => Promise<void>
+    }
+    await api.onPipelineRestart({ task: 'ship', workspacePath: '/ws', fromNodeId: 'typo' })
+    expect(onKill).not.toHaveBeenCalled()
+    expect(onPipelineStart).not.toHaveBeenCalled()
+    expect(log.some((l) => l.includes('typo'))).toBe(true)
+    // A real node still restarts.
+    await api.onPipelineRestart({ task: 'ship', workspacePath: '/ws', fromNodeId: 'gate' })
+    expect(onKill).toHaveBeenCalledTimes(1)
+    expect(onPipelineStart).toHaveBeenCalledTimes(1)
+  })
+})

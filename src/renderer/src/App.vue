@@ -11934,6 +11934,13 @@ async function onRefreshAnalyzer(): Promise<void> {
 
 
 async function onPipelineRestart(payload: { task: string; workspacePath: string; fromNodeId?: string }): Promise<void> {
+  // Check the restart point before anything below closes the run's panes.
+  if (payload.fromNodeId && !(await pipelineDag.canRestartFrom(
+    pipelinesApi.activePipelineId.value, stagesApi.stages.value, payload.fromNodeId,
+  ))) {
+    pipelineLog(`Restart refused: node ${payload.fromNodeId} is not in this pipeline — nothing was closed`)
+    return
+  }
   // Cancel any running watchers / questions left from a previous attempt
   // before we overwrite project state.
   cancelAllWatchers()

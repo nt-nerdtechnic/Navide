@@ -90,6 +90,10 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     plan.value = null
     run = null
     awaitingGate.value = null
+    return fetchPlan(pipelineId, stages)
+  }
+
+  async function fetchPlan(pipelineId: string, stages: readonly Stage[]): Promise<DagPlan | null> {
     const resp = await deps.send('pipelines.graph.get', pipelineId ? { pipeline_id: pipelineId } : {})
     if (!resp) {
       deps.log('DAG ✕ could not load the pipeline graph')
@@ -130,6 +134,14 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     run = createRunState(built, startIndex, startLayer ?? built.stageLayer[startIndex] ?? Infinity)
     void report()
     return startIndex
+  }
+
+  /** True when a run of this pipeline can restart at `nodeId`. Reads the
+   *  graph without touching the current run, so a restart can be refused
+   *  before it tears anything down. */
+  async function canRestartFrom(pipelineId: string, stages: readonly Stage[], nodeId: string): Promise<boolean> {
+    const built = await fetchPlan(pipelineId, stages)
+    return !!built && restartPointFor(built, nodeId) !== null
   }
 
   /** Resume a run that was aborted while paused at `gate` (as persisted in
@@ -299,6 +311,7 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     awaitingGate,
     nodeStates,
     begin,
+    canRestartFrom,
     beginAtGate,
     adoptOutputs,
     holdBeforeStage,
