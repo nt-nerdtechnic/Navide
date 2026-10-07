@@ -69,9 +69,15 @@ def safe_name(name: str, kind: str = "file", mime: str = "") -> str:
     return fallback
 
 
+def pane_dir(root: Path, pane_id: str) -> Path:
+    """One pane's folder under the media root. A pane may send only its own folder's
+    files: another pane's came from another chat."""
+    return root / (_UNSAFE_RE.sub("_", pane_id).strip("._") or "pane")
+
+
 def new_inbound_path(root: Path, pane_id: str, name: str) -> Path:
     """A fresh path for one inbound file: ``root/<pane>/<random>-<name>``."""
-    folder = root / (_UNSAFE_RE.sub("_", pane_id).strip("._") or "pane")
+    folder = pane_dir(root, pane_id)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     return folder / f"{secrets.token_hex(4)}-{name}"
 

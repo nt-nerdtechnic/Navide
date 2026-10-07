@@ -221,3 +221,26 @@ async def test_attach_lines_outside_an_msg_block_are_never_honoured(media_env: E
     await _until(lambda: _said(media_env, "plain turn"))
     await media_env.m.wait_idle()
     assert m.files == [] and not _said(media_env, "ATTACH")
+
+
+async def test_a_reply_sends_the_panes_own_received_file(media_env: Env, tmp_path: Path) -> None:
+    own = tmp_path / "media" / "pane-1" / "abcd1234-photo.jpg"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"JPEG")
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"back to you\n---ATTACH--- {own}"))
+    await _until(lambda: m.files)
+    assert m.files[0][1] == own.resolve()
+
+
+async def test_another_panes_received_file_is_not_sent(media_env: Env, tmp_path: Path) -> None:
+    """Each pane's media folder holds files from its own chat; sending another's leaks a chat."""
+    theirs = tmp_path / "media" / "pane-2" / "abcd1234-secret.png"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_bytes(b"PNG")
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"leak\n---ATTACH--- {theirs}"))
+    await _until(lambda: _said(media_env, "⚠️"))
+    assert m.files == []

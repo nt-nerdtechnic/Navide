@@ -1592,7 +1592,9 @@ class ChannelManager:
         if adapter is None or not callable(getattr(adapter, "send_file", None)):
             await note(media.text(lang, "unsupported"))
             return
-        roots = [self._seams.pane_workspace(pending.owner) if pending.owner else "", self._seams.media_root()]
+        # The replying pane's own media folder only: another pane's files came from another chat.
+        roots = [self._seams.pane_workspace(pending.owner), media.pane_dir(self._seams.media_root(), pending.owner)
+                 ] if pending.owner else []
         limit = int(getattr(adapter, "upload_max_bytes", 0) or 0)
         for raw in paths[: media.MAX_ATTACHMENTS_PER_REPLY]:
             name = Path(raw.strip()).name or raw.strip()

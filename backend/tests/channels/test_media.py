@@ -44,7 +44,7 @@ def test_safe_name_falls_back_to_the_kind_and_mime() -> None:
 def test_inbound_path_is_per_pane_with_a_random_prefix(tmp_path: Path) -> None:
     a = media.new_inbound_path(tmp_path, "../pane:1", "a.png")
     b = media.new_inbound_path(tmp_path, "../pane:1", "a.png")
-    assert a.parent == b.parent == tmp_path / "pane_1" and a != b
+    assert a.parent == b.parent == media.pane_dir(tmp_path, "../pane:1") == tmp_path / "pane_1" and a != b
     assert a.name.endswith("-a.png") and len(a.name) == len("abcd1234-a.png")
 
 
