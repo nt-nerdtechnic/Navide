@@ -51,6 +51,7 @@ from agent_team_backend.pending_registry import TIMEOUT, PendingRegistry
 # Workspace normalisation, not a plan dependency: preview_* resolves a
 # workspace the same way plans do, and both must agree on what one root means.
 from agent_team_backend.plan_index import resolve_plan_root
+from agent_team_backend.stages_store import GraphNonLinearError
 from agent_team_backend.preview_log import MAX_INLINE_CHARS, MAX_ROWS
 
 #: Where this server is mounted. Baked into every pane config file already
@@ -4995,6 +4996,11 @@ _UI_INVOKE_SLOW_ACTIONS = frozenset({
     "ui.pipeline.next",
     "ui.pipeline.resume",
     "ui.pipeline.restart",
+    # Passing a gate hands off to the next stage; a reject re-runs a stage;
+    # restart_from re-enters onPipelineStart. All three spawn panes.
+    "ui.pipeline.gate_pass",
+    "ui.pipeline.gate_reject",
+    "ui.pipeline.restart_from",
 })
 _ui_invoke_pending: PendingRegistry[dict[str, Any]] = PendingRegistry()
 
@@ -5622,6 +5628,9 @@ _PIPELINE_STAGE_FIELDS = (
 )
 _PIPELINE_SLOT_FIELDS = ("agent_key", "role_key", "label", "is_commander")
 _ROLE_FIELDS = ("key", "label", "one_line", "is_default")
+# NodeRunState (src/renderer/src/lib/pipelineGraph.ts) minus `summary`, which
+# is a whole output tail.
+_NODE_STATE_FIELDS = ("status", "startedAt", "endedAt", "tokens", "paneId", "attempts", "pinned")
 
 #: Execution state of a project: the run, not the window it is drawn in.
 #: workspace_path is left out on purpose — the resolved one is reported instead.
@@ -5961,6 +5970,14 @@ def _pipeline_status_of(workspace_path: str) -> dict[str, Any]:
         for pane in stored.get("panes") or []
         if pane.get("origin") == "pipeline"
     ]
+    # Per graph node (pipeline_graph op "get" names them): the run engine's
+    # reported state, and the gate the run is paused on ({} when none).
+    status["nodes"] = {
+        node_id: _pick(state, _NODE_STATE_FIELDS)
+        for node_id, state in (stored.get("node_states") or {}).items()
+        if isinstance(state, dict)
+    }
+    status["gate"] = stored.get("node_gate") or {}
     return status
 
 
@@ -5987,6 +6004,14 @@ async def pipeline_status(ctx: Context, workspace_path: str = "") -> dict[str, A
     slot_label, spawn_status, kickoff_status}. Panes the user or an agent
     opened by hand are not pipeline slots and are left out; cli_list_targets is
     where every pane is listed.
+
+    Per graph node it also carries `nodes` — {node_id: {status, startedAt,
+    endedAt, tokens, paneId, attempts, pinned}}, status one of pending /
+    running / done / awaiting / rejected / failed / skipped / aborted — and
+    `gate`, the gate the run is paused on ({gateId, label, prompt, nextIndex},
+    or {} when it is not paused). Node ids are the ones pipeline_graph op
+    "get" returns; a pipeline without a stored graph uses n-<stage_id>-<slot
+    index>. A paused gate is resolved with pipeline_gate.
 
     workspace_path defaults to your own pane's workspace; pass it only to ask
     about another project.
@@ -7055,10 +7080,15 @@ async def stage_define(
     unrunnable, and there is no undo. Read it out of pipeline_list first if you
     might want it back.
 
+    A pipeline whose graph has gates, reject loops or cross-layer edges cannot
+    be expressed as a stage list: "upsert", "delete" and "reorder" are refused
+    for it (error_code "graph_nonlinear") — edit it with pipeline_graph. On a
+    pipeline whose graph is still linear they work and the graph follows.
+
     Returns {ok, op, stages, pipeline_id, pipelines, active_pipeline_id}, plus
     `stage` for "upsert". ok false carries `error` and `error_code` — one of
-    "bad_op", "missing_argument", "pipeline_running", "not_found", "invalid" —
-    and nothing was written.
+    "bad_op", "missing_argument", "pipeline_running", "graph_nonlinear",
+    "not_found", "invalid" — and nothing was written.
     """
     caller = _resolve_caller(ctx)
     op = str(op or "").strip()
@@ -7097,6 +7127,8 @@ async def stage_define(
         else:
             await asyncio.to_thread(_app.stages_store.reset, pipeline_id or None)
             written = None
+    except GraphNonLinearError as exc:
+        return {"ok": False, "error": str(exc), "error_code": "graph_nonlinear"}
     except (KeyError, ValueError) as exc:
         return _store_refused(exc)
 
@@ -7118,6 +7150,7 @@ async def role_define(
     label: str = "",
     one_line: str = "",
     system_prompt: str = "",
+    properties: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create, edit, rename, delete or re-seed the ROLES pipeline slots cast from.
 
@@ -7157,6 +7190,15 @@ async def role_define(
                  rather than left dangling, so pipelines survive but those
                  slots lose their role and must be re-cast. There is no undo.
 
+    `properties` (optional, "upsert" and "rename") declares the settings form a
+    slot of this role shows: a list of {name, type, label?, description?,
+    default?, options?, required?, displayOptions?}, type one of string / text
+    / template / number / boolean / options ("options" needs `options`, a list
+    of {value, label?}), displayOptions {show?, hide?} mapping another
+    property's name to the values that show or hide this one. Omitted, a
+    role's existing properties are kept; [] clears them. A slot stores its
+    values in `params`.
+
     Roles have no run guard: unlike stages, editing one is allowed while a
     pipeline runs. A pane already started keeps the prompt it was given — the
     change reaches the next pane opened for that slot, not the ones on screen.
@@ -7194,6 +7236,7 @@ async def role_define(
                     label=label,
                     one_line=one_line,
                     system_prompt=system_prompt,
+                    properties=properties,
                 )
             )
         except (KeyError, ValueError) as exc:
@@ -7224,6 +7267,7 @@ async def role_define(
         next_label = label.strip() or str(existing.get("label", ""))
         next_one_line = one_line.strip() or str(existing.get("one_line", ""))
         next_prompt = system_prompt.strip() or str(existing.get("system_prompt", ""))
+        next_properties = properties if properties is not None else existing.get("properties")
 
         def _rename() -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
             role = _app.roles_store.upsert(
@@ -7231,6 +7275,7 @@ async def role_define(
                 label=next_label,
                 one_line=next_one_line,
                 system_prompt=next_prompt,
+                properties=next_properties,
             )
             # The stores' locks are taken one after the other, never nested —
             # the same ordering ws_handlers.roles_rename keeps.
@@ -7286,6 +7331,100 @@ async def role_define(
 
     await _publish_role_stage_changes(await asyncio.to_thread(_clear_dangling), "roles_reset")
     return {"ok": True, "op": op, "roles": roles}
+
+
+_PIPELINE_GRAPH_OPS = ("get", "apply", "set")
+
+
+@server.tool()
+async def pipeline_graph(
+    ctx: Context,
+    op: str,
+    pipeline_id: str = "",
+    ops: list[dict[str, Any]] | None = None,
+    graph: dict[str, Any] | None = None,
+    workspace_path: str = "",
+) -> dict[str, Any]:
+    """Read or edit a pipeline TEMPLATE as a graph: nodes, edges, gates, loops.
+
+    A pipeline's shape is a graph — slot nodes (one CLI pane each, carrying the
+    same agentKey / roleKey / label / kickoffBody / isCommander a stage slot
+    has, plus optional `params`), gate nodes (the run pauses there until
+    pipeline_gate passes or rejects it) and a trigger — joined by edges keyed
+    by id. Its stages (what stage_define and pipeline_list show) are derived
+    from it: each longest-path layer of slot nodes is one stage, run in order,
+    so a node waits for every node upstream of it. A pipeline that has never
+    been edited as a graph answers "get" with the graph its stages imply
+    (derived: true) and is unchanged until you write one.
+
+    `op`:
+    - "get"   — returns {graph, derived, stages}.
+    - "apply" — needs `ops`, a list applied all-or-nothing:
+        {op:"add_node", node:{id, kind:"slot"|"gate"|"trigger", label?,
+           position:{x,y}, slot?:{agentKey, roleKey, label, kickoffBody,
+           isCommander?, params?}, gate?:{prompt?}}, after?:[ids], before?:[ids]}
+           (after/before wire main edges; an edge after→before is replaced,
+           i.e. inserting on an edge)
+        {op:"remove_node", id, reconnect?:true}  (upstream rewired to downstream)
+        {op:"update_node", id, label?, slot?:{...partial}, gate?:{prompt?}}
+        {op:"move_node", id, position:{x,y}}
+        {op:"add_edge", edge:{id?, from, to, kind?:"main"|"reject", maxLoops?}}
+        {op:"remove_edge", id}
+        {op:"set_gate", id, prompt?}
+        {op:"set_pin", id, pinned}   (a pinned slot is skipped on later runs and
+           its last output reused)
+        {op:"set_stage_meta", stageId, title?, shortTitle?, question?,
+           description?, sentinel?, allowQuestions?, docQuery?,
+           recommendedRoles?}  (metadata of the stage a layer derives to)
+    - "set"   — needs `graph` ({version:1, nodes, edges}); replaces it whole.
+
+    Rules a write must satisfy: main edges form no cycle; the only loops are
+    "reject" edges, which must point to an upstream node and carry maxLoops
+    1..10 (default 2) — a rejected gate follows its reject edge back and re-runs
+    from there at most that many times, then the run fails.
+
+    Refused while the workspace's run is using this pipeline (error_code
+    "pipeline_running"), like stage_define. `pipeline_id` empty means the
+    active pipeline; name it. Returns {ok, op, pipeline_id, graph, stages}
+    (+ derived for "get"); ok false carries `error`, `error_code` ("bad_op",
+    "missing_argument", "pipeline_running", "not_found", "invalid") and, for
+    an invalid graph, `errors` — nothing was written.
+    """
+    caller = _resolve_caller(ctx)
+    op = str(op or "").strip()
+    if op not in _PIPELINE_GRAPH_OPS:
+        return _bad_op(op, _PIPELINE_GRAPH_OPS)
+    pipeline_id = str(pipeline_id or "").strip()
+    if op == "apply" and not isinstance(ops, list):
+        return _missing_arg(op, "ops (a list of graph ops)")
+    if op == "set" and not isinstance(graph, dict):
+        return _missing_arg(op, "graph (an object with nodes and edges)")
+
+    from agent_team_backend import app as _app
+    from agent_team_backend.pipeline_graph import GraphError
+
+    try:
+        if op == "get":
+            out = await asyncio.to_thread(_app.stages_store.get_graph, pipeline_id or None)
+            return {"ok": True, "op": op, **out}
+        workspace_path = await _definition_workspace(caller, workspace_path)
+        if await asyncio.to_thread(_stage_edit_blocked, workspace_path, pipeline_id):
+            return _run_in_progress("edit the pipeline graph")
+        if op == "apply":
+            out = await asyncio.to_thread(
+                _app.stages_store.apply_graph_ops, pipeline_id or None, list(ops or [])
+            )
+        else:
+            out = await asyncio.to_thread(_app.stages_store.set_graph, pipeline_id or None, graph)
+    except GraphError as exc:
+        return {"ok": False, "error": str(exc), "error_code": "invalid", "errors": exc.errors}
+    except (KeyError, ValueError) as exc:
+        return _store_refused(exc)
+    # The same three events the pipelines.graph.* ws handlers send.
+    from agent_team_backend.ws_handlers import _broadcast_graph_change
+
+    await _broadcast_graph_change(out, f"graph_{op}")
+    return {"ok": True, "op": op, **out}
 
 
 # ── Pipelines: driving a run that is already going ──────────────────────────
@@ -7405,6 +7544,87 @@ async def pipeline_restart(ctx: Context, workspace_path: str = "") -> dict[str, 
     workspace_path = await _plan_workspace(caller, workspace_path)
     return await _ui_request(
         workspace_path, "invoke", caller=caller, action="ui.pipeline.restart", args={}
+    )
+
+
+_PIPELINE_GATE_OPS = ("pass", "reject")
+
+
+@server.tool()
+async def pipeline_gate(
+    ctx: Context,
+    op: str,
+    node_id: str = "",
+    comment: str = "",
+    workspace_path: str = "",
+) -> dict[str, Any]:
+    """Pass or reject the gate a running pipeline is paused on.
+
+    A gate node stops the run between two stages until someone decides.
+    pipeline_status shows it in `gate` ({gateId, label, prompt, ...}) — read
+    that prompt and look at the work before deciding.
+
+    - "pass"   — the run carries on with the next stage. THIS OPENS CLI PANES
+                 AND SPENDS THEIR QUOTA.
+    - "reject" — the gate's reject edge is followed back and the stages from
+                 its target on run again, with `comment` put in front of their
+                 kickoffs so the agents know what to fix. Each reject edge has
+                 a loop budget; once it is spent, or when the gate has no
+                 reject edge, rejecting ends the run as failed.
+
+    `node_id` is optional: given, it must be the gate the run is waiting on,
+    which guards against deciding a different gate than the one you read.
+
+    Returns the window's own reply — {ok, result, error}; ok false means no
+    run is waiting on a gate (or on that one) and nothing changed.
+    """
+    caller = _resolve_caller(ctx)
+    op = str(op or "").strip()
+    if op not in _PIPELINE_GATE_OPS:
+        return _bad_op(op, _PIPELINE_GATE_OPS)
+    workspace_path = await _plan_workspace(caller, workspace_path)
+    args: dict[str, Any] = {}
+    if node_id:
+        args["nodeId"] = str(node_id)
+    if op == "reject" and comment:
+        args["comment"] = str(comment)
+    return await _ui_request(
+        workspace_path, "invoke", caller=caller,
+        action="ui.pipeline.gate_pass" if op == "pass" else "ui.pipeline.gate_reject",
+        args=args,
+    )
+
+
+@server.tool()
+async def pipeline_restart_from(
+    ctx: Context,
+    node_id: str,
+    task: str = "",
+    workspace_path: str = "",
+) -> dict[str, Any]:
+    """Start a new run of the pipeline at one node instead of stage one.
+
+    THIS CLOSES THE PIPELINE'S PANES, OPENS NEW ONES AND SPENDS THEIR QUOTA.
+    The stages before the node's stage are not run again: their last recorded
+    output is reused as context (the same as a pinned node). Use it when an
+    early stage's work is good and only a later one needs redoing — cheaper
+    than pipeline_restart, which re-runs everything. Refused while a run is in
+    progress (pipeline_abort first).
+
+    `node_id` comes from pipeline_graph op "get" (or pipeline_status `nodes`).
+    `task` defaults to the recorded run's task.
+
+    Returns the window's own reply — {ok, result, error}.
+    """
+    caller = _resolve_caller(ctx)
+    if not str(node_id or "").strip():
+        return _missing_arg("restart_from", "node_id")
+    workspace_path = await _plan_workspace(caller, workspace_path)
+    args: dict[str, Any] = {"nodeId": str(node_id).strip()}
+    if task:
+        args["task"] = str(task)
+    return await _ui_request(
+        workspace_path, "invoke", caller=caller, action="ui.pipeline.restart_from", args=args
     )
 
 
