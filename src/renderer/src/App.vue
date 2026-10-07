@@ -2310,6 +2310,7 @@ function reportPaneBusy(paneId: string, busy: boolean, status: string): void {
   backend
     .send('agent_msg.set_busy', { pane_id: paneId, busy, status })
     .catch(() => { /* advisory only */ })
+  persistPaneTurnState(paneId, status)
 }
 
 /** Re-derive every registered pane's busy state. Polled rather than driven off
@@ -2319,19 +2320,20 @@ function syncPaneBusy(): void {
   for (const pane of panes.value) {
     if (!pane.messagingName) continue
     reportPaneBusy(pane.id, !isPaneIdleForMessaging(pane.id), paneDisplayStatus(pane))
-    persistPaneTurnState(pane)
   }
 }
 
 /** Record whether a pane is working, so a manual relaunch knows which panes it
- *  interrupted. Only a real turn state is written, and only when it changes.
+ *  interrupted. Fed the badge word reportPaneBusy was just given, so the two
+ *  never disagree. Only a real turn state is written, and only when it changes.
  *  Skipped while a restore still has the pane parked (resuming, or waiting on
  *  its continue button): its work is unfinished, and writing its idle prompt
  *  would make the next relaunch forget it. */
 const paneTurnStatePersisted = new Map<string, string>()
-function persistPaneTurnState(pane: ActivePane): void {
-  if (!pane.realized || pane.restoring || pane.resumeContinueAvailable || !pane.workspacePath) return
-  const state = turnStateForStatus(paneDisplayStatus(pane))
+function persistPaneTurnState(paneId: string, status: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane?.realized || pane.restoring || pane.resumeContinueAvailable || !pane.workspacePath) return
+  const state = turnStateForStatus(status)
   if (!state || paneTurnStatePersisted.get(pane.id) === state) return
   paneTurnStatePersisted.set(pane.id, state)
   backend
@@ -11427,7 +11429,11 @@ async function advanceRestoreSession(trigger: RestoreSessionTrigger, coldBatch?:
   // the semaphore at whatever the user set (default 3), so adding a second
   // ceiling of 2 would just make their own setting slower.
   const unthrottledBatch = decision === 'fresh' && trigger === 'cold'
-  if (unthrottledBatch || (decision === 'resume' && session.scope === 'all') || interrupted.length > 0) {
+  if (unthrottledBatch || (decision === 'resume' && session.scope === 'all')) {
+    await runWithConcurrency(ids, ALL_SCOPE_RESTORE_CONCURRENCY, (paneId) => realizeRestoredPane(paneId, true))
+  } else if (interrupted.length > 0) {
+    // The interrupted panes ride on top of the scope's pick: same ceiling as
+    // an 'all' restore, so a relaunch never starts more than two at once.
     await runWithConcurrency(ids, ALL_SCOPE_RESTORE_CONCURRENCY, (paneId) => realizeRestoredPane(paneId, true))
   } else {
     await Promise.all(ids.map((paneId) => realizeRestoredPane(paneId, true)))

@@ -20,13 +20,15 @@ function fn(name: string): string {
 }
 
 describe('recording what a pane was doing', () => {
-  it('persists the turn state on the same poll that reports busy', () => {
-    expect(fn('syncPaneBusy')).toContain('persistPaneTurnState(pane)')
+  it('persists the turn state from the badge word reported to the registry', () => {
+    // One expression for the badge word (see AccountModal.network.test.ts):
+    // the recorder takes the status reportPaneBusy was handed, not a copy.
+    expect(fn('reportPaneBusy')).toContain('persistPaneTurnState(paneId, status)')
   })
 
   it('writes only real turn states, deduped, and never for a pane still parked by a restore', () => {
     const body = fn('persistPaneTurnState')
-    expect(body).toContain('turnStateForStatus(paneDisplayStatus(pane))')
+    expect(body).toContain('turnStateForStatus(status)')
     // A resumed pane waiting on its continue button has unfinished work: writing
     // its idle prompt would make the next relaunch forget it.
     expect(body).toContain('pane.resumeContinueAvailable')
