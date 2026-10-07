@@ -3550,3 +3550,60 @@ async def test_a_read_that_announces_its_own_switch_is_not_cancelled_by_it(
     await asyncio.wait_for(svc.poll_once(tmp_path), timeout=5)
 
     assert returned is True
+
+
+class _AccountDirVault(_SlotVault):
+    """Slots plus claude accounts that signed in inside their own config dir."""
+
+    def __init__(self, slots, signed_in_dirs):
+        super().__init__(slots)
+        self.signed_in_dirs = set(signed_in_dirs)
+
+    def account_dir_signed_in(self, slot_id: str) -> bool:
+        return slot_id in self.signed_in_dirs
+
+    def account_dir_path(self, slot_id: str) -> Path:
+        return Path("/account-dirs") / slot_id
+
+
+async def test_a_parked_account_with_its_own_config_dir_is_measured_live(
+    tmp_path, monkeypatch
+):
+    """An account that signed in inside its own config dir can be asked
+    directly — its /usage read runs on that dir, not the live login — so it
+    gets a current figure instead of its old one marked stale. An account
+    without one stays not-measured, exactly as before."""
+    store = _isolated_store(tmp_path)
+    active = store.create(agent_key="claude", name="Active")
+    with_dir = store.create(agent_key="claude", name="Dir")
+    without = store.create(agent_key="claude", name="NoDir")
+    store.set_default("claude", active["id"])
+    vault = _AccountDirVault({}, {with_dir["id"]})
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: store)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: vault)
+
+    async def fake_claude(home):
+        return us._snapshot("claude", "ok",
+                            windows=[us._window("session", "Session", 10, None)])
+
+    read_dirs: list[Path] = []
+
+    async def fake_dir(directory):
+        read_dirs.append(directory)
+        return us._snapshot("claude", "ok",
+                            windows=[us._window("session", "Session", 70, None)])
+
+    monkeypatch.setattr(us, "fetch_claude", fake_claude)
+    monkeypatch.setattr(us, "fetch_claude_account_dir", fake_dir)
+    _stub_non_claude_fetchers(monkeypatch)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    payload = await svc.poll_once(tmp_path)
+
+    assert read_dirs == [Path("/account-dirs") / with_dir["id"]]
+    row = payload["accounts"]["claude"][with_dir["id"]]
+    assert row["status"] == "ok"
+    assert row["stale"] is False
+    assert row["windows"][0]["usedPercent"] == 70
+    assert payload["accounts"]["claude"][without["id"]]["status"] == "not-measured"
+    assert payload["accounts"]["claude"][active["id"]]["windows"][0]["usedPercent"] == 10

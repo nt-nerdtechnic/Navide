@@ -154,6 +154,7 @@ from .usage_common import (  # noqa: E402,F401
 from .cli_vendors.claude import (  # noqa: E402,F401
     CLAUDE_KEYCHAIN_SERVICE,
     fetch_claude,
+    fetch_claude_account_dir,
     parse_claude_credentials,
     read_claude_credentials,
     read_claude_credentials_file,
@@ -698,6 +699,8 @@ class UsageService:
         # shutdown must still propagate.
         self._claude_reads: dict[str, asyncio.Task] = {}
         self._reads_cancelled: set[str] = set()
+        # Account-dir /usage reads run one at a time (each boots a Claude Code).
+        self._account_dir_read_lock = asyncio.Lock()
         self._cache_path = cache_path
         from .token_monitor import QuotaHistory
 
@@ -1150,6 +1153,34 @@ class UsageService:
             except Exception:  # noqa: BLE001
                 pass
 
+    async def _claude_account_dirs(self, slot_ids: list[str]) -> list[tuple[str, Path]]:
+        """``(slot, config dir)`` for every one of ``slot_ids`` whose account
+        signed in inside its own config dir. A vault without account dirs, or
+        a failed lookup, reads as none — the slot stays not-measured."""
+        vault = _get_credential_vault()
+        signed_in = getattr(vault, "account_dir_signed_in", None)
+        path_of = getattr(vault, "account_dir_path", None)
+        if not callable(signed_in) or not callable(path_of):
+            return []
+
+        def _lookup() -> list[tuple[str, Path]]:
+            found: list[tuple[str, Path]] = []
+            for slot_id in slot_ids:
+                if slot_id == "__default__":
+                    continue
+                try:
+                    if signed_in(slot_id):
+                        found.append((slot_id, path_of(slot_id)))
+                except Exception as err:  # noqa: BLE001 — one account must not sink the rest
+                    log.warning("claude account dir lookup failed for %s: %s", slot_id, err)
+            return found
+
+        return await asyncio.to_thread(_lookup)
+
+    async def _read_account_dir(self, directory: Path) -> dict:
+        async with self._account_dir_read_lock:
+            return await fetch_claude_account_dir(directory)
+
     async def poll_once(self, home: Path | None = None) -> dict:
         home = home or Path.home()
         codex_home = Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME") \
@@ -1176,6 +1207,12 @@ class UsageService:
             claude_active, credentials = claude_accounts
             parked_slots = [s for s in credentials if s != claude_active]
         claude_coros = {claude_active: lambda: fetch_claude(home)}
+        # A parked account that signed in inside its own config dir is not
+        # parked for measuring: its /usage read runs on that dir. One at a
+        # time — each read boots a whole Claude Code.
+        for slot_id, directory in await self._claude_account_dirs(parked_slots):
+            claude_coros[slot_id] = functools.partial(self._read_account_dir, directory)
+        parked_slots = [s for s in parked_slots if s not in claude_coros]
         if self._switch_epoch == switch_epoch:
             for slot_id in parked_slots:
                 self._record_parked_claude_slot(slot_id)

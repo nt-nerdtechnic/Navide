@@ -874,11 +874,15 @@ def parse_usage_panel(text: str, *, now: datetime | None = None) -> list[dict]:
     return [found[k] for k in sorted(found, key=lambda k: (order.get(k, 2), k))]
 
 
-def _panel_probe_env() -> dict[str, str]:
+def _panel_probe_env(config_dir: str | None = None) -> dict[str, str]:
+    """The probe's environment. ``config_dir`` asks an account that signed in
+    inside its own CLAUDE_CONFIG_DIR instead of the live login."""
     env = dict(os.environ)
     for key in _ENV_DROP:
         env.pop(key, None)
     env.update({"TERM": "xterm-256color", "COLUMNS": "100", "LINES": "40"})
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
     return env
 
 
@@ -916,7 +920,7 @@ def _first_line(*streams: str) -> str:
     return ""
 
 
-async def read_usage_panel(binary: str) -> str:
+async def read_usage_panel(binary: str, config_dir: str | None = None) -> str:
     """Run ``claude -p /usage`` and return what it printed.
 
     Raises ``RuntimeError`` with a message fit for the badge's ``error`` field:
@@ -928,7 +932,7 @@ async def read_usage_panel(binary: str) -> str:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=_panel_probe_env(), start_new_session=True,
+        env=_panel_probe_env(config_dir), start_new_session=True,
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=USAGE_TIMEOUT_S)
@@ -970,7 +974,9 @@ async def read_usage_panel(binary: str) -> str:
     return text
 
 
-async def fetch_claude_usage_via_cli(home: Path) -> dict[str, Any] | None:
+async def fetch_claude_usage_via_cli(
+    home: Path, config_dir: str | None = None
+) -> dict[str, Any] | None:
     """Snapshot for the usage badge, or None when there is no CLI to ask.
 
     A read that actually started a Claude Code but came back empty returns an
@@ -988,7 +994,9 @@ async def fetch_claude_usage_via_cli(home: Path) -> dict[str, Any] | None:
     # Logged out is knowable without a spawn. The CLI would only present its
     # login wizard — at a full boot's cost, on every retry, forever — and the
     # badge would say "unavailable" where it means "log in".
-    if await read_claude_credentials(home) is None:
+    # An account dir is only ever read once its own login exists (the caller
+    # checks), and that credential is Claude Code's to read, not ours.
+    if config_dir is None and await read_claude_credentials(home) is None:
         return _snapshot("claude", "no-credentials")
     try:
         binary = resolve_cli_binary("claude")
@@ -1006,7 +1014,9 @@ async def fetch_claude_usage_via_cli(home: Path) -> dict[str, Any] | None:
         )
         return None
     try:
-        raw = await read_usage_panel(binary)
+        raw = await (
+            read_usage_panel(binary, config_dir) if config_dir else read_usage_panel(binary)
+        )
     except Exception as err:  # noqa: BLE001 — a failed read is just "no data"
         log.warning("claude /usage read failed: %s", err)
         return _costly(str(err) or type(err).__name__)
@@ -1240,6 +1250,15 @@ async def fetch_claude(home: Path) -> dict:
     user can act on — install it, or point the app at the right binary —
     indistinguishable from a panel that failed to render."""
     return await fetch_claude_usage_via_cli(home) or _snapshot("claude", "cli-missing")
+
+
+async def fetch_claude_account_dir(config_dir: Path) -> dict:
+    """Claude quota for an account that signed in inside its own config dir:
+    the same ``/usage`` read, run on that dir. Unlike the live login, such an
+    account can be measured while another one is active."""
+    return await fetch_claude_usage_via_cli(
+        config_dir, os.fspath(config_dir)
+    ) or _snapshot("claude", "cli-missing")
 
 
 
