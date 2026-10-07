@@ -142,7 +142,7 @@ describe('pipelineGraphEdits', () => {
     expect(opsAutoLayout(laid)).toEqual([])
   })
 
-  it('badges what the columns cannot draw: reject loops, gate forks and skips', () => {
+  it('badges what the columns cannot draw: reject loops and skips', () => {
     let g = base()
     g = applyGraphOps(g, opsInsertLayer(g, 3, { id: 'gate', kind: 'gate', label: 'OK?', position: { x: 0, y: 0 } }))
     g = applyGraphOps(g, [
@@ -150,10 +150,7 @@ describe('pipelineGraphEdits', () => {
       { op: 'add_edge', edge: { id: 'skip', from: 'n-01-0', to: 'n-03-0', kind: 'main' } },
     ])
     const badges = laneBadges(g)
-    expect(badges.get('gate')).toEqual([
-      { kind: 'reject', edgeId: 'r', targetLayer: 2, maxLoops: 3 },
-      { kind: 'branch', edgeId: 'r' },
-    ])
+    expect(badges.get('gate')).toEqual([{ kind: 'reject', edgeId: 'r', targetLayer: 2, maxLoops: 3 }])
     expect(badges.get('n-01-0')).toEqual([{ kind: 'skip', edgeId: 'skip', targetLayer: 3 }])
     expect(badges.has('n-02-1')).toBe(false)
   })
@@ -164,5 +161,38 @@ describe('pipelineGraphEdits', () => {
     expect(uniqueLabel(g, 'Fresh')).toBe('Fresh')
     const id = freshNodeId(g)
     expect(g.nodes.some((n) => n.id === id)).toBe(false)
+  })
+})
+
+describe('opsPlaceNode', () => {
+  it('places an inserted node right of its upstream and slides the downstream over', async () => {
+    const { opsPlaceNode } = await import('../pipelineGraphEdits')
+    const g0 = base()
+    const laid = applyGraphOps(g0, opsAutoLayout(g0))
+    const edge = laid.edges.find((e) => e.from === 'n-01-0')!
+    const inserted = applyGraphOps(laid, opsInsertOnEdge(edge, slotNode('x', 'X')))
+    const placed = applyGraphOps(inserted, opsPlaceNode(inserted, 'x'))
+    const pos = (id: string) => placed.nodes.find((n) => n.id === id)!.position
+    expect(pos('x').x).toBeGreaterThan(pos('n-01-0').x)
+    // No two nodes overlap after placement.
+    const boxes = placed.nodes.map((n) => ({ id: n.id, ...n.position }))
+    for (const a of boxes) for (const b of boxes) {
+      if (a.id >= b.id) continue
+      const apart = Math.abs(a.x - b.x) >= 160 || Math.abs(a.y - b.y) >= 56
+      expect(apart, `${a.id} vs ${b.id}`).toBe(true)
+    }
+    // Downstream of x was pushed right of x.
+    expect(pos(edge.to).x).toBeGreaterThan(pos('x').x)
+  })
+
+  it('stacks a parallel node under its sibling', async () => {
+    const { opsPlaceNode } = await import('../pipelineGraphEdits')
+    const g0 = base()
+    const laid = applyGraphOps(g0, opsAutoLayout(g0))
+    const added = applyGraphOps(laid, opsAddToLayer(laid, 2, slotNode('x', 'X')))
+    const placed = applyGraphOps(added, opsPlaceNode(added, 'x'))
+    const pos = (id: string) => placed.nodes.find((n) => n.id === id)!.position
+    expect(pos('x').y).toBeGreaterThan(pos('n-03-0').y)
+    expect(Math.abs(pos('x').x - pos('n-03-0').x)).toBeLessThan(10)
   })
 })

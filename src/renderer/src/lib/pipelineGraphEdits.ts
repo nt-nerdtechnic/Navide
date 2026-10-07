@@ -159,7 +159,7 @@ export function canReorderLayers(graph: PipelineGraph): boolean {
  *  move ops for nodes whose position actually changes. */
 export function opsAutoLayout(graph: PipelineGraph): GraphOp[] {
   const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: 'LR', nodesep: 36, ranksep: 96, marginx: 0, marginy: 0 })
+  g.setGraph({ rankdir: 'LR', nodesep: 32, ranksep: 80, marginx: 0, marginy: 0 })
   g.setDefaultEdgeLabel(() => ({}))
   for (const n of graph.nodes) {
     const size = NODE_SIZE[n.kind] ?? NODE_SIZE.slot
@@ -185,7 +185,7 @@ export function opsAutoLayout(graph: PipelineGraph): GraphOp[] {
 // ── Swimlane badges: what the columns cannot draw ────────────────────────────
 
 export interface LaneBadge {
-  kind: 'reject' | 'branch' | 'skip'
+  kind: 'reject' | 'skip'
   /** Edge to focus on the canvas when the badge is clicked. */
   edgeId: string
   /** Target layer (1-based for display) for reject/skip; undefined otherwise. */
@@ -193,8 +193,9 @@ export interface LaneBadge {
   maxLoops?: number
 }
 
-/** Badges per node: reject loops leaving it (↺ back to layer N), a gate's
- *  pass/reject fork (⑂), and main edges that jump over a layer (⤳). These are
+/** Badges per node: reject loops leaving it (↺ back to layer N — for a gate
+ *  that is also its pass/reject fork) and main edges that jump over a layer
+ *  (⤳). These are
  *  the edges the column layout cannot express, so the swimlane marks them and
  *  hands the user to the canvas. */
 export function laneBadges(graph: PipelineGraph): Map<string, LaneBadge[]> {
@@ -211,13 +212,77 @@ export function laneBadges(graph: PipelineGraph): Map<string, LaneBadge[]> {
     if (from === undefined || to === undefined) continue
     if (!isMain(e)) {
       push(e.from, { kind: 'reject', edgeId: e.id, targetLayer: to + 1, maxLoops: e.maxLoops })
-      const source = graph.nodes.find((n) => n.id === e.from)
-      if (source?.kind === 'gate' && !out.get(e.from)?.some((b) => b.kind === 'branch')) {
-        push(e.from, { kind: 'branch', edgeId: e.id })
-      }
     } else if (from >= 0 && to - from > 1) {
       push(e.from, { kind: 'skip', edgeId: e.id, targetLayer: to + 1 })
     }
   }
   return out
+}
+
+// ── Placement: where a new node lands on the canvas ──────────────────────────
+
+const GAP_X = 80 // = dagre ranksep, so placed and tidied nodes share columns
+const GAP_Y = 32
+
+/** Position a just-added node next to its neighbours, n8n-style: right of its
+ *  upstream (or left of its downstream), below any sibling that shares its
+ *  upstream; then push everything downstream of it right when it would
+ *  overlap. Hand-arranged nodes elsewhere are left alone — a full re-layout
+ *  is the explicit "Tidy up" command, never a side effect. */
+export function opsPlaceNode(graph: PipelineGraph, id: string): GraphOp[] {
+  const node = graph.nodes.find((n) => n.id === id)
+  if (!node) return []
+  const at = new Map(graph.nodes.map((n) => [n.id, n]))
+  const size = NODE_SIZE[node.kind]
+  const mainEdges = graph.edges.filter(isMain)
+  const ups = mainEdges.filter((e) => e.to === id).map((e) => at.get(e.from)!).filter(Boolean)
+  const downs = mainEdges.filter((e) => e.from === id).map((e) => at.get(e.to)!).filter(Boolean)
+  const others = graph.nodes.filter((n) => n.id !== id)
+
+  let x: number
+  let y: number
+  if (ups.length) {
+    x = Math.max(...ups.map((u) => u.position.x + NODE_SIZE[u.kind].w)) + GAP_X
+    y = ups.reduce((s, u) => s + u.position.y, 0) / ups.length
+  } else if (downs.length) {
+    x = Math.min(...downs.map((d) => d.position.x)) - size.w - GAP_X
+    y = downs.reduce((s, d) => s + d.position.y, 0) / downs.length
+  } else {
+    x = others.length ? Math.max(...others.map((n) => n.position.x + NODE_SIZE[n.kind].w)) + GAP_X : 0
+    y = 0
+  }
+  // Stack under siblings fed by the same upstream.
+  const upIds = new Set(ups.map((u) => u.id))
+  const siblings = others.filter((n) =>
+    upIds.size > 0 && mainEdges.some((e) => e.to === n.id && upIds.has(e.from)) && Math.abs(n.position.x - x) < size.w
+  )
+  if (siblings.length) {
+    x = Math.min(...siblings.map((s) => s.position.x))
+    y = Math.max(...siblings.map((s) => s.position.y + NODE_SIZE[s.kind].h)) + GAP_Y
+  }
+  x = Math.round(x)
+  y = Math.round(y)
+
+  const ops: GraphOp[] = [{ op: 'move_node', id, position: { x, y } }]
+  const overlaps = (n: GraphNode): boolean => {
+    const s = NODE_SIZE[n.kind]
+    return n.position.x < x + size.w && n.position.x + s.w > x && n.position.y < y + size.h && n.position.y + s.h > y
+  }
+  if (others.some(overlaps)) {
+    // Make room: everything reachable downstream of the new node, at or right
+    // of its column, slides one column right.
+    const reach = new Set<string>()
+    const queue = [id]
+    while (queue.length) {
+      const cur = queue.shift()!
+      for (const e of mainEdges) if (e.from === cur && !reach.has(e.to)) { reach.add(e.to); queue.push(e.to) }
+    }
+    const shift = size.w + GAP_X
+    for (const n of others) {
+      if (reach.has(n.id) && n.position.x >= x - size.w / 2) {
+        ops.push({ op: 'move_node', id: n.id, position: { x: n.position.x + shift, y: n.position.y } })
+      }
+    }
+  }
+  return ops
 }
