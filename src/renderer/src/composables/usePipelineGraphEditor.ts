@@ -77,6 +77,10 @@ export function usePipelineGraphEditor(
   const undoLabel = computed(() => undoStack.value.at(-1)?.label ?? '')
   const redoLabel = computed(() => redoStack.value.at(-1)?.label ?? '')
 
+  /** The graph the backend last confirmed. A refused write falls back to
+   *  this, never to the optimistic graph it was made on: that one may hold an
+   *  earlier edit the backend refused too. */
+  let confirmed: PipelineGraph | null = null
   let chain: Promise<unknown> = Promise.resolve()
   /** Serialise writes: each starts after the previous one has settled. */
   function enqueue<T>(job: () => Promise<T>): Promise<T> {
@@ -88,6 +92,7 @@ export function usePipelineGraphEditor(
 
   function adopt(payload: GraphPayload): void {
     graph.value = payload.graph
+    confirmed = payload.graph
     if (payload.stages) stages.value = payload.stages.map(stageDefToFrontend)
   }
 
@@ -175,15 +180,17 @@ export function usePipelineGraphEditor(
     }
     graph.value = next
     return enqueue(async () => {
+      // What the backend applies the ops to — and so what undo restores.
+      const before = confirmed ?? current
       const result = await sendApply(ops)
       if (!result.ok) {
-        // Only roll back if nothing newer has replaced the optimistic graph.
-        if (graph.value === next) graph.value = current
+        // Edits queued behind this one settle the view themselves.
+        if (pending.value === 1) graph.value = confirmed
         return result
       }
       adopt(result.payload)
       derived.value = false
-      undoStack.value = [...undoStack.value, { label, before: current, after: result.payload.graph, undoOps, redoOps: undoOps ? ops : undefined }].slice(-HISTORY_LIMIT)
+      undoStack.value = [...undoStack.value, { label, before, after: result.payload.graph, undoOps, redoOps: undoOps ? ops : undefined }].slice(-HISTORY_LIMIT)
       redoStack.value = []
       return { ok: true } as EditResult
     })
@@ -196,12 +203,11 @@ export function usePipelineGraphEditor(
     if (!cmd || pending.value) return { ok: true }
     const target = direction === 'undo' ? cmd.before : cmd.after
     const inverse = direction === 'undo' ? cmd.undoOps : cmd.redoOps
-    const current = graph.value
     graph.value = target
     return enqueue(async () => {
       const result = inverse ? await sendApply(inverse) : await sendSet(target)
       if (!result.ok) {
-        if (graph.value === target) graph.value = current
+        if (pending.value === 1) graph.value = confirmed
         return result
       }
       adopt(result.payload)

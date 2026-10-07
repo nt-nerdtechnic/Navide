@@ -21,13 +21,14 @@ function fakeServer() {
   const mock = createMockBackend('connected')
   let stored = seed()
   let refuse: { code: string; message: string } | null = null
+  let refuseLeft = 0
   const original = mock.backend.send
   ;(mock.backend as { send: unknown }).send = async (type: string, payload: Record<string, unknown> = {}) => {
     await original(type, payload)
     const ok = (p: unknown) => ({ id: 't', type, ok: true, payload: p, error: null, timestamp: '' })
     const fail = (e: { code: string; message: string }) => ({ id: 't', type, ok: false, payload: null, error: e, timestamp: '' })
     if (type === 'pipelines.graph.get') return ok({ pipeline_id: 'p1', graph: stored, derived: true, stages: [] })
-    if (refuse) { const e = refuse; refuse = null; return fail(e) }
+    if (refuse) { const e = refuse; if (--refuseLeft <= 0) refuse = null; return fail(e) }
     if (type === 'pipelines.graph.apply') stored = applyGraphOps(stored, payload.ops as GraphOp[])
     if (type === 'pipelines.graph.set') stored = payload.graph as PipelineGraph
     return ok({ pipeline_id: 'p1', graph: stored, stages: [] })
@@ -35,7 +36,7 @@ function fakeServer() {
   return {
     mock,
     stored: () => stored,
-    refuseNext: (code = 'PIPELINE_RUNNING') => { refuse = { code, message: 'refused' } },
+    refuseNext: (code = 'PIPELINE_RUNNING', times = 1) => { refuse = { code, message: 'refused' }; refuseLeft = times },
   }
 }
 
@@ -137,5 +138,29 @@ describe('usePipelineGraphEditor', () => {
     server.mock.emit('pipeline.graph_changed', { pipeline_id: 'other', graph: seed(), stages: [] })
     expect(editor.canUndo.value).toBe(true)
     expect(editor.externalEdits.value).toBe(0)
+  })
+  it('two queued edits that are both refused leave the saved graph on screen', async () => {
+    const { editor, server } = await setup()
+    server.refuseNext('PIPELINE_RUNNING', 2)
+    const a = editor.execute('One', [rename('n-01-0', 'One')])
+    const b = editor.execute('Two', [rename('n-02-0', 'Two')])
+    const [ra, rb] = await Promise.all([a, b])
+    expect(ra.ok).toBe(false)
+    expect(rb.ok).toBe(false)
+    // Neither edit was saved, so neither may stay on screen.
+    expect(editor.graph.value).toEqual(server.stored())
+  })
+
+  it('undo after a refused edit never writes the refused edit back', async () => {
+    const { editor, server } = await setup()
+    server.refuseNext('PIPELINE_RUNNING', 1)
+    const a = editor.execute('One', [rename('n-01-0', 'One')])
+    const b = editor.execute('Two', [rename('n-02-0', 'Two')])
+    await Promise.all([a, b])
+    expect(label(server.stored(), 'n-01-0')).toBe('A')
+    expect(editor.graph.value).toEqual(server.stored())
+    expect((await editor.undo()).ok).toBe(true)
+    expect(label(server.stored(), 'n-01-0')).toBe('A')
+    expect(label(server.stored(), 'n-02-0')).toBe('B')
   })
 })
