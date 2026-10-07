@@ -235,6 +235,23 @@ class TestPaths:
         assert _linux.paths.home_env_var() == "HOME"
         assert _windows.paths.home_env_var() == "USERPROFILE"
 
+    # Folders a chat attachment may never come from (channels/media.py).
+    def test_system_dirs_name_each_platforms_own(self, monkeypatch):
+        from agent_team_backend.osplat import _darwin, _linux, _windows
+
+        assert Path("/etc") in _darwin.paths.system_dirs() and Path("/System") in _darwin.paths.system_dirs()
+        assert Path("/etc") in _linux.paths.system_dirs() and Path("/boot") in _linux.paths.system_dirs()
+        monkeypatch.setenv("SystemRoot", r"D:\Win")
+        monkeypatch.setenv("ProgramData", r"D:\PD")
+        monkeypatch.delenv("ProgramFiles", raising=False)
+        monkeypatch.setenv("APPDATA", r"D:\Users\me\AppData\Roaming")
+        monkeypatch.setenv("LOCALAPPDATA", r"D:\Users\me\AppData\Local")
+        found = _windows.paths.system_dirs()
+        assert Path(r"D:\Win") in found and Path(r"D:\PD") in found
+        assert Path(r"C:\Program Files") in found  # the documented default when unset
+        assert Path(r"D:\Users\me\AppData\Roaming") / "Microsoft" / "Credentials" in found
+        assert Path(r"D:\Users\me\AppData\Local") / "Google" / "Chrome" / "User Data" in found
+
     # A quoted path reaches a program through the platform's own shell
     # convention: POSIX apostrophes are literal characters to cmd.exe.
     def test_quote_arg_follows_each_platforms_shell(self):

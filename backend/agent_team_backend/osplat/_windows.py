@@ -1025,6 +1025,24 @@ class WindowsLayout(WindowsPaths):
         configured = os.environ.get("APPDATA")
         return Path(configured) if configured else None
 
+    def system_dirs(self) -> list[Path]:
+        env = os.environ
+        found = [Path(env.get(var) or default) for var, default in (
+            ("SystemRoot", r"C:\Windows"), ("ProgramFiles", r"C:\Program Files"),
+            ("ProgramFiles(x86)", r"C:\Program Files (x86)"), ("ProgramData", r"C:\ProgramData"),
+        )]
+        # Credential Manager, DPAPI master keys and browser profiles (cookies, logins).
+        for var, rels in (
+            ("APPDATA", ("Microsoft/Credentials", "Microsoft/Protect", "Microsoft/Crypto",
+                         "Microsoft/SystemCertificates", "Mozilla/Firefox")),
+            ("LOCALAPPDATA", ("Microsoft/Credentials", "Microsoft/Vault", "Google/Chrome/User Data",
+                              "Microsoft/Edge/User Data", "BraveSoftware")),
+        ):
+            base = env.get(var)
+            if base:
+                found += [Path(base).joinpath(*rel.split("/")) for rel in rels]
+        return found
+
     def home_env_var(self) -> str:
         return "USERPROFILE"
 

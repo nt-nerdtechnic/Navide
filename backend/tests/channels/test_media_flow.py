@@ -9,12 +9,18 @@ from pathlib import Path
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.channels import media
 from agent_team_backend.channels.base import (
     ChannelSendError, InboundAttachment, InboundMessage, Location, MediaTooLarge,
 )
 
 from .test_manager import _MIDS, Env, _armed, _said, _until, env, fast_timers  # noqa: F401 — fixtures
+
+
+# Windows creates symlinks only with Developer Mode or elevation.
+needs_symlinks = pytest.mark.skipif(not osplat.paths.symlinks_available(),
+                                    reason="this Windows session may not create symlinks")
 
 
 class Media:
@@ -189,6 +195,7 @@ async def test_a_refused_file_is_not_sent_and_the_chat_hears_why(media_env: Env,
     assert m.files == [] and not _said(media_env, "SECRET")
 
 
+@needs_symlinks
 async def test_a_symlink_to_a_secret_is_not_sent(media_env: Env, ws: Path, tmp_path: Path) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("SECRET=1")

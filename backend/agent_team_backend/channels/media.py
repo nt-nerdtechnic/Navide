@@ -49,11 +49,6 @@ DENIED_NAMES = (
     "cookies", "cookies-journal", "login data", "login data-journal", "web data",
     "*.sqlite", "*.sqlite3", "*.db", "*.db-wal", "*.db-shm",
 )
-# System folders refused even inside a workspace that happens to contain them.
-SYSTEM_ROOTS = (
-    "/etc", "/private/etc", "/System", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
-    "/Library/Keychains", "/private/var/db", "C:\\Windows",
-)
 
 _KIND_DEFAULT_NAMES = {
     "photo": "photo.jpg", "voice": "voice.ogg", "video_note": "video_note.mp4",
@@ -150,11 +145,18 @@ def _home() -> Path:
     return Path.home().resolve()
 
 
+def _system_dirs() -> list[Path]:
+    """The platform's system, program and credential folders (osplat), never sent from."""
+    from .. import osplat
+
+    return osplat.paths.system_dirs()
+
+
 def _too_broad(base: Path) -> bool:
     """A folder no pane may send from wholesale: a filesystem root or other shallow
     folder (/Users, /Volumes, /opt), a mount point, or the home folder or one above it,
     where everything a user keeps (Documents, Desktop, Downloads) would be in reach."""
-    if base == Path(base.anchor) or len(base.parts) < 3 or os.path.ismount(base):
+    if base == type(base)(base.anchor) or len(base.parts) < 3 or os.path.ismount(base):
         return True
     home = _home()
     return base == home or home.is_relative_to(base)
@@ -175,6 +177,9 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
         return None, None, "not_absolute"
     if ".." in path.parts:
         return None, None, "parent_ref"
+    # "name:stream" opens an NTFS alternate data stream; no colon below the anchor anywhere.
+    if any(":" in part for part in path.parts[1:]):
+        return None, None, "denied_name"
     try:
         real = path.resolve(strict=True)
     except (OSError, RuntimeError):
@@ -199,7 +204,7 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
             return None, None, "hidden"
         if any(fnmatch.fnmatch(part.lower(), pat) for part in rel for pat in DENIED_NAMES):
             return None, None, "denied_name"
-        if any(real == Path(s) or real.is_relative_to(Path(s)) for s in SYSTEM_ROOTS):
+        if any(_within(real, s) for s in _system_dirs()):
             return None, None, "system"
         st = real.stat()
         # A second name for the same inode may be a file from anywhere on the disk.
@@ -207,6 +212,16 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
             return None, None, "hard_link"
         return real, st, ""
     return None, None, "broad_workspace" if in_broad else "outside"
+
+
+def _within(path: Path, folder: Path) -> bool:
+    """``path`` is ``folder`` or inside it, after resolving the folder too (so /etc and
+    /private/etc agree on macOS). Windows paths compare case-insensitively."""
+    try:
+        folder = folder.resolve()
+    except (OSError, RuntimeError):
+        pass
+    return path == folder or path.is_relative_to(folder)
 
 
 @dataclass

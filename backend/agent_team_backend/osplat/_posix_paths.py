@@ -27,6 +27,18 @@ def roaming_app_data() -> Path | None:
     return None
 
 
+# One list for macOS and Linux: a folder that does not exist on one simply never matches.
+_POSIX_SYSTEM_DIRS = (
+    "/etc", "/private/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec", "/boot",
+    "/proc", "/sys", "/dev", "/root", "/System", "/Library/Keychains", "/private/var/db",
+    "/var/db", "/var/lib",
+)
+
+
+def system_dirs() -> list[Path]:
+    return [Path(p) for p in _POSIX_SYSTEM_DIRS]
+
+
 def isolated_home_env(home_dir: Path) -> dict[str, str]:
     home = str(home_dir)
     return {"HOME": home, "TMPDIR": home}

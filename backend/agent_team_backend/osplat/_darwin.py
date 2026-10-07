@@ -128,6 +128,9 @@ class DarwinLayout(DarwinPaths):
     def config_home(self, home: Path) -> Path:
         return home / "Library" / "Application Support"
 
+    def system_dirs(self) -> list[Path]:
+        return _posix_paths.system_dirs()
+
     def roaming_app_data(self) -> Path | None:
         return _posix_paths.roaming_app_data()
 

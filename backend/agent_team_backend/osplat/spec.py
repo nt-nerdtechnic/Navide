@@ -90,6 +90,16 @@ class Paths(Protocol):
         """
         ...
 
+    def system_dirs(self) -> list[Path]:
+        """Folders that hold the OS, installed programs, or stored credentials and
+        browser profiles; a chat attachment is never sent from inside one.
+
+        POSIX: `/etc`, `/bin`, `/System`, the keychains ... Windows: `%SystemRoot%`,
+        `%ProgramFiles%`, `%ProgramData%`, and the credential, DPAPI and browser
+        profile folders under `%APPDATA%` / `%LOCALAPPDATA%`.
+        """
+        ...
+
     def home_env_var(self) -> str:
         """The environment variable naming the user's home: `HOME` or `USERPROFILE`."""
         ...

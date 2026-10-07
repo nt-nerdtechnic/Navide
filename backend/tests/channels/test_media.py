@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
 from agent_team_backend.channels import media
+
+from agent_team_backend import osplat
+
+# Windows creates symlinks only with Developer Mode or elevation.
+needs_symlinks = pytest.mark.skipif(not osplat.paths.symlinks_available(),
+                                    reason="this Windows session may not create symlinks")
 
 
 def _file(path: Path, data: bytes = b"x") -> Path:
@@ -48,6 +55,7 @@ def test_inbound_path_is_per_pane_with_a_random_prefix(tmp_path: Path) -> None:
     assert a.name.endswith("-a.png") and len(a.name) == len("abcd1234-a.png")
 
 
+@needs_symlinks
 def test_prune_removes_old_files_symlinks_and_empty_folders(tmp_path: Path) -> None:
     now = time.time()
     old = _file(tmp_path / "p1" / "old.png")
@@ -108,6 +116,7 @@ def test_paths_outside_the_rules_are_refused(tmp_path: Path, ws: Path, raw: str,
     assert media.resolve_outbound(raw, [ws]) == (None, reason)
 
 
+@needs_symlinks
 def test_a_symlink_out_of_the_workspace_is_judged_by_its_target(tmp_path: Path, ws: Path) -> None:
     secret = _file(tmp_path / "home" / "notes.txt")
     (ws / "out" / "notes.txt").symlink_to(secret)
@@ -116,6 +125,7 @@ def test_a_symlink_out_of_the_workspace_is_judged_by_its_target(tmp_path: Path, 
     assert media.resolve_outbound(str(ws / "linkdir" / "notes.txt"), [ws]) == (None, "outside")
 
 
+@needs_symlinks
 def test_a_symlink_into_a_dotfolder_is_refused(ws: Path) -> None:
     key = _file(ws / ".ssh" / "config")
     (ws / "out" / "cfg").symlink_to(key)
@@ -135,13 +145,54 @@ def test_credential_shaped_names_are_refused(ws: Path, name: str) -> None:
     assert media.resolve_outbound(str(f), [ws]) == (None, "denied_name")
 
 
-def test_a_filesystem_root_is_never_a_workspace() -> None:
-    assert media.resolve_outbound("/etc/hosts", ["/"]) == (None, "broad_workspace")
+def test_a_filesystem_root_is_never_a_workspace(ws: Path) -> None:
+    f = ws / "out" / "chart.png"
+    assert media.resolve_outbound(str(f), [Path(f.resolve().anchor)]) == (None, "broad_workspace")
 
 
-def test_system_folders_are_refused_inside_a_workspace() -> None:
-    if Path("/private/etc/hosts").exists():
-        assert media.resolve_outbound("/private/etc/hosts", ["/private/etc"]) == (None, "system")
+def test_system_folders_are_refused_inside_a_workspace(tmp_path: Path, monkeypatch) -> None:
+    f = _file(tmp_path / "deep" / "sys" / "hosts")
+    monkeypatch.setattr(media, "_system_dirs", lambda: [tmp_path / "deep" / "sys"])
+    assert media.resolve_outbound(str(f), [tmp_path / "deep"]) == (None, "system")
+
+
+def test_the_platforms_system_dirs_are_used() -> None:
+    from agent_team_backend import osplat
+
+    assert media._system_dirs() == osplat.paths.system_dirs()
+
+
+@pytest.mark.parametrize("suffix", [":secret", ":secret:$DATA", "::$DATA"])
+def test_an_alternate_data_stream_is_refused(ws: Path, suffix: str) -> None:
+    """NTFS reads ``file:stream`` as a hidden stream of the file; a colon is refused
+    below the anchor everywhere, before the path is resolved."""
+    assert media.resolve_outbound(str(ws / "out" / "chart.png") + suffix, [ws]) == (None, "denied_name")
+
+
+@pytest.mark.parametrize("raw", ["C:foo\\bar.txt", "\\foo\\bar.txt", "out/chart.png", "~/chart.png"])
+def test_relative_and_drive_relative_paths_are_refused(ws: Path, raw: str) -> None:
+    assert media.resolve_outbound(raw, [ws]) == (None, "not_absolute")
+
+
+def test_a_unc_share_root_is_too_broad(monkeypatch) -> None:
+    from pathlib import PureWindowsPath
+
+    monkeypatch.setattr(media, "_home", lambda: PureWindowsPath(r"C:\Users\me"))
+    assert media._too_broad(PureWindowsPath("\\\\server\\share\\"))
+    assert media._too_broad(PureWindowsPath("\\\\server\\share\\team"))
+    assert not media._too_broad(PureWindowsPath("\\\\server\\share\\team\\app"))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 short names exist only on Windows (NTFS)")
+def test_a_short_name_cannot_hide_a_denied_folder(ws: Path) -> None:
+    import ctypes
+
+    f = _file(ws / "credentials_store" / "notes.txt")
+    buf = ctypes.create_unicode_buffer(1024)
+    ctypes.windll.kernel32.GetShortPathNameW(str(f.parent), buf, 1024)
+    if not buf.value or Path(buf.value).name.lower() == "credentials_store":
+        pytest.skip("8.3 name generation is off on this volume")
+    assert media.resolve_outbound(str(Path(buf.value) / "notes.txt"), [ws]) == (None, "denied_name")
 
 
 def test_human_size() -> None:
@@ -209,6 +260,7 @@ def test_open_outbound_reads_the_checked_file(ws: Path) -> None:
         assert (opened.fh.read(), opened.size, opened.path.name) == (b"x", 1, "chart.png")
 
 
+@needs_symlinks
 def test_a_file_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Path, ws: Path,
                                                                      monkeypatch) -> None:
     secret = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
@@ -225,6 +277,7 @@ def test_a_file_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Pa
     assert media.open_outbound(str(target), [ws]) == (None, "changed")
 
 
+@needs_symlinks
 def test_a_folder_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Path, ws: Path,
                                                                        monkeypatch) -> None:
     _file(tmp_path / "elsewhere" / "chart.png", b"SECRET")
