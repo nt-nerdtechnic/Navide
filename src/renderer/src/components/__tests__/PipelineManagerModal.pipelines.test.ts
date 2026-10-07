@@ -217,7 +217,10 @@ describe('PipelineManagerModal — pipelines tab', () => {
 
     const last = useNotify().toasts.value.slice(before).at(-1)
     expect(last?.type).toBe('error')
-    expect(last?.message).toContain('Cannot delete pipeline while a project is running')
+    // PIPELINE_RUNNING is a code the UI knows, so it reads in the UI language
+    // instead of echoing the backend's English sentence.
+    expect(last?.message).toContain('This pipeline is running, so it cannot be changed right now')
+    expect(last?.message).not.toContain('Cannot delete pipeline')
   })
 
   it('reports a failed factory reset instead of doing nothing visible', async () => {
@@ -378,9 +381,7 @@ describe('PipelineManagerModal — pipelines tab', () => {
     await tab(w).findAll('.split-list li .icon-btn')[1].trigger('click')
     await flushPromises()
 
-    expect(tab(w).find('.err-msg').text()).toContain(
-      'Cannot reorder stages while the active pipeline is running'
-    )
+    expect(tab(w).find('.err-msg').text()).toContain('This pipeline is running, so it cannot be changed right now')
     // The refusal stops the round trip: no refresh is issued for it.
     expect(mock.sent.filter((s) => s.type === 'stages.list')).toHaveLength(listsBefore)
   })
@@ -388,7 +389,7 @@ describe('PipelineManagerModal — pipelines tab', () => {
   it('reports a vetoed move-up too', async () => {
     const { wrapper: w, mock } = await detail()
     mock.setResponse('stages.reorder', null, {
-      ok: false, error: { code: 'PIPELINE_RUNNING', message: 'reorder refused' },
+      ok: false, error: { code: 'ERR', message: 'reorder refused' },
     })
 
     // ▲ on the second row: [▲, ▼] per row, so index 2 is the second row's ▲.
@@ -413,9 +414,80 @@ describe('PipelineManagerModal — pipelines tab', () => {
     await tab(w).findAll('.toolbar .ghost')[1].trigger('click')
     await flushPromises()
 
-    expect(tab(w).find('.err-msg').text()).toContain(
-      'Cannot edit stages while the active pipeline is running'
-    )
+    expect(tab(w).find('.err-msg').text()).toContain('This pipeline is running, so it cannot be changed right now')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).agentTeam
+  })
+
+  // ── Phase 0 regressions ────────────────────────────────────────────────────
+  const slotRows = (w: VueWrapper) => tab(w).findAll('.slots-section .slot-item')
+
+  it('asks before removing a slot, and writes nothing when the user cancels', async () => {
+    const { wrapper: w, mock } = await detail()
+    const upsertsBefore = mock.sent.filter((s) => s.type === 'stages.upsert').length
+
+    await slotRows(w)[0].find('.icon-btn.danger-icon').trigger('click')
+    await flushPromises()
+    expect(useNotify().dialog.value?.kind).toBe('confirm')
+    useNotify().resolveDialog(false)
+    await flushPromises()
+
+    expect(mock.sent.filter((s) => s.type === 'stages.upsert')).toHaveLength(upsertsBefore)
+    expect(slotRows(w)).toHaveLength(2)
+  })
+
+  it('puts a refused slot removal back instead of showing a layout the backend never stored', async () => {
+    const { wrapper: w, mock } = await detail()
+    mock.setResponse('stages.upsert', null, {
+      ok: false,
+      error: { code: 'PIPELINE_RUNNING', message: 'Cannot edit stages while the active pipeline is running' },
+    })
+
+    await slotRows(w)[0].find('.icon-btn.danger-icon').trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(true)
+    await flushPromises()
+
+    expect(mock.sent.filter((s) => s.type === 'stages.upsert').length).toBeGreaterThan(0)
+    expect(slotRows(w).map((r) => r.find('.item-label').text())).toEqual(['Lead', 'Second'])
+    expect(tab(w).find('.err-msg').text()).toContain('This pipeline is running')
+  })
+
+  it('keeps a successful slot removal', async () => {
+    const { wrapper: w, mock } = await detail()
+    mock.setResponse('stages.upsert', { stage: twoSlotStage })
+
+    await slotRows(w)[0].find('.icon-btn.danger-icon').trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(true)
+    await flushPromises()
+
+    const stage = sentPayload(mock, 'stages.upsert')?.stage as { slots: { label: string }[] }
+    expect(stage.slots.map((s) => s.label)).toEqual(['Second'])
+  })
+
+  it('reports a reorder that never reached the backend instead of swallowing it', async () => {
+    const { wrapper: w, mock } = await detail()
+    mock.setRejection('stages.reorder', 'ws not open')
+
+    await tab(w).findAll('.split-list li .icon-btn')[1].trigger('click')
+    await flushPromises()
+
+    expect(tab(w).find('.err-msg').text()).toContain('ws not open')
+  })
+
+  it('releases the export button and says why when saving the file throws', async () => {
+    const { wrapper: w } = await detail()
+    const saveJson = vi.fn().mockRejectedValue(new Error('disk full'))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).agentTeam = { saveJson }
+
+    const exportBtn = tab(w).findAll('.toolbar .ghost')[0]
+    await exportBtn.trigger('click')
+    await flushPromises()
+
+    expect(tab(w).findAll('.toolbar .ghost')[0].attributes('disabled')).toBeUndefined()
+    expect(tab(w).find('.err-msg').text()).toContain('disk full')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).agentTeam
   })

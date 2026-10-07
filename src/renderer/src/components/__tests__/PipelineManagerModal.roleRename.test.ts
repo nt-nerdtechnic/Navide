@@ -443,46 +443,35 @@ describe('PipelineManagerModal — role key rename', () => {
     await saveStage(w)
   }
 
-  it('does not swap roles between slots when a delete+add kept the length equal', async () => {
-    const { mock, w } = await openDivergingStageDraft()
-    // Draft becomes [Second(frontend), Third(qa)] — still two slots, but index 0
-    // is a different slot than the persisted index 0.
-    await deleteSlot(w, 0)
-    await addSlot(w, 'Third', 'qa')
-
-    mock.emit('stages.changed', {
-      stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
-    })
-    await flushPromises()
-    await saveStageForReal(mock, w)
-
-    // Index adoption wrote Second:backend2 / Third:frontend here — both of the
-    // user's role choices replaced by their neighbour's, with no error shown.
-    expect(savedSlots(mock)).toEqual(['Second:frontend', 'Third:qa'])
-  })
-
-  it('still adopts the repointed key when the draft has one slot more', async () => {
-    // The length check used to skip adoption outright here, so the draft wrote
-    // the vanished `backend` key back — the dangling role_key the rename exists
-    // to prevent. Labels match one-to-one, so nothing has to be guessed.
-    const { mock, w } = await openDivergingStageDraft()
-    await addSlot(w, 'Third', 'qa')
-
-    mock.emit('stages.changed', {
-      stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
-    })
-    await flushPromises()
-    await saveStageForReal(mock, w)
-
-    expect(savedSlots(mock)).toEqual(['Lead:backend2', 'Second:frontend', 'Third:qa'])
-  })
-
-  it('leaves a duplicated label alone rather than guessing which slot it is', async () => {
-    // Two draft slots named "Second": no unique counterpart on the draft side, so
-    // adopting into either is a coin flip and neither moves.
+  it('rolls a refused delete+add back, so the next rename adopts into the persisted slots', async () => {
+    // A refused slot edit used to stay in the draft, which is how the draft and
+    // the persisted stage drifted apart. The draft now snaps back to what the
+    // backend holds, so a later rename lines up label for label.
     const { mock, w } = await openDivergingStageDraft()
     await deleteSlot(w, 0)
-    await addSlot(w, 'Second', 'qa')
+    useNotify().resolveDialog(true)
+    await flushPromises()
+    await addSlot(w, 'Third', 'qa')
+    const rows = slotsSection(w).findAll('.slot-item .item-label').map((r) => r.text())
+    expect(rows, 'both refused edits rolled back').toEqual(['Lead', 'Second'])
+
+    mock.emit('stages.changed', {
+      stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
+    })
+    await flushPromises()
+    const titleInput = w.findAll('.tab-body')[0].findAll('.split-detail input')[2]
+    await titleInput.setValue('Specification v2')
+    await flushPromises()
+    await saveStageForReal(mock, w)
+
+    expect(savedSlots(mock)).toEqual(['Lead:backend2', 'Second:frontend'])
+  })
+
+  it('still adopts by label when a stage-field edit keeps the draft open', async () => {
+    const { mock, w } = await openDivergingStageDraft()
+    const titleInput = w.findAll('.tab-body')[0].findAll('.split-detail input')[2]
+    await titleInput.setValue('Specification v2')
+    await flushPromises()
 
     mock.emit('stages.changed', {
       stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
@@ -490,7 +479,7 @@ describe('PipelineManagerModal — role key rename', () => {
     await flushPromises()
     await saveStageForReal(mock, w)
 
-    expect(savedSlots(mock)).toEqual(['Second:frontend', 'Second:qa'])
+    expect(savedSlots(mock)).toEqual(['Lead:backend2', 'Second:frontend'])
   })
 
   it('leaves the draft alone for a stage change that is not a rename', async () => {

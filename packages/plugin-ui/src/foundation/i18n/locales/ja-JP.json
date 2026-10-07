@@ -9742,5 +9742,16 @@
         "body": "「ヘルプ → 新機能…」からいつでも開き直せます。ツアーボタンもそこにあります。"
       }
     }
+  },
+  "pipelineEditor": {
+    "error": {
+      "pipeline-running": "このパイプラインは実行中のため、今は変更できません。先に中止するか、実行の終了を待ってください。",
+      "export-failed": "エクスポートに失敗しました：{message}",
+      "role-entry-invalid": "{key}：key または system prompt がありません"
+    },
+    "confirm": {
+      "remove-slot-title": "スロットを削除",
+      "remove-slot-body": "このステージから「{label}」を削除しますか？変更はすぐに保存されます。"
+    }
   }
 }

@@ -248,4 +248,28 @@ describe('PipelineManagerModal — roles tab', () => {
     expect(fields(w).key.element.value).toBe('qa')
     expect(fields(w).label.element.value).toBe('QA Engin')
   })
+
+  it('counts every role an import could not write and names the first reason', async () => {
+    const { wrapper: w, mock } = await open()
+    // dev is rejected by the backend; the third entry has no system_prompt.
+    mock.setResponse('roles.upsert', null, {
+      ok: false, error: { code: 'ERR', message: 'roles.json is read-only' },
+    })
+    const openJson = vi.fn().mockResolvedValue({
+      ok: true,
+      content: JSON.stringify({ roles: [dev, { key: 'broken' }] }),
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).agentTeam = { openJson }
+
+    await tab(w).findAll('.toolbar .ghost')[1].trigger('click')
+    await flushPromises()
+
+    expect(tab(w).find('.summary-ok').text()).toContain('Imported 0 role(s)')
+    expect(tab(w).find('.summary-ok').text()).toContain('2 failed')
+    expect(tab(w).find('.err-msg').text()).toContain('dev: roles.json is read-only')
+    expect(tab(w).findAll('.toolbar .ghost')[1].attributes('disabled')).toBeUndefined()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).agentTeam
+  })
 })

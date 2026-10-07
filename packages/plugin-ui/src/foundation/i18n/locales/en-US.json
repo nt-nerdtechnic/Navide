@@ -9742,5 +9742,16 @@
         "body": "Reopen it any time from Help → What's New… — the tour button is there."
       }
     }
+  },
+  "pipelineEditor": {
+    "error": {
+      "pipeline-running": "This pipeline is running, so it cannot be changed right now. Abort or finish the run first.",
+      "export-failed": "Export failed: {message}",
+      "role-entry-invalid": "{key}: entry has no key or system prompt"
+    },
+    "confirm": {
+      "remove-slot-title": "Remove slot",
+      "remove-slot-body": "Remove “{label}” from this stage? The change is saved right away."
+    }
   }
 }

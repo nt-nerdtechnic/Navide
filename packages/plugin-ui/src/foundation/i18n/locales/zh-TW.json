@@ -9742,5 +9742,16 @@
         "body": "之後隨時可從選單列「輔助說明（Help）→ 新版更新…」再打開，導覽按鈕就在那裡。"
       }
     }
+  },
+  "pipelineEditor": {
+    "error": {
+      "pipeline-running": "這條 pipeline 正在執行，目前無法修改。請先中止或等執行結束。",
+      "export-failed": "匯出失敗：{message}",
+      "role-entry-invalid": "{key}：項目缺少 key 或 system prompt"
+    },
+    "confirm": {
+      "remove-slot-title": "移除 slot",
+      "remove-slot-body": "要從這個 Stage 移除「{label}」嗎？變更會立即儲存。"
+    }
   }
 }

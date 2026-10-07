@@ -16,6 +16,7 @@ import { stageToBackend, type AgentKey, type Stage, type StageSlot } from '../da
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import { buildPmAiContext } from '../lib/pmAiContext'
 import { aiTerminalPaneId } from '@navide/plugin-shell'
+import { backendErrorText } from '../lib/pipelineErrors'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -144,6 +145,8 @@ function plBackToList(): void {
  *  fold it into the toast instead of showing a bare "failed". */
 function plFail(key: string): string {
   const reason = pipelinesApi.error.value
+    ? backendErrorText(t, { code: pipelinesApi.errorCode.value, message: pipelinesApi.error.value }, key)
+    : ''
   return reason ? `${t(key)} — ${reason}` : t(key)
 }
 
@@ -351,8 +354,8 @@ function sStartNew(): void {
   }
 }
 
-async function sSave(): Promise<void> {
-  if (!sDraft.value || !sCanSave.value) return
+async function sSave(): Promise<boolean> {
+  if (!sDraft.value || !sCanSave.value) return false
   sSaving.value = true; sError.value = ''
   try {
     const payload = stageToBackend({ ...sDraft.value, id: sDraft.value.id.trim() })
@@ -360,13 +363,15 @@ async function sSave(): Promise<void> {
       'stages.upsert',
       { stage: payload, pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
     )
-    if (!resp.ok) { sError.value = resp.error?.message ?? t('error.save-failed'); return }
+    if (!resp.ok) { sError.value = backendErrorText(t, resp.error, 'error.save-failed'); return false }
     sSummary.value = t('label.saved-name', { name: sDraft.value.title })
     sSelectedId.value = sDraft.value.id.trim()
     sIsNew.value = false
     await stagesApi.refresh(plEditingId.value)
+    return true
   } catch (err) {
     sError.value = err instanceof Error ? err.message : t('error.save-failed')
+    return false
   } finally { sSaving.value = false }
 }
 async function sDoDelete(): Promise<void> {
@@ -377,7 +382,7 @@ async function sDoDelete(): Promise<void> {
       { id: sDraft.value.id, pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
     )
     sConfirmDelete.value = false
-    if (!resp.ok) { sError.value = resp.error?.message ?? t('error.delete-failed'); return }
+    if (!resp.ok) { sError.value = backendErrorText(t, resp.error, 'error.delete-failed'); return }
     sSummary.value = t('label.deleted-name', { name: sDraft.value.id })
     await stagesApi.refresh(plEditingId.value)
     sSelectStage(sActiveStages.value[0]?.id ?? null)
@@ -392,7 +397,7 @@ async function sDoReset(): Promise<void> {
       'stages.reset', { pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
     )
     sConfirmReset.value = false
-    if (!resp.ok) { sError.value = resp.error?.message ?? t('error.reset-failed'); return }
+    if (!resp.ok) { sError.value = backendErrorText(t, resp.error, 'error.reset-failed'); return }
     sSummary.value = t('label.reset-to-factory-defaults')
     await stagesApi.refresh(plEditingId.value)
     sSelectStage(sActiveStages.value[0]?.id ?? null)
@@ -401,31 +406,31 @@ async function sDoReset(): Promise<void> {
     sError.value = err instanceof Error ? err.message : t('error.reset-failed')
   }
 }
-async function sMoveUp(index: number): Promise<void> {
-  if (index <= 0) return
-  const ids = sActiveStages.value.map((s) => s.id)
-  ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
+async function sReorder(ids: string[]): Promise<void> {
   try {
     const resp = await backend.send(
       'stages.reorder',
       { ids, pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
     )
-    if (!resp.ok) { sError.value = resp.error?.message ?? t('error.save-failed'); return }
+    if (!resp.ok) { sError.value = backendErrorText(t, resp.error, 'error.save-failed'); return }
     await stagesApi.refresh(plEditingId.value)
-  } catch { /* ignore transient WS errors for reorder */ }
+  } catch (err) {
+    // A dropped socket used to be swallowed here, so the list snapped back with
+    // no word of why. Say it like every other stage write does.
+    sError.value = err instanceof Error ? err.message : t('error.save-failed')
+  }
+}
+async function sMoveUp(index: number): Promise<void> {
+  if (index <= 0) return
+  const ids = sActiveStages.value.map((s) => s.id)
+  ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
+  await sReorder(ids)
 }
 async function sMoveDown(index: number): Promise<void> {
   if (index >= sActiveStages.value.length - 1) return
   const ids = sActiveStages.value.map((s) => s.id)
   ;[ids[index], ids[index + 1]] = [ids[index + 1], ids[index]]
-  try {
-    const resp = await backend.send(
-      'stages.reorder',
-      { ids, pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
-    )
-    if (!resp.ok) { sError.value = resp.error?.message ?? t('error.save-failed'); return }
-    await stagesApi.refresh(plEditingId.value)
-  } catch { /* ignore transient WS errors for reorder */ }
+  await sReorder(ids)
 }
 
 function sStartAddSlot(): void {
@@ -434,12 +439,25 @@ function sStartAddSlot(): void {
   sSlotDraft.value = { agentKey: 'claude', roleKey: '', label: '', kickoffBody: '', isCommander: false }
 }
 function sCancelAddSlot(): void { sAddingSlot.value = false; sEditingSlotIndex.value = null }
+/** Slot edits auto-save. When the backend refuses the write (PIPELINE_RUNNING
+ *  while a run uses this pipeline), the draft must not keep the edit: the list
+ *  would show a slot layout the backend never stored. Snapshot the slots, apply
+ *  the change, and put the snapshot back if the save fails. */
+async function sMutateSlots(mutate: (slots: StageSlot[]) => void): Promise<boolean> {
+  const draft = sDraft.value
+  if (!draft) return false
+  if (!draft.slots) draft.slots = []
+  const before = JSON.parse(JSON.stringify(draft.slots)) as StageSlot[]
+  mutate(draft.slots)
+  const saved = await sSave()
+  if (!saved && sDraft.value === draft) draft.slots = before
+  return saved
+}
 async function sConfirmAddSlot(): Promise<void> {
   if (!sDraft.value || !sSlotDraft.value.label.trim()) return
-  if (!sDraft.value.slots) sDraft.value.slots = []
-  sDraft.value.slots.push({ ...sSlotDraft.value })
+  const slot = { ...sSlotDraft.value }
   sAddingSlot.value = false
-  await sSave()
+  await sMutateSlots((slots) => { slots.push(slot) })
 }
 function sStartEditSlot(index: number): void {
   sEditingSlotIndex.value = index
@@ -448,57 +466,72 @@ function sStartEditSlot(index: number): void {
 }
 async function sSaveEditSlot(): Promise<void> {
   if (!sDraft.value?.slots || sEditingSlotIndex.value === null) return
-  sDraft.value.slots[sEditingSlotIndex.value] = { ...sSlotDraft.value }
+  const index = sEditingSlotIndex.value
+  const slot = { ...sSlotDraft.value }
   sEditingSlotIndex.value = null
-  await sSave()
+  await sMutateSlots((slots) => { slots[index] = slot })
 }
 async function sRemoveSlot(index: number): Promise<void> {
-  if (!sDraft.value?.slots || sDraft.value.slots.length <= 1) return  // must keep at least one
+  const slots = sDraft.value?.slots
+  if (!slots || slots.length <= 1) return  // must keep at least one
+  const label = slots[index]?.label ?? ''
+  // Removing a slot writes straight to the backend, so ask first.
+  if (!(await notify.confirm(t('pipelineEditor.confirm.remove-slot-body', { label }), {
+    title: t('pipelineEditor.confirm.remove-slot-title'),
+    confirmText: t('action.delete'),
+  }))) return
   if (sEditingSlotIndex.value === index) sEditingSlotIndex.value = null
-  sDraft.value.slots.splice(index, 1)
-  await sSave()
+  await sMutateSlots((s) => { s.splice(index, 1) })
 }
 
 async function sExport(): Promise<void> {
   if (!window.agentTeam?.saveJson) return
   sExportBusy.value = true
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  // Export the snake_case backend shape so a round-trip import (raw dicts fed
-  // back to stages.upsert) preserves short_title / slots[].agent_key etc.
-  const envelope = { format_version: 1, exported_at: new Date().toISOString(), stages: sActiveStages.value.map(stageToBackend) }
-  const result = await window.agentTeam.saveJson({ title: t('label.export-stages-title'), defaultName: `agent-team-stages-${stamp}.json`, content: JSON.stringify(envelope, null, 2) })
-  if (result.ok) sSummary.value = t('label.exported-stages', { count: envelope.stages.length })
-  sExportBusy.value = false
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    // Export the snake_case backend shape so a round-trip import (raw dicts fed
+    // back to stages.upsert) preserves short_title / slots[].agent_key etc.
+    const envelope = { format_version: 1, exported_at: new Date().toISOString(), stages: sActiveStages.value.map(stageToBackend) }
+    const result = await window.agentTeam.saveJson({ title: t('label.export-stages-title'), defaultName: `agent-team-stages-${stamp}.json`, content: JSON.stringify(envelope, null, 2) })
+    if (result.ok) sSummary.value = t('label.exported-stages', { count: envelope.stages.length })
+  } catch (err) {
+    sError.value = t('pipelineEditor.error.export-failed', { message: err instanceof Error ? err.message : String(err) })
+  } finally {
+    sExportBusy.value = false
+  }
 }
 async function sImport(): Promise<void> {
   if (!window.agentTeam?.openJson) return
   sImporting.value = true; sError.value = ''
-  const result = await window.agentTeam.openJson({ title: t('label.import-stages-title') })
-  if (result.ok && result.content) {
-    try {
-      const parsed = JSON.parse(result.content)
-      const raw: unknown[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.stages) ? parsed.stages : [])
-      let ok = 0, failed = 0
-      let firstFailure = ''
-      for (const entry of raw) {
-        const s = entry as Record<string, unknown>
-        if (!s.id) { failed++; continue }
-        const resp = await backend.send(
-          'stages.upsert',
-          { stage: s, pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
-        )
-        if (resp.ok) ok++
-        else {
-          failed++
-          if (!firstFailure) firstFailure = resp.error?.message ?? ''
+  try {
+    const result = await window.agentTeam.openJson({ title: t('label.import-stages-title') })
+    if (result.ok && result.content) {
+      try {
+        const parsed = JSON.parse(result.content)
+        const raw: unknown[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.stages) ? parsed.stages : [])
+        let ok = 0, failed = 0
+        let firstFailure = ''
+        for (const entry of raw) {
+          const s = entry as Record<string, unknown>
+          if (!s.id) { failed++; continue }
+          const resp = await backend.send(
+            'stages.upsert',
+            { stage: s, pipeline_id: plEditingId.value, workspace_path: props.workspacePath }
+          )
+          if (resp.ok) ok++
+          else {
+            failed++
+            if (!firstFailure) firstFailure = backendErrorText(t, resp.error, 'error.save-failed')
+          }
         }
-      }
-      if (firstFailure) sError.value = firstFailure
-      sSummary.value = t('label.imported-stages', { count: ok }) + (failed ? t('label.import-failed-count', { count: failed }) : '')
-      await stagesApi.refresh(plEditingId.value)
-    } catch (err) { sError.value = t('error.invalid-json', { message: (err as Error).message }) }
+        if (firstFailure) sError.value = firstFailure
+        sSummary.value = t('label.imported-stages', { count: ok }) + (failed ? t('label.import-failed-count', { count: failed }) : '')
+        await stagesApi.refresh(plEditingId.value)
+      } catch (err) { sError.value = t('error.invalid-json', { message: (err as Error).message }) }
+    }
+  } finally {
+    sImporting.value = false
   }
-  sImporting.value = false
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -663,30 +696,51 @@ async function rDoReset(): Promise<void> {
 async function rExport(): Promise<void> {
   if (!window.agentTeam?.saveJson) return
   rExportBusy.value = true
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const envelope = { format_version: 1, exported_at: new Date().toISOString(), roles: rolesApi.roles.value }
-  const result = await window.agentTeam.saveJson({ title: t('label.export-roles-title'), defaultName: `agent-team-roles-${stamp}.json`, content: JSON.stringify(envelope, null, 2) })
-  if (result.ok) rSummary.value = t('label.exported-roles', { count: envelope.roles.length })
-  rExportBusy.value = false
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const envelope = { format_version: 1, exported_at: new Date().toISOString(), roles: rolesApi.roles.value }
+    const result = await window.agentTeam.saveJson({ title: t('label.export-roles-title'), defaultName: `agent-team-roles-${stamp}.json`, content: JSON.stringify(envelope, null, 2) })
+    if (result.ok) rSummary.value = t('label.exported-roles', { count: envelope.roles.length })
+  } catch (err) {
+    rError.value = t('pipelineEditor.error.export-failed', { message: err instanceof Error ? err.message : String(err) })
+  } finally {
+    rExportBusy.value = false
+  }
 }
 async function rImport(): Promise<void> {
   if (!window.agentTeam?.openJson) return
-  rImporting.value = true
-  const result = await window.agentTeam.openJson({ title: t('label.import-roles-title') })
-  if (result.ok && result.content) {
-    try {
-      const parsed = JSON.parse(result.content)
-      const raw: unknown[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.roles) ? parsed.roles : [])
-      let ok = 0
-      for (const entry of raw) {
-        const e = entry as Record<string, unknown>
-        if (typeof e?.key === 'string' && e.key && typeof e.system_prompt === 'string')
-          if (await rolesApi.upsert({ key: e.key as string, label: String(e.label ?? e.key), one_line: String(e.one_line ?? ''), system_prompt: e.system_prompt as string })) ok++
-      }
-      rSummary.value = t('label.imported-roles', { count: ok })
-    } catch (err) { rError.value = t('error.invalid-json', { message: (err as Error).message }) }
+  rImporting.value = true; rError.value = ''; rErrorUsages.value = []
+  try {
+    const result = await window.agentTeam.openJson({ title: t('label.import-roles-title') })
+    if (result.ok && result.content) {
+      try {
+        const parsed = JSON.parse(result.content)
+        const raw: unknown[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.roles) ? parsed.roles : [])
+        // Every entry is accounted for: a malformed one or a rejected upsert
+        // used to vanish, so "Imported 3" could mean 3 of 10.
+        let ok = 0, failed = 0
+        let firstFailure = ''
+        for (const entry of raw) {
+          const e = entry as Record<string, unknown>
+          if (!(typeof e?.key === 'string' && e.key && typeof e.system_prompt === 'string')) {
+            failed++
+            if (!firstFailure) firstFailure = t('pipelineEditor.error.role-entry-invalid', { key: typeof e?.key === 'string' && e.key ? e.key : '?' })
+            continue
+          }
+          const saved = await rolesApi.upsert({ key: e.key, label: String(e.label ?? e.key), one_line: String(e.one_line ?? ''), system_prompt: e.system_prompt })
+          if (saved) ok++
+          else {
+            failed++
+            if (!firstFailure) firstFailure = `${e.key}: ${rolesApi.error.value || t('error.save-failed')}`
+          }
+        }
+        if (firstFailure) rError.value = firstFailure
+        rSummary.value = t('label.imported-roles', { count: ok }) + (failed ? t('label.import-failed-count', { count: failed }) : '')
+      } catch (err) { rError.value = t('error.invalid-json', { message: (err as Error).message }) }
+    }
+  } finally {
+    rImporting.value = false
   }
-  rImporting.value = false
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1000,6 +1054,9 @@ function buildAiContext(): string {
         <button class="ghost danger-link" @click="rConfirmReset = true">↺ {{ $t('action.reset-defaults') }}</button>
         <span v-if="rSummary" class="summary-ok">{{ rSummary }}</span>
       </div>
+      <!-- Toolbar actions (import/export) can fail with no role open; the
+           detail pane's error line would then never render. -->
+      <p v-if="rError && !rDraft" class="err-msg pad">{{ rError }}</p>
       <div class="split">
         <aside class="split-list">
           <button class="primary new-btn nv-btn nv-btn--primary" @click="rStartNew">{{ $t('settings.roles.new-role') }}</button>
