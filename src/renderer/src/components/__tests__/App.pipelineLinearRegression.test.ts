@@ -361,3 +361,75 @@ describe('a run that loses every slot', () => {
     expect(nodes['n-01-1'].status).toBe('aborted')
   })
 })
+
+const abortSource = block('async function onPipelineAbort(): Promise<void> {', '\nasync function onPipelineGateApprove(')
+const resumeSource = block('async function runPipelineResume(): Promise<void> {', '\n// Orders every project.set_ui_state')
+
+describe('a run aborted while paused at a gate', () => {
+  it('keeps the gate across the abort and resumes waiting on it, not re-running the stage', async () => {
+    const graph = gatedGraph()
+    const run = await loadGraphRun(graph)
+    await run.start()
+    // Stage 01's slots finish (what onStageSlotCompleted reports), then the
+    // hand-off stops on the gate.
+    run.dag.slotFinished(0, 'fe', 'front done')
+    run.dag.slotFinished(0, 'be', 'back done')
+    await run.api.onPipelineNext()
+    await flush()
+    expect(run.dag.awaitingGate.value?.gateId).toBe('gate')
+
+    // Abort through the real handler.
+    const { code: abortCode } = await transformWithEsbuild(`${abortSource}\nreturn { onPipelineAbort }`, 'AppAbort.ts', { loader: 'ts' })
+    const abortDeps: Record<string, unknown> = {
+      pipeline: run.pipeline,
+      pipelineLog: () => {},
+      tearDownPipelineOrchestration: () => { run.pipeline.state = 'aborted' },
+      pipelineDag: run.dag,
+      sendQuiet: async () => null,
+      applyProjectPaths: () => {},
+      onWorkspaceCheck: async () => {},
+    }
+    await (new Function(...Object.keys(abortDeps), abortCode)(...Object.values(abortDeps)) as { onPipelineAbort: () => Promise<void> }).onPipelineAbort()
+    await flush()
+    const persisted = run.sent.filter((s) => s.type === 'pipeline.node_states').at(-1)!.payload
+    expect((persisted.gate as { gateId?: string }).gateId).toBe('gate')
+
+    // What the backend would hand back on the next workspace check.
+    const info = {
+      taskDescription: 'ship', nextStageIndex: 0, stagesCompleted: 0, totalStages: 2,
+      workspacePath: '/ws', pipelineId: 'pl-1',
+      nodeGate: persisted.gate, nodeStates: persisted.nodes,
+    }
+    const { code: resumeCode } = await transformWithEsbuild(`${resumeSource}\nreturn { runPipelineResume }`, 'AppResume.ts', { loader: 'ts' })
+    const activated: number[] = []
+    const resumeDeps: Record<string, unknown> = {
+      existingProject: { value: info },
+      pipelinesApi: { activePipelineId: { value: 'pl-1' }, setActivePipeline: vi.fn(), error: { value: '' } },
+      stagesApi: { stages: { value: STAGES }, refresh: vi.fn(), error: { value: '' } },
+      pipeline: run.pipeline,
+      pipelineRunWorkspace: '',
+      pipelineDag: run.dag,
+      deriveGlobalManager: () => null,
+      pipelineLog: () => {},
+      sendQuiet: async () => ({}),
+      applyProjectPaths: () => {},
+      panes: { value: [] },
+      realizeRestoredPane: async () => {},
+      activateStage: async (i: number) => { activated.push(i) },
+      startGlobalManagerRouter: () => {},
+    }
+    await (new Function(...Object.keys(resumeDeps), resumeCode)(...Object.values(resumeDeps)) as { runPipelineResume: () => Promise<void> }).runPipelineResume()
+    await flush()
+    expect(run.pipeline.state).toBe('running')
+    expect(activated).toEqual([])
+    expect(run.dag.awaitingGate.value?.gateId).toBe('gate')
+    expect(run.pipeline.stageIndex).toBe(0)
+    // The stage before the gate keeps its finished state, not 'skipped'.
+    expect(run.dag.nodeStates.value['n-01-0'].status).toBe('done')
+    expect(run.dag.nodeStates.value['n-01-0'].summary).toBe('front done')
+    // Passing it now carries on into stage 02.
+    expect(await run.api.onPipelineGateApprove('gate')).toBe(true)
+    await flush()
+    expect(run.pipeline.stageIndex).toBe(1)
+  })
+})

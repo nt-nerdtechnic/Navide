@@ -92,6 +92,7 @@ import {
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { usePipelineDag } from './composables/usePipelineDag'
+import type { NodeRunState } from './lib/pipelineGraph'
 import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
 import { useWorkspaceAliases } from './composables/useWorkspaceAliases'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
@@ -10370,6 +10371,9 @@ interface ProjectPayload {
     run_count?: number
     theme?: string
     theme_custom?: Record<string, string>
+    node_states?: Record<string, NodeRunState>  // DAG engine's last reported per-node state
+    node_gate?: { gateId?: string; nextIndex?: number }  // gate the run is paused on; {} = none
+    node_outputs?: Record<string, unknown>
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
@@ -10678,7 +10682,9 @@ function buildExistingProjectInfo(payload: ProjectPayload | null): ExistingProje
     updatedAt: proj.updated_at ?? '',
     workspacePath: proj.workspace_path,
     pipelineId: (proj.pipeline_id as string | undefined) ?? '',
-    runCount: (proj.run_count as number | undefined) ?? 0
+    runCount: (proj.run_count as number | undefined) ?? 0,
+    nodeGate: proj.node_gate ?? null,
+    nodeStates: proj.node_states ?? {},
   }
 }
 
@@ -11921,12 +11927,17 @@ async function runPipelineResume(): Promise<void> {
       return
     }
   }
-  // Gates before the resume stage count as passed; one after it still holds.
-  const dagStart = await pipelineDag.begin(
-    info.pipelineId || pipelinesApi.activePipelineId.value,
-    stagesApi.stages.value,
-    { startIndex: info.nextStageIndex },
-  )
+  // A run aborted while paused at a gate goes back to waiting on that gate
+  // (persisted as project.node_gate) instead of re-running the stage before
+  // it. Otherwise gates before the resume stage count as passed and one after
+  // it still holds.
+  const resumePipelineId = info.pipelineId || pipelinesApi.activePipelineId.value
+  const gateNext = info.nodeGate?.gateId
+    ? await pipelineDag.beginAtGate(resumePipelineId, stagesApi.stages.value, info.nodeGate, info.nodeStates ?? {})
+    : null
+  const dagStart = gateNext !== null
+    ? gateNext
+    : await pipelineDag.begin(resumePipelineId, stagesApi.stages.value, { startIndex: info.nextStageIndex })
   if (dagStart === null) {
     pipelineLog('Resume aborted: could not prepare the run graph — see the line above')
     return
@@ -11950,6 +11961,8 @@ async function runPipelineResume(): Promise<void> {
   pipelineRunWorkspace = resumeWorkspacePath
   pipeline.stageIndex = info.nextStageIndex
   pipeline.state = 'running'
+  // Paused at a gate: the run sits at the end of the stage before it.
+  if (gateNext !== null) pipeline.stageIndex = gateNext - 1
   pipeline.log = []
   // Rebuild the cross-stage Manager reference; only onPipelineStart used to do
   // this, so a resumed run routed nothing between Manager and workers.
@@ -11986,8 +11999,13 @@ async function runPipelineResume(): Promise<void> {
     .map((p) => p.id)
   await Promise.all(pendingPipeline.map((id) => realizeRestoredPane(id)))
   if (pipeline.state !== 'running') return
-  // activateStage builds context from prior stages and injects kickoffs.
-  await activateStage(info.nextStageIndex)
+  if (gateNext !== null) {
+    // Back to the hand-off the abort interrupted: wait on the gate.
+    pipelineDag.holdBeforeStage(gateNext)
+  } else {
+    // activateStage builds context from prior stages and injects kickoffs.
+    await activateStage(info.nextStageIndex)
+  }
   // Start the global Manager cross-stage router (if configured), same as start.
   if (pipeline.state === 'running' && pipeline.globalManager) startGlobalManagerRouter()
 }
@@ -12855,7 +12873,7 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
     ...(startIndex > 0 ? { start_index: startIndex } : {}),
   })
   applyProjectPaths(resp ?? undefined)
-  pipelineDag.adoptOutputs((resp?.project as { node_outputs?: unknown } | undefined)?.node_outputs)
+  pipelineDag.adoptOutputs(resp?.project?.node_outputs)
   if (resp?.paths) {
     pipelineLog(`${resp.paths.project_file.split(/[\\/]/).pop()} → ${resp.paths.project_file}`)
     pipelineLog(`pipeline.log → ${resp.paths.pipeline_log}`)

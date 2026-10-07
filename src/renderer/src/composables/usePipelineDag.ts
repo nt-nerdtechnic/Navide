@@ -61,12 +61,15 @@ export function usePipelineDag(deps: PipelineDagDeps) {
 
   const now = (): string => new Date().toISOString()
 
-  function report(): Promise<unknown> {
+  /** `gate` overrides what is reported as the paused gate (default: the one
+   *  the run is waiting on now, or {} for none). */
+  function report(gateOverride?: AwaitingGate | null): Promise<unknown> {
     if (!run) return reportChain
     const ws = deps.workspacePath()
     if (!ws) return reportChain
     nodeStates.value = { ...run.nodes }
-    const gate = awaitingGate.value ? { ...awaitingGate.value } : {}
+    const current = gateOverride === undefined ? awaitingGate.value : gateOverride
+    const gate = current ? { ...current } : {}
     const payload: Record<string, unknown> = { workspace_path: ws, nodes: run.nodes, gate }
     if (Object.keys(pendingOutputs).length) {
       payload.outputs = pendingOutputs
@@ -77,13 +80,7 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     return reportChain
   }
 
-  /** Load the graph and set up a run. Returns the stage index to start at
-   *  (0, or the restart point's), or null when the run must not start. */
-  async function begin(
-    pipelineId: string,
-    stages: readonly Stage[],
-    opts: { startIndex?: number; fromNodeId?: string } = {},
-  ): Promise<number | null> {
+  async function loadPlan(pipelineId: string, stages: readonly Stage[]): Promise<DagPlan | null> {
     plan.value = null
     run = null
     awaitingGate.value = null
@@ -97,6 +94,18 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     if (graph && built.graph !== graph) {
       deps.log('DAG ⚠ the stored graph does not match the loaded stages — running the stages linearly')
     }
+    return built
+  }
+
+  /** Load the graph and set up a run. Returns the stage index to start at
+   *  (0, or the restart point's), or null when the run must not start. */
+  async function begin(
+    pipelineId: string,
+    stages: readonly Stage[],
+    opts: { startIndex?: number; fromNodeId?: string } = {},
+  ): Promise<number | null> {
+    const built = await loadPlan(pipelineId, stages)
+    if (!built) return null
     let startIndex = opts.startIndex ?? 0
     let startLayer: number | undefined
     if (opts.fromNodeId) {
@@ -112,6 +121,37 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     run = createRunState(built, startIndex, startLayer ?? built.stageLayer[startIndex] ?? Infinity)
     void report()
     return startIndex
+  }
+
+  /** Resume a run that was aborted while paused at `gate` (as persisted in
+   *  project.node_gate): the run is set up to wait on that gate again, with
+   *  the node states it had restored. Returns the stage index the gate opens
+   *  onto, or null when the gate is not in this pipeline's plan any more (the
+   *  caller then resumes the ordinary way). Call holdBeforeStage(it) next. */
+  async function beginAtGate(
+    pipelineId: string,
+    stages: readonly Stage[],
+    gate: { gateId?: unknown; nextIndex?: unknown },
+    restored: Record<string, NodeRunState> = {},
+  ): Promise<number | null> {
+    const gateId = typeof gate.gateId === 'string' ? gate.gateId : ''
+    const nextIndex = typeof gate.nextIndex === 'number' ? gate.nextIndex : -1
+    const built = await loadPlan(pipelineId, stages)
+    if (!built) return null
+    if (!built.gateIds.includes(gateId) || nextIndex < 0 || nextIndex > built.stageLayer.length) {
+      deps.log(`DAG ⚠ the paused gate ${gateId || '?'} is no longer in this pipeline — resuming normally`)
+      return null
+    }
+    plan.value = built
+    run = createRunState(built, nextIndex, built.nodeLayer[gateId])
+    for (const [id, st] of Object.entries(restored)) {
+      // Only finished work carries over; anything that was in flight is
+      // what the gate is about to decide on, or runs again after it.
+      if (id in run.nodes && st && (st.status === 'done' || (st.status === 'skipped' && st.pinned))) {
+        run.nodes[id] = { ...st }
+      }
+    }
+    return nextIndex
   }
 
   function adoptOutputs(raw: unknown): void {
@@ -235,11 +275,14 @@ export function usePipelineDag(deps: PipelineDagDeps) {
   async function end(outcome: 'completed' | 'aborted' | 'failed'): Promise<void> {
     if (!run) return
     const final: NodeRunState['status'] = outcome === 'completed' ? 'done' : outcome === 'failed' ? 'failed' : 'aborted'
+    // An abort is a pause: the gate it paused on stays recorded so a resume
+    // goes back to waiting on it. Any other ending clears it.
+    const keptGate = outcome === 'aborted' ? awaitingGate.value : null
     for (const [id, st] of Object.entries(run.nodes)) {
       if (st.status === 'running' || st.status === 'awaiting') run.nodes[id] = { ...st, status: final, endedAt: now() }
     }
     awaitingGate.value = null
-    await report()
+    await report(keptGate)
   }
 
   return {
@@ -247,6 +290,7 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     awaitingGate,
     nodeStates,
     begin,
+    beginAtGate,
     adoptOutputs,
     holdBeforeStage,
     approve,

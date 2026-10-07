@@ -285,3 +285,19 @@ def test_start_index_records_skipped_stages_as_completed(tmp_path):
     assert nxt == 2
     store.start_pipeline(ws, task_description="t", total_stages=3, stage_blueprint=bp)
     assert [s.status for s in ProjectStore().peek(ws).stages] == ["pending"] * 3
+
+
+def test_paused_gate_survives_abort_and_resume_until_a_new_run(tmp_path):
+    from agent_team_backend.projects import ProjectStore
+
+    ws = str(tmp_path)
+    store = ProjectStore()
+    bp = [{"stage_id": "01", "slots": []}, {"stage_id": "02", "slots": []}]
+    store.start_pipeline(ws, task_description="t", total_stages=2, stage_blueprint=bp)
+    store.record_node_states(ws, nodes={}, gate={"gateId": "gate", "nextIndex": 1})
+    store.abort_pipeline(ws)
+    assert ProjectStore().peek(ws).node_gate == {"gateId": "gate", "nextIndex": 1}
+    store.resume_pipeline(ws)
+    assert ProjectStore().peek(ws).node_gate == {"gateId": "gate", "nextIndex": 1}
+    store.start_pipeline(ws, task_description="t", total_stages=2, stage_blueprint=bp)
+    assert ProjectStore().peek(ws).node_gate == {}

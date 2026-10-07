@@ -314,6 +314,11 @@ export interface ExistingProjectInfo {
   workspacePath: string
   pipelineId: string
   runCount: number
+  /** The DAG gate the run was paused on when it was aborted (project
+   *  node_gate); resume waits on it again. Absent/null = not paused. */
+  nodeGate?: { gateId?: string; nextIndex?: number } | null
+  /** Last reported per-node run states (project node_states). */
+  nodeStates?: Record<string, import('../lib/pipelineGraph').NodeRunState>
 }
 
 export interface AnalyzerModelOption {
