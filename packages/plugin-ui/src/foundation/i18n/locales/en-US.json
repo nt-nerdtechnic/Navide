@@ -557,6 +557,8 @@
       "open-file-failed": "Could not open {file} — the editor did not respond",
       "idle-reclaimed": "Reclaimed {count} idle CLI pane(s) to free memory — click one to resume it",
       "click-to-resume": "Click to resume",
+      "interrupted-at-launch": "Working at restart",
+      "interrupted-at-launch-tooltip": "This pane was working when Navide restarted, and its turn was cut off. It was not resumed automatically (over the automatic-resume limit, or the resume failed). Click to resume it.",
       "resuming": "Resuming…",
       "rebuild-tooltip": "Rebuild (resume the conversation) ⌘R — close and reopen via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
       "rebuild-tooltip-disabled": "Rebuild needs an existing session to resume. Send a message first — the conversation transcript is created after the first turn.",
@@ -1681,6 +1683,7 @@
     },
     "general": {
       "auto-resume-reconnect": "Resume sessions after a backend restart",
+      "resume-interrupted-on-launch": "Resume working panes after restarting Navide",
       "system-notify": "System notifications",
       "system-notify-hint": "Show a desktop notification when a CLI finishes its turn or needs your input while Navide is in the background. The Dock badge keeps counting either way.",
       "notify-sound": "Notification sound",
@@ -1695,6 +1698,7 @@
         "not-applicable": "Not available on this platform."
       },
       "auto-resume-reconnect-hint": "When the backend crashes it takes every CLI process with it. Turn this on to resume the visible panes' conversations automatically once it comes back, instead of rebuilding each one by hand.",
+      "resume-interrupted-on-launch-hint": "When Navide restarts, panes that were running a turn or waiting on a permission prompt or a question, plus the parent panes waiting on their reports, resume automatically (up to 6; the rest are marked \"Working at restart\"). Nothing continues on its own: press Continue, or let the parent tell it to. The parent is told which of its panes were interrupted.",
       "confirm-close-pane": "Confirm before closing a pane",
       "confirm-close-pane-hint": "Ask before the close-pane shortcut closes a CLI pane. A pane with a turn in progress always asks, regardless of this setting.",
       "confirm-close-workspace": "Confirm before closing a workspace",
@@ -2036,6 +2040,10 @@
             "resumeAfterRestart": {
               "desc": "A backend crash takes every CLI process with it; with this on, the panes on screen resume automatically once it is back.",
               "fallback": "—"
+            },
+            "resumeInterrupted": {
+              "desc": "After you restart Navide, panes that were working (and the parents waiting on them) resume automatically, up to 6, without continuing on their own; the parent is told which ones were interrupted.",
+              "fallback": "On"
             },
             "concurrentResume": {
               "desc": "How many panes resume at once (1–10); the rest queue. Lower it if you see terminal.create timeout.",

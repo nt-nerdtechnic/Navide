@@ -25,7 +25,7 @@ const LITERAL_OPTIONS = ['繁體中文', '日本語']
 // The first table is the settings nav: nineteen pages in four groups,
 // counted from SettingsModal.vue's `.s-nav-group` blocks rather than from the
 // prose. The last one is section 8's which-surface-is-which table.
-const TABLE_ROWS = [22, 14, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
+const TABLE_ROWS = [22, 15, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
 
 function unexpectedWarnings(warn: ReturnType<typeof vi.spyOn>): unknown[][] {
   return warn.mock.calls.filter(([first]) => !String(first).startsWith(HTML_ADVISORY))

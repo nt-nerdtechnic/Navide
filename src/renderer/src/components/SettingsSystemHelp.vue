@@ -85,6 +85,7 @@ const generalSettings = [
   { key: 'resumeOnOpen', nameKey: 'settings.appearance.resume-behavior' },
   { key: 'resumeScope', nameKey: 'settings.appearance.restore-scope' },
   { key: 'resumeAfterRestart', nameKey: 'settings.general.auto-resume-reconnect' },
+  { key: 'resumeInterrupted', nameKey: 'settings.general.resume-interrupted-on-launch' },
   { key: 'concurrentResume', nameKey: 'settings.appearance.resume-concurrency' },
   { key: 'defaultEditor', nameKey: 'settings.general.default-editor' },
   { key: 'quotaBadge', nameKey: 'usage.settings-title' },

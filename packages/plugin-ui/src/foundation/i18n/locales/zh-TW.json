@@ -557,6 +557,8 @@
       "open-file-failed": "無法開啟 {file} — 編輯器沒有回應",
       "idle-reclaimed": "已回收 {count} 個閒置的 CLI 以釋放記憶體 — 點一下即可繼續",
       "click-to-resume": "點擊以續接",
+      "interrupted-at-launch": "重開時工作中",
+      "interrupted-at-launch-tooltip": "Navide 重新啟動時這個 pane 正在工作，回合被中斷；它沒有被自動接回（超過自動接回上限或接回失敗）。點擊即可接回。",
       "resuming": "續接中…",
       "rebuild-tooltip": "重建（接續原對話）⌘R — 關掉再用 --resume 以目前尺寸重新開，清除無法重畫的疊影／跑版。會中斷進行中的回合、重印對話。",
       "rebuild-tooltip-disabled": "重建需要一段可以接續的對話。請先送出一則訊息，逐字稿會在第一次對話後建立。",
@@ -1681,6 +1683,7 @@
     },
     "general": {
       "auto-resume-reconnect": "後端重啟後自動接回工作階段",
+      "resume-interrupted-on-launch": "重開 Navide 後自動接回工作中的 pane",
       "system-notify": "系統通知",
       "system-notify-hint": "Navide 在背景時，CLI 完成回合或需要你輸入會送出桌面通知。Dock 徽章的計數不受此開關影響。",
       "notify-sound": "提示音",
@@ -1695,6 +1698,7 @@
         "not-applicable": "此平台不提供。"
       },
       "auto-resume-reconnect-hint": "後端崩潰時會一併帶走所有 CLI 行程。開啟後，後端恢復時會自動接回目前看得見的 pane 的對話，不必逐一手動重建。",
+      "resume-interrupted-on-launch-hint": "重開 Navide 時，正在跑回合、停在權限詢問或快選等待的 pane，以及等它們回報的母 pane，會自動接回（最多 6 個，其餘標記「重開時工作中」）。接回後不會自動續跑，按「繼續」或由母 pane 下令才會繼續；母 pane 會收到哪些子 pane 被中斷的通知。",
       "confirm-close-pane": "關閉 pane 前確認",
       "confirm-close-pane-hint": "用關閉 pane 快捷鍵關閉 CLI pane 前先跳出確認。執行中的 pane 一律會確認，不受此設定影響。",
       "confirm-close-workspace": "關閉工作區前確認",
@@ -2036,6 +2040,10 @@
             "resumeAfterRestart": {
               "desc": "Backend 掛掉會帶走所有 CLI 行程；開著的話它回來後自動接續畫面上的面板。",
               "fallback": "—"
+            },
+            "resumeInterrupted": {
+              "desc": "重開 Navide 後，自動接回重開前工作中的 pane（以及等它們回報的母 pane），最多 6 個，不會自動續跑；母 pane 會收到哪些子 pane 被中斷的通知。",
+              "fallback": "開"
             },
             "concurrentResume": {
               "desc": "同時最多幾個面板一起接續（1–10），其餘排隊。出現 terminal.create timeout 就調低。",

@@ -32,7 +32,9 @@ import {
   AUTO_RESUME_ON_RECONNECT_SETTING_KEY,
   RESUME_BEHAVIOR_SETTING_KEY,
   RESTORE_SCOPE_SETTING_KEY,
+  RESUME_INTERRUPTED_ON_LAUNCH_SETTING_KEY,
   normalizeAutoResumeOnReconnect,
+  normalizeResumeInterruptedOnLaunch,
   normalizeResumeBehavior,
   normalizeRestoreScope,
   type ResumeBehavior,
@@ -1337,6 +1339,16 @@ const autoResumeOnReconnectModel = ref(
 )
 function onAutoResumeOnReconnectChange(): void {
   settingsSet(AUTO_RESUME_ON_RECONNECT_SETTING_KEY, autoResumeOnReconnectModel.value)
+}
+
+// Whether relaunching Navide brings back, by itself, the panes that were
+// working when it closed. Separate from both settings above: neither the
+// workspace-open scope nor the crash reconnect answers a relaunch.
+const resumeInterruptedOnLaunchModel = ref(
+  normalizeResumeInterruptedOnLaunch(settingsGet(RESUME_INTERRUPTED_ON_LAUNCH_SETTING_KEY, true))
+)
+function onResumeInterruptedOnLaunchChange(): void {
+  settingsSet(RESUME_INTERRUPTED_ON_LAUNCH_SETTING_KEY, resumeInterruptedOnLaunchModel.value)
 }
 
 // Background notifications for CLI done / needs-input: the OS notification and
@@ -3470,6 +3482,20 @@ watch(activeTab, (tab) => {
                     v-model="autoResumeOnReconnectModel"
                     :aria-label="$t('settings.general.auto-resume-reconnect')"
                     @update:modelValue="onAutoResumeOnReconnectChange"
+                  />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                data-settings-section="general-resume-interrupted-launch"
+                :title="$t('settings.general.resume-interrupted-on-launch')"
+                :description="$t('settings.general.resume-interrupted-on-launch-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="resumeInterruptedOnLaunchModel"
+                    :aria-label="$t('settings.general.resume-interrupted-on-launch')"
+                    @update:modelValue="onResumeInterruptedOnLaunchChange"
                   />
                 </template>
               </SettingRow>
