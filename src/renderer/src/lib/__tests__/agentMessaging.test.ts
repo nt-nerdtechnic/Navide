@@ -3,6 +3,7 @@ import {
   MSG_START,
   MSG_END,
   MSG_ENVELOPE_PREFIX,
+  ATTACH_MARKER,
   SPAWN_START,
   SPAWN_END,
   isQualifiedTarget,
@@ -378,6 +379,18 @@ describe('renderEnvelope', () => {
     expect(lines.filter((l) => l === EXTERNAL_CONTENT_START)).toHaveLength(1)
     expect(lines[1]).toBe(EXTERNAL_CONTENT_START)
     expect(lines[lines.length - 2]).toBe(EXTERNAL_CONTENT_END)
+  })
+
+  it('tells a chat sender\'s pane how to send a file, on the one hint line', () => {
+    const env = renderEnvelope('telegram:alice', 'send me the chart', { external: true })
+    const hint = env.split('\n').pop() ?? ''
+    expect(hint).toContain(`單獨一行寫 ${ATTACH_MARKER} <絕對路徑>`)
+    expect(hint.startsWith(ATTACH_MARKER)).toBe(false)
+    expect(env.split('\n').filter((l) => l.includes(ATTACH_MARKER))).toHaveLength(1)
+  })
+
+  it('does not offer attachments to a pane-to-pane message', () => {
+    expect(renderEnvelope('coordinator', 'run the tests')).not.toContain(ATTACH_MARKER)
   })
 
   it('round-trips: a reply written to the hint parses back to the same id', () => {

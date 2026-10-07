@@ -24,6 +24,9 @@ import { enUSMessages } from '@navide/plugin-ui/foundation'
 import { CHANNEL_PLATFORM_IDS } from '../platform/channels'
 
 export const MSG_START = '---MSG-START---'
+/** A line `---ATTACH--- <absolute path>` in an MSG block to a chat sender sends that
+ *  file (backend channels/media.py checks the path; this side only explains it). */
+export const ATTACH_MARKER = '---ATTACH---'
 export const MSG_END = '---MSG-END---'
 /** Opening token of everything Navide injects into a pane, whichever form it
  *  takes. See isInjectedMessageText(). */
@@ -396,10 +399,14 @@ export function renderEnvelope(
       ? `to: ${sender} re: ${opts.correlationId}`
       : `to: ${sender}`
     const echo = opts.correlationId ? 're 欄位請原樣帶回，' : ''
+    const attach = isChannelTarget(sender)
+      ? `要傳檔案回聊天室，就在訊息內容中單獨一行寫 ${ATTACH_MARKER} <絕對路徑>（同樣頂格；` +
+        '只限這個 workspace 內或收到的附件，不傳隱藏檔與金鑰）。'
+      : ''
     lines.push(
       `（回覆方式：第一行完整寫成 ${MSG_START} ${head}，下一行起為訊息內容，` +
         `最後一行寫 ${MSG_END}；to: 必須與 ${MSG_START} 同一行，不可換行；` +
-        `${echo}三行都要頂格，不可縮排，也不可放進 code block。` +
+        `${echo}三行都要頂格，不可縮排，也不可放進 code block。${attach}` +
         `只是「收到」或沒有新資訊就不要回信，純確認請改用 cli_send 的 kind="ack"（不會打擾對方）；` +
         `已用 cli_send 送出的內容不要再用 MSG 區塊重述）`,
     )
