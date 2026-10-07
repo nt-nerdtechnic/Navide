@@ -55,7 +55,9 @@ const dropMonacoWorkerFallbacks: Plugin = {
   name: 'drop-monaco-worker-fallbacks',
   enforce: 'pre',
   transform(code, id) {
-    if (!/[/\\]monaco-editor[/\\]esm[/\\]vs[/\\]language[/\\](?:css|typescript|html|json)[/\\]workerManager\.js$/.test(id)) return null
+    // Match the file, not the request: an id can carry `?v=<hash>` or another query.
+    const file = id.split('?', 1)[0]
+    if (!/[/\\]monaco-editor[/\\]esm[/\\]vs[/\\]language[/\\](?:css|typescript|html|json)[/\\]workerManager\.js$/.test(file)) return null
     if (!monacoWorkerFallback.test(code)) throw new Error(`Monaco worker fallback not found in ${id}`)
     return { code: code.replace(monacoWorkerFallback, 'createWorker: undefined,'), map: null }
   },
