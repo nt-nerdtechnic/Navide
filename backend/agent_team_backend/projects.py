@@ -133,6 +133,9 @@ class PaneRecord:
     collapsed: bool = False         # lineage subtree folded in the agent lists. Lives here, not in a Project-level id set: pane_id is regenerated every restart, so such a set would silently empty itself.
     surface: str = ""               # embedded AI panel (AiCliDock) host surface ("pm" / "plans" / "git" / "editor"); "" = a main-window pane, which is every record written before this field existed
     window_kind: str = ""           # the window that surface lives in ("main" for the Pipeline Manager modal); "" alongside surface
+    last_turn_state: str = ""       # "working" (running a turn, or parked on a permission / question prompt) / "idle"; "" = never reported. Read on a cold restore to bring back the panes a manual restart interrupted.
+    report_to: str = ""             # messaging handle of the parent this spawned pane owes a report to
+    report_pending: bool = False    # that report is still outstanding — persisted so a pane resumed after a restart still reports when its turn ends
 
 
 @dataclass
@@ -1358,6 +1361,42 @@ class ProjectStore:
             return project
         pane.is_muted = is_muted
         self.save(project)
+        return project
+
+    PANE_TURN_STATES = ("working", "idle")
+
+    def set_pane_resume_state(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        last_turn_state: str | None = None,
+        report_to: str | None = None,
+        report_pending: bool | None = None,
+    ) -> Project:
+        """Persist what a pane was doing and the report it owes its parent.
+
+        Only the fields passed are written. The renderer reports on every turn
+        transition, so an unchanged write skips the save rather than rewriting
+        the project on each one. An unknown turn state is ignored. No-op if
+        pane not found.
+        """
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        changed = False
+        if last_turn_state in self.PANE_TURN_STATES and pane.last_turn_state != last_turn_state:
+            pane.last_turn_state = last_turn_state
+            changed = True
+        if report_to is not None and pane.report_to != report_to:
+            pane.report_to = report_to
+            changed = True
+        if report_pending is not None and pane.report_pending != report_pending:
+            pane.report_pending = report_pending
+            changed = True
+        if changed:
+            self.save(project)
         return project
 
     def set_pane_collapsed(

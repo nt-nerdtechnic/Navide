@@ -8628,6 +8628,29 @@ async def project_set_pane_muted(session: "Session", msg_id: str, msg_type: str,
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
+@handler("project.set_pane_resume_state")
+async def project_set_pane_resume_state(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """What a pane was doing and the report it owes its parent, so a manual
+    restart can bring back the panes it interrupted. Each field is optional;
+    only the ones sent are written."""
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    pane_id = payload.get("pane_id", "") or ""
+    turn_state = payload.get("last_turn_state")
+    report_to = payload.get("report_to")
+    report_pending = payload.get("report_pending")
+    if ws_raw and pane_id:
+        app.project_store.set_pane_resume_state(
+            ws_raw,
+            pane_id=pane_id,
+            last_turn_state=turn_state if isinstance(turn_state, str) else None,
+            report_to=report_to if isinstance(report_to, str) else None,
+            report_pending=report_pending if isinstance(report_pending, bool) else None,
+        )
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
 @handler("project.set_pane_collapsed")
 async def project_set_pane_collapsed(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Whether this pane's lineage subtree is folded in the agent lists."""
