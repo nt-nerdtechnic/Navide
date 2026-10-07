@@ -1597,21 +1597,24 @@ class ChannelManager:
                  ] if pending.owner else []
         limit = int(getattr(adapter, "upload_max_bytes", 0) or 0)
         for raw in paths[: media.MAX_ATTACHMENTS_PER_REPLY]:
-            name = Path(raw.strip()).name or raw.strip()
-            real, reason = await asyncio.to_thread(media.resolve_outbound, raw, roots)
-            if real is None:
+            # Only the file name ever goes back to the chat, never the folders above it.
+            name = media.safe_name(Path(raw.strip()).name)
+            opened, reason = await asyncio.to_thread(media.open_outbound, raw, roots)
+            if opened is None:
                 await note(media.text(lang, "refused", name=name, reason=media.text(lang, f"reason.{reason}")))
                 continue
-            size = real.stat().st_size
-            if limit and size > limit:
-                await note(media.text(lang, "too_large_out", name=real.name, size=media.human_size(size),
-                                      limit=media.human_size(limit)))
-                continue
             try:
-                ids = await adapter.send_file(loc, real, real.name)
+                if limit and opened.size > limit:
+                    await note(media.text(lang, "too_large_out", name=name, size=media.human_size(opened.size),
+                                          limit=media.human_size(limit)))
+                    continue
+                # The adapter reads the file already open: a swap after the check cannot change it.
+                ids = await adapter.send_file(loc, opened.fh, opened.path.name)
             except Exception as exc:  # noqa: BLE001
-                await note(media.text(lang, "send_failed", name=real.name, error=redact.redact_text(str(exc))))
+                await note(media.text(lang, "send_failed", name=name, error=redact.redact_text(str(exc))))
                 continue
+            finally:
+                opened.fh.close()
             if pending.owner:
                 self.mirror.owners.remember(loc.key(), ids, pending.owner)
         if len(paths) > media.MAX_ATTACHMENTS_PER_REPLY:

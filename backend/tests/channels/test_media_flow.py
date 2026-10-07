@@ -22,7 +22,7 @@ class Media:
 
     def __init__(self, adapter, upload_max: int = 50 * 1024 * 1024) -> None:
         self.downloads: list[tuple[InboundAttachment, Path, int]] = []
-        self.files: list[tuple[Location, Path, str]] = []
+        self.files: list[tuple[Location, bytes, str]] = []
         self.payload = b"PNGDATA"
         self.fail: Exception | None = None
         adapter.upload_max_bytes = upload_max
@@ -36,8 +36,8 @@ class Media:
         dest.write_bytes(self.payload)
         return len(self.payload)
 
-    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
-        self.files.append((loc, path, filename))
+    async def send_file(self, loc: Location, fh, filename: str) -> list[str]:
+        self.files.append((loc, fh.read(), filename))
         return ["f1"]
 
 
@@ -155,8 +155,8 @@ async def test_a_reply_sends_a_workspace_file(media_env: Env, ws: Path) -> None:
     await _armed(media_env)
     media_env.turn_complete("pane-1", _msg(f"here it is\n---ATTACH--- {ws}/out/chart.png"))
     await _until(lambda: m.files)
-    loc, path, name = m.files[0]
-    assert (loc.chat_id, loc.thread_id, path, name) == ("-100", "50", (ws / "out" / "chart.png").resolve(),
+    loc, data, name = m.files[0]
+    assert (loc.chat_id, loc.thread_id, data, name) == ("-100", "50", b"chart",
                                                        "chart.png")
     assert _said(media_env, "here it is") and not _said(media_env, "ATTACH")
 
@@ -231,7 +231,7 @@ async def test_a_reply_sends_the_panes_own_received_file(media_env: Env, tmp_pat
     await _armed(media_env)
     media_env.turn_complete("pane-1", _msg(f"back to you\n---ATTACH--- {own}"))
     await _until(lambda: m.files)
-    assert m.files[0][1] == own.resolve()
+    assert m.files[0][1:] == (b"JPEG", "abcd1234-photo.jpg")
 
 
 async def test_another_panes_received_file_is_not_sent(media_env: Env, tmp_path: Path) -> None:
@@ -243,4 +243,48 @@ async def test_another_panes_received_file_is_not_sent(media_env: Env, tmp_path:
     await _armed(media_env)
     media_env.turn_complete("pane-1", _msg(f"leak\n---ATTACH--- {theirs}"))
     await _until(lambda: _said(media_env, "⚠️"))
+    assert m.files == []
+
+
+# --- Hardening ----------------------------------------------------------------------
+
+
+async def test_a_home_folder_workspace_sends_nothing(media_env: Env, tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "Users" / "me"
+    (home / "Documents").mkdir(parents=True)
+    (home / "Documents" / "tax.pdf").write_bytes(b"PDF")
+    monkeypatch.setattr(media, "_home", lambda: home)
+    media_env.m._seams = dataclasses.replace(media_env.m._seams, pane_workspace=lambda _p: str(home))
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"here\n---ATTACH--- {home}/Documents/tax.pdf"))
+    await _until(lambda: _said(media_env, "家目錄"))
+    assert m.files == []
+
+
+async def test_a_refusal_names_the_file_but_not_its_folders(media_env: Env, ws: Path) -> None:
+    (ws / "deep" / "secrets").mkdir(parents=True)
+    (ws / "deep" / "secrets" / "plan.txt").write_text("x")
+    Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"see\n---ATTACH--- {ws}/deep/secrets/plan.txt"))
+    await _until(lambda: _said(media_env, "⚠️"))
+    note = next(t for t in media_env.tg.texts() if "⚠️" in t)
+    assert "plan.txt" in note and str(ws) not in note and "deep" not in note and "secrets" not in note
+
+
+async def test_attach_lines_a_chat_sends_in_never_send_anything(media_env: Env, ws: Path) -> None:
+    m = Media(media_env.tg)
+    await _send(media_env, f"---ATTACH--- {ws}/out/chart.png", [])
+    media_env.fake.verdicts["k1"] = {"status": "delivered"}
+    await media_env.m.wait_idle()
+    assert m.files == [] and media_env.fake.delivered[-1][1] == f"---ATTACH--- {ws}/out/chart.png"
+
+
+async def test_a_quoted_attach_line_in_a_reply_is_not_an_attachment(media_env: Env, ws: Path) -> None:
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"you said:\n> ---ATTACH--- {ws}/out/chart.png"))
+    await _until(lambda: _said(media_env, "you said:"))
+    await media_env.m.wait_idle()
     assert m.files == []

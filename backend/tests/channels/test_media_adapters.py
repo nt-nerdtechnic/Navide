@@ -58,6 +58,11 @@ def _form(request: httpx.Request) -> bytes:
     return request.read()
 
 
+async def _send_file(ad: Any, loc: Location, path: Path, name: str) -> list[str]:
+    with open(path, "rb") as fh:
+        return await ad.send_file(loc, fh, name)
+
+
 # --- Telegram -----------------------------------------------------------------------
 
 
@@ -134,6 +139,17 @@ async def test_a_download_without_a_length_is_counted_against_the_cap(tmp_path: 
     assert not dest.exists()
 
 
+async def test_telegram_refuses_a_file_getfile_says_is_too_big_before_fetching(tmp_path: Path) -> None:
+    rec = Recorder({"/getFile": httpx.Response(200, json={"ok": True, "result": {
+        "file_path": "d/big.bin", "file_size": 30 * MB}})})
+    ad = TelegramAdapter(TOKEN, base_url="https://tg.test")
+    ad._client = httpx.AsyncClient(transport=rec.transport())
+    ad._media_transport = rec.transport()
+    with pytest.raises(MediaTooLarge):
+        await ad.download(InboundAttachment("document", "big.bin", None, "", "d"), tmp_path / "b", 20 * MB)
+    assert len(rec.requests) == 1  # getFile only, the file itself never requested
+
+
 @pytest.mark.parametrize("file_path", ["/var/lib/telegram-bot-api/x.jpg", "../x.jpg", ""])
 async def test_telegram_refuses_odd_file_paths(tmp_path: Path, file_path: str) -> None:
     rec = Recorder({"/getFile": httpx.Response(200, json={"ok": True, "result": {"file_path": file_path}})})
@@ -151,7 +167,7 @@ async def test_telegram_sends_a_document_to_the_topic(tmp_path: Path) -> None:
     rec = Recorder({"/sendDocument": httpx.Response(200, json={"ok": True, "result": {"message_id": 77}})})
     ad = TelegramAdapter(TOKEN, base_url="https://tg.test")
     ad._media_transport = rec.transport()
-    ids = await ad.send_file(Location("telegram", "default", "-100", "50"), f, "chart.png")
+    ids = await _send_file(ad, Location("telegram", "default", "-100", "50"), f, "chart.png")
     body = _form(rec.requests[0])
     assert ids == ["77"] and b'name="chat_id"\r\n\r\n-100' in body
     assert b'name="message_thread_id"\r\n\r\n50' in body
@@ -167,7 +183,7 @@ async def test_telegram_send_error_is_a_send_error(tmp_path: Path) -> None:
     ad = TelegramAdapter(TOKEN, base_url="https://tg.test")
     ad._media_transport = rec.transport()
     with pytest.raises(ChannelSendError, match="too big"):
-        await ad.send_file(Location("telegram", "default", "42"), f, "a.txt")
+        await _send_file(ad, Location("telegram", "default", "42"), f, "a.txt")
 
 
 # --- Discord ------------------------------------------------------------------------
@@ -223,7 +239,7 @@ async def test_discord_sends_a_file_as_a_multipart_attachment(tmp_path: Path) ->
     ad = _discord()
     ad._client = httpx.AsyncClient(base_url="https://discord.test/api/v10", transport=rec.transport(),
                                    headers={"Authorization": "Bot tok"})
-    ids = await ad.send_file(Location("discord", "default", "C1", "T9"), f, "chart.png")
+    ids = await _send_file(ad, Location("discord", "default", "C1", "T9"), f, "chart.png")
     body = _form(rec.requests[0])
     assert ids == ["m77"] and b'name="files[0]"; filename="chart.png"' in body
     payload = body.split(b'name="payload_json"\r\n\r\n', 1)[1].split(b"\r\n--", 1)[0]
@@ -289,7 +305,7 @@ async def test_slack_upload_uses_the_external_upload_flow(tmp_path: Path) -> Non
     ad = _slack()
     ad._client = httpx.AsyncClient(base_url="https://slack.test/api", transport=rec.transport())
     ad._media_transport = rec.transport()
-    ids = await ad.send_file(Location("slack", "default", "C1", "9.0"), f, "chart.png")
+    ids = await _send_file(ad, Location("slack", "default", "C1", "9.0"), f, "chart.png")
     first, upload, done = rec.requests
     assert ids == ["F9"]
     assert b"filename=chart.png" in first.content and b"length=3" in first.content

@@ -15,8 +15,11 @@ import mimetypes
 import os
 import re
 import secrets
+import stat
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 MEDIA_DIRNAME = "channels-media"
 # Telegram's getFile serves at most 20 MB, and the same cap keeps every platform alike.
@@ -31,11 +34,20 @@ _ATTACH_RE = re.compile(r"^---ATTACH---[ \t]+(\S.*?)[ \t]*$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-# Names a pane may never send, whatever folder they sit in (fnmatch, case-insensitive).
+# Names a pane may never send: matched (fnmatch, case-insensitive) against every segment
+# of the path below the allowed folder, so a credentials/ or secrets/ folder counts too.
+# Errs on the side of refusing: a refused file can still be shared by hand.
 DENIED_NAMES = (
-    "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "*.ovpn",
-    "*.keychain", "*.keychain-db", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
-    "credentials", "credentials.*", "*.tfstate", "*.tfstate.*",
+    # keys, certificates and keystores
+    "*.pem", "*.key", "*.p12", "*.pfx", "*.p8", "*.pkcs12", "*.jks", "*.keystore", "*.ppk",
+    "*.der", "*.gpg", "*.pgp", "*.asc", "*.kdbx", "*.ovpn", "*.keychain", "*.keychain-db",
+    "keychains", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
+    # credentials, tokens and environment files (prod.env, env.local ...)
+    "credentials*", "*secret*", "*token*", "*password*", "*passwd*", "*.env", "env.*",
+    "*.tfstate", "*.tfstate.*", "*.netrc", "*.npmrc", "*.pypirc",
+    # browser and app databases (cookies, saved logins)
+    "cookies", "cookies-journal", "login data", "login data-journal", "web data",
+    "*.sqlite", "*.sqlite3", "*.db", "*.db-wal", "*.db-shm",
 )
 # System folders refused even inside a workspace that happens to contain them.
 SYSTEM_ROOTS = (
@@ -134,20 +146,42 @@ def split_attachments(body: str) -> tuple[str, list[str]]:
     return "\n".join(kept).strip("\n"), paths
 
 
+def _home() -> Path:
+    return Path.home().resolve()
+
+
+def _too_broad(base: Path) -> bool:
+    """A folder no pane may send from wholesale: a filesystem root or other shallow
+    folder (/Users, /Volumes, /opt), a mount point, or the home folder or one above it,
+    where everything a user keeps (Documents, Desktop, Downloads) would be in reach."""
+    if base == Path(base.anchor) or len(base.parts) < 3 or os.path.ismount(base):
+        return True
+    home = _home()
+    return base == home or home.is_relative_to(base)
+
+
 def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, str]:
     """(the real file, "") when a pane may send ``raw``, else (None, reason): one of
-    not_absolute, parent_ref, missing, not_file, outside, hidden, denied_name, system."""
+    not_absolute, parent_ref, missing, not_file, outside, broad_workspace, hidden,
+    denied_name, system, hard_link."""
+    real, _st, reason = _check(raw, roots)
+    return real, reason
+
+
+def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_result | None, str]:
+    """``resolve_outbound`` plus the stat of the very inode that passed the rules."""
     path = Path(raw.strip())
     if not path.is_absolute():
-        return None, "not_absolute"
+        return None, None, "not_absolute"
     if ".." in path.parts:
-        return None, "parent_ref"
+        return None, None, "parent_ref"
     try:
         real = path.resolve(strict=True)
     except (OSError, RuntimeError):
-        return None, "missing"
+        return None, None, "missing"
     if not real.is_file():
-        return None, "not_file"
+        return None, None, "not_file"
+    in_broad = False
     for root in roots:
         if not root:
             continue
@@ -155,17 +189,59 @@ def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, st
             base = Path(root).resolve(strict=True)
         except (OSError, RuntimeError):
             continue
-        if base == Path(base.anchor) or not real.is_relative_to(base):
-            continue  # a filesystem root is never a usable workspace
+        if not real.is_relative_to(base):
+            continue
+        if _too_broad(base):
+            in_broad = True  # never usable; a narrower root later may still admit the file
+            continue
         rel = real.relative_to(base).parts
         if any(part.startswith(".") for part in rel):
-            return None, "hidden"
-        if any(fnmatch.fnmatch(real.name.lower(), pat) for pat in DENIED_NAMES):
-            return None, "denied_name"
+            return None, None, "hidden"
+        if any(fnmatch.fnmatch(part.lower(), pat) for part in rel for pat in DENIED_NAMES):
+            return None, None, "denied_name"
         if any(real == Path(s) or real.is_relative_to(Path(s)) for s in SYSTEM_ROOTS):
-            return None, "system"
-        return real, ""
-    return None, "outside"
+            return None, None, "system"
+        st = real.stat()
+        # A second name for the same inode may be a file from anywhere on the disk.
+        if st.st_nlink > 1:
+            return None, None, "hard_link"
+        return real, st, ""
+    return None, None, "broad_workspace" if in_broad else "outside"
+
+
+@dataclass
+class Outbound:
+    fh: BinaryIO  # the checked file, already open; the caller closes it
+    path: Path
+    size: int
+
+
+def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, str]:
+    """``resolve_outbound``, then open the file so what is sent is what was checked.
+
+    The open file must be the inode the check saw (a file swapped in afterwards), with one
+    link, and the path must still resolve to itself (a folder swapped for a symlink). The
+    last component is also opened without following a symlink, a second guard the realpath
+    check already covers. Any difference is reason "changed".
+    """
+    real, seen, reason = _check(raw, roots)
+    if real is None or seen is None:
+        return None, reason
+    try:
+        fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return None, "changed"
+    try:
+        st = os.fstat(fd)
+        same = (st.st_dev, st.st_ino) == (seen.st_dev, seen.st_ino)
+        if not (same and stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+                and Path(os.path.realpath(real)) == real):
+            os.close(fd)
+            return None, "changed"
+    except OSError:
+        os.close(fd)
+        return None, "changed"
+    return Outbound(os.fdopen(fd, "rb"), real, st.st_size), ""
 
 
 # Chat-side notices, in the languages quick_menu.STRINGS covers.
@@ -186,6 +262,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.hidden": "不傳隱藏檔或隱藏資料夾裡的檔案",
         "reason.denied_name": "這個檔名看起來是憑證或金鑰",
         "reason.system": "不傳系統檔案",
+        "reason.broad_workspace": "這個 pane 的 workspace 是家目錄或範圍過大的資料夾，不從那裡傳檔",
+        "reason.hard_link": "這個檔案有其他硬連結，可能是 workspace 外的檔案",
+        "reason.changed": "檢查後檔案被更動或換成連結",
     },
     "en-US": {
         "unsupported": "This platform does not support media yet",
@@ -203,6 +282,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.hidden": "hidden files and files in hidden folders are not sent",
         "reason.denied_name": "the name looks like a credential or key",
         "reason.system": "system files are not sent",
+        "reason.broad_workspace": "this pane's workspace is the home folder or another folder too broad to send from",
+        "reason.hard_link": "the file has other hard links and may be a file from outside the workspace",
+        "reason.changed": "the file changed or became a link after it was checked",
     },
     "ja-JP": {
         "unsupported": "このプラットフォームはまだメディアに対応していません",
@@ -220,6 +302,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.hidden": "隠しファイルや隠しフォルダ内のファイルは送信しません",
         "reason.denied_name": "認証情報や鍵のようなファイル名です",
         "reason.system": "システムファイルは送信しません",
+        "reason.broad_workspace": "この pane の workspace はホームフォルダか範囲が広すぎるフォルダなので、そこからは送信しません",
+        "reason.hard_link": "このファイルには別のハードリンクがあり、workspace 外のファイルの可能性があります",
+        "reason.changed": "確認した後にファイルが変更されたか、リンクに置き換えられました",
     },
 }
 DEFAULT_LANGUAGE = "zh-TW"

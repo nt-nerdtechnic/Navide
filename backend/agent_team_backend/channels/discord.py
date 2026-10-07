@@ -36,7 +36,7 @@ import logging
 import random
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable
 from urllib.parse import urlsplit
 
 import httpx
@@ -394,9 +394,9 @@ class DiscordAdapter:
         async with media_client(self._media_transport) as client:  # no Authorization header
             return await download_to(client, att.ref, dest, max_bytes)
 
-    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
         payload = {"attachments": [{"id": 0, "filename": filename}], "allowed_mentions": {"parse": []}}
-        content = await asyncio.to_thread(path.read_bytes)
+        content = await asyncio.to_thread(fh.read)
         try:
             resp = await send_request(self._http(), "POST", f"/channels/{self._target(loc)}/messages",
                                       data={"payload_json": json.dumps(payload)},

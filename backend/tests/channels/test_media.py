@@ -136,13 +136,12 @@ def test_credential_shaped_names_are_refused(ws: Path, name: str) -> None:
 
 
 def test_a_filesystem_root_is_never_a_workspace() -> None:
-    assert media.resolve_outbound("/etc/hosts", ["/"]) == (None, "outside")
+    assert media.resolve_outbound("/etc/hosts", ["/"]) == (None, "broad_workspace")
 
 
 def test_system_folders_are_refused_inside_a_workspace() -> None:
-    assert media.resolve_outbound("/etc/hosts", ["/etc"])[1] in ("system", "outside")
     if Path("/private/etc/hosts").exists():
-        assert media.resolve_outbound("/private/etc/hosts", ["/private"]) == (None, "system")
+        assert media.resolve_outbound("/private/etc/hosts", ["/private/etc"]) == (None, "system")
 
 
 def test_human_size() -> None:
@@ -154,3 +153,108 @@ def test_every_language_has_every_notice() -> None:
     keys = set(media.STRINGS[media.DEFAULT_LANGUAGE])
     assert all(set(table) == keys for table in media.STRINGS.values())
     assert set(media.STRINGS) == {"zh-TW", "en-US", "ja-JP"}
+
+
+# --- Hardening: broad workspaces, every path segment, links and swaps -----------------
+
+
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch) -> Path:
+    root = tmp_path / "Users" / "me"
+    _file(root / "Documents" / "tax.pdf")
+    monkeypatch.setattr(media, "_home", lambda: root)
+    return root
+
+
+def test_a_home_workspace_sends_nothing(home: Path) -> None:
+    assert media.resolve_outbound(str(home / "Documents" / "tax.pdf"), [home]) == (None, "broad_workspace")
+
+
+def test_a_workspace_above_home_sends_nothing(home: Path) -> None:
+    assert media.resolve_outbound(str(home / "Documents" / "tax.pdf"), [home.parent]) == (None, "broad_workspace")
+
+
+def test_a_project_inside_home_and_the_media_folder_still_work(home: Path) -> None:
+    proj = _file(home / "code" / "app" / "out.png")
+    pane = _file(home / "Library" / "Agent-Team" / "channels-media" / "pane-1" / "ab-x.png")
+    assert media.resolve_outbound(str(proj), [home / "code" / "app"]) == (proj.resolve(), "")
+    assert media.resolve_outbound(str(pane), [home, pane.parent]) == (pane.resolve(), "")
+
+
+@pytest.mark.parametrize("path", ["/", "/Users", "/Volumes", "/home", "/opt"])
+def test_shallow_folders_are_too_broad(path: str) -> None:
+    assert media._too_broad(Path(path))
+
+
+@pytest.mark.parametrize("rel", [
+    "secrets/notes.txt", "credentials/aws.txt", "config/prod.env", "api_token.txt", "keys/server.ppk",
+    "Chrome/Default/Cookies", "Chrome/Default/Login Data", "data/app.sqlite", "data/app.sqlite3",
+    "my_password.txt", "backup.gpg", "Keychains/login.keychain-db",
+])
+def test_credential_shaped_names_are_refused_in_any_segment(ws: Path, rel: str) -> None:
+    f = _file(ws / rel)
+    assert media.resolve_outbound(str(f), [ws]) == (None, "denied_name")
+
+
+def test_a_hard_link_to_another_file_is_refused(tmp_path: Path, ws: Path) -> None:
+    outside = _file(tmp_path / "elsewhere" / "secret.txt", b"S")
+    os.link(outside, ws / "out" / "copy.txt")
+    assert media.resolve_outbound(str(ws / "out" / "copy.txt"), [ws]) == (None, "hard_link")
+
+
+def test_open_outbound_reads_the_checked_file(ws: Path) -> None:
+    opened, reason = media.open_outbound(str(ws / "out" / "chart.png"), [ws])
+    assert reason == "" and opened is not None
+    with opened.fh:
+        assert (opened.fh.read(), opened.size, opened.path.name) == (b"x", 1, "chart.png")
+
+
+def test_a_file_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Path, ws: Path,
+                                                                     monkeypatch) -> None:
+    secret = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
+    target = ws / "out" / "chart.png"
+    checked = media._check
+
+    def racing(raw, roots):
+        result = checked(raw, roots)
+        target.unlink()
+        target.symlink_to(secret)  # swapped between the check and the open
+        return result
+
+    monkeypatch.setattr(media, "_check", racing)
+    assert media.open_outbound(str(target), [ws]) == (None, "changed")
+
+
+def test_a_folder_swapped_for_a_symlink_after_the_check_is_not_opened(tmp_path: Path, ws: Path,
+                                                                       monkeypatch) -> None:
+    _file(tmp_path / "elsewhere" / "chart.png", b"SECRET")
+    checked = media._check
+
+    def racing(raw, roots):
+        result = checked(raw, roots)
+        (ws / "out").rename(ws / "moved")
+        (ws / "out").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(media, "_check", racing)
+    assert media.open_outbound(str(ws / "out" / "chart.png"), [ws]) == (None, "changed")
+
+
+def test_an_inbound_path_never_leaves_the_pane_folder(tmp_path: Path) -> None:
+    for name in ("../../x", "..\\..\\y", "/etc/passwd", "a/../../b", "\x00z"):
+        dest = media.new_inbound_path(tmp_path, "pane-1", media.safe_name(name))
+        assert dest.parent == media.pane_dir(tmp_path, "pane-1")
+
+
+def test_a_different_file_swapped_in_after_the_check_is_not_opened(ws: Path, monkeypatch) -> None:
+    target = ws / "out" / "chart.png"
+    checked = media._check
+
+    def racing(raw, roots):
+        result = checked(raw, roots)
+        target.unlink()
+        target.write_bytes(b"OTHER")  # a new inode under the same, still-real path
+        return result
+
+    monkeypatch.setattr(media, "_check", racing)
+    assert media.open_outbound(str(target), [ws]) == (None, "changed")

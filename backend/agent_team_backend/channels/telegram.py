@@ -28,7 +28,7 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Awaitable, BinaryIO, Callable, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -44,6 +44,7 @@ from .base import (
     InboundAttachment,
     InboundMessage,
     Location,
+    MediaTooLarge,
     backoff_delay,
 )
 from . import redact
@@ -435,6 +436,9 @@ class TelegramAdapter:
             info = await self._call("getFile", {"file_id": att.ref}) or {}
         except TelegramApiError as exc:
             raise ChannelSendError(exc.description) from exc
+        # getFile reports the size: refuse before fetching anything.
+        if isinstance(info.get("file_size"), int) and info["file_size"] > max_bytes:
+            raise MediaTooLarge(f"{info['file_size']} bytes")
         file_path = str(info.get("file_path") or "")
         # A local-mode Bot API server answers with a path on its own disk: never fetched.
         if not file_path or file_path.startswith("/") or ".." in file_path.split("/"):
@@ -442,9 +446,9 @@ class TelegramAdapter:
         async with media_client(self._media_transport) as client:
             return await download_to(client, f"{self._file_base}/{file_path}", dest, max_bytes)
 
-    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
         data = {key: str(value) for key, value in self._target(loc).items()}
-        content = await asyncio.to_thread(path.read_bytes)
+        content = await asyncio.to_thread(fh.read)
         async with media_client(self._media_transport) as client:
             for _attempt in range(3):
                 try:

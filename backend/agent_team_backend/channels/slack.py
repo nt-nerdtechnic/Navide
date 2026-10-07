@@ -32,12 +32,13 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import random
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable
 from urllib.parse import urlsplit
 
 import httpx
@@ -349,14 +350,14 @@ class SlackAdapter:
                     raise ChannelSendError(f"{exc} (does the app have the files:read scope?)") from exc
                 raise
 
-    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
-        size = path.stat().st_size
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
+        size = os.fstat(fh.fileno()).st_size
         try:
             ticket = await self._call("files.getUploadURLExternal", token=self._bot_token,
                                       form={"filename": filename, "length": str(size)})
             async with media_client(self._media_transport) as client:
                 # A streamed body is sent chunked unless its length is given.
-                resp = await client.post(str(ticket["upload_url"]), content=_read_chunks(path),
+                resp = await client.post(str(ticket["upload_url"]), content=_read_chunks(fh),
                                          headers={"Content-Length": str(size)})
             if resp.status_code != 200:
                 raise ChannelSendError(f"upload failed: HTTP {resp.status_code}")
@@ -435,10 +436,6 @@ def _attachments(event: dict[str, Any]) -> list[InboundAttachment]:
     return found
 
 
-async def _read_chunks(path: Path) -> AsyncIterator[bytes]:
-    fh = await asyncio.to_thread(open, path, "rb")
-    try:
-        while chunk := await asyncio.to_thread(fh.read, UPLOAD_CHUNK):
-            yield chunk
-    finally:
-        await asyncio.to_thread(fh.close)
+async def _read_chunks(fh: BinaryIO) -> AsyncIterator[bytes]:
+    while chunk := await asyncio.to_thread(fh.read, UPLOAD_CHUNK):
+        yield chunk
