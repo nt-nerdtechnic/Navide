@@ -70,13 +70,19 @@ export function usePipelineDag(deps: PipelineDagDeps) {
     nodeStates.value = { ...run.nodes }
     const current = gateOverride === undefined ? awaitingGate.value : gateOverride
     const gate = current ? { ...current } : {}
-    const payload: Record<string, unknown> = { workspace_path: ws, nodes: run.nodes, gate }
-    if (Object.keys(pendingOutputs).length) {
-      payload.outputs = pendingOutputs
-      pendingOutputs = {}
-    }
+    const nodes = { ...run.nodes }
     // Serialised so the backend sees states in the order they happened.
-    reportChain = reportChain.then(() => deps.send('pipeline.node_states', payload)).catch(() => null)
+    reportChain = reportChain.then(async () => {
+      const payload: Record<string, unknown> = { workspace_path: ws, nodes, gate }
+      // Outputs go out once, with whichever report sends first after they
+      // were recorded; a failed report puts them back for the next one.
+      const outputs = pendingOutputs
+      pendingOutputs = {}
+      if (Object.keys(outputs).length) payload.outputs = outputs
+      const resp = await deps.send('pipeline.node_states', payload)
+      if (!resp && payload.outputs) pendingOutputs = { ...outputs, ...pendingOutputs }
+      return resp
+    }).catch(() => null)
     return reportChain
   }
 
