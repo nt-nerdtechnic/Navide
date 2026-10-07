@@ -210,12 +210,19 @@ describe('navide Mini-IDE public package boundary', () => {
 
         const externalRequire = createRequire(join(externalProject, 'package.json'))
         const vueTscCli = resolveInstalledPackageBin(externalProject, 'vue-tsc', 'vue-tsc', externalRequire)
-        await runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject)
-
         const viteCli = resolveInstalledPackageBin(externalProject, 'vite', 'vite', externalRequire)
-        await runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject, {
-          NAVIDE_MINI_IDE_DIST_DIR: join(externalProject, 'dist'),
-        })
+        // The typecheck reads only src/ and the build writes only dist/, so the
+        // two run side by side: one after the other they took 1m35s + 3m44s of
+        // wall time at load average ~280 and outran the test timeout. Both
+        // settle before the finally block removes the project they read.
+        const [typecheck, build] = await Promise.allSettled([
+          runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject),
+          runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject, {
+            NAVIDE_MINI_IDE_DIST_DIR: join(externalProject, 'dist'),
+          }),
+        ])
+        if (typecheck.status === 'rejected') throw typecheck.reason
+        if (build.status === 'rejected') throw build.reason
 
         const distFiles = collectFiles(join(externalProject, 'dist'))
         const workerFiles = distFiles.filter((path) => /(?:editor|ts|json|css|html)\.worker-[^/]+\.js$/.test(path))
@@ -253,6 +260,8 @@ describe('navide Mini-IDE public package boundary', () => {
         rmSync(temporaryRoot, { recursive: true, force: true })
       }
     },
-    180_000,
+    // The build is inherently heavy (3.4K modules, five Monaco worker
+    // sub-builds); at load average ~280 it alone took 3m44s of wall time.
+    600_000,
   )
 })
