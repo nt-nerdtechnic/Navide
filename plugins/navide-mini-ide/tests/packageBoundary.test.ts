@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -231,9 +231,22 @@ describe('navide Mini-IDE public package boundary', () => {
           expect(workerFiles.some((path) => path.includes(workerPrefix)), workerPrefix).toBe(true)
         }
         expect(workerFiles.length).toBeGreaterThanOrEqual(5)
+        // Exactly one bundle per worker kind, and that one is the one the code
+        // loads: Monaco's own `new URL('<x>.worker.js')` fallbacks used to add a
+        // second, never-used copy of each language worker (~9MB in all).
+        for (const workerPrefix of workerPrefixes) {
+          expect(workerFiles.filter((path) => basename(path).startsWith(workerPrefix)), workerPrefix).toHaveLength(1)
+        }
+        const javaScriptFiles = distFiles.filter((path) => path.endsWith('.js'))
+        for (const workerFile of workerFiles) {
+          const workerName = basename(workerFile)
+          expect(
+            javaScriptFiles.some((path) => path !== workerFile && readFileSync(path, 'utf8').includes(workerName)),
+            workerName,
+          ).toBe(true)
+        }
 
-        const builtJavaScript = distFiles
-          .filter((path) => path.endsWith('.js'))
+        const builtJavaScript = javaScriptFiles
           .map((path) => readFileSync(path, 'utf8'))
           .join('\n')
         expect(builtJavaScript.length).toBeGreaterThan(0)
