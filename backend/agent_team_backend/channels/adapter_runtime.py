@@ -304,19 +304,47 @@ def error_text(resp: httpx.Response) -> str:
     return f"HTTP {resp.status_code}: {resp.text[:200]}"
 
 
+# A whole download, not one read: a server dripping bytes under the read timeout would
+# otherwise hold the chat's worker for as long as it likes.
+DOWNLOAD_TOTAL_S = 300.0
+# How much of a failed download's error body is read to explain it.
+ERROR_BODY_MAX_BYTES = 4096
+
+
 async def download_to(
     client: httpx.AsyncClient, url: str, dest: Path, max_bytes: int, *,
     headers: dict[str, str] | None = None,
 ) -> int:
     """Stream ``url`` into ``dest`` and return its size. Past ``max_bytes`` (declared or
-    counted) raise ``MediaTooLarge``; any status but 200 raises ``ChannelSendError``. A
-    redirect is not followed (it could carry a credential header to another host). ``dest``
-    is removed whenever no complete file was written."""
+    counted) raise ``MediaTooLarge``; any status but 200, or the whole transfer taking
+    past ``DOWNLOAD_TOTAL_S``, raises ``ChannelSendError``. A redirect is not followed (it
+    could carry a credential header to another host). ``dest`` is removed whenever no
+    complete file was written."""
+    try:
+        return await asyncio.wait_for(_download(client, url, dest, max_bytes, headers),
+                                      DOWNLOAD_TOTAL_S)
+    except TimeoutError as exc:
+        dest.unlink(missing_ok=True)
+        raise ChannelSendError(f"download timed out after {DOWNLOAD_TOTAL_S:g}s") from exc
+
+
+async def _error_head(resp: httpx.Response) -> httpx.Response:
+    """``resp`` with only the first ``ERROR_BODY_MAX_BYTES`` of its body, for error_text."""
+    head = b""
+    async for chunk in resp.aiter_bytes():
+        head += chunk
+        if len(head) >= ERROR_BODY_MAX_BYTES:
+            break
+    return httpx.Response(resp.status_code, headers=resp.headers, content=head[:ERROR_BODY_MAX_BYTES])
+
+
+async def _download(
+    client: httpx.AsyncClient, url: str, dest: Path, max_bytes: int, headers: dict[str, str] | None,
+) -> int:
     try:
         async with client.stream("GET", url, headers=headers, follow_redirects=False) as resp:
             if resp.status_code != 200:
-                await resp.aread()
-                raise ChannelSendError(error_text(resp))
+                raise ChannelSendError(error_text(await _error_head(resp)))
             declared = resp.headers.get("content-length", "")
             if declared.isdigit() and int(declared) > max_bytes:
                 raise MediaTooLarge(f"{declared} bytes")

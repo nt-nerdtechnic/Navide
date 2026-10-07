@@ -373,3 +373,39 @@ async def test_imessage_reports_attachment_only_messages() -> None:
            "chat_style": 45, "display_name": None}
     await ad._on_row(row)
     assert _reported(got) == [("", ["file"])]
+
+
+async def test_an_error_body_is_read_only_up_to_a_cap(tmp_path: Path) -> None:
+    from agent_team_backend.channels.adapter_runtime import download_to
+
+    served = {"n": 0}
+
+    async def body():
+        for _ in range(256):
+            served["n"] += 1
+            yield b"e" * 1024
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(500, content=body())))
+    dest = tmp_path / "f.bin"
+    with pytest.raises(ChannelSendError) as err:
+        await download_to(client, "https://cdn.test/f", dest, 1 << 30)
+    assert str(err.value).startswith("HTTP 500")
+    assert served["n"] <= 8 and not dest.exists()
+
+
+async def test_a_download_that_never_finishes_times_out_and_leaves_no_file(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    from agent_team_backend.channels import adapter_runtime
+
+    async def body():
+        yield b"x"
+        await asyncio.sleep(30)
+        yield b"y"
+
+    monkeypatch.setattr(adapter_runtime, "DOWNLOAD_TOTAL_S", 0.2)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(200, content=body())))
+    dest = tmp_path / "f.bin"
+    with pytest.raises(ChannelSendError, match="timed out"):
+        await adapter_runtime.download_to(client, "https://cdn.test/f", dest, 1 << 20)
+    assert not dest.exists()
