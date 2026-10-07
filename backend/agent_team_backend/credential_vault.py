@@ -370,6 +370,17 @@ def _write_live_file(path: Path, text: str) -> None:
     secret_files.write_private_plain(path, text.encode("utf-8"))
 
 
+def _link_target(raw: str) -> str:
+    """A symlink's target as it was written: Windows' ``os.readlink`` returns
+    it as an extended-length path (``\\\\?\\`` / ``\\\\?\\UNC\\``), which never
+    equals the plain path the link was created from."""
+    if raw.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + raw[len("\\\\?\\UNC\\"):]
+    if raw.startswith("\\\\?\\"):
+        return raw[len("\\\\?\\"):]
+    return raw
+
+
 def legacy_claude_keychain_service(config_dir: Path | str) -> str:
     """Keychain service Claude Code used under CLAUDE_CONFIG_DIR isolation:
     the fixed service name suffixed with sha256(config-dir string)[:8]."""
@@ -1714,7 +1725,7 @@ class CredentialVault:
         isolated home, never raising."""
         try:
             if dst.is_symlink():
-                if os.readlink(dst) == os.fspath(target):
+                if _link_target(os.readlink(dst)) == os.fspath(target):
                     self._ensure_target_base(target, is_dir=is_dir)
                     return
                 dst.unlink()  # stale/wrong link -> repoint

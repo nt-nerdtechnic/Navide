@@ -55,7 +55,7 @@ def test_prepare_links_shared_entries_but_not_credentials_or_runtime_state(tmp_p
     real = _real_claude(tmp_path)
     directory = vault.prepare_account_dir("p1")
     assert (directory / "projects").is_symlink()
-    assert os.readlink(directory / "projects") == os.fspath(real / "projects")
+    assert (directory / "projects").resolve() == (real / "projects").resolve()
     assert (directory / "settings.json").is_symlink()
     assert (directory / "skills").is_symlink()
     assert not (directory / ".credentials.json").exists()
@@ -249,3 +249,29 @@ def test_an_expired_dir_login_on_file_platforms_clears_when_the_file_changes(tmp
     assert vault.account_dir_signed_in("p1") is False
     os.utime(creds, ns=(2_000_000_000, 2_000_000_000))
     assert vault.account_dir_signed_in("p1") is True
+
+
+def test_a_correct_link_is_left_alone_when_readlink_reports_an_extended_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows' os.readlink returns the target with a \\\\?\\ prefix. Compared
+    as a raw string against the target, every already-correct link read as
+    wrong and was deleted and recreated on every prepare — a window in which
+    a running pane writing into projects/ would create a real directory in
+    its place."""
+    vault, _ = _vault(tmp_path)
+    _real_claude(tmp_path)
+    directory = vault.prepare_account_dir("p1")
+    real_readlink = os.readlink
+    monkeypatch.setattr(os, "readlink", lambda p: "\\\\?\\" + real_readlink(p))
+    recreated: list[str] = []
+    real_symlink_to = Path.symlink_to
+
+    def spy(self, target, target_is_directory=False):
+        recreated.append(self.name)
+        return real_symlink_to(self, target, target_is_directory)
+
+    monkeypatch.setattr(Path, "symlink_to", spy)
+    vault.prepare_account_dir("p1")
+    assert recreated == []
+    assert (directory / "projects").is_symlink()
