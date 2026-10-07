@@ -266,25 +266,45 @@ def test_an_inbound_path_never_leaves_the_pane_folder(tmp_path: Path) -> None:
         assert dest.parent == media.pane_dir(tmp_path, "pane-1")
 
 
-def _staged(monkeypatch, *, before_recheck=None, after_first=None, after_recheck=None) -> None:
-    """Run hooks around open_outbound's two checks: the first runs before the file is
+def _staged(monkeypatch, *, before_recheck=None, after_first=None, after_recheck=None) -> dict:
+    """Run swaps around open_outbound's two checks: the first runs before the file is
     opened, the recheck after. The open file pins its inode, so nothing here depends on
-    whether the filesystem would reuse an inode number."""
+    whether the filesystem would reuse an inode number.
+
+    Windows will not delete or rename a file another handle has open (WinError 32), so a
+    swap aimed at the open file fails there; the returned dict says whether one did, and
+    the test then expects the safe Windows outcome: the checked original goes out."""
     checked = media._check
     calls = []
+    state = {"blocked": False}
+
+    def attempt(swap) -> None:
+        try:
+            swap()
+        except PermissionError:
+            state["blocked"] = True
 
     def staged(raw, roots):
         calls.append(raw)
         if len(calls) == 2 and before_recheck:
-            before_recheck()
+            attempt(before_recheck)
         result = checked(raw, roots)
         if len(calls) == 1 and after_first:
-            after_first()
+            attempt(after_first)
         if len(calls) == 2 and after_recheck:
-            after_recheck()
+            attempt(after_recheck)
         return result
 
     monkeypatch.setattr(media, "_check", staged)
+    return state
+
+
+def _sends_the_original(result) -> bool:
+    opened, reason = result
+    if opened is None or reason:
+        return False
+    with opened.fh:
+        return opened.fh.read() == b"x"
 
 
 def test_a_file_replaced_between_the_open_and_the_recheck_is_caught(ws: Path, monkeypatch) -> None:
@@ -294,8 +314,9 @@ def test_a_file_replaced_between_the_open_and_the_recheck_is_caught(ws: Path, mo
         target.unlink()
         target.write_bytes(b"OTHER")  # a new file under the same, still-real path
 
-    _staged(monkeypatch, before_recheck=swap)
-    assert media.open_outbound(str(target), [ws]) == (None, "changed")
+    state = _staged(monkeypatch, before_recheck=swap)
+    result = media.open_outbound(str(target), [ws])
+    assert _sends_the_original(result) if state["blocked"] else result == (None, "changed")
 
 
 @needs_symlinks
@@ -313,8 +334,10 @@ def test_a_file_opened_through_a_folder_swapped_and_back_is_caught(tmp_path: Pat
         (ws / "out").unlink()
         (ws / "moved").rename(ws / "out")
 
-    _staged(monkeypatch, after_first=swap_out, before_recheck=swap_back)
-    assert media.open_outbound(str(ws / "out" / "chart.png"), [ws]) == (None, "changed")
+    state = _staged(monkeypatch, after_first=swap_out, before_recheck=swap_back)
+    opened, reason = media.open_outbound(str(ws / "out" / "chart.png"), [ws])
+    # Put back or not, the secret opened through the link is never handed out.
+    assert opened is None and reason == ("outside" if state["blocked"] else "changed")
 
 
 @needs_symlinks
@@ -326,12 +349,15 @@ def test_a_symlink_swapped_in_before_the_recheck_is_refused(tmp_path: Path, ws: 
         target.unlink()
         target.symlink_to(secret)
 
-    _staged(monkeypatch, before_recheck=swap)
-    assert media.open_outbound(str(target), [ws]) == (None, "outside")
+    state = _staged(monkeypatch, before_recheck=swap)
+    result = media.open_outbound(str(target), [ws])
+    assert _sends_the_original(result) if state["blocked"] else result == (None, "outside")
 
 
 @needs_symlinks
 def test_a_swap_before_the_open_is_never_sent(tmp_path: Path, ws: Path, monkeypatch) -> None:
+    """Nothing is open yet, so the swap works everywhere. With O_NOFOLLOW the open itself
+    refuses the link; Windows has no such flag, follows it, and the recheck refuses."""
     secret = _file(tmp_path / "elsewhere" / "secret.txt", b"SECRET")
     target = ws / "out" / "chart.png"
 
@@ -340,7 +366,8 @@ def test_a_swap_before_the_open_is_never_sent(tmp_path: Path, ws: Path, monkeypa
         target.symlink_to(secret)
 
     _staged(monkeypatch, after_first=swap)
-    assert media.open_outbound(str(target), [ws]) == (None, "changed")
+    expected = "changed" if hasattr(os, "O_NOFOLLOW") else "outside"
+    assert media.open_outbound(str(target), [ws]) == (None, expected)
 
 
 def test_a_replacement_before_the_open_is_judged_by_the_recheck(tmp_path: Path, ws: Path,
@@ -366,10 +393,7 @@ def test_a_swap_after_the_recheck_still_sends_the_checked_file(ws: Path, monkeyp
         target.write_bytes(b"OTHER")
 
     _staged(monkeypatch, after_recheck=swap)
-    opened, reason = media.open_outbound(str(target), [ws])
-    assert reason == "" and opened is not None
-    with opened.fh:
-        assert opened.fh.read() == b"x"
+    assert _sends_the_original(media.open_outbound(str(target), [ws]))
 
 
 # --- Review 2: user-data folders, the root's own path, resolved colons -----------------
