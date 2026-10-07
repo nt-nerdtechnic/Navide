@@ -63,7 +63,10 @@ def test_prepare_links_shared_entries_but_not_credentials_or_runtime_state(tmp_p
     # An entry the real home does not have is not invented there.
     assert not (directory / "commands").exists()
     assert not (real / "commands").exists()
-    assert (directory.stat().st_mode & 0o777) == 0o700
+    if os.name != "nt":
+        # Windows has no POSIX mode bits: chmod(0o700) cannot narrow access
+        # there, and st_mode always reads 0o777 for a directory.
+        assert (directory.stat().st_mode & 0o777) == 0o700
 
 
 def test_prepare_is_idempotent(tmp_path: Path) -> None:
@@ -251,6 +254,15 @@ def test_an_expired_dir_login_on_file_platforms_clears_when_the_file_changes(tmp
     assert vault.account_dir_signed_in("p1") is True
 
 
+def _extended_readlink(real_readlink):
+    """os.readlink as Windows reports it: with the \\\\?\\ prefix. On Windows
+    the real call already carries it, so it is added only when absent."""
+    def readlink(path):
+        raw = real_readlink(path)
+        return raw if raw.startswith("\\\\?\\") else "\\\\?\\" + raw
+    return readlink
+
+
 def test_a_correct_link_is_left_alone_when_readlink_reports_an_extended_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -262,8 +274,7 @@ def test_a_correct_link_is_left_alone_when_readlink_reports_an_extended_path(
     vault, _ = _vault(tmp_path)
     _real_claude(tmp_path)
     directory = vault.prepare_account_dir("p1")
-    real_readlink = os.readlink
-    monkeypatch.setattr(os, "readlink", lambda p: "\\\\?\\" + real_readlink(p))
+    monkeypatch.setattr(os, "readlink", _extended_readlink(os.readlink))
     recreated: list[str] = []
     real_symlink_to = Path.symlink_to
 

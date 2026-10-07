@@ -538,7 +538,13 @@ def test_prepare_keeps_a_correct_skills_link_when_readlink_reports_an_extended_p
     assert (home / "skills").is_symlink()
 
     real_readlink = os.readlink
-    monkeypatch.setattr(os, "readlink", lambda p: "\\\\?\\" + real_readlink(p))
+
+    def extended_readlink(path):
+        # Windows' real readlink already carries the prefix: add it only when absent.
+        raw = real_readlink(path)
+        return raw if raw.startswith("\\\\?\\") else "\\\\?\\" + raw
+
+    monkeypatch.setattr(os, "readlink", extended_readlink)
     recreated: list[str] = []
     real_symlink_to = Path.symlink_to
 
