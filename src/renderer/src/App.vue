@@ -63,7 +63,7 @@ import type { MessageReason, PushOutcome, RouteResult } from './composables/useA
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
 import { parsePlanTargetArgs } from './lib/planTarget'
-import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isExternalDelivery, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
+import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isExternalDelivery, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderInterruptedChildrenNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
 import {
   evaluateTurnSpawns,
   evaluateSpawnRequest,
@@ -236,17 +236,23 @@ import {
 import {
   ALL_SCOPE_RESTORE_CONCURRENCY,
   AUTO_RESUME_ON_RECONNECT_SETTING_KEY,
+  INTERRUPTED_RESUME_LIMIT,
   RESUME_BEHAVIOR_SETTING_KEY,
+  RESUME_INTERRUPTED_ON_LAUNCH_SETTING_KEY,
   RESTORE_SCOPE_SETTING_KEY,
   createWorkspaceRestoreSession,
   explicitRestoreDecision,
+  interruptedRestoreTargetIds,
   normalizeAutoResumeOnReconnect,
+  normalizeResumeInterruptedOnLaunch,
   pendingRestorePaneIds,
   resolveWorkspaceRestoreSession,
   restoreScopeTargetIds,
   runWithConcurrency,
   stripPinnedSessionId,
   stripDeadOpencodeAutoFlag,
+  turnStateForStatus,
+  wasInterruptedAtLaunch,
   type RestoreScope,
   type RestoreSessionDecision,
   type RestoreSessionTrigger,
@@ -1531,11 +1537,16 @@ interface ActivePane {
   /** Messaging handle of the parent this pane owes a report to, and whether
    *  that report is still outstanding. Set together when a spawn kickoff lands
    *  and cleared by the first turn that ends — by the pane's own report if it
-   *  wrote one, by a fallback report if it did not. Runtime only — unlike
-   *  spawnedBy this is deliberately NOT persisted: the turn that owed the
-   *  report ended when the app closed, so a restored pane owes nothing. */
+   *  wrote one, by a fallback report if it did not. Persisted
+   *  (PaneRecord.report_to / report_pending): a relaunch interrupts the turn
+   *  that owed the report, and the pane resumed afterwards still owes it — so
+   *  a resume re-arms it, and the first turn that ends clears it for good. */
   spawnedByName?: string
   spawnReportPending?: boolean
+  /** Placeholder only: the record says this pane was working (or still owed
+   *  its parent a report) when the app closed. Shown on the placeholder, and
+   *  read by the relaunch's automatic resume. */
+  interruptedAtLaunch?: boolean
   roleKey: RoleKey
   stageId: StageId
   /** Human-readable slot label, e.g. "Architecture" or "UI/UX".
@@ -2308,7 +2319,39 @@ function syncPaneBusy(): void {
   for (const pane of panes.value) {
     if (!pane.messagingName) continue
     reportPaneBusy(pane.id, !isPaneIdleForMessaging(pane.id), paneDisplayStatus(pane))
+    persistPaneTurnState(pane)
   }
+}
+
+/** Record whether a pane is working, so a manual relaunch knows which panes it
+ *  interrupted. Only a real turn state is written, and only when it changes.
+ *  Skipped while a restore still has the pane parked (resuming, or waiting on
+ *  its continue button): its work is unfinished, and writing its idle prompt
+ *  would make the next relaunch forget it. */
+const paneTurnStatePersisted = new Map<string, string>()
+function persistPaneTurnState(pane: ActivePane): void {
+  if (!pane.realized || pane.restoring || pane.resumeContinueAvailable || !pane.workspacePath) return
+  const state = turnStateForStatus(paneDisplayStatus(pane))
+  if (!state || paneTurnStatePersisted.get(pane.id) === state) return
+  paneTurnStatePersisted.set(pane.id, state)
+  backend
+    .send('project.set_pane_resume_state', {
+      workspace_path: pane.workspacePath, pane_id: pane.id, last_turn_state: state,
+    })
+    .catch(() => { /* a relaunch just will not resume this pane by itself */ })
+}
+
+/** Persist the report this pane owes its parent (or that it owes none now). */
+function persistPaneReportDebt(pane: ActivePane): void {
+  if (!pane.workspacePath) return
+  backend
+    .send('project.set_pane_resume_state', {
+      workspace_path: pane.workspacePath,
+      pane_id: pane.id,
+      report_to: pane.spawnedByName ?? '',
+      report_pending: !!pane.spawnReportPending,
+    })
+    .catch(() => { /* the report still settles in this session */ })
 }
 
 /** Mirror a pane's handle into the backend registry, which is the only place
@@ -2346,6 +2389,7 @@ function mirrorMessagingHandle(pane: ActivePane): void {
 function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean } = {}): void {
   messaging.unregisterPane(paneId)
   paneBusyReported.delete(paneId)
+  paneTurnStatePersisted.delete(paneId)
   pushReadyPanes.delete(paneId)
   pushCooldownUntil.delete(paneId)
   pushUnclearAt.delete(paneId)
@@ -2643,6 +2687,7 @@ function settleSpawnReport(
   const parentName = pane?.spawnedByName
   if (!pane?.spawnReportPending || !parentName) return
   pane.spawnReportPending = false
+  persistPaneReportDebt(pane)
   // It reported itself — nothing to stand in for. Broadcasts count: the parent
   // is one of the panes a broadcast reaches.
   if (parsed.some((m) => isBroadcastTarget(m.target) || m.target === parentName)) return
@@ -3305,6 +3350,7 @@ async function kickoffRequestedPane(
       if (live) {
         live.spawnedByName = parentName
         live.spawnReportPending = true
+        persistPaneReportDebt(live)
       }
     }
     return kicked
@@ -10182,6 +10228,12 @@ interface ProjectPane {
    *  is not known" — never as "now". */
   spawned_at?: string
   removed_at?: string
+  /** What the pane was doing when last reported ('working' / 'idle'), and the
+   *  report it still owes its parent. Absent on records written before the
+   *  fields existed. */
+  last_turn_state?: string
+  report_to?: string
+  report_pending?: boolean
 }
 
 const HISTORY_ORIGINS: readonly SpawnHistoryEntry['origin'][] = ['manual', 'pipeline', 'mcp']
@@ -11078,6 +11130,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         pinnedSessionId: sessionId || undefined,
         sessionHomeId: sessionHomeId || undefined,
         deferredRestore: { saved, workspacePath, batch: coldBatch! },
+        interruptedAtLaunch: wasInterruptedAtLaunch(saved) || undefined,
       }
       // Register the handle now rather than on realize. `messagingName` is what
       // the @-mention menu filters on and what mirrors the pane into the
@@ -11347,11 +11400,19 @@ async function advanceRestoreSession(trigger: RestoreSessionTrigger, coldBatch?:
     restoreSessions.get(session.workspacePath) !== session ||
     !isLocalWorkspace(session.workspacePath)
   ) return
-  const ids = decision === 'fresh'
+  const scopeIds = decision === 'fresh'
     ? (trigger === 'cold'
       ? pendingRestorePaneIds(panes.value, session.workspacePath)
       : [])
     : restoreSessionScopeTargets(session, trigger)
+  // A relaunch also brings back the panes it interrupted (and the parents
+  // waiting on them), whatever the scope picked — same realize path, so each
+  // resumed one gets the continue button and nothing is continued by itself.
+  const interrupted = trigger === 'cold' && decision === 'resume'
+    ? interruptedLaunchTargets(session.workspacePath)
+    : []
+  const interruptedKids = interrupted.length > 0 ? interruptedChildren(session.workspacePath) : []
+  const ids = [...new Set([...scopeIds, ...interrupted])]
   const reconnectStart = reconnectedCount.value
   // Starting a workspace fresh is the one batch nothing caps. Fresh spawns are
   // deliberately exempt from the resume semaphore — throttling them would stall
@@ -11366,7 +11427,7 @@ async function advanceRestoreSession(trigger: RestoreSessionTrigger, coldBatch?:
   // the semaphore at whatever the user set (default 3), so adding a second
   // ceiling of 2 would just make their own setting slower.
   const unthrottledBatch = decision === 'fresh' && trigger === 'cold'
-  if (unthrottledBatch || (decision === 'resume' && session.scope === 'all')) {
+  if (unthrottledBatch || (decision === 'resume' && session.scope === 'all') || interrupted.length > 0) {
     await runWithConcurrency(ids, ALL_SCOPE_RESTORE_CONCURRENCY, (paneId) => realizeRestoredPane(paneId, true))
   } else {
     await Promise.all(ids.map((paneId) => realizeRestoredPane(paneId, true)))
@@ -11374,6 +11435,64 @@ async function advanceRestoreSession(trigger: RestoreSessionTrigger, coldBatch?:
   const reconnected = reconnectedCount.value - reconnectStart
   if (reconnected > 0) {
     notifyRestore.toast(i18n.global.t('reconnect.auto-toast', { count: reconnected }), { type: 'success' })
+  }
+  if (interruptedKids.length > 0) notifyInterruptedParents(interruptedKids)
+}
+
+/** The placeholders a relaunch resumes by itself in one workspace: the
+ *  interrupted ones and their pending parents, visible first, capped. Empty
+ *  when the setting is off. */
+function interruptedLaunchTargets(workspacePath: string): string[] {
+  if (!normalizeResumeInterruptedOnLaunch(settingsGet(RESUME_INTERRUPTED_ON_LAUNCH_SETTING_KEY, true))) return []
+  const pending = pendingRestorePaneIds(panes.value, workspacePath).map((id) => {
+    const pane = panes.value.find((p) => p.id === id)
+    return { id, interrupted: !!pane?.interruptedAtLaunch, spawnedBy: pane?.spawnedBy }
+  })
+  const onScreen = normWs(workspacePath) === normWs(currentWorkspace.value)
+  return interruptedRestoreTargetIds({
+    pending,
+    visibleIds: onScreen ? tabVisiblePanes.value.map((pane) => pane.id) : [],
+    limit: INTERRUPTED_RESUME_LIMIT,
+  })
+}
+
+interface InterruptedChild {
+  placeholderId: string
+  name: string
+  parentName: string
+}
+
+/** Every interrupted placeholder in a workspace that has a parent to tell,
+ *  captured BEFORE the batch: realizing gives each pane a new id, while the
+ *  messaging names carry across. */
+function interruptedChildren(workspacePath: string): InterruptedChild[] {
+  const out: InterruptedChild[] = []
+  for (const pane of panes.value) {
+    if (pane.realized || !pane.interruptedAtLaunch || !pane.messagingName) continue
+    if (normWs(pane.workspacePath) !== normWs(workspacePath)) continue
+    const parentName = panes.value.find((p) => p.id === pane.spawnedBy)?.messagingName ??
+      pane.deferredRestore?.saved.report_to ?? ''
+    if (parentName) out.push({ placeholderId: pane.id, name: pane.messagingName, parentName })
+  }
+  return out
+}
+
+/** Tell each parent which of its children the relaunch interrupted and which
+ *  came back. One notice per parent; a parent that is still a placeholder gets
+ *  it when it is opened, like any other message. A resumed child is one whose
+ *  placeholder is gone — a failed or over-the-cap one is still there. */
+function notifyInterruptedParents(kids: readonly InterruptedChild[]): void {
+  const byParent = new Map<string, { name: string; resumed: boolean }[]>()
+  for (const kid of kids) {
+    if (!panes.value.some((p) => p.messagingName === kid.parentName)) continue
+    const resumed = !panes.value.some((p) => p.id === kid.placeholderId && !p.realized)
+    const list = byParent.get(kid.parentName) ?? []
+    list.push({ name: kid.name, resumed })
+    byParent.set(kid.parentName, list)
+  }
+  for (const [parentName, children] of byParent) {
+    const text = renderInterruptedChildrenNotice(children)
+    if (text) messaging.sendMessage(NOTICE_SENDER, parentName, text, { kind: 'notice' })
   }
 }
 
@@ -11565,6 +11684,13 @@ async function performRealizeRestoredPane(
     if (isResume) {
       const revived = panes.value.find((p) => p.id === newId)
       if (revived) revived.resumeContinueAvailable = true
+      // The turn that owed the parent a report was cut off by the relaunch; the
+      // resumed conversation still owes it, and settleSpawnReport clears it on
+      // the first turn that ends.
+      if (revived && saved.report_pending && saved.report_to) {
+        revived.spawnedByName = saved.report_to
+        revived.spawnReportPending = true
+      }
     } else {
       // A fresh restore starts a NEW conversation in a marker-camp CLI, and
       // nothing else types the marker into it (manual spawn and rebuild do
@@ -11572,6 +11698,8 @@ async function performRealizeRestoredPane(
       // pane comes back unresumable after every restart. Same gate as
       // onManualSpawn: role panes carry the marker inside the role prompt.
       const fresh = panes.value.find((p) => p.id === newId)
+      // A new conversation has no turn left to report on.
+      if (saved.report_pending && fresh) persistPaneReportDebt(fresh)
       if (
         fresh && fresh.agentKey !== 'terminal' &&
         fresh.sessionMarker &&
@@ -20408,6 +20536,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-focus="p.id === effectiveFocusPaneId"
           :realizing="p.restoring"
+          :interrupted="p.interruptedAtLaunch"
           @activate="selectPane(p.id, { userInitiated: true })"
           @minimize="minimizePane(p.id)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
