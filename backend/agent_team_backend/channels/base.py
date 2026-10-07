@@ -10,7 +10,8 @@ returns, never blocking the event loop.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Awaitable, Callable, Literal, Protocol
 
 Platform = Literal[
@@ -42,6 +43,17 @@ class Location:
         return f"{self.platform}:{self.account}:{self.chat_id}:{self.thread_id}"
 
 
+@dataclass(frozen=True)
+class InboundAttachment:
+    """A file a chat message carries, not yet downloaded."""
+
+    kind: str  # photo | document | video | audio | voice | animation | video_note | file
+    name: str  # as the platform reports it (unsanitized); may be ""
+    size: int | None  # bytes, when the platform says
+    mime: str
+    ref: str  # what the adapter's ``download`` needs (Telegram file_id, a CDN / url_private URL)
+
+
 @dataclass
 class InboundMessage:
     platform: str
@@ -66,6 +78,8 @@ class InboundMessage:
     # allowlisted senders' are quoted, so a reply cannot carry a stranger's text into a pane.
     reply_to_sender_id: str = ""
     reply_to_self: bool = False
+    # Files the message carries; the manager downloads them only for an allowed sender.
+    attachments: list[InboundAttachment] = field(default_factory=list)
 
     def location_key(self) -> str:
         return Location(self.platform, self.account, self.chat_id, self.thread_id).key()
@@ -136,6 +150,25 @@ class MenuAdapter(Protocol):
     async def edit_menu(self, loc: Location, message_id: str, text: str, rows: ButtonRows) -> None:
         """Replace the menu message's text and buttons."""
         ...
+
+
+class MediaAdapter(Protocol):
+    """Optional: an adapter that can fetch a chat's files and send files to it."""
+
+    upload_max_bytes: int  # the platform's documented per-file upload limit
+
+    async def download(self, att: InboundAttachment, dest: Path, max_bytes: int) -> int:
+        """Write the file to ``dest`` and return its size; raise ``MediaTooLarge`` past
+        ``max_bytes`` (``dest`` is then removed) or ``ChannelSendError`` on failure."""
+        ...
+
+    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
+        """Post the file at ``path`` as ``filename`` and return the message ids."""
+        ...
+
+
+class MediaTooLarge(Exception):
+    """A download passed its size cap."""
 
 
 class ChannelAuthError(Exception):
