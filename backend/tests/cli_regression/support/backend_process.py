@@ -29,6 +29,13 @@ from .isolation import isolated_environment
 #: runner: the shell's tree is long gone by then and only the host is left.
 _REAP_WINDOW_S = 10.0
 
+#: How long a fresh backend gets to start serving. Mirrors the app's own
+#: health-check default (src/main/health-timeout.ts: 45s, 120s on Linux): a
+#: backend the app would accept must not fail here. The former 30s was stricter
+#: than the product, and four backends started side by side at load ~140 were
+#: measured at 15-27s, so a loaded full run crossed it.
+_STARTUP_TIMEOUT_S = 120.0 if sys.platform.startswith("linux") else 45.0
+
 
 class BackendProcess:
     def __init__(self, root: Path):
@@ -56,7 +63,7 @@ class BackendProcess:
             )
             self.process.stdin.write("\n")
             self.process.stdin.flush()
-            async with asyncio.timeout(30):
+            async with asyncio.timeout(_STARTUP_TIMEOUT_S):
                 while True:
                     if self.process.poll() is not None:
                         raise AssertionError(self.log_path.read_text(encoding="utf-8"))
