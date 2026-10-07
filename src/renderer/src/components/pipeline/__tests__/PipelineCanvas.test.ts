@@ -75,4 +75,31 @@ describe('PipelineCanvas', () => {
     expect(w.emitted('select-edge')?.at(-1)).toEqual(['r-g-a'])
     w.unmount()
   })
+
+  it('offers zoom controls with the current zoom level', async () => {
+    const w = mountCanvas()
+    await flushPromises()
+    const zoom = w.find('.pcv-zoom')
+    expect(zoom.findAll('button')).toHaveLength(3)
+    expect(zoom.find('.pcv-zoom-level').text()).toMatch(/^\d+%$/)
+    w.unmount()
+  })
+
+  it('colours minimap nodes by run state', async () => {
+    const { minimapClass } = await import('../PipelineCanvas.vue')
+    expect(minimapClass('done')).toBe('pcv-mm pcv-mm--done')
+    expect(minimapClass(undefined)).toBe('pcv-mm')
+  })
+
+  it('frames for reading: below the readable zoom it centres on the node that matters', async () => {
+    const { framingTarget, READABLE_ZOOM } = await import('../PipelineCanvas.vue')
+    // Fit already readable: keep it.
+    expect(framingTarget(0.9, graph, null, {})).toBeNull()
+    // Too small: centre on the selected node at the readable zoom…
+    expect(framingTarget(0.5, graph, 'g', {})).toEqual({ id: 'g', zoom: READABLE_ZOOM })
+    // …else on what the run is doing…
+    expect(framingTarget(0.5, graph, null, { a: { status: 'running' } })).toEqual({ id: 'a', zoom: READABLE_ZOOM })
+    // …else on the start.
+    expect(framingTarget(0.5, graph, null, {})).toEqual({ id: 'trigger', zoom: READABLE_ZOOM })
+  })
 })

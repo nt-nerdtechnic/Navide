@@ -1,3 +1,35 @@
+<script lang="ts">
+import type { NodeRunState as RunState, PipelineGraph as Graph } from '../../lib/pipelineGraph'
+
+/** Below this the card text stops being readable at the default font size. */
+export const READABLE_ZOOM = 0.72
+
+/** When fitting the whole graph would shrink it past readable, frame the node
+ *  that matters instead: the selected one, else what the run is doing, else
+ *  the start. null = the fit is readable as it is. */
+export function framingTarget(
+  fitZoom: number,
+  graph: Graph,
+  selectedId: string | null,
+  runNodes: Record<string, RunState>
+): { id: string; zoom: number } | null {
+  if (fitZoom >= READABLE_ZOOM) return null
+  const live = graph.nodes.find((n) => runNodes[n.id]?.status === 'awaiting')
+    ?? graph.nodes.find((n) => runNodes[n.id]?.status === 'running')
+  const id = (selectedId && graph.nodes.some((n) => n.id === selectedId) ? selectedId : null)
+    ?? live?.id
+    ?? graph.nodes.find((n) => n.kind === 'trigger')?.id
+    ?? graph.nodes[0]?.id
+  return id ? { id, zoom: READABLE_ZOOM } : null
+}
+
+/** Minimap node class for a run status: the overview doubles as a progress
+ *  map while a run is live. */
+export function minimapClass(status: string | undefined): string {
+  return status ? `pcv-mm pcv-mm--${status}` : 'pcv-mm'
+}
+</script>
+
 <script setup lang="ts">
 // Free canvas view (Vue Flow): the same graph as the swimlane, with what
 // columns cannot draw — branches, joins, approval gates and bounded reject
@@ -54,7 +86,8 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 const flowId = props.flowId ?? 'pipeline-canvas'
-const { fitView, screenToFlowCoordinate, onInit } = useVueFlow(flowId)
+const { fitView, screenToFlowCoordinate, onInit, zoomIn, zoomOut, viewport, setCenter } = useVueFlow(flowId)
+const zoomPercent = computed(() => `${Math.round((viewport.value?.zoom ?? 1) * 100)}%`)
 
 const selectedEdge = ref<string | null>(null)
 watch(selectedEdge, (id) => emit('select-edge', id))
@@ -175,8 +208,19 @@ function onDrop(e: DragEvent): void {
 }
 
 // ── Viewport ─────────────────────────────────────────────────────────────────
+/** Fit, then — if that left the cards too small to read — centre the node
+ *  that matters at a readable zoom (see framingTarget). */
+async function frame(duration = 0): Promise<void> {
+  await fitView({ padding: 0.1, maxZoom: 1, duration })
+  const target = framingTarget(viewport.value?.zoom ?? 1, props.graph, props.selectedId, props.runNodes)
+  if (!target) return
+  const n = byId.value.get(target.id)
+  if (!n) return
+  const size = NODE_SIZE[n.kind]
+  await setCenter(n.position.x + size.w / 2, n.position.y + size.h / 2, { zoom: target.zoom, duration })
+}
 onInit(() => {
-  void fitView({ padding: 0.1, maxZoom: 1 }).then(() => emit('ready'))
+  void frame().then(() => emit('ready'))
 })
 
 /** Frame one link and select it — the target of a swimlane badge click. */
@@ -187,8 +231,11 @@ async function focusEdge(id: string): Promise<void> {
   await nextTick()
   await fitView({ nodes: [e.from, e.to], padding: 0.6, maxZoom: 1.1, duration: 420 })
 }
-function zoomToFit(): void { void fitView({ padding: 0.1, maxZoom: 1, duration: 320 }) }
-defineExpose({ focusEdge, zoomToFit })
+/** Readable framing (after layout changes, inspector open/close). */
+function zoomToFit(): void { void frame(320) }
+/** The whole graph, however small — the explicit "fit" command. */
+function fitAll(): void { void fitView({ padding: 0.1, maxZoom: 1, duration: 320 }) }
+defineExpose({ focusEdge, zoomToFit, fitAll })
 
 watch(() => props.selectedId, (id) => { if (id) selectedEdge.value = null })
 
@@ -325,8 +372,21 @@ function mainPath(p: EdgeProps): { path: string; labelX: number; labelY: number 
       <MiniMap
         class="pcv-minimap" pannable zoomable :width="132" :height="84"
         :node-border-radius="6" :aria-label="t('pipelineEditor.canvas.minimap')"
+        :node-class-name="(n) => minimapClass(runNodes[n.id]?.status)"
       />
     </VueFlow>
+    <div class="pcv-zoom" role="group" :aria-label="t('pipelineEditor.canvas.zoom-level')">
+      <button type="button" :aria-label="t('pipelineEditor.canvas.zoom-out')" :title="t('pipelineEditor.canvas.zoom-out')" @click="zoomOut({ duration: 160 })">
+        <svg viewBox="0 0 16 16"><path d="M4 8h8" /></svg>
+      </button>
+      <span class="pcv-zoom-level" aria-live="polite">{{ zoomPercent }}</span>
+      <button type="button" :aria-label="t('pipelineEditor.canvas.zoom-in')" :title="t('pipelineEditor.canvas.zoom-in')" @click="zoomIn({ duration: 160 })">
+        <svg viewBox="0 0 16 16"><path d="M4 8h8M8 4v8" /></svg>
+      </button>
+      <button type="button" :aria-label="t('pipelineEditor.toolbar.fit')" :title="t('pipelineEditor.toolbar.fit')" @click="fitAll">
+        <svg viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" /></svg>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -443,6 +503,40 @@ function mainPath(p: EdgeProps): { path: string; labelX: number; labelY: number 
   box-shadow: var(--shadow-popover);
 }
 .pcv :deep(.vue-flow__minimap-node) { fill: var(--bg-muted); stroke: var(--border-strong); }
+.pcv :deep(.pcv-mm--done), .pcv :deep(.pcv-mm--skipped) { fill: color-mix(in srgb, var(--success-emphasis) 70%, transparent); stroke: var(--success-emphasis); }
+.pcv :deep(.pcv-mm--running) { fill: var(--accent-emphasis); stroke: var(--accent-emphasis); }
+.pcv :deep(.pcv-mm--awaiting) { fill: var(--attention-emphasis); stroke: var(--attention-emphasis); }
+.pcv :deep(.pcv-mm--failed), .pcv :deep(.pcv-mm--rejected), .pcv :deep(.pcv-mm--aborted) { fill: var(--danger-emphasis); stroke: var(--danger-emphasis); }
+
+/* Zoom: bottom-left, opposite the minimap. */
+.pcv-zoom {
+  position: absolute;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+}
+.pcv-zoom button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.pcv-zoom button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pcv-zoom button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.pcv-zoom button:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: -2px; }
+.pcv-zoom-level { min-width: 42px; text-align: center; font-size: var(--font-2xs); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .pcv :deep(.vue-flow__minimap-mask) { fill: color-mix(in srgb, var(--bg-base) 62%, transparent); }
 
 @keyframes pcv-flow { to { stroke-dashoffset: -22; } }
