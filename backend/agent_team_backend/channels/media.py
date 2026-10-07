@@ -237,7 +237,10 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
             return None, None, "denied_name"
         if any(_within(real, s) for s in _system_dirs()):
             return None, None, "system"
-        st = real.stat()
+        try:
+            st = real.stat()
+        except OSError:
+            return None, None, "changed"  # gone or unreadable since it resolved
         # A second name for the same inode may be a file from anywhere on the disk.
         if st.st_nlink > 1:
             return None, None, "hard_link"

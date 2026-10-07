@@ -1593,7 +1593,11 @@ class ChannelManager:
         for raw in paths[: media.MAX_ATTACHMENTS_PER_REPLY]:
             # Only the file name ever goes back to the chat, never the folders above it.
             name = media.safe_name(Path(raw.strip()).name)
-            opened, reason = await asyncio.to_thread(media.open_outbound, raw, roots)
+            try:
+                opened, reason = await asyncio.to_thread(media.open_outbound, raw, roots)
+            except Exception as exc:  # noqa: BLE001 — refuse this one, keep sending the rest
+                log.warning("channels: opening an attachment for %s failed: %s", loc.key(), exc)
+                opened, reason = None, "changed"
             if opened is None:
                 await note(media.text(lang, "refused", name=name, reason=media.text(lang, f"reason.{reason}")))
                 continue

@@ -454,3 +454,22 @@ def test_crlf_attach_lines_parse_like_the_msg_markers_around_them() -> None:
     or the block parses while its path keeps the \\r."""
     text, paths = media.split_attachments("hi\r\n---ATTACH--- C:\\ws\\a.png\r\n---ATTACH---\t/w/b.pdf \r")
     assert paths == ["C:\\ws\\a.png", "/w/b.pdf"] and text == "hi\r"
+
+
+def test_a_file_whose_stat_fails_after_resolving_is_refused_not_raised(ws: Path, monkeypatch) -> None:
+    target = ws / "out" / "chart.png"
+    resolved = str(target.resolve())
+    real_stat = Path.stat
+    seen = {"n": 0}
+
+    def stat(self, *a, **kw):
+        if str(self) == resolved:
+            seen["n"] += 1
+            if seen["n"] > 1:  # is_file() passes; the inode stat right after does not
+                raise PermissionError(13, "Permission denied")
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    assert media.resolve_outbound(str(target), [ws]) == (None, "changed")
+    seen["n"] = 0
+    assert media.open_outbound(str(target), [ws]) == (None, "changed")

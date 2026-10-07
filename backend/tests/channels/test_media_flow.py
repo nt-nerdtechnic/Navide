@@ -295,3 +295,26 @@ async def test_a_quoted_attach_line_in_a_reply_is_not_an_attachment(media_env: E
     await _until(lambda: _said(media_env, "you said:"))
     await media_env.m.wait_idle()
     assert m.files == []
+
+
+# --- failures that must not lose the message or the other files -------------------
+
+
+async def test_a_file_that_fails_to_open_is_refused_and_the_next_still_goes(
+        media_env: Env, ws: Path, monkeypatch) -> None:
+    (ws / "out" / "b.png").write_bytes(b"second")
+    real_open = media.open_outbound
+
+    def flaky(raw, roots):
+        if raw.endswith("chart.png"):
+            raise OSError(5, "Input/output error")
+        return real_open(raw, roots)
+
+    monkeypatch.setattr(media, "open_outbound", flaky)
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(
+        f"two files\n---ATTACH--- {ws}/out/chart.png\n---ATTACH--- {ws}/out/b.png"))
+    await _until(lambda: m.files)
+    assert [f[2] for f in m.files] == ["b.png"]
+    await _until(lambda: _said(media_env, "chart.png"))
