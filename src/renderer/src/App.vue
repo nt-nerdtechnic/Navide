@@ -9347,7 +9347,11 @@ registerCommand('ui.pane.reclaim', async (args) => {
   await reclaimPanesNow(ids, false, outcome)
   return {
     reclaimed: outcome.reclaimed,
-    refused: outcome.refused.map((r) => ({ paneId: r.paneId, reason: r.reason, detail: reclaimRefusalReason(r.reason) })),
+    refused: outcome.refused.map((r) => ({
+      paneId: r.paneId,
+      reason: r.reason,
+      detail: r.message ? `${reclaimRefusalReason(r.reason)}: ${r.message}` : reclaimRefusalReason(r.reason),
+    })),
   }
 })
 // Where a pane sits: its tab group and its parent. Both halves are optional
@@ -16151,7 +16155,7 @@ const RECLAIM_ESTIMATE_BYTES_PER_CLI = 250 * 1024 * 1024
  *  each pane it named (ui.pane.reclaim) rather than just count. */
 interface ReclaimOutcome {
   reclaimed: string[]
-  refused: { paneId: string; reason: ReclaimRefusal }[]
+  refused: { paneId: string; reason: ReclaimRefusal; message?: string }[]
 }
 
 /** Reclaim now, by explicit request. Returns how many actually went.
@@ -16178,11 +16182,20 @@ async function reclaimPanesNow(paneIds?: string[], named = false, outcome?: Recl
       outcome?.refused.push({ paneId, reason: blocked })
       continue
     }
-    if (await reclaimIdlePane(paneId)) {
-      reclaimed++
-      outcome?.reclaimed.push(paneId)
-    } else {
-      outcome?.refused.push({ paneId, reason: 'not-found' })
+    // A caller collecting per-pane results keeps the ones already gathered
+    // when a later kill throws; every other caller sees the throw as before.
+    try {
+      if (await reclaimIdlePane(paneId)) {
+        reclaimed++
+        outcome?.reclaimed.push(paneId)
+      } else {
+        // The pane was here a moment ago, so false means onKill ran and it left
+        // the list: the CLI is gone, which 'not-found' would hide.
+        outcome?.refused.push({ paneId, reason: 'gone-after-kill' })
+      }
+    } catch (err) {
+      if (!outcome) throw err
+      outcome.refused.push({ paneId, reason: 'error', message: err instanceof Error ? err.message : String(err) })
     }
   }
   if (reclaimed > 0) {

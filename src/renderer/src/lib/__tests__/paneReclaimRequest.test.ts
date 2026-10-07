@@ -41,5 +41,7 @@ describe('reclaimRefusalReason', () => {
     expect(reclaimRefusalReason('has-draft')).toMatch(/unsent/i)
     expect(reclaimRefusalReason('no-resume-id')).toMatch(/resume/i)
     expect(reclaimRefusalReason('not-found')).toMatch(/no pane/i)
+    expect(reclaimRefusalReason('gone-after-kill')).toMatch(/stopped/i)
+    expect(reclaimRefusalReason('error')).toMatch(/fail/i)
   })
 })

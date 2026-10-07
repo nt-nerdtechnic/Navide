@@ -36,6 +36,19 @@ describe('reclaimPanesNow', () => {
     expect(fn).toContain('outcome?.refused.push({ paneId, reason: blocked })')
     expect(fn).toContain('outcome?.reclaimed.push(paneId)')
   })
+
+  it('says a pane gone after its kill went, not that it was never there', () => {
+    // reclaimIdlePane answers false once onKill has run and the pane left the
+    // list: the CLI is dead, so 'not-found' would tell the caller nothing happened.
+    expect(fn).toContain("outcome?.refused.push({ paneId, reason: 'gone-after-kill' })")
+    expect(fn).not.toMatch(/reclaimIdlePane\(paneId\)[^]*?reason: 'not-found'/)
+  })
+
+  it('keeps earlier results when one pane throws, for a caller collecting them', () => {
+    expect(fn).toContain("outcome.refused.push({ paneId, reason: 'error', message: err instanceof Error ? err.message : String(err) })")
+    // Callers that pass no outcome still see the throw, as before.
+    expect(fn).toMatch(/if \(!outcome\) throw err/)
+  })
 })
 
 describe('ui.pane.reclaim wiring', () => {
@@ -59,5 +72,6 @@ describe('ui.pane.reclaim wiring', () => {
   it('answers which panes went and why the others stayed', () => {
     expect(cmd).toContain('reclaimed: outcome.reclaimed')
     expect(cmd).toContain('reclaimRefusalReason(r.reason)')
+    expect(cmd).toContain('r.message')
   })
 })

@@ -20,11 +20,15 @@ export function reclaimRequestPaneIds(args: unknown): string[] {
   return ids
 }
 
-/** A reclaim refusal: one of the guards, or an id that names no pane here. */
-export type ReclaimRefusal = ReclaimBlock | 'not-found'
+/** A reclaim refusal: one of the guards, an id that names no pane here, a
+ *  pane that left the list during its own kill (its CLI did stop), or a reclaim
+ *  that threw. */
+export type ReclaimRefusal = ReclaimBlock | 'not-found' | 'gone-after-kill' | 'error'
 
 const REASONS: Record<ReclaimRefusal, string> = {
   'not-found': 'no pane with this id in this window',
+  'gone-after-kill': 'its CLI was stopped, but the pane left the window during the kill, so no resume card was left',
+  error: 'the reclaim failed partway; check the pane before retrying',
   'not-realized': 'already reclaimed or closed: it is a click-to-resume placeholder',
   restoring: 'a restore is in flight for it',
   focused: 'the user has it focused',
