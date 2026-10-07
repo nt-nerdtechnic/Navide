@@ -13,7 +13,12 @@ import pytest
 from agent_team_backend.channels.base import (
     ChannelSendError, InboundAttachment, InboundMessage, Location, MediaTooLarge,
 )
+from agent_team_backend.channels.dingtalk import DingTalkAdapter
 from agent_team_backend.channels.discord import DiscordAdapter
+from agent_team_backend.channels.feishu import FeishuAdapter
+from agent_team_backend.channels.imessage import IMessageAdapter
+from agent_team_backend.channels.matrix import MatrixAdapter
+from agent_team_backend.channels.mattermost import MattermostAdapter
 from agent_team_backend.channels.slack import SlackAdapter
 from agent_team_backend.channels.telegram import TelegramAdapter
 
@@ -292,3 +297,63 @@ async def test_slack_upload_uses_the_external_upload_flow(tmp_path: Path) -> Non
     assert json.loads(done.content) == {"files": [{"id": "F9", "title": "chart.png"}], "channel_id": "C1",
                                         "thread_ts": "9.0"}
     assert ad.upload_max_bytes == 1024 * MB
+
+
+# --- Platforms without media: a file is reported so the chat hears it is unsupported ---
+
+
+def _reported(msgs: list[InboundMessage]) -> list[tuple[str, list[str]]]:
+    return [(m.text, [a.kind for a in m.attachments]) for m in msgs]
+
+
+async def test_matrix_reports_media_events() -> None:
+    ad = MatrixAdapter("https://hs", "tok")
+    ad._user_id = "@bot:hs"
+    ad._names["@a:hs"] = "a"
+    got = _collect(ad)
+    await ad._on_event("!r:hs", {"type": "m.room.message", "sender": "@a:hs", "event_id": "$1",
+                                 "content": {"msgtype": "m.image", "body": "cat.png",
+                                             "info": {"size": 5, "mimetype": "image/png"}}})
+    await ad._on_event("!r:hs", {"type": "m.room.message", "sender": "@a:hs", "event_id": "$2",
+                                 "content": {"msgtype": "m.notice", "body": "bot noise"}})
+    assert _reported(got) == [("", ["photo"])]
+    assert not hasattr(ad, "download")
+
+
+async def test_mattermost_reports_file_ids() -> None:
+    ad = MattermostAdapter("https://mm", "tok")
+    ad._user_id = "bot"
+    got = _collect(ad)
+    post = {"id": "p1", "user_id": "u1", "channel_id": "c", "message": "see", "file_ids": ["f1", "f2"]}
+    await ad._on_posted({"post": json.dumps(post), "channel_type": "O", "sender_name": "@a"})
+    assert _reported(got) == [("see", ["file", "file"])]
+
+
+async def test_feishu_reports_image_messages() -> None:
+    ad = FeishuAdapter("id", "secret")
+    ad._names["ou_1"] = "alice"
+    got = _collect(ad)
+    await ad._on_event({"header": {"event_type": "im.message.receive_v1"}, "event": {
+        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_1"}},
+        "message": {"chat_id": "oc_1", "chat_type": "group", "message_id": "om_1", "message_type": "image",
+                    "content": json.dumps({"image_key": "img_1"})}}})
+    assert _reported(got) == [("", ["photo"])]
+
+
+async def test_dingtalk_reports_picture_messages() -> None:
+    ad = DingTalkAdapter("cid", "secret")
+    got = _collect(ad)
+    await ad._on_bot_message({"conversationType": "2", "conversationId": "cid1", "senderStaffId": "u1",
+                              "senderNick": "a", "msgId": "m1", "msgtype": "picture",
+                              "content": {"downloadCode": "x"}})
+    assert _reported(got) == [("", ["photo"])]
+
+
+async def test_imessage_reports_attachment_only_messages() -> None:
+    ad = IMessageAdapter()
+    got = _collect(ad)
+    row = {"rowid": 1, "guid": "g1", "text": "\ufffc", "attributedBody": None, "date": 0, "is_from_me": 0,
+           "associated_message_type": 0, "item_type": 0, "handle_id": "+1555", "chat_guid": "iMessage;-;+1555",
+           "chat_style": 45, "display_name": None}
+    await ad._on_row(row)
+    assert _reported(got) == [("", ["file"])]
