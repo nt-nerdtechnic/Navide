@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  createKickoffReporter, kickoffAttemptOutcome, runKickoffAttempts, terminalKickoffOutcome,
-  type KickoffAttemptEvidence,
+  createKickoffReporter, kickoffAttemptOutcome, paneStillStarting, promptReadyNow, runKickoffAttempts,
+  terminalKickoffOutcome, type KickoffAttemptEvidence,
 } from '../spawnKickoff'
 
 describe('terminalKickoffOutcome', () => {
@@ -241,6 +241,47 @@ describe('runKickoffAttempts', () => {
       settled: true, outcome: 'failed', retriedOut: false, echo: null, submit: null,
     })
     expect(inject).toHaveBeenCalledTimes(1)
+  })
+})
+
+// 10-07 16:16/16:17, two cli_open_agent kickoffs into fresh Claude Code
+// panes: both pane logs open with nothing but ESC7 ESC8 — a few raw bytes and
+// zero clean ones — while the CLI ran its SessionStart hooks, then the
+// bracketed paste, THEN the banner. Any raw byte takes the pane out of
+// 'starting', zero clean bytes never move, so idle + 2s quiet opened the gate
+// on a CLI that had drawn nothing. One paste was flushed, one landed as a
+// collapsed paste whose Enter never took.
+describe('promptReadyNow', () => {
+  const ready = { status: 'idle', cleanBytes: 1200, quietMs: 2500, quietNeededMs: 2000 }
+
+  it('opens once an idle pane that has drawn something has been quiet long enough', () => {
+    expect(promptReadyNow(ready)).toBe(true)
+  })
+
+  it('stays shut on an idle pane that has not printed a single clean byte', () => {
+    expect(promptReadyNow({ ...ready, cleanBytes: 0, quietMs: 30_000 })).toBe(false)
+  })
+
+  it('stays shut while not idle or not quiet long enough', () => {
+    expect(promptReadyNow({ ...ready, status: 'running' })).toBe(false)
+    expect(promptReadyNow({ ...ready, status: undefined })).toBe(false)
+    expect(promptReadyNow({ ...ready, quietMs: 1999 })).toBe(false)
+  })
+})
+
+describe('paneStillStarting', () => {
+  it('treats a pane with raw bytes but no clean output as still starting', () => {
+    expect(paneStillStarting({ status: 'idle', cleanBytes: 0 })).toBe(true)
+  })
+
+  it('keeps the status machine\'s own starting verdict', () => {
+    expect(paneStillStarting({ status: 'starting', cleanBytes: 0 })).toBe(true)
+    expect(paneStillStarting({ status: 'starting', cleanBytes: 10 })).toBe(true)
+  })
+
+  it('is not starting once the pane has drawn something', () => {
+    expect(paneStillStarting({ status: 'idle', cleanBytes: 10 })).toBe(false)
+    expect(paneStillStarting({ status: 'running', cleanBytes: 10 })).toBe(false)
   })
 })
 

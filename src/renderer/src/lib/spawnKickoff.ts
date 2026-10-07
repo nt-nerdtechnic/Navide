@@ -196,6 +196,32 @@ export async function runKickoffAttempts(deps: KickoffLoopDeps): Promise<Kickoff
   return { settled: true, outcome: 'failed', retriedOut: true, echo: last.echo, submit: last.submit }
 }
 
+/** The prompt-ready gate's per-poll answer (waitForPromptReady, App.vue).
+ *
+ *  `idle` alone is not enough: the status machine leaves 'starting' on any raw
+ *  byte, and a Claude Code running its SessionStart hooks has printed only a
+ *  cursor save/restore — no clean byte at all — so it reads idle, nothing
+ *  grows, and two quiet seconds opened the gate on a CLI that had drawn
+ *  nothing (10-07: one kickoff flushed, one left as an unsent collapsed
+ *  paste). A pane at its prompt has drawn that prompt. */
+export function promptReadyNow(input: {
+  status: string | undefined
+  cleanBytes: number
+  quietMs: number
+  quietNeededMs: number
+}): boolean {
+  return input.status === 'idle' && input.cleanBytes > 0 && input.quietMs >= input.quietNeededMs
+}
+
+/** Whether a pane the gate gave up on is still initialising — the
+ *  `paneStarting` runKickoffAttempts leaves untyped. The status machine's
+ *  'starting' covers a pane that has printed no byte; a pane whose bytes were
+ *  all control sequences (zero clean output) has not drawn anything either,
+ *  and typing into it is typing into a CLI that may flush or misread it. */
+export function paneStillStarting(input: { status: string | undefined; cleanBytes: number }): boolean {
+  return input.status === 'starting' || input.cleanBytes <= 0
+}
+
 /** One-shot reporter for the `agent_spawn.kickoff` event.
  *
  *  cli_open_agent blocks on exactly one verdict per request: a second is

@@ -172,7 +172,10 @@ import { failedInjectReleasesHold } from './lib/deliveryHold'
 import {
   awaitEcho, awaitInputUnblocked, createInputBlockTracker, needsInputWait, PROBE_SESSION_GONE
 } from './lib/ptyInputBlock'
-import { TERMINAL_KICKOFF_REASON, createKickoffReporter, runKickoffAttempts, terminalKickoffOutcome } from './lib/spawnKickoff'
+import {
+  TERMINAL_KICKOFF_REASON, createKickoffReporter, paneStillStarting, promptReadyNow, runKickoffAttempts,
+  terminalKickoffOutcome,
+} from './lib/spawnKickoff'
 import { terminalMultilineRefusal } from './lib/terminalInput'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
@@ -3084,7 +3087,11 @@ async function waitForPromptReady(paneId: string, timeoutMs: number): Promise<bo
       continue
     }
     const status = ref.displayStatus as string | undefined
-    if (status === 'idle' && Date.now() - stableSince >= PROMPT_READY_QUIET_MS) return true
+    // Idle with zero clean bytes is a CLI that has drawn nothing yet — see
+    // promptReadyNow.
+    if (promptReadyNow({
+      status, cleanBytes: size, quietMs: Date.now() - stableSince, quietNeededMs: PROMPT_READY_QUIET_MS,
+    })) return true
   }
   return false
 }
@@ -3152,7 +3159,10 @@ async function kickoffRequestedPane(
     // Sampled once, with the gate's answer: a pane that has printed nothing is
     // still initialising and is not typed into (runKickoffAttempts); one that
     // is printing but never read idle+quiet is typed into as before.
-    const paneStarting = paneRefs[paneId]?.displayStatus === 'starting'
+    const paneStarting = paneStillStarting({
+      status: paneRefs[paneId]?.displayStatus as string | undefined,
+      cleanBytes: paneCleanBytes(paneId),
+    })
     if (!promptReady && !paneStarting) {
       recordDiagnostic({
         level: 'warn',
