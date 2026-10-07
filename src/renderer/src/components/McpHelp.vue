@@ -43,6 +43,7 @@ const cliTools = [
   'cli_get_status',
   'cli_wait_idle',
   'cli_interrupt',
+  'cli_answer_prompt',
   'cli_close_agent',
   'cli_place_pane',
   'cli_message_log',
