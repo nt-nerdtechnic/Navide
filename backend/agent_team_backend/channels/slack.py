@@ -35,12 +35,15 @@ import logging
 import random
 import time
 from collections import OrderedDict
+from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
-from .adapter_runtime import ReceiveLoop, ReconnectNow, send_request, ws_keepalive
+from .adapter_runtime import ReceiveLoop, ReconnectNow, download_to, media_client, send_request, ws_keepalive
 from .base import (
     STALL_WATCHDOG_S,
     AdapterStatus,
@@ -48,6 +51,7 @@ from .base import (
     ChannelAuthError,
     ChannelSendError,
     Emit,
+    InboundAttachment,
     InboundMessage,
     Location,
     backoff_delay,
@@ -66,6 +70,14 @@ TEXT_SUBTYPES = {"", "thread_broadcast", "file_share"}
 EDIT_LIMIT = 4000
 SECTION_LIMIT = 3000
 DEDUP_SIZE = 2000
+# https://slack.com/help/articles/201330736: "You can add files up to 1GB in size."
+# Uploads use files.getUploadURLExternal + files.completeUploadExternal (bot scope
+# files:write); files.upload was sunset on November 12, 2025.
+UPLOAD_MAX_BYTES = 1024 * 1024 * 1024
+# A shared file's url_private_download needs the bot token (and the files:read scope),
+# so the token is only ever sent to Slack's own file host.
+FILE_HOST = "files.slack.com"
+UPLOAD_CHUNK = 1024 * 1024
 
 
 class SlackApiError(Exception):
@@ -109,6 +121,8 @@ class SlackAdapter:
         self._team_id = ""
         self._app_id = ""
         self._names: dict[str, str] = {}
+        self.upload_max_bytes = UPLOAD_MAX_BYTES
+        self._media_transport: httpx.AsyncBaseTransport | None = None  # tests swap in a mock
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._known: dict[str, dict[str, Any]] = {}
         self._ws_lock = asyncio.Lock()
@@ -262,6 +276,7 @@ class SlackAdapter:
             is_direct=event.get("channel_type") == "im", ts=time.time(),
             # A Slack reply is a thread reply: its parent is the thread root.
             reply_to_id=thread_ts if thread_ts != ts else "",
+            attachments=_attachments(event),
         ))
 
     async def _on_block_action(self, payload: dict[str, Any]) -> None:
@@ -321,6 +336,39 @@ class SlackAdapter:
                 ids.append(str((await self._write("chat.postMessage", extra)).get("ts") or ""))
         return ids
 
+    async def download(self, att: InboundAttachment, dest: Path, max_bytes: int) -> int:
+        parts = urlsplit(att.ref)
+        if parts.scheme != "https" or parts.hostname != FILE_HOST:
+            raise ChannelSendError(f"not a Slack file URL: {parts.scheme}://{parts.hostname}")
+        async with media_client(self._media_transport) as client:
+            try:
+                return await download_to(client, att.ref, dest, max_bytes,
+                                         headers={"Authorization": f"Bearer {self._bot_token}"})
+            except ChannelSendError as exc:
+                if str(exc).startswith(("HTTP 302", "HTTP 401", "HTTP 403")):
+                    raise ChannelSendError(f"{exc} (does the app have the files:read scope?)") from exc
+                raise
+
+    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
+        size = path.stat().st_size
+        try:
+            ticket = await self._call("files.getUploadURLExternal", token=self._bot_token,
+                                      form={"filename": filename, "length": str(size)})
+            async with media_client(self._media_transport) as client:
+                # A streamed body is sent chunked unless its length is given.
+                resp = await client.post(str(ticket["upload_url"]), content=_read_chunks(path),
+                                         headers={"Content-Length": str(size)})
+            if resp.status_code != 200:
+                raise ChannelSendError(f"upload failed: HTTP {resp.status_code}")
+            body: dict[str, Any] = {"files": [{"id": ticket["file_id"], "title": filename}],
+                                    "channel_id": loc.chat_id}
+            if loc.thread_id:
+                body["thread_ts"] = loc.thread_id
+            await self._call("files.completeUploadExternal", token=self._bot_token, json_body=body)
+        except (ChannelAuthError, SlackApiError, KeyError, httpx.HTTPError) as exc:
+            raise ChannelSendError(f"Slack upload failed: {exc}") from exc
+        return [str(ticket["file_id"])]
+
     @staticmethod
     def _actions_block(buttons: list[tuple[str, str]]) -> dict[str, Any]:
         return {"type": "actions", "elements": [
@@ -372,3 +420,25 @@ def create_adapter(config: dict[str, Any], secret: dict[str, Any], *, store: Any
     if not bot_token.startswith("xoxb-"):
         raise ValueError("missing or invalid bot token (xoxb-...)")
     return SlackAdapter(app_token, bot_token, account=str(config.get("account") or "default"))
+
+
+def _attachments(event: dict[str, Any]) -> list[InboundAttachment]:
+    """Files shared with the message; deleted (tombstone) and external ones are skipped."""
+    found: list[InboundAttachment] = []
+    for f in event.get("files") or []:
+        url = str(f.get("url_private_download") or f.get("url_private") or "")
+        if not url or f.get("mode") in ("tombstone", "external") or f.get("is_external"):
+            continue
+        mime = str(f.get("mimetype") or "")
+        kind = {"image": "photo", "video": "video", "audio": "audio"}.get(mime.split("/", 1)[0], "document")
+        found.append(InboundAttachment(kind, str(f.get("name") or ""), f.get("size"), mime, url))
+    return found
+
+
+async def _read_chunks(path: Path) -> AsyncIterator[bytes]:
+    fh = await asyncio.to_thread(open, path, "rb")
+    try:
+        while chunk := await asyncio.to_thread(fh.read, UPLOAD_CHUNK):
+            yield chunk
+    finally:
+        await asyncio.to_thread(fh.close)

@@ -14,6 +14,7 @@ import contextlib
 import logging
 import random
 import time
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -24,6 +25,7 @@ from .base import (
     AdapterStatus,
     ChannelAuthError,
     ChannelSendError,
+    MediaTooLarge,
     backoff_delay,
 )
 
@@ -300,3 +302,43 @@ def error_text(resp: httpx.Response) -> str:
             if body.get(key):
                 return f"HTTP {resp.status_code}: {body[key]}"
     return f"HTTP {resp.status_code}: {resp.text[:200]}"
+
+
+async def download_to(
+    client: httpx.AsyncClient, url: str, dest: Path, max_bytes: int, *,
+    headers: dict[str, str] | None = None,
+) -> int:
+    """Stream ``url`` into ``dest`` and return its size. Past ``max_bytes`` (declared or
+    counted) raise ``MediaTooLarge``; any status but 200 raises ``ChannelSendError``. A
+    redirect is not followed (it could carry a credential header to another host). ``dest``
+    is removed whenever no complete file was written."""
+    try:
+        async with client.stream("GET", url, headers=headers, follow_redirects=False) as resp:
+            if resp.status_code != 200:
+                await resp.aread()
+                raise ChannelSendError(error_text(resp))
+            declared = resp.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > max_bytes:
+                raise MediaTooLarge(f"{declared} bytes")
+            size = 0
+            fh = await asyncio.to_thread(open, dest, "wb")
+            try:
+                async for chunk in resp.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise MediaTooLarge(f"over {max_bytes} bytes")
+                    await asyncio.to_thread(fh.write, chunk)
+            finally:
+                await asyncio.to_thread(fh.close)
+        return size
+    except httpx.HTTPError as exc:
+        dest.unlink(missing_ok=True)
+        raise ChannelSendError(f"download failed: {exc}") from exc
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+
+
+def media_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+    """A bare client for file transfers: no platform auth header, long read timeout."""
+    return httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(120.0, connect=10.0))

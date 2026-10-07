@@ -27,6 +27,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 from urllib.parse import urlsplit
 
@@ -40,12 +41,13 @@ from .base import (
     ChannelAuthError,
     ChannelSendError,
     Emit,
+    InboundAttachment,
     InboundMessage,
     Location,
     backoff_delay,
 )
 from . import redact
-from .adapter_runtime import READY_STABLE_S, cancel_and_wait
+from .adapter_runtime import READY_STABLE_S, cancel_and_wait, download_to, media_client
 from .text import TEXT_LIMITS, chunk_text, is_telegram_parse_error, markdown_to_telegram_html
 
 log = logging.getLogger(__name__)
@@ -53,6 +55,12 @@ log = logging.getLogger(__name__)
 redact.install()
 
 DEFAULT_BASE_URL = "https://api.telegram.org"
+# https://core.telegram.org/bots/api#sending-files: "Post the file using multipart/form-data
+# ... 10 MB max size for photos, 50 MB for other files." Everything goes as a document.
+UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+# The file kinds a Message may carry that are taken as attachments (stickers are not).
+# An animation also fills ``document`` "for backward compatibility", so it comes first.
+_FILE_KINDS = ("animation", "document", "video", "audio", "voice", "video_note")
 POLL_TIMEOUT_S = 30
 GENERAL_TOPIC_ID = "1"
 SEND_CONNECT_RETRIES = 2
@@ -110,6 +118,10 @@ class TelegramAdapter:
         redact.add_secret(self._token)
         self.account = account
         self._base = f"{base_url.rstrip('/')}/bot{self._token}"
+        # getFile hands back a path to fetch from <base>/file/bot<token>/<file_path>.
+        self._file_base = f"{base_url.rstrip('/')}/file/bot{self._token}"
+        self.upload_max_bytes = UPLOAD_MAX_BYTES
+        self._media_transport: httpx.AsyncBaseTransport | None = None  # tests swap in a mock
         self._offsets = offset_store
         self._backoff = backoff
         self._attempt = 0
@@ -253,20 +265,22 @@ class TelegramAdapter:
         chat = msg.get("chat") or {}
         self._remember_chat(chat)
         text = msg.get("text") or msg.get("caption") or ""
-        if not text or (msg.get("from") or {}).get("is_bot"):
+        attachments = _attachments(msg)
+        if not (text or attachments) or (msg.get("from") or {}).get("is_bot"):
             return
         await self._deliver(
             chat=chat, sender=msg.get("from") or {}, text=text, thread=_thread_of(msg),
             message_id=f"{chat.get('id')}:{msg.get('message_id')}",
             ts=float(msg.get("date") or time.time()),
             reply_to_id=str((msg.get("reply_to_message") or {}).get("message_id") or ""),
-            reply_quote=_reply_quote(msg, self.bot_id),
+            reply_quote=_reply_quote(msg, self.bot_id), attachments=attachments,
         )
 
     async def _deliver(
         self, *, chat: dict[str, Any], sender: dict[str, Any], text: str, thread: str,
         message_id: str, ts: float, callback_data: str = "", reply_to_id: str = "",
         reply_quote: tuple[str, str, str, bool] = ("", "", "", False),
+        attachments: list[InboundAttachment] | None = None,
     ) -> None:
         self.status.last_inbound_at = time.time()
         if self._emit is None:
@@ -278,6 +292,7 @@ class TelegramAdapter:
             callback_data=callback_data, reply_to_id=reply_to_id,
             reply_to_text=reply_quote[0], reply_to_sender=reply_quote[1],
             reply_to_sender_id=reply_quote[2], reply_to_self=reply_quote[3],
+            attachments=attachments or [],
         ))
 
     def _remember_chat(self, chat: dict[str, Any]) -> None:
@@ -412,6 +427,44 @@ class TelegramAdapter:
             except httpx.HTTPError as exc:
                 raise ChannelSendError(self._redact(f"{type(exc).__name__}: {exc}")) from exc
 
+    # --- media ----------------------------------------------------------------
+
+    async def download(self, att: InboundAttachment, dest: Path, max_bytes: int) -> int:
+        """getFile, then fetch the path it names. The Bot API serves at most 20 MB this way."""
+        try:
+            info = await self._call("getFile", {"file_id": att.ref}) or {}
+        except TelegramApiError as exc:
+            raise ChannelSendError(exc.description) from exc
+        file_path = str(info.get("file_path") or "")
+        # A local-mode Bot API server answers with a path on its own disk: never fetched.
+        if not file_path or file_path.startswith("/") or ".." in file_path.split("/"):
+            raise ChannelSendError(f"unusable file_path {file_path!r}")
+        async with media_client(self._media_transport) as client:
+            return await download_to(client, f"{self._file_base}/{file_path}", dest, max_bytes)
+
+    async def send_file(self, loc: Location, path: Path, filename: str) -> list[str]:
+        data = {key: str(value) for key, value in self._target(loc).items()}
+        content = await asyncio.to_thread(path.read_bytes)
+        async with media_client(self._media_transport) as client:
+            for _attempt in range(3):
+                try:
+                    resp = await client.post(f"{self._base}/sendDocument", data=data,
+                                             files={"document": (filename, content)})
+                except httpx.HTTPError as exc:
+                    raise ChannelSendError(self._redact(str(exc))) from exc
+                try:
+                    body = resp.json()
+                except ValueError:
+                    body = {"ok": False, "description": f"HTTP {resp.status_code}"}
+                if body.get("ok"):
+                    return [str((body.get("result") or {}).get("message_id", ""))]
+                retry_after = (body.get("parameters") or {}).get("retry_after")
+                if body.get("error_code") == 429 and retry_after is not None:
+                    await asyncio.sleep(min(float(retry_after), RETRY_AFTER_CAP_S))
+                    continue
+                break
+        raise ChannelSendError(str(body.get("description") or f"HTTP {resp.status_code}"))
+
     # --- transport ------------------------------------------------------------
 
     def _redact(self, text: str) -> str:
@@ -465,6 +518,22 @@ def _thread_of(msg: dict[str, Any]) -> str:
     if msg.get("is_topic_message") and msg.get("message_thread_id") is not None:
         return str(msg["message_thread_id"])
     return ""
+
+
+def _attachments(msg: dict[str, Any]) -> list[InboundAttachment]:
+    """The files a Message carries: the largest size of a photo, plus one file kind."""
+    found: list[InboundAttachment] = []
+    sizes = msg.get("photo") or []
+    if sizes:
+        best = sizes[-1]  # PhotoSize array, smallest first
+        found.append(InboundAttachment("photo", "", best.get("file_size"), "image/jpeg", str(best.get("file_id", ""))))
+    for kind in _FILE_KINDS:
+        obj = msg.get(kind)
+        if isinstance(obj, dict) and obj.get("file_id"):
+            found.append(InboundAttachment(kind, str(obj.get("file_name") or ""), obj.get("file_size"),
+                                           str(obj.get("mime_type") or ""), str(obj["file_id"])))
+            break
+    return found
 
 
 def _display_name(user: dict[str, Any]) -> str:
