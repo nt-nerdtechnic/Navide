@@ -38,6 +38,20 @@ describe('recording what a pane was doing', () => {
   })
 })
 
+describe('writes that cannot land', () => {
+  it('forgets a turn state whose write failed, so the next poll sends it again', () => {
+    // Cached before the send; left cached after a failure, the dedupe would
+    // swallow every retry and the relaunch would never resume this pane.
+    const body = fn('persistPaneTurnState')
+    expect(body).toMatch(/\.catch\(\(\) => \{[\s\S]*?if \(paneTurnStatePersisted\.get\(paneId\) === state\) paneTurnStatePersisted\.delete\(paneId\)/)
+  })
+
+  it('writes only for a workspace this window holds, which load_or_create would otherwise create', () => {
+    expect(fn('persistPaneTurnState')).toContain('!isLocalWorkspace(pane.workspacePath)')
+    expect(fn('persistPaneReportDebt')).toContain('!isLocalWorkspace(pane.workspacePath)')
+  })
+})
+
 describe('the owed report survives a relaunch', () => {
   it('is persisted when the kickoff arms it', () => {
     const body = fn('kickoffRequestedPane')

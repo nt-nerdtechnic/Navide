@@ -2334,6 +2334,9 @@ const paneTurnStatePersisted = new Map<string, string>()
 function persistPaneTurnState(paneId: string, status: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane?.realized || pane.restoring || pane.resumeContinueAvailable || !pane.workspacePath) return
+  // Another workspace's pane (detach leaves them behind): the backend would
+  // create an empty project for it rather than find the record.
+  if (!isLocalWorkspace(pane.workspacePath)) return
   const state = turnStateForStatus(status)
   if (!state || paneTurnStatePersisted.get(pane.id) === state) return
   paneTurnStatePersisted.set(pane.id, state)
@@ -2341,12 +2344,15 @@ function persistPaneTurnState(paneId: string, status: string): void {
     .send('project.set_pane_resume_state', {
       workspace_path: pane.workspacePath, pane_id: pane.id, last_turn_state: state,
     })
-    .catch(() => { /* a relaunch just will not resume this pane by itself */ })
+    .catch(() => {
+      // Forget it, so the next poll sends it again instead of deduping it away.
+      if (paneTurnStatePersisted.get(paneId) === state) paneTurnStatePersisted.delete(paneId)
+    })
 }
 
 /** Persist the report this pane owes its parent (or that it owes none now). */
 function persistPaneReportDebt(pane: ActivePane): void {
-  if (!pane.workspacePath) return
+  if (!pane.workspacePath || !isLocalWorkspace(pane.workspacePath)) return
   backend
     .send('project.set_pane_resume_state', {
       workspace_path: pane.workspacePath,
