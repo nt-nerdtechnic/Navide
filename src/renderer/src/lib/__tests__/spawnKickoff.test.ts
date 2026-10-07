@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createKickoffReporter, kickoffAttemptOutcome, paneStillStarting, promptReadyNow, runKickoffAttempts,
-  terminalKickoffOutcome, type KickoffAttemptEvidence,
+  submitHeldCopy, terminalKickoffOutcome, type KickoffAttemptEvidence,
 } from '../spawnKickoff'
 
 describe('terminalKickoffOutcome', () => {
@@ -282,6 +282,117 @@ describe('paneStillStarting', () => {
   it('is not starting once the pane has drawn something', () => {
     expect(paneStillStarting({ status: 'idle', cleanBytes: 10 })).toBe(false)
     expect(paneStillStarting({ status: 'running', cleanBytes: 10 })).toBe(false)
+  })
+})
+
+// 10-07 16:16: the kickoff settled 'unverified' with the task sitting in the
+// composer as "[Pasted text #1 +31 lines]" — our own paste, never submitted.
+// Stopping there is right for a RETYPE (a second copy would ride along), but
+// the one keystroke that finishes the job is Enter, and nothing pressed it:
+// the caller resent with cli_send, which reached the CLI through its hook and
+// left the paste stranded in the box.
+describe('runKickoffAttempts — a held copy is submitted, not abandoned', () => {
+  function deps(over: Partial<Parameters<typeof runKickoffAttempts>[0]> = {}) {
+    return {
+      maxAttempts: 2,
+      promptReady: true,
+      paneStarting: false,
+      inject: async (): Promise<KickoffAttemptEvidence> =>
+        ({ injected: true, echo: 'growth', submit: 'growth' }),
+      composerHolds: () => true,
+      paneAlive: () => true,
+      onRetry: () => {},
+      ...over,
+    }
+  }
+
+  it('settles sent once Enter took the held copy out of the composer', async () => {
+    const resubmit = vi.fn(async () => true)
+    const inject = vi.fn(async () => ({ injected: true, echo: 'growth', submit: 'growth' } as const))
+    await expect(runKickoffAttempts(deps({ inject, resubmit }))).resolves.toEqual({
+      settled: true, outcome: 'sent', retriedOut: false, echo: 'growth', submit: 'growth',
+      resubmitted: true,
+    })
+    expect(resubmit).toHaveBeenCalledTimes(1)
+    expect(inject).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays unverified, never retyped, when Enter did not take either', async () => {
+    const resubmit = vi.fn(async () => false)
+    const inject = vi.fn(async () => ({ injected: true, echo: 'growth', submit: 'growth' } as const))
+    await expect(runKickoffAttempts(deps({ inject, resubmit }))).resolves.toEqual({
+      settled: true, outcome: 'unverified', retriedOut: false, echo: 'growth', submit: 'growth',
+    })
+    expect(inject).toHaveBeenCalledTimes(1)
+  })
+
+  it('never presses Enter on a blank composer or a verified kickoff', async () => {
+    const resubmit = vi.fn(async () => true)
+    await runKickoffAttempts(deps({ resubmit, composerHolds: () => false }))
+    await runKickoffAttempts(deps({
+      resubmit, inject: async () => ({ injected: true, echo: 'tail', submit: 'tail-left' }),
+    }))
+    expect(resubmit).not.toHaveBeenCalled()
+  })
+
+  it('abandons without a verdict when the pane dies before the Enter', async () => {
+    const resubmit = vi.fn(async () => true)
+    await expect(runKickoffAttempts(deps({ resubmit, paneAlive: () => false }))).resolves.toEqual({
+      settled: false,
+    })
+    expect(resubmit).not.toHaveBeenCalled()
+  })
+})
+
+describe('submitHeldCopy', () => {
+  /** A fake clock the sleeps advance, and a box whose answers are scripted
+   *  per read; the last answer repeats. */
+  function harness(answers: Array<boolean | null>, pressOk = true) {
+    let t = 0
+    let read = 0
+    const pressEnter = vi.fn(async () => pressOk)
+    return {
+      pressEnter,
+      run: () => submitHeldCopy({
+        held: () => answers[Math.min(read++, answers.length - 1)],
+        pressEnter,
+        sleep: async (ms: number) => { t += ms },
+        now: () => t,
+        confirmMs: 1000,
+      }),
+    }
+  }
+
+  it('presses Enter on a held copy and reports it once the box lets go', async () => {
+    const h = harness([true, true, false])
+    await expect(h.run()).resolves.toBe(true)
+    expect(h.pressEnter).toHaveBeenCalledTimes(1)
+  })
+
+  it('presses again when the first Enter did not take, up to three', async () => {
+    const h = harness([true])
+    await expect(h.run()).resolves.toBe(false)
+    expect(h.pressEnter).toHaveBeenCalledTimes(3)
+  })
+
+  it('never presses on an empty box or a box it cannot locate', async () => {
+    for (const first of [false, null]) {
+      const h = harness([first])
+      await expect(h.run()).resolves.toBe(false)
+      expect(h.pressEnter).not.toHaveBeenCalled()
+    }
+  })
+
+  it('does not call a frameless screen after Enter a release', async () => {
+    const h = harness([true, null])
+    await expect(h.run()).resolves.toBe(false)
+    expect(h.pressEnter).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives up when the keystroke cannot be written', async () => {
+    const h = harness([true], false)
+    await expect(h.run()).resolves.toBe(false)
+    expect(h.pressEnter).toHaveBeenCalledTimes(1)
   })
 })
 

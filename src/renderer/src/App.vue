@@ -164,7 +164,7 @@ import {
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
 import {
-  composerHoldsPayload, echoEvidence, echoTimeoutFor, normalizeForMatch,
+  composerHoldsPayload, echoEvidence, echoTimeoutFor, framedComposerHolds, normalizeForMatch,
   shellSubmitEvidence, submitBaseline, submitEvidence, type EchoEvidence, type SubmitEvidence,
   SUBMIT_CONFIRM_MS, SUBMIT_SCREEN_LINES, TAIL_MATCH_LEN
 } from './lib/injectEcho'
@@ -174,7 +174,7 @@ import {
 } from './lib/ptyInputBlock'
 import {
   TERMINAL_KICKOFF_REASON, createKickoffReporter, paneStillStarting, promptReadyNow, runKickoffAttempts,
-  terminalKickoffOutcome,
+  submitHeldCopy, terminalKickoffOutcome,
 } from './lib/spawnKickoff'
 import { terminalMultilineRefusal } from './lib/terminalInput'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
@@ -3221,6 +3221,25 @@ async function kickoffRequestedPane(
       // summary does not.
       composerHolds: () => composerHoldsPayload(screenTail(), tail),
       paneAlive: () => paneAlive(paneId),
+      // Enter on our own copy, held unsent in the box (see runKickoffAttempts).
+      // Only the framed box is trusted, both before pressing and after: a
+      // summary redrawn above the box once a submit took is not a held copy.
+      resubmit: () => submitHeldCopy({
+        held: () => framedComposerHolds(screenTail(), tail),
+        pressEnter: async () => {
+          const sid = paneRefs[paneId]?.sessionId
+          if (!sid || !paneAlive(paneId)) return false
+          try {
+            await backend.send('terminal.input', { terminal_session_id: sid, data: '\r' })
+            return true
+          } catch {
+            return false
+          }
+        },
+        sleep,
+        now: Date.now,
+        confirmMs: SUBMIT_CONFIRM_MS,
+      }),
       onRetry: ({ attempt, echo, submit }) => recordDiagnostic({
         level: 'warn',
         code: 'spawn.kickoff-retry',
@@ -3238,6 +3257,16 @@ async function kickoffRequestedPane(
       'distinguish our text from a booting CLI repainting'
     const settled = paneRefs[paneId] ? panes.value.find((p) => p.id === paneId) : undefined
     if (settled) settled.kickoffStatus = outcome
+    if (loop.resubmitted) {
+      recordDiagnostic({
+        level: 'info',
+        code: 'spawn.kickoff-resubmitted',
+        message:
+          `kickoff held unsent in the composer on ${loop.echo ?? 'no'} echo / ${loop.submit ?? 'no'} ` +
+          'submit evidence — pressed Enter and it left the box',
+        paneId,
+      })
+    }
     if (loop.untyped) {
       // Not typed at all (see runKickoffAttempts): 'failed' is the verdict
       // that tells the caller to resend, and here a resend is exactly right.
