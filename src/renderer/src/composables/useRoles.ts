@@ -117,7 +117,7 @@ export function useRoles(backend: ReturnType<typeof useBackend>) {
    *  halfway, because roles.delete refuses while a slot still names the role. */
   async function rename(
     oldKey: string,
-    input: { key: string; label: string; one_line: string; system_prompt: string }
+    input: { key: string; label: string; one_line: string; system_prompt: string; properties?: unknown[] }
   ): Promise<RoleRenameOutcome> {
     try {
       const resp = await backend.send<{
@@ -129,7 +129,8 @@ export function useRoles(backend: ReturnType<typeof useBackend>) {
         new_key: input.key,
         label: input.label,
         one_line: input.one_line,
-        system_prompt: input.system_prompt
+        system_prompt: input.system_prompt,
+        ...(input.properties ? { properties: input.properties } : {})
       })
       if (!resp.ok || !resp.payload) {
         error.value = resp.error?.message ?? 'rename failed'

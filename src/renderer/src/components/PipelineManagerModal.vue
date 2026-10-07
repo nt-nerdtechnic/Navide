@@ -18,6 +18,8 @@ import { aiTerminalPaneId } from '@navide/plugin-shell'
 import { backendErrorText } from '../lib/pipelineErrors'
 import { usePipelineRunState, type HostRun } from '../composables/usePipelineRunState'
 import PipelineEditor from './pipeline/PipelineEditor.vue'
+import RolePropertiesEditor, { rolePropertyProblems } from './pipeline/RolePropertiesEditor.vue'
+import type { RoleProperty } from '../lib/pipelineGraph'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -340,6 +342,8 @@ async function sImport(): Promise<void> {
 
 interface DraftRole {
   key: string; label: string; one_line: string; system_prompt: string
+  /** The role's declared step fields (the node inspector's form). */
+  properties: RoleProperty[]
   isNew: boolean; originalKey: string
 }
 
@@ -371,7 +375,11 @@ watch(() => rolesApi.roles.value, (rs) => {
 }, { deep: false })
 
 function rFromRole(r: Role, isNew: boolean): DraftRole {
-  return { key: r.key, label: r.label, one_line: r.one_line, system_prompt: r.system_prompt, isNew, originalKey: isNew ? '' : r.key }
+  return {
+    key: r.key, label: r.label, one_line: r.one_line, system_prompt: r.system_prompt,
+    properties: JSON.parse(JSON.stringify(r.properties ?? [])) as RoleProperty[],
+    isNew, originalKey: isNew ? '' : r.key,
+  }
 }
 function rSelectKey(key: string | null): void {
   rSelectedKey.value = key; rError.value = ''; rErrorUsages.value = []
@@ -381,7 +389,7 @@ function rSelectKey(key: string | null): void {
 }
 function rStartNew(): void {
   rSelectedKey.value = null; rError.value = ''; rErrorUsages.value = []
-  rDraft.value = { key: '', label: '', one_line: '', system_prompt: '# Role: \nYou are a...\n\n# Guidelines:\n1. ...\n\n# Output Format:\n...', isNew: true, originalKey: '' }
+  rDraft.value = { key: '', label: '', one_line: '', system_prompt: '# Role: \nYou are a...\n\n# Guidelines:\n1. ...\n\n# Output Format:\n...', properties: [], isNew: true, originalKey: '' }
 }
 
 const rIsDirty = computed(() => {
@@ -389,8 +397,18 @@ const rIsDirty = computed(() => {
   if (rDraft.value.isNew) return true
   const r = rolesApi.find(rDraft.value.originalKey)
   if (!r) return true
-  return r.label !== rDraft.value.label || r.one_line !== rDraft.value.one_line || r.system_prompt !== rDraft.value.system_prompt || r.key !== rDraft.value.key
+  return r.label !== rDraft.value.label || r.one_line !== rDraft.value.one_line || r.system_prompt !== rDraft.value.system_prompt || r.key !== rDraft.value.key || rPropertiesChanged.value
 })
+/** Whether the draft's step fields differ from the stored role's. */
+const rPropertiesChanged = computed(() => {
+  const d = rDraft.value
+  if (!d) return false
+  const stored = d.isNew ? [] : (rolesApi.find(d.originalKey)?.properties ?? [])
+  return JSON.stringify(stored) !== JSON.stringify(d.properties)
+})
+const rPropertiesValid = computed(() =>
+  !rDraft.value || rolePropertyProblems(rDraft.value.properties).every((p) => p.length === 0)
+)
 /** True when the drafted key belongs to a DIFFERENT role than the one being
  *  edited — the state that both disables Save and fails roles.rename. */
 const rKeyTaken = computed(() => {
@@ -407,6 +425,7 @@ const rCanSave = computed(() => {
   // Block if the target key is already taken by a DIFFERENT role (covers both
   // new and rename); rKeyTaken drives the explanation shown beside the field.
   if (rKeyTaken.value) return false
+  if (!rPropertiesValid.value) return false
   return rIsDirty.value
 })
 
@@ -430,7 +449,11 @@ function rRenameErrorMessage(
 async function rSave(): Promise<void> {
   if (!rDraft.value || !rCanSave.value) return
   rSaving.value = true; rError.value = ''; rErrorUsages.value = []; rSummary.value = ''
-  const payload = { key: rDraft.value.key.trim(), label: rDraft.value.label.trim(), one_line: rDraft.value.one_line.trim(), system_prompt: rDraft.value.system_prompt }
+  const payload = {
+    key: rDraft.value.key.trim(), label: rDraft.value.label.trim(), one_line: rDraft.value.one_line.trim(), system_prompt: rDraft.value.system_prompt,
+    // Sent only when changed: omitted, the backend keeps what the role has.
+    ...(rPropertiesChanged.value ? { properties: rDraft.value.properties } : {}),
+  }
   // Capture before awaiting — the draft can be swapped out while requests are in flight.
   const originalKey = rDraft.value.originalKey
   const wasRename = !rDraft.value.isNew && originalKey && originalKey !== payload.key
@@ -799,6 +822,7 @@ function buildAiContext(): string {
             <textarea v-model="rDraft.system_prompt" rows="14" spellcheck="false"></textarea>
             <p class="hint">{{ $t('hint.prompt-chars-new-spawns', { count: rDraft.system_prompt.length }) }}</p>
           </div>
+          <RolePropertiesEditor v-model="rDraft.properties" class="role-fields" />
         </section>
         <section v-else class="split-detail empty-detail">
           <p>{{ $t('hint.select-role-or-create') }}</p>
@@ -1161,6 +1185,11 @@ function buildAiContext(): string {
 }
 
 /* ── Pipeline detail header ───────────────────────────────────────────────── */
+.role-fields {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-muted);
+}
 .pl-editor {
   flex: 1;
   min-height: 0;
