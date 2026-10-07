@@ -56,7 +56,7 @@ describe('McpHelp', () => {
     expect(tables[0].findAll('tbody tr')).toHaveLength(6) // plan tools
     expect(tables[1].findAll('tbody tr')).toHaveLength(25) // workspace tools
     expect(tables[2].findAll('tbody tr')).toHaveLength(4) // preview tools
-    expect(tables[3].findAll('tbody tr')).toHaveLength(20) // cli tools
+    expect(tables[3].findAll('tbody tr')).toHaveLength(21) // cli tools
     expect(tables[4].findAll('tbody tr')).toHaveLength(4) // ui tools
     expect(tables[5].findAll('tbody tr')).toHaveLength(5) // comparison
     expect(tables[5].findAll('tbody tr')).toHaveLength(5) // troubleshooting
@@ -88,7 +88,7 @@ describe('McpHelp', () => {
     expect(text).toContain('出問題時')
     expect(wrapper.findAll('.mh-h2')).toHaveLength(5)
     expect(wrapper.findAll('.mh-dir')).toHaveLength(3)
-    expect(wrapper.findAll('.mh-table').at(3)!.findAll('tbody tr')).toHaveLength(20)
+    expect(wrapper.findAll('.mh-table').at(3)!.findAll('tbody tr')).toHaveLength(21)
     expect(wrapper.findAll('.mk-fig')).toHaveLength(2)
 
     expect(unexpectedWarnings(warn)).toEqual([])
