@@ -212,6 +212,7 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
       output_log_file: requestBody.outputLogFile,
       login_profile_id: requestBody.loginProfileId,
       is_login: requestBody.isLogin,
+      ...(requestBody.accountDirLogin ? { account_dir_login: true } : {}),
       replaces_terminal_id: requestBody.replacesTerminalId,
       ...(requestBody.quotaTransactionId ? { quota_transaction_id: requestBody.quotaTransactionId } : {}),
       ...(requestBody.quotaOriginalPaneId ? { quota_original_pane_id: requestBody.quotaOriginalPaneId } : {}),
