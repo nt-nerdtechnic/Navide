@@ -228,6 +228,7 @@ import {
   resolveReadySpawnGroupId,
   runGroupCreatedAt,
   groupPeers,
+  savedGroupToRecreate,
 } from './lib/runGroups'
 import {
   ALL_SCOPE_RESTORE_CONCURRENCY,
@@ -10922,6 +10923,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // RunGroup tab; task_description stays task content, not a grouping label.
   let _restoreGroupId = ''
   const ensureRestoreGroup = (): string => {
+    // Another held workspace (a relaunch restores them all): only its own
+    // groups may be used, and none is created in the list on screen.
+    if (normWs(workspacePath) !== normWs(currentWorkspace.value)) {
+      return runGroupsOf(workspacePath)[0]?.id ?? ''
+    }
     if (_restoreGroupId) return _restoreGroupId
     _restoreGroupId = runGroups.value[0]?.id
       ?? createRunGroup(pipelineRunGroupName(payload.project?.pipeline_id as string | undefined)).id
@@ -10933,8 +10939,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // its stored group — routing it to another group would be written back by the
   // spawn upsert below and permanently overwrite the saved assignment.
   const ensureSavedGroup = (gid: string): string => {
-    if (!runGroups.value.some((g) => g.id === gid)) {
-      runGroups.value = [...runGroups.value, { id: gid, name: `Run ${runGroups.value.length + 1}`, createdAt: Date.now() }]
+    const missing = savedGroupToRecreate(runGroups.value, gid, workspacePath, currentWorkspace.value)
+    if (missing) {
+      runGroups.value = [...runGroups.value, missing]
       _saveRunGroups()
     }
     return gid
