@@ -5223,6 +5223,18 @@ async def ui_invoke(
     ui.pane.sendKeys, and ui.settings.yolo with yolo true, are refused with
     error_code "ui_human_only": answering a pane's prompt and switching the
     permission bypass on are the user's to do.
+
+    ui.pane.reclaim frees a finished pane's resources without closing it — the
+    same "reclaim now" the status bar and Resource Manager offer. args
+    {"paneId": id} or {"paneId": [id, ...]} (pane ids from cli_list_targets).
+    Each CLI process ends and the pane stays as a click-to-resume card holding
+    its conversation; the user resumes it by clicking. Use it from a parent pane
+    on the children it opened once their work is reported. The status bar's
+    guards apply unchanged, so a pane that is busy or awaiting an answer, the
+    one the user has focused, one with unsent input, one with queued messages
+    or a running pipeline/loop, and one whose session cannot be resumed are
+    refused. Returns {reclaimed: [paneId], refused: [{paneId, reason, detail}]}
+    with ok true even when every pane was refused.
     """
     caller = _resolve_caller(ctx)
     refusal = _human_only_refusal(action, args)
@@ -6536,7 +6548,9 @@ async def cli_close_agent(target: str, ctx: Context, pane_id: str = "") -> dict[
 
     Use it to clean up a pane you opened with cli_open_agent and no longer
     need. Panes the user opened are the user's; closing one takes their work
-    away with no warning they will see first.
+    away with no warning they will see first. To free a finished pane's memory
+    but leave it for the user to check, use ui_invoke "ui.pane.reclaim"
+    instead: the CLI process ends and the pane stays as a click-to-resume card.
 
     `target` uses the same addressing as cli_send and `pane_id` names one exact
     pane instead. Panes on this machine only: closing one is an action taken by
