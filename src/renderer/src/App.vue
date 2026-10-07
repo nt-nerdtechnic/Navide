@@ -6673,6 +6673,8 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     // name is silently renamed under them. The persisted name stays — it is
     // exactly what the replacement is about to claim.
     if (opts.replacePaneId !== id) {
+      // Queued messages go with the identity (see handOverQueue).
+      messaging.handOverQueue(opts.replacePaneId, id)
       unregisterPaneMessaging(opts.replacePaneId, { keepPersisted: true })
       useChannels(backend).paneReplaced(opts.replacePaneId, id)
     }

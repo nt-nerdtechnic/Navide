@@ -67,6 +67,7 @@ function harness() {
     spawnHistory: { value: [] }, runGroups: { value: [] },
     activeTab: { value: '' }, runGroupsReady: { value: true },
     registerPaneMessaging: vi.fn(), unregisterPaneMessaging: vi.fn(),
+    messaging: { handOverQueue: vi.fn() },
     selectPane: vi.fn(), setPaneAutoName: vi.fn(), requestLlmPaneName: vi.fn(),
     deriveAutoName: (text: string) => text, roleLabel: (role: string) => role,
     entryBelongsToWorkspace: () => true,

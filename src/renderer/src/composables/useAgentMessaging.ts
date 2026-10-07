@@ -584,6 +584,29 @@ function unregisterPane(paneId: string): void {
   agentByPane.delete(paneId)
 }
 
+/** Move a pane's undelivered messages onto the id that replaces it. Opening a
+ *  restore placeholder (and rebuilding a pane) spawns the replacement under a
+ *  fresh id and then releases the old one through unregisterPane, which fails
+ *  whatever is still queued as 'pane-closed' — so a message cli_send promised
+ *  would wait for the pane to be opened was lost the moment it was. Call this
+ *  before that release. A head already being injected into the old pane stays
+ *  where it is: that attempt finishes against the pane it started on. */
+function handOverQueue(fromPaneId: string, toPaneId: string): void {
+  if (!fromPaneId || !toPaneId || fromPaneId === toPaneId) return
+  const q = queues.get(fromPaneId)
+  if (!q || q.length === 0) return
+  const kept = delivering.has(fromPaneId) ? q.slice(0, 1) : []
+  const moved = q.slice(kept.length)
+  if (moved.length === 0) return
+  for (const id of moved) {
+    const reserved = readReserved.get(id)
+    if (reserved) reserved.paneId = toPaneId
+  }
+  queues.set(toPaneId, [...(queues.get(toPaneId) ?? []), ...moved])
+  if (kept.length) queues.set(fromPaneId, kept)
+  else queues.delete(fromPaneId)
+}
+
 function nameOf(paneId: string): string | null {
   return nameByPane.get(paneId) ?? null
 }
@@ -1983,6 +2006,7 @@ export function useAgentMessaging() {
     renamePane,
     setDerivedName,
     unregisterPane,
+    handOverQueue,
     queuedCountFor,
     nameOf,
     paneIdOf,
