@@ -291,6 +291,9 @@ class DiscordAdapter:
             self._known[chat_id] = {"chat_id": chat_id, "title": str(author.get("username") or chat_id),
                                     "kind": "dm", "supports_topics": False}
         self.status.last_inbound_at = time.time()
+        # A reply's gateway payload carries the message it answers.
+        quoted = d.get("referenced_message") or {}
+        quoted_author = quoted.get("author") or {}
         await self._emit(InboundMessage(
             platform=self.platform, account=self.account, chat_id=chat_id, thread_id=thread_id,
             sender_id=str(author.get("id") or ""),
@@ -298,6 +301,8 @@ class DiscordAdapter:
             text=str(d.get("content") or ""), message_id=str(d.get("id") or ""),
             is_direct=not d.get("guild_id"), ts=time.time(),
             reply_to_id=str((d.get("message_reference") or {}).get("message_id") or ""),
+            reply_to_text=str(quoted.get("content") or ""),
+            reply_to_sender=str(quoted_author.get("global_name") or quoted_author.get("username") or ""),
         ))
 
     async def _on_interaction(self, d: dict[str, Any]) -> None:

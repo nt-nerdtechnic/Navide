@@ -61,6 +61,7 @@ VERDICT_WATCH_MAX_S = 3600.0
 STATUS_POLL_S = 1.0
 DEBOUNCE_S = 0.5  # lines from one sender to one location within this window become one message
 DEBOUNCE_MAX_S = 3.0
+REPLY_QUOTE_MAX_CHARS = 500  # a native reply's quoted message, cut before it reaches the pane
 
 MSG_RECEIVED_BUSY = "已收到，等 pane 空檔…"
 MSG_WORKING = "⏳ pane 處理中…"
@@ -1325,6 +1326,10 @@ class ChannelManager:
         if buf is None:
             buf = _Debounce(msg, binding, pane_id, [], now)
             self._debounce[key] = buf
+        if buf.msg.reply_to_text and not msg.reply_to_text:
+            # A follow-up line keeps the quote an earlier line in the same message replied to.
+            msg = dataclasses.replace(msg, reply_to_text=buf.msg.reply_to_text,
+                                      reply_to_sender=buf.msg.reply_to_sender)
         buf.msg, buf.binding, buf.pane_id = msg, binding, pane_id
         buf.texts.append(msg.text)
         if buf.task is not None:
@@ -1514,8 +1519,9 @@ class ChannelManager:
             await self._reply(msg, MSG_QUEUE_FULL)
             return False
         state = self._seams.pane_state(pane_id)
+        body = _with_reply_quote(msg)
         try:
-            result = await self._seams.deliver(pane_id, msg.text, f"{msg.platform}:{msg.sender_name}")
+            result = await self._seams.deliver(pane_id, body, f"{msg.platform}:{msg.sender_name}")
         except Exception as exc:  # noqa: BLE001
             result = {"ok": False, "error": str(exc)}
         if not result.get("ok"):
@@ -1529,7 +1535,7 @@ class ChannelManager:
             pending = _Pending(loc=loc)
             self._pending[pane_id] = pending
         # The chat's own message comes back as the pane's prompt and its result carries this source.
-        self.mirror.echo.remember(pane_id, msg.text)
+        self.mirror.echo.remember(pane_id, body)
         pending.source = pending.source or source_chat(msg.sender_name)
         pending.owner = pane_id
         if pane_id != binding.pane_id:
@@ -1953,6 +1959,18 @@ def _chat_msg_bodies(text: str) -> list[str]:
     """Bodies of the MSG blocks in a turn that are addressed to a chat sender."""
     return [content for target, content in msg_blocks(text)
             if target.split(":", 1)[0] in PLATFORMS and ":" in target]
+
+
+def _with_reply_quote(msg: InboundMessage) -> str:
+    """``msg.text`` under a quote of the message it natively replies to, when known."""
+    quoted = msg.reply_to_text.strip()
+    if not quoted:
+        return msg.text
+    if len(quoted) > REPLY_QUOTE_MAX_CHARS:
+        quoted = quoted[:REPLY_QUOTE_MAX_CHARS] + "…"
+    header = f"[Replying to {msg.reply_to_sender}]" if msg.reply_to_sender else "[Replying to a message]"
+    lines = "\n".join(f"> {line}" for line in quoted.splitlines())
+    return f"{header}\n{lines}\n{msg.text}"
 
 
 def _is_stop_word(text: str) -> bool:

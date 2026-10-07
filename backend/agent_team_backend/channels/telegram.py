@@ -260,23 +260,23 @@ class TelegramAdapter:
             message_id=f"{chat.get('id')}:{msg.get('message_id')}",
             ts=float(msg.get("date") or time.time()),
             reply_to_id=str((msg.get("reply_to_message") or {}).get("message_id") or ""),
+            reply_quote=_reply_quote(msg),
         )
 
     async def _deliver(
         self, *, chat: dict[str, Any], sender: dict[str, Any], text: str, thread: str,
         message_id: str, ts: float, callback_data: str = "", reply_to_id: str = "",
+        reply_quote: tuple[str, str] = ("", ""),
     ) -> None:
         self.status.last_inbound_at = time.time()
         if self._emit is None:
             return
-        name = sender.get("username") or " ".join(
-            p for p in (sender.get("first_name"), sender.get("last_name")) if p
-        ) or str(sender.get("id", ""))
         await self._emit(InboundMessage(
             platform=self.platform, account=self.account, chat_id=str(chat.get("id", "")),
-            thread_id=thread, sender_id=str(sender.get("id", "")), sender_name=name,
+            thread_id=thread, sender_id=str(sender.get("id", "")), sender_name=_display_name(sender),
             text=text, message_id=message_id, is_direct=chat.get("type") == "private", ts=ts,
             callback_data=callback_data, reply_to_id=reply_to_id,
+            reply_to_text=reply_quote[0], reply_to_sender=reply_quote[1],
         ))
 
     def _remember_chat(self, chat: dict[str, Any]) -> None:
@@ -464,6 +464,23 @@ def _thread_of(msg: dict[str, Any]) -> str:
     if msg.get("is_topic_message") and msg.get("message_thread_id") is not None:
         return str(msg["message_thread_id"])
     return ""
+
+
+def _display_name(user: dict[str, Any]) -> str:
+    return user.get("username") or " ".join(
+        p for p in (user.get("first_name"), user.get("last_name")) if p
+    ) or str(user.get("id", ""))
+
+
+def _reply_quote(msg: dict[str, Any]) -> tuple[str, str]:
+    """(quoted text, its sender) for a native reply; the part the user selected wins."""
+    reply = msg.get("reply_to_message") or {}
+    # A forum topic's messages all "reply" to the topic's creation message.
+    if not reply or reply.get("forum_topic_created") or (
+            msg.get("is_topic_message") and reply.get("message_id") == msg.get("message_thread_id")):
+        return "", ""
+    text = (msg.get("quote") or {}).get("text") or reply.get("text") or reply.get("caption") or ""
+    return (str(text), _display_name(reply.get("from") or {})) if text else ("", "")
 
 
 def _describe_failure(exc: Exception) -> str:

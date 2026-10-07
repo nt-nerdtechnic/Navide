@@ -58,6 +58,10 @@ class InboundMessage:
     callback_data: str = ""
     # The platform message id this message replies to ("" when none or unknown).
     reply_to_id: str = ""
+    # The replied-to message's text and sender, when the platform's payload carries them
+    # ("" otherwise); the manager quotes them above the text it delivers to the pane.
+    reply_to_text: str = ""
+    reply_to_sender: str = ""
 
     def location_key(self) -> str:
         return Location(self.platform, self.account, self.chat_id, self.thread_id).key()
