@@ -371,7 +371,7 @@ function openSettings(): void {
         @dblclick.stop
       >
         <svg class="pch-icon pch-chip-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z" /><path d="M5.4 6.2h5.2M5.4 8.2h3.2" /></svg>
-        <span class="pch-chip-label">{{ platformName(binding.platform) }} · {{ binding.title || binding.chat_id }}</span>
+        <span class="pch-chip-label" v-truncate>{{ platformName(binding.platform) }} · {{ binding.title || binding.chat_id }}</span>
         <span class="pch-chip-level" data-testid="channel-chip-level">{{ t(`channels.pane.verbosity-${verbosity}`) }}</span>
       </button>
       <button

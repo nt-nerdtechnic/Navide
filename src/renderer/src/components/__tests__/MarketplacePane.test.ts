@@ -1275,10 +1275,10 @@ describe('MarketplacePane', () => {
       await wrapper!.get('.mkt-pack-install').trigger('click')
       await flushPromises()
       expect(api.preparePack).toHaveBeenCalledWith({ namespace: 'acme', name: 'demo' })
-      // The id and version stay one token with the full value as a tooltip.
+      // The id and version stay one token; v-truncate shows the full value on hover when cut off.
       const lintId = wrapper!.get('.pack-member--summary[data-member="acme.lint"] .pack-member-id')
       expect(lintId.text()).toBe('acme.lint · 1.0.0')
-      expect(lintId.attributes('title')).toBe('acme.lint · 1.0.0')
+      expect(lintId.attributes('data-truncate')).toBe('')
       // Every summary row has the same three cells, so states line up.
       for (const row of wrapper!.findAll('.pack-member--summary')) {
         expect(row.findAll(':scope > .pack-member-main, :scope > .pack-member-caps, :scope > .pack-status')).toHaveLength(3)

@@ -3124,7 +3124,7 @@ watch(activeTab, (tab) => {
               <section id="cli-panel-overview" class="ap-section cli-overview">
                 <h3 class="ap-title">{{ $t('settings.cliAgents.tab-overview') }}</h3>
                 <p v-if="selectedCli.hint" class="ap-hint">{{ selectedCli.hint }}</p>
-                <div class="cli-agent-chips"><span v-for="chip in selectedCli.chips" :key="chip.id" class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span></div>
+                <div class="cli-agent-chips"><span v-for="chip in selectedCli.chips" :key="chip.id" v-truncate class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span></div>
                 <label class="cli-agent-toggle"><input type="checkbox" :checked="cliAgentEnabled(selectedCli.agentKey)" :disabled="cliAgentEnabled(selectedCli.agentKey) && cliEnabledCount <= 1" @change="toggleCliAgent(selectedCli.agentKey)" />{{ $t('settings.cliAgents.enabled') }}</label>
               </section>
           <section id="cli-panel-launch" class="ap-section" data-settings-section="cli-agents-launch">
@@ -3211,6 +3211,7 @@ watch(activeTab, (tab) => {
                           <code>{{ entry.name }}</code>
                           <span
                             v-if="isReservedSpawnEnvKey(entry.name, { foldCase: platformId() === 'win32' })"
+                            v-truncate
                             class="cli-chip cli-chip--bad"
                           >{{ $t('settings.cliLaunch.env-reserved-chip') }}</span>
                         </td>

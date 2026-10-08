@@ -226,7 +226,7 @@ function stepState(m: PackMemberSummary): 'current' | 'done' | 'skipped' | 'fail
           <ul class="pack-members">
             <li v-for="m in pack.members" :key="m.id" class="pack-member pack-member--result" :data-member="m.id">
               <span class="pack-member-main">
-                <span class="pack-member-name">{{ m.display_name || m.id }}</span>
+                <span class="pack-member-name" v-truncate>{{ m.display_name || m.id }}</span>
                 <span v-if="m.display_name" class="pack-muted pack-member-id" v-truncate>{{ m.id }}</span>
               </span>
               <span
