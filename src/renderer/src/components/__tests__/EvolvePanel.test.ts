@@ -199,6 +199,16 @@ describe('EvolvePanel', () => {
     expect(wrapper.get('[data-field="model"]').attributes('disabled')).toBeDefined()
   })
 
+  it('v1.1: explains a pending catch-up and never sends the read-only flag back', async () => {
+    states[A] = stateFor(A, {}, { pending_catch_up: true })
+    wrapper = await mountPanel(A)
+    expect(wrapper.get('[data-test="pending-catch-up"]').text()).toContain('補跑')
+    await wrapper.get('[data-field="at"]').setValue('08:00')
+    await wrapper.get('[data-test="save"]').trigger('click')
+    await flushPromises()
+    expect(callsOf('evolve.set').at(-1)?.payload).toEqual({ workspace: A, settings: { at: '08:00' } })
+  })
+
   it('shows the built-in rules on demand', async () => {
     wrapper = await mountPanel(A)
     expect(wrapper.find('[data-test="template"]').exists()).toBe(false)

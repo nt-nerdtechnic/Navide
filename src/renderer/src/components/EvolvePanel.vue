@@ -137,7 +137,7 @@ const changed = computed<Partial<EvolveSettings>>(() => {
   if (!d || !s) return {}
   const out: Record<string, unknown> = {}
   for (const key of Object.keys(d) as (keyof EvolveSettings)[]) {
-    if (key === 'enabled') continue
+    if (key === 'enabled' || key === 'pending_catch_up') continue
     if (d[key] !== s[key]) out[key] = d[key]
   }
   return out as Partial<EvolveSettings>
@@ -369,6 +369,9 @@ async function openProposal(rel: string): Promise<void> {
             </button>
           </div>
           <div v-if="runNotice" class="ev-ok" data-test="run-notice">{{ runNotice }}</div>
+          <div v-if="state.settings.pending_catch_up" class="ev-muted" data-test="pending-catch-up">
+            {{ t('evolve.panel.pending-catch-up') }}
+          </div>
 
           <div v-if="disabledLegacy.length" class="ev-legacy" data-test="legacy-disabled">
             {{ t('evolve.panel.legacy-disabled', { n: disabledLegacy.length }) }}

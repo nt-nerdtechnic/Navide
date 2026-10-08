@@ -10026,7 +10026,10 @@
       "history": "履歴（直近 30 回）",
       "unsaved": "未保存の変更があります",
       "save": "保存",
-      "ledger-open-failed": "台帳の計画を開けませんでした"
+      "ledger-open-failed": "台帳の計画を開けませんでした",
+      "pending-catch-up": "逃した実行が 1 回、この workspace が開かれるのを待っています。",
+      "system-pane": "✦ システム起動",
+      "system-pane-title": "自己改善が開いた pane です"
     },
     "field": {
       "time": "実行時刻",
@@ -10035,7 +10038,7 @@
       "catch-up-skip": "逃したらスキップ",
       "unit": "実行先",
       "unit-auto": "pane を自動で開く",
-      "unit-auto-hint": "毎回「自我優化-MMDD」を開き、終わったら回収",
+      "unit-auto-hint": "毎回「evolve-MMDD-HHMM」を開き、終わったら回収",
       "unit-pane": "指定した pane",
       "pick-pane": "pane を選択",
       "pane-gone": "{name}（存在しません）",
@@ -10113,7 +10116,9 @@
         "reclaim": "回収",
         "panel": "パネルを開く →",
         "result": "結果を見る"
-      }
+      },
+      "over_budget": "自己改善が予算超過 · {workspace}",
+      "over-budget-body": "この実行は token 予算の 1.5 倍を超えたため、Navide が一度中断を送りました。"
     }
   }
 }

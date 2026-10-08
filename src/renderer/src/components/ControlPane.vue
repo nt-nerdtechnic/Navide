@@ -13,7 +13,7 @@ import { subtreeSignals } from '../lib/paneSubtreeStatus'
 import { workspaceAliasKey, workspaceAliasOf, workspaceBasename, workspaceDisplayName } from '../lib/workspaceAlias'
 import type { SidebarMode } from '../lib/sidebarMode'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
-import { evolveBadgeLabel, evolveBadgeState, useEvolveBadges } from '../composables/useEvolve'
+import { evolveBadgeLabel, evolveBadgeState, isEvolveSystemPane, useEvolveBadges } from '../composables/useEvolve'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
 import {
   ALL_RAIL_ID,
@@ -3948,6 +3948,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               :title="$t('pane.terminal.auto-named-tooltip')"
             >◦</span>
             <span v-if="p.isCommander" class="manager-inline" :title="$t('label.stage-manager-tooltip')">🎯 Mgr</span>
+            <span v-if="isEvolveSystemPane(p.id)" class="evolve-pane-tag" data-test="evolve-pane-tag" :title="$t('evolve.panel.system-pane-title')">{{ $t('evolve.panel.system-pane') }}</span>
             <span v-if="!isRowExpanded(p.id)" class="agent-line-sub">{{ agentTypeLabel(p.agentKey) }} · {{ p.roleLabel || 'No role' }}</span>
             <span
               v-if="p.loopActive"
@@ -7000,6 +7001,16 @@ button.icon-btn.muted:hover {
   background: var(--success-subtle);
   color: var(--success-fg);
   border: 1px solid var(--success-emphasis);
+  white-space: nowrap;
+}
+.evolve-pane-tag {
+  font-size: var(--font-3xs);
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent-muted);
   white-space: nowrap;
 }
 .loop-tag.waiting {

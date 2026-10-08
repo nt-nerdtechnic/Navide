@@ -9,6 +9,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import ControlPane from '../ControlPane.vue'
 import {
   __resetEvolveForTest,
+  noteEvolvePanes,
   setEvolveBadge,
   useEvolve,
   useEvolveBadges,
@@ -149,6 +150,22 @@ describe('ControlPane – workspace self-evolution entry', () => {
     wrapper = mountWith()
     await wrapper.findAll('.ws-head')[0].find('.ws-more').trigger('click')
     expect(wrapper.get('[data-test="evolve-menu"]').text()).toContain('evolve.menu.enabled')
+  })
+
+  it('v1.1: tags the pane evolve opened by id, not by its name', async () => {
+    const named = [
+      { ...panes[0], id: 'evolve-pane-id', customName: 'whatever' },
+      { ...panes[1], id: 'b1', customName: 'evolve-1009-0900' },
+    ]
+    noteEvolvePanes({ running: null, runs: [{ pane_id: 'evolve-pane-id' } as never] })
+    // Pane rows render without a workspaces tree (same harness as the mute tag test).
+    wrapper = mountWith()
+    await wrapper.setProps({ panes: named, workspaces: undefined })
+    const items = wrapper.findAll('.agent-item')
+    const tagged = items.filter((i) => i.find('[data-test="evolve-pane-tag"]').exists())
+    expect(tagged).toHaveLength(1)
+    expect(tagged[0].html()).toContain('evolve.panel.system-pane')
+    expect(items.length).toBe(2)
   })
 
   it('opens it from the right-click menu', async () => {

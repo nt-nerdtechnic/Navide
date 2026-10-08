@@ -10026,7 +10026,10 @@
       "history": "歷史（最近 30 次）",
       "unsaved": "有未儲存的變更",
       "save": "儲存",
-      "ledger-open-failed": "無法開啟帳本計畫"
+      "ledger-open-failed": "無法開啟帳本計畫",
+      "pending-catch-up": "有一次錯過的執行，等這個 workspace 開啟後補跑。",
+      "system-pane": "✦ 系統開啟",
+      "system-pane-title": "這個 pane 由自我優化開啟"
     },
     "field": {
       "time": "執行時間",
@@ -10035,7 +10038,7 @@
       "catch-up-skip": "錯過就跳過",
       "unit": "執行單位",
       "unit-auto": "自動開 pane",
-      "unit-auto-hint": "每次開「自我優化-MMDD」，跑完回收",
+      "unit-auto-hint": "每次開「evolve-MMDD-HHMM」，跑完回收",
       "unit-pane": "指定 pane",
       "pick-pane": "選擇 pane",
       "pane-gone": "{name}（已不在）",
@@ -10113,7 +10116,9 @@
         "reclaim": "回收",
         "panel": "開啟面板 →",
         "result": "看結果"
-      }
+      },
+      "over_budget": "自我優化超出預算 · {workspace}",
+      "over-budget-body": "這次執行超過 1.5 倍 token 預算，Navide 已送出一次中斷。"
     }
   }
 }

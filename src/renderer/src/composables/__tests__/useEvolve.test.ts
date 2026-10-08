@@ -12,6 +12,7 @@ import {
   evolveGet,
   evolveRunNow,
   evolveSet,
+  isEvolveSystemPane,
   openEvolvePanel,
   refreshEvolveBadges,
   useEvolve,
@@ -186,5 +187,26 @@ describe('useEvolve', () => {
     expect(skipped.title).toBe('自我優化未執行 · beta')
     expect(skipped.highlights).toEqual(['這個 workspace 已有一次在執行'])
     expect(skipped.actions).toEqual([{ kind: 'evolve-panel', workspace: B }])
+  })
+
+  it('v1.1: over_budget is a warn row with an open-pane button and the detail', () => {
+    scope.run(() => useEvolve(fakeBackend()))
+    emit('evolve.notice', { workspace: A, kind: 'over_budget', run: run({ id: 'r7', status: 'running', detail: '312k / 200k' }) })
+    const row = useAnnouncements().items.value.find((i) => i.kind === 'evolve')!
+    expect(row.title).toBe('自我優化超出預算 · alpha')
+    expect(row.highlights).toEqual(['這次執行超過 1.5 倍 token 預算，Navide 已送出一次中斷。'])
+    expect(row.note).toBe('312k / 200k')
+    expect(row.actions).toEqual([{ kind: 'evolve-open-pane', workspace: A, paneId: 'pane-1' }])
+  })
+
+  it('v1.1: learns evolve pane ids from notices and get replies, by id only', async () => {
+    scope.run(() => useEvolve(fakeBackend()))
+    emit('evolve.notice', { workspace: A, kind: 'started', run: run({ pane_id: 'p-run' }) })
+    replies['evolve.get'] = { ok: true, running: null, runs: [run({ pane_id: 'p-old' }), run({ pane_id: '' })] }
+    await evolveGet(fakeBackend(), A)
+    expect(isEvolveSystemPane('p-run')).toBe(true)
+    expect(isEvolveSystemPane('p-old')).toBe(true)
+    expect(isEvolveSystemPane('evolve-1009-0900')).toBe(false)
+    expect(isEvolveSystemPane('')).toBe(false)
   })
 })

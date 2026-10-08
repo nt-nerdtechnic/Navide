@@ -10026,7 +10026,10 @@
       "history": "History (last 30)",
       "unsaved": "Unsaved changes",
       "save": "Save",
-      "ledger-open-failed": "Could not open the ledger plan"
+      "ledger-open-failed": "Could not open the ledger plan",
+      "pending-catch-up": "A missed run is waiting for this workspace to be opened.",
+      "system-pane": "✦ system",
+      "system-pane-title": "Opened by self-evolution"
     },
     "field": {
       "time": "Time",
@@ -10035,7 +10038,7 @@
       "catch-up-skip": "Skip if missed",
       "unit": "Runs in",
       "unit-auto": "A new pane",
-      "unit-auto-hint": "Opens \"自我優化-MMDD\" each run and reclaims it after",
+      "unit-auto-hint": "Opens \"evolve-MMDD-HHMM\" each run and reclaims it after",
       "unit-pane": "A chosen pane",
       "pick-pane": "Pick a pane",
       "pane-gone": "{name} (gone)",
@@ -10113,7 +10116,9 @@
         "reclaim": "Reclaim",
         "panel": "Open panel →",
         "result": "See result"
-      }
+      },
+      "over_budget": "Self-evolution over budget · {workspace}",
+      "over-budget-body": "This run passed 1.5× its token budget; Navide sent one interrupt."
     }
   }
 }

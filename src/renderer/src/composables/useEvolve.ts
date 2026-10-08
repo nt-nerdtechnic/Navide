@@ -35,6 +35,8 @@ export interface EvolveSettings {
   scope: 'fix' | 'propose'
   extra: string
   ledger_plan: string
+  /** Read-only (v1.1): a missed run is waiting for the workspace to open. */
+  pending_catch_up?: boolean
 }
 
 export type EvolveRunStatus = 'running' | 'ok' | 'error' | 'timeout' | 'skipped'
@@ -67,6 +69,8 @@ export interface EvolveBadge {
   running_since: number | null
   next_run_at: number | null
   last_status: EvolveRunStatus | null
+  /** Optional: panes evolve opened for this workspace, if the backend sends them. */
+  pane_ids?: string[]
 }
 
 export interface EvolveState {
@@ -97,6 +101,9 @@ const RPC_TIMEOUT_MS = 15_000
 
 const badges = ref<Record<string, EvolveBadge>>({})
 const panelWorkspace = ref<string | null>(null)
+/** Pane ids evolve opened (a workspace's running.pane_id and runs[].pane_id),
+ *  for the sidebar's 「✦ 系統開啟」 tag. Matched by id, never by pane name. */
+const systemPaneIds = ref<ReadonlySet<string>>(new Set())
 let boundBackend: Backend | null = null
 /** Every path anyone asked a badge for, so a reconnect can re-read them. */
 const knownPaths = new Set<string>()
@@ -107,6 +114,20 @@ export function openEvolvePanel(workspace: string): void {
 
 export function closeEvolvePanel(): void {
   panelWorkspace.value = null
+}
+
+function addSystemPanes(ids: (string | null | undefined)[]): void {
+  const fresh = ids.filter((id): id is string => !!id && !systemPaneIds.value.has(id))
+  if (fresh.length) systemPaneIds.value = new Set([...systemPaneIds.value, ...fresh])
+}
+
+/** Record the panes named by an evolve.get / evolve.set reply. */
+export function noteEvolvePanes(state: Pick<EvolveState, 'running' | 'runs'>): void {
+  addSystemPanes([state.running?.pane_id, ...(state.runs ?? []).map((r) => r.pane_id)])
+}
+
+export function isEvolveSystemPane(paneId: string): boolean {
+  return systemPaneIds.value.has(paneId)
 }
 
 function errorOf(resp: { ok: boolean; payload?: unknown; error?: { message?: string } | null }, type: string) {
@@ -127,16 +148,20 @@ async function call<T>(backend: Backend, type: string, payload: Record<string, u
   }
 }
 
-export function evolveGet(backend: Backend, workspace: string): Promise<EvolveResult<EvolveState>> {
-  return call<EvolveState>(backend, 'evolve.get', { workspace })
+export async function evolveGet(backend: Backend, workspace: string): Promise<EvolveResult<EvolveState>> {
+  const res = await call<EvolveState>(backend, 'evolve.get', { workspace })
+  if (res.ok) noteEvolvePanes(res.data)
+  return res
 }
 
-export function evolveSet(
+export async function evolveSet(
   backend: Backend,
   workspace: string,
   settings: Partial<EvolveSettings>
 ): Promise<EvolveResult<EvolveState>> {
-  return call<EvolveState>(backend, 'evolve.set', { workspace, settings })
+  const res = await call<EvolveState>(backend, 'evolve.set', { workspace, settings })
+  if (res.ok) noteEvolvePanes(res.data)
+  return res
 }
 
 export function evolveRunNow(backend: Backend, workspace: string): Promise<EvolveResult<{ run_id: string }>> {
@@ -147,6 +172,7 @@ export function evolveRunNow(backend: Backend, workspace: string): Promise<Evolv
 export function setEvolveBadge(workspace: string, badge: EvolveBadge): void {
   if (!workspace || !badge) return
   badges.value = { ...badges.value, [workspace]: badge }
+  addSystemPanes(badge.pane_ids ?? [])
 }
 
 /** Re-read the badges of these workspaces. A no-op until App.vue bound the
@@ -159,6 +185,7 @@ export async function refreshEvolveBadges(paths: string[]): Promise<void> {
   const res = await call<{ badges?: Record<string, EvolveBadge> }>(backend, 'evolve.badges', { workspaces: list })
   if (!res.ok || !res.data.badges) return
   badges.value = { ...badges.value, ...res.data.badges }
+  addSystemPanes(Object.values(res.data.badges).flatMap((b) => b.pane_ids ?? []))
 }
 
 export type EvolveBadgeState = 'on' | 'running' | 'off' | 'failed'
@@ -215,6 +242,7 @@ export function evolveBadgeLabel(badge: EvolveBadge | null | undefined, now: num
 export function useEvolveBadges() {
   return {
     badges: readonly(badges),
+    systemPaneIds: readonly(systemPaneIds),
     panelWorkspace: readonly(panelWorkspace),
     refreshBadges: refreshEvolveBadges,
     openPanel: openEvolvePanel,
@@ -230,6 +258,7 @@ const NOTICE_KINDS: readonly EvolveNoticeKind[] = [
   'skipped',
   'fallback_auto',
   'not_git',
+  'over_budget',
 ]
 
 /** App-level install: binds the backend and subscribes to the broadcasts.
@@ -248,6 +277,7 @@ export function useEvolve(backend: Backend) {
   const offNotice = backend.on('evolve.notice', (raw) => {
     const ev = raw as Partial<EvolveNotice> | null
     if (!ev?.workspace || !ev.kind || !NOTICE_KINDS.includes(ev.kind)) return
+    addSystemPanes([ev.run?.pane_id])
     announcements.noteEvolveNotice({ workspace: ev.workspace, kind: ev.kind, run: ev.run ?? null })
   })
   if (typeof offNotice === 'function') offs.push(offNotice)
@@ -274,6 +304,7 @@ export function useEvolve(backend: Backend) {
 export function __resetEvolveForTest(): void {
   badges.value = {}
   panelWorkspace.value = null
+  systemPaneIds.value = new Set()
   boundBackend = null
   knownPaths.clear()
 }

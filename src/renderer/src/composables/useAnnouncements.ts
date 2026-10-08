@@ -340,7 +340,16 @@ function noteSchedulerDisabled(notice: SchedulerDisabledNotice, at: number = Dat
 
 // ── Workspace self-evolution ────────────────────────────────────────────────
 
-export type EvolveNoticeKind = 'started' | 'finished' | 'timeout' | 'failed' | 'skipped' | 'fallback_auto' | 'not_git'
+export type EvolveNoticeKind =
+  | 'started'
+  | 'finished'
+  | 'timeout'
+  | 'failed'
+  | 'skipped'
+  | 'fallback_auto'
+  | 'not_git'
+  /** Passed 1.5× the token budget; Navide pressed interrupt once. */
+  | 'over_budget'
 
 /** What the backend's `evolve.notice` broadcast carries. */
 export interface EvolveNotice {
@@ -377,6 +386,7 @@ function evolveActions(notice: EvolveNotice): EvolveAnnouncementAction[] {
   switch (notice.kind) {
     case 'started':
     case 'fallback_auto':
+    case 'over_budget':
       return pane('evolve-open-pane')
     case 'finished':
       return [{ kind: 'evolve-result', workspace }, ...pane('evolve-resume-pane')]
@@ -414,6 +424,8 @@ function evolveHighlights(notice: EvolveNotice): string[] {
       return [t('evolve.notice.fallback-body', { pane })]
     case 'not_git':
       return [t('evolve.notice.not-git-body')]
+    case 'over_budget':
+      return [t('evolve.notice.over-budget-body')]
     default: {
       const why = evolveReason(run?.reason) || run?.detail || ''
       return why ? [why] : []
