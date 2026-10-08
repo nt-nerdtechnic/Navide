@@ -716,3 +716,62 @@ async def test_a_too_large_stub_in_a_push_conflict_is_not_a_delete(tmp_path, acc
     assert result["tooLarge"] == ["big"]
     assert b.store.conflict_ids("prompts") == set()
     assert b.adapter.items == {"big": {"v": 1}}
+
+
+# ── B6: a round that began under the previous account writes nothing ─────────
+async def test_a_round_that_outlives_an_account_switch_writes_nothing(tmp_path, account_key):
+    import asyncio
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            # The account changes while this round is on the wire — on another
+            # task, outside this round's context (run_in_executor copies none).
+            def switch():
+                b.store.new_generation()
+                b.store.forget("prompts")
+
+            await asyncio.get_running_loop().run_in_executor(None, switch)
+        return reply
+
+    b.engine._request = request
+    result = await b.engine.sync_all()
+    assert result[0]["ok"] is False and "account changed" in result[0]["error"]
+    assert b.store.cursor("prompts") == 0 and b.store.states("prompts") == {}
+
+
+async def test_a_reset_inside_a_round_does_not_count_as_a_switch(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    b.store.set_cursor("prompts", 50)  # beyond the server: the next pull resets
+    result = await b.sync()
+    assert result["ok"] is True
+
+
+async def test_rounds_started_by_a_kick_can_be_cancelled(tmp_path, account_key):
+    import asyncio
+
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+    gate = asyncio.Event()
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        await gate.wait()
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    b.engine._kick("prompts")
+    await asyncio.sleep(0)
+    assert b.engine._kicked
+    b.engine.cancel_rounds()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert all(t.done() for t in list(b.engine._kicked)) or not b.engine._kicked

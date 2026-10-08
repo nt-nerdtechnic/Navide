@@ -34,6 +34,7 @@ is only worth making if it carries real work.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -125,6 +126,17 @@ INVENTORY_DISABLED = "disabled"
 
 class SyncError(Exception):
     """A sync round could not be completed. Always recoverable by retrying."""
+
+
+class StaleRound(SyncError):
+    """A round that began under the previous account tried to write."""
+
+
+#: The store generation the running round began under (None outside a round).
+#: Carried into worker threads by ``asyncio.to_thread``, which copies context.
+_round_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "sync_round_generation", default=None
+)
 
 
 class DeferItem(Exception):
@@ -277,6 +289,22 @@ class SyncStore:
         self._db.migrate(_COMPONENT, 1, _create_schema)
         self._db.migrate(_COMPONENT, 2, _schema_v2)
         self._redactors: dict[str, Callable[[Any], dict[str, Any] | None]] = {}
+        #: Bumped when the account changes. A round records the generation it
+        #: began under, and a write from a round of an older one is refused:
+        #: what it read belongs to the previous account.
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def new_generation(self) -> None:
+        self._generation += 1
+
+    def _check_round(self) -> None:
+        began = _round_generation.get()
+        if began is not None and began != self._generation:
+            raise StaleRound("the account changed while this round was running; nothing was recorded")
 
     def set_redactor(self, scope: str, fn: Callable[[Any], dict[str, Any] | None]) -> None:
         self._redactors[scope] = fn
@@ -313,6 +341,7 @@ class SyncStore:
         deleted: bool,
         sealed_kid: str = "",
     ) -> None:
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 """
@@ -336,6 +365,7 @@ class SyncStore:
         return int(row[0]) if row else 0
 
     def set_cursor(self, scope: str, value: int) -> None:
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 """
@@ -371,6 +401,7 @@ class SyncStore:
         else:
             local_text = canonical(local)
             remote_text = canonical(remote)
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 """
@@ -512,6 +543,7 @@ class SyncStore:
         return {str(r[0]) for r in rows}
 
     def clear_conflict(self, scope: str, item_id: str) -> None:
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 "DELETE FROM sync_conflicts WHERE scope = ? AND item_id = ?", (scope, item_id)
@@ -519,6 +551,7 @@ class SyncStore:
 
     def forget(self, scope: str) -> None:
         """Drop everything known about a scope — used when it is switched off."""
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM sync_state WHERE scope = ?", (scope,))
             cur.execute("DELETE FROM sync_cursor WHERE scope = ?", (scope,))
@@ -541,6 +574,7 @@ class SyncEngine:
         signing_key_for: Callable[[str], str] | None = None,
         on_result: Callable[[dict[str, Any]], None] | None = None,
         account_member: Callable[[], str] | None = None,
+        on_forget: Callable[[str], None] | None = None,
     ) -> None:
         self._store = store
         self._request = request
@@ -555,6 +589,9 @@ class SyncEngine:
                 else _pinned_signing_key
             )
         self._signing_key_for = signing_key_for
+        #: Told when a cursor reset forgets a scope, so state kept outside the
+        #: store about that scope's items (detached marks) goes with it.
+        self._on_forget = on_forget or (lambda _scope: None)
         #: Told every round's result (see ``sync``) — the link broadcasts it
         #: to the renderer as ``sync.result``. Must not raise; it is guarded.
         self._on_result = on_result
@@ -629,15 +666,22 @@ class SyncEngine:
         if not await asyncio.to_thread(sync_keyring.has_account_key):
             return {"skipped": "no-key"}
         async with self._locks.setdefault(scope, asyncio.Lock()):
-            self._notes[scope] = {}
-            # An adapter that needs the server for more than records (blob
-            # transfers) is handed the connection here, and may decline the
-            # round when the server cannot serve it.
-            prepare = getattr(adapter, "prepare", None)
-            if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
-                return {"skipped": "unsupported"}
-            pulled = await self._pull(adapter)
-            pushed = await self._push(adapter)
+            token = _round_generation.set(self._store.generation)
+            try:
+                return await self._locked_round(scope, adapter)
+            finally:
+                _round_generation.reset(token)
+
+    async def _locked_round(self, scope: str, adapter: ScopeAdapter) -> dict[str, Any]:
+        self._notes[scope] = {}
+        # An adapter that needs the server for more than records (blob
+        # transfers) is handed the connection here, and may decline the
+        # round when the server cannot serve it.
+        prepare = getattr(adapter, "prepare", None)
+        if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
+            return {"skipped": "unsupported"}
+        pulled = await self._pull(adapter)
+        pushed = await self._push(adapter)
         return {"pulled": pulled, "pushed": pushed}
 
     def _finish(self, scope: str, outcome: dict[str, Any]) -> dict[str, Any]:
@@ -688,6 +732,12 @@ class SyncEngine:
     def forget_results(self) -> None:
         """Drop the remembered results — they belonged to another account."""
         self._last.clear()
+
+    def cancel_rounds(self) -> None:
+        """Cancel the rounds ``_kick`` started — on an account change, so one
+        begun for the previous account does not run on into the next."""
+        for task in list(self._kicked):
+            task.cancel()
 
     def _kick(self, scope: str) -> None:
         """Run one more round of *scope* soon. For an adapter whose background
@@ -744,6 +794,10 @@ class SyncEngine:
                 # bring the item back. Remembered across the reset instead.
                 self._reset_deletes[scope] = await asyncio.to_thread(self._pending_deletes, adapter)
                 self._store.forget(scope)
+                try:
+                    await asyncio.to_thread(self._on_forget, scope)
+                except Exception as err:  # noqa: BLE001 - the reset itself happened
+                    log.warning("could not let go of %s's marks after a reset: %s", scope, err)
                 reset = True
                 since = 0
                 continue
