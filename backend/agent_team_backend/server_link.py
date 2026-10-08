@@ -3768,6 +3768,10 @@ async def _note_account(namespace: str | None) -> None:
     if previous is None or previous == namespace:
         _settled_account = namespace
         await _record_account(namespace)
+        # Back on the account a failed switch was leaving: whatever that
+        # switch did let go of belonged to this account, so sync reopens
+        # rather than staying shut for a switch that is no longer happening.
+        _switch_pending = False
         return
     _switch_pending = True
     link = _link

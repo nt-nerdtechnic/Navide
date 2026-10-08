@@ -218,7 +218,7 @@ async def test_a_failing_scope_is_reported_and_the_others_still_run(tmp_path, ac
     broken.snapshot = snapshot
     b.engine.register(broken)
     results = {r["scope"]: r for r in await b.engine.sync_all()}
-    assert results["mcp"]["ok"] is False and "disk on fire" in results["mcp"]["error"]
+    assert results["mcp"]["ok"] is False and "RuntimeError" in results["mcp"]["error"]
     assert results["prompts"]["ok"] is True and results["prompts"]["pushed"] == 1
     assert b.engine.last_results()["mcp"]["ok"] is False
 
@@ -775,3 +775,235 @@ async def test_rounds_started_by_a_kick_can_be_cancelled(tmp_path, account_key):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert all(t.done() for t in list(b.engine._kicked)) or not b.engine._kicked
+
+
+# ── X-4: after a rotation, nothing stays under a key that is not the active one
+async def test_a_v1_record_is_resealed_after_a_rotation(tmp_path, account_key):
+    from agent_team_backend import sync_keyring
+
+    from .test_sync_keyring import _v1_body
+
+    server = FakeServer()
+    payload = {"id": "p1", "prompt": "hello"}
+    server.rows[("prompts", "p1")] = {
+        "itemId": "p1", "rev": 1, "updatedAt": "t", "deviceId": "old-dev", "deleted": 0,
+        "body": _v1_body(sync_keyring.account_key(), sync_engine.canonical(payload),
+                         scope="prompts", item_id="p1"),
+        "sig": "",
+    }
+    server.cursors["prompts"] = 1
+    a = Device(tmp_path, server, "dev-a")
+    await a.sync()
+    assert a.adapter.items == {"p1": payload}
+    # Before any rotation a v1 body is left alone: older devices read only v1.
+    await a.sync()
+    assert server.rows[("prompts", "p1")]["rev"] == 1
+    sync_keyring.rotate_account_key()
+    await a.sync()
+    body = server.rows[("prompts", "p1")]["body"]
+    assert not sync_keyring.needs_reseal(body)
+    assert server.rows[("prompts", "p1")]["rev"] > 1
+
+
+async def test_a_record_pulled_under_a_retired_key_is_resealed(tmp_path, account_key):
+    # A device that had not yet received the new ring wrote under the old key.
+    from agent_team_backend import sync_keyring
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()  # sealed under the key that is about to be retired
+    b = Device(tmp_path, server, "dev-b")
+    sync_keyring.rotate_account_key()
+    await b.sync()
+    await b.sync()
+    assert not sync_keyring.needs_reseal(server.rows[("prompts", "x")]["body"])
+
+
+# ── F4b: a server cannot make a scope start over every round ─────────────────
+async def test_a_second_reset_within_the_hour_is_refused_and_reported(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {f"p{i}": {"n": i} for i in range(5)})
+    await b.sync()
+    clock = _Clock()
+    b.engine._clock = clock
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0:
+            reply["payload"] = dict(reply["payload"], cursor=0)
+        return reply
+
+    b.engine._request = request
+    first = await b.sync()
+    assert not first.get("resetThrottled")
+    before = b.store.states("prompts")
+    second = await b.sync()
+    assert second["resetThrottled"] is True
+    assert b.store.states("prompts") == before          # nothing forgotten
+    clock.now += 2 * 3600
+    third = await b.sync()
+    assert not third.get("resetThrottled")
+
+
+# ── security re-review (sync審-資安, round 2) ────────────────────────────────
+async def test_a_round_queued_across_an_account_switch_writes_nothing(tmp_path, account_key):
+    # R-B1: it passed its checks under A, waited for the lock, and must not
+    # then run under B's generation.
+    import asyncio
+
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"a-only": {"v": 1}})
+    lock = b.engine._locks.setdefault("prompts", asyncio.Lock())
+    await lock.acquire()
+    queued = asyncio.create_task(b.sync())
+    await asyncio.sleep(0.05)
+    b.store.new_generation()
+    lock.release()
+    with pytest.raises(sync_engine.StaleRound):
+        await queued
+    assert server.rows == {}
+
+
+async def test_a_pending_delete_survives_a_too_large_stub(tmp_path, account_key):
+    # R-A1 (a): the re-read after a reset brings the deleted item back as a stub.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("x")
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        elif msg_type == "sync.pull":
+            reply["payload"]["items"] = [
+                dict(_stub("x", r["rev"]), deviceId=r["deviceId"]) if r["itemId"] == "x" else r
+                for r in reply["payload"]["items"]
+            ]
+        return reply
+
+    b.engine._request = request
+    await b.sync()
+    await b.sync()
+    assert server.rows[("prompts", "x")]["deleted"] == 1
+
+
+async def test_a_pending_delete_survives_a_round_cut_short(tmp_path, account_key, monkeypatch):
+    # R-A1 (b): the re-read stops at the page cap before reaching the item.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}, "z": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("z")  # rev 3: the last page of the re-read
+    monkeypatch.setattr(sync_engine, "PULL_PAGE", 1)
+    monkeypatch.setattr(sync_engine, "MAX_PULL_PAGES", 1)
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        return reply
+
+    b.engine._request = request
+    for _ in range(5):
+        await b.sync()
+    assert "z" not in b.adapter.items
+    assert server.rows[("prompts", "z")]["deleted"] == 1
+    assert b.store.conflict_ids("prompts") == set()
+
+
+async def test_push_items_waits_for_the_running_round_and_checks_the_generation(tmp_path, account_key):
+    # R-B2.
+    import asyncio
+
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    lock = b.engine._locks.setdefault("prompts", asyncio.Lock())
+    await lock.acquire()
+    task = asyncio.create_task(b.engine.push_items("prompts", ["x"]))
+    await asyncio.sleep(0.05)
+    assert server.pushes == 0   # waiting behind the round
+    b.store.new_generation()
+    lock.release()
+    with pytest.raises(sync_engine.StaleRound):
+        await task
+    assert server.pushes == 0
+
+
+async def test_pull_items_records_nothing_once_the_account_changed(tmp_path, account_key):
+    import asyncio
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        await asyncio.get_running_loop().run_in_executor(None, b.store.new_generation)
+        return reply
+
+    b.engine._request = request
+    with pytest.raises(sync_engine.StaleRound):
+        await b.engine.pull_items("prompts", ["x"])
+    assert b.adapter.items == {}
+
+
+async def test_a_stale_round_never_reaches_the_adapter(tmp_path, account_key):
+    # R-B3: no apply (and so no detach) once the round is stale.
+    import asyncio
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    applied: list[str] = []
+    b.adapter.apply = lambda item_id, payload: applied.append(item_id)
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            await asyncio.get_running_loop().run_in_executor(None, b.store.new_generation)
+        return reply
+
+    b.engine._request = request
+    await b.engine.sync_all()
+    assert applied == []
+
+
+async def test_an_unsigned_record_claiming_to_be_ours_is_dropped(tmp_path, account_key):
+    # R-A3: this release always signs; an unsigned "own" row is not ours.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    before = b.store.state("prompts", "x")
+    _unsigned(server, "x", None, device="dev-b", deleted=True)
+    result = await b.sync()
+    assert result["refused"] == ["x"]
+    assert b.store.state("prompts", "x") == before
+
+
+async def test_errors_are_reported_by_class_not_by_their_text(tmp_path, account_key, caplog):
+    # R-B5: an exception's text can carry what it failed on.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+
+    def snapshot():
+        raise RuntimeError("token sk-live-123 in the way")
+
+    b.adapter.snapshot = snapshot
+    with caplog.at_level("WARNING"):
+        [result] = await b.engine.sync_all()
+    assert result["ok"] is False
+    assert "sk-live-123" not in result["error"] and "RuntimeError" in result["error"]
+    assert "sk-live-123" not in caplog.text
