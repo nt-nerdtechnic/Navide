@@ -628,6 +628,36 @@ describe('SyncSettings', () => {
     expect(stuck).toContain('retrying')
   })
 
+  // resetThrottled: the server asked this scope to start over a second time
+  // within an hour; the backend refused, so nothing moved. "Pulled 0, pushed 0"
+  // would read as an ordinary quiet round.
+  it('says a throttled reset paused the scope instead of reporting a quiet round', async () => {
+    const { backend, emit } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    emit('sync.result', {
+      scope: 'prompts',
+      ok: true,
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      held: [],
+      gaveUp: [],
+      refused: [],
+      tooLarge: [],
+      resetThrottled: true,
+      at: '2026-10-09T06:30:00Z',
+    })
+    await flushPromises()
+
+    const row = wrapper.get('.sync-result')
+    expect(row.text()).toContain('paused')
+    expect(row.text()).toContain('an hour')
+    expect(row.text()).not.toContain('Pulled 0')
+    expect(row.find('.sync-result-error').exists()).toBe(true)
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

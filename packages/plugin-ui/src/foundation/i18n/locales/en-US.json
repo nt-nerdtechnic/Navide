@@ -6233,7 +6233,8 @@
       "result-too-large": "Too large to sync: {items}",
       "account": "Syncing with {email}",
       "scope-skill-files": "Skill files",
-      "result-gave-up": "Stuck, still retrying: {items}"
+      "result-gave-up": "Stuck, still retrying: {items}",
+      "result-reset-throttled": "The server's state looks wrong, so re-syncing this section is paused; it retries in an hour."
     },
     "sharing": {
       "intro": "Two ways to move these four sections between machines: a file you hand over, and the account they already share.",

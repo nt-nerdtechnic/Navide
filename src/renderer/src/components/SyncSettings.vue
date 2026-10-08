@@ -54,6 +54,9 @@ interface ScopeResult {
   gaveUp?: string[]
   refused?: string[]
   tooLarge?: string[]
+  /** The server asked for a second start-over within an hour and the backend
+   *  refused it: nothing was pulled, pushed or cleared this round. */
+  resetThrottled?: boolean
   /** ISO-8601 UTC. */
   at?: string
 }
@@ -119,6 +122,7 @@ function toResult(value: unknown): ScopeResult | null {
     gaveUp: itemIds(value.gaveUp),
     refused: itemIds(value.refused),
     tooLarge: itemIds(value.tooLarge),
+    resetThrottled: value.resetThrottled === true,
     at: typeof value.at === 'string' ? value.at : undefined,
   }
 }
@@ -145,6 +149,7 @@ function resultLines(r: ScopeResult): ResultLine[] {
       },
     ]
   }
+  if (r.resetThrottled) return [{ text: t('settings.sync.result-reset-throttled'), error: true }]
   const lines: ResultLine[] = [
     { text: t('settings.sync.result-ok', { pulled: r.pulled ?? 0, pushed: r.pushed ?? 0 }) },
   ]
