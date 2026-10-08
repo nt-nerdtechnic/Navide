@@ -6,6 +6,8 @@ a random prefix and a name of safe characters only, and are pruned after
 line inside an MSG block addressed to the chat; ``resolve_outbound`` admits only a
 regular file inside the pane's workspace or the media directory, judged after
 symlinks are resolved, and never a dotfile, a credential-shaped name or a system file.
+The one hidden folder a pane may send from is its workspace's plan documents,
+``<workspace>/.agent-team/plans/*.html`` (``plans_workspace``).
 """
 
 from __future__ import annotations
@@ -191,15 +193,35 @@ def _inside(path: PurePath, folder: PurePath) -> bool:
     return inner[: len(outer)] == outer
 
 
-def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, str]:
+PLANS_DIR = (".agent-team", "plans")
+
+
+def resolve_outbound(raw: str, roots: list[str | Path],
+                     plans_workspace: str | Path | None = None) -> tuple[Path | None, str]:
     """(the real file, "") when a pane may send ``raw``, else (None, reason): one of
     not_absolute, parent_ref, missing, not_file, outside, broad_workspace, hidden,
     denied_name, system, hard_link."""
-    real, _st, reason = _check(raw, roots)
+    real, _st, reason = _check(raw, roots, plans_workspace)
     return real, reason
 
 
-def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_result | None, str]:
+def _plan_document(real: Path, base: Path, plans_workspace: str | Path | None) -> bool:
+    """``real`` is a plan document right in ``base``'s ``.agent-team/plans/`` and ``base``
+    is the workspace whose plans may be sent: then ``.agent-team`` is not a hidden folder."""
+    if not plans_workspace:
+        return False
+    try:
+        if Path(plans_workspace).resolve(strict=True) != base:
+            return False
+    except (OSError, RuntimeError):
+        return False
+    rel = real.relative_to(base).parts
+    return (len(rel) == 3 and rel[:2] == PLANS_DIR and rel[2].lower().endswith(".html")
+            and not rel[2].startswith("."))
+
+
+def _check(raw: str, roots: list[str | Path],
+           plans_workspace: str | Path | None = None) -> tuple[Path | None, os.stat_result | None, str]:
     """``resolve_outbound`` plus the stat of the very inode that passed the rules."""
     path = Path(raw.strip())
     if not path.is_absolute():
@@ -229,6 +251,8 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
             in_broad = True  # never usable; a narrower root later may still admit the file
             continue
         scope = _scope(real)
+        if _plan_document(real, base, plans_workspace):
+            scope = scope[:-3] + scope[-2:]  # drop the .agent-team segment, judge the rest
         if any(part.startswith(".") for part in scope):
             return None, None, "hidden"
         # A colon can also arrive through a symlink, after the raw path passed.
@@ -265,7 +289,8 @@ class Outbound:
     size: int
 
 
-def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, str]:
+def open_outbound(raw: str, roots: list[str | Path],
+                  plans_workspace: str | Path | None = None) -> tuple[Outbound | None, str]:
     """Check ``raw``, open it, then check it again, so what is sent is what was checked.
 
     The recheck runs while the file is open, and an open file pins its inode: its number
@@ -277,7 +302,7 @@ def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, s
     recheck's own reason). A swap after the recheck
     no longer matters: the open file is the checked one.
     """
-    real, _seen, reason = _check(raw, roots)
+    real, _seen, reason = _check(raw, roots, plans_workspace)
     if real is None:
         return None, reason
     try:
@@ -286,7 +311,7 @@ def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, s
         return None, "changed"
     try:
         st = os.fstat(fd)
-        again, seen, reason = _check(raw, roots)
+        again, seen, reason = _check(raw, roots, plans_workspace)
         if again is None or seen is None:
             os.close(fd)
             return None, reason
@@ -303,6 +328,16 @@ def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, s
 # Chat-side notices, in the languages quick_menu.STRINGS covers.
 STRINGS: dict[str, dict[str, str]] = {
     "zh-TW": {
+        "card.todos": "待辦 {done}/{total}",
+        "card.pages": "{n} 頁",
+        "card.pdf_failed": "⚠️ PDF 轉換失敗：{reason}，附上原始檔",
+        "card.failure.no_host": "App 主視窗未連線",
+        "card.failure.timeout": "逾時",
+        "card.failure.not_pdf": "轉出的檔案不是 PDF",
+        "card.failure.too_large": "PDF 超過這個平台的上限",
+        "card.failure.budget": "這則回覆的轉檔時間已用完",
+        "card.failure.source_too_large": "HTML 檔太大",
+        "card.failure.error": "轉檔出錯",
         "unsupported": "此平台尚不支援媒體",
         "too_large": "⚠️ 檔案「{name}」超過 {limit} 上限，沒有收下",
         "download_failed": "⚠️ 檔案「{name}」下載失敗：{error}",
@@ -323,6 +358,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.changed": "檢查後檔案被更動或換成連結",
     },
     "en-US": {
+        "card.todos": "todos {done}/{total}",
+        "card.pages": "{n} pages",
+        "card.pdf_failed": "⚠️ PDF conversion failed: {reason}; the original file is attached",
+        "card.failure.no_host": "the app window is not connected",
+        "card.failure.timeout": "timed out",
+        "card.failure.not_pdf": "the output was not a PDF",
+        "card.failure.too_large": "the PDF is over this platform's limit",
+        "card.failure.budget": "this reply ran out of conversion time",
+        "card.failure.source_too_large": "the HTML file is too large",
+        "card.failure.error": "the conversion failed",
         "unsupported": "This platform does not support media yet",
         "too_large": "⚠️ \"{name}\" is over the {limit} limit, so it was not received",
         "download_failed": "⚠️ \"{name}\" could not be downloaded: {error}",
@@ -343,6 +388,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.changed": "the file changed or became a link after it was checked",
     },
     "ja-JP": {
+        "card.todos": "ToDo {done}/{total}",
+        "card.pages": "{n} ページ",
+        "card.pdf_failed": "⚠️ PDF 変換に失敗しました：{reason}。元のファイルを添付します",
+        "card.failure.no_host": "アプリのウィンドウが接続されていません",
+        "card.failure.timeout": "タイムアウト",
+        "card.failure.not_pdf": "出力が PDF ではありません",
+        "card.failure.too_large": "PDF がこのプラットフォームの上限を超えています",
+        "card.failure.budget": "この返信の変換時間を使い切りました",
+        "card.failure.source_too_large": "HTML ファイルが大きすぎます",
+        "card.failure.error": "変換エラー",
         "unsupported": "このプラットフォームはまだメディアに対応していません",
         "too_large": "⚠️ ファイル「{name}」は上限 {limit} を超えているため、受け取りませんでした",
         "download_failed": "⚠️ ファイル「{name}」をダウンロードできませんでした：{error}",

@@ -284,11 +284,11 @@ def _staged(monkeypatch, *, before_recheck=None, after_first=None, after_recheck
         except PermissionError:
             state["blocked"] = True
 
-    def staged(raw, roots):
+    def staged(raw, roots, plans_workspace=None):
         calls.append(raw)
         if len(calls) == 2 and before_recheck:
             attempt(before_recheck)
-        result = checked(raw, roots)
+        result = checked(raw, roots, plans_workspace)
         if len(calls) == 1 and after_first:
             attempt(after_first)
         if len(calls) == 2 and after_recheck:
@@ -473,3 +473,48 @@ def test_a_file_whose_stat_fails_after_resolving_is_refused_not_raised(ws: Path,
     assert media.resolve_outbound(str(target), [ws]) == (None, "changed")
     seen["n"] = 0
     assert media.open_outbound(str(target), [ws]) == (None, "changed")
+
+
+# --- Plan documents: <workspace>/.agent-team/plans/*.html ------------------------------
+
+
+def test_a_plan_document_of_the_workspace_is_allowed(ws: Path) -> None:
+    f = _file(ws / ".agent-team" / "plans" / "report_abc123.html")
+    assert media.resolve_outbound(str(f), [ws], plans_workspace=ws) == (f.resolve(), "")
+    opened, reason = media.open_outbound(str(f), [ws], plans_workspace=ws)
+    assert reason == "" and opened is not None
+    opened.fh.close()
+
+
+def test_a_plan_document_stays_hidden_unless_asked_for(ws: Path) -> None:
+    f = _file(ws / ".agent-team" / "plans" / "report_abc123.html")
+    assert media.resolve_outbound(str(f), [ws]) == (None, "hidden")
+
+
+@pytest.mark.parametrize("rel, reason", [
+    (".agent-team/plans/sub/report.html", "hidden"),
+    (".agent-team/report.html", "hidden"),
+    (".agent-team/settings.json", "hidden"),
+    (".agent-team/plans/report.md", "hidden"),
+    (".agent-team/plans/.draft.html", "hidden"),
+    (".agent-team/plans/credentials.html", "denied_name"),
+    ("sub/.agent-team/plans/report.html", "hidden"),
+    (".git/.agent-team/plans/report.html", "hidden"),
+])
+def test_only_the_workspace_plans_folder_is_opened(ws: Path, rel: str, reason: str) -> None:
+    f = _file(ws / rel)
+    assert media.resolve_outbound(str(f), [ws], plans_workspace=ws) == (None, reason)
+
+
+def test_plans_in_the_media_folder_or_another_workspace_stay_refused(tmp_path: Path, ws: Path) -> None:
+    root = tmp_path / "media" / "pane"
+    in_media = _file(root / ".agent-team" / "plans" / "r.html")
+    assert media.resolve_outbound(str(in_media), [ws, root], plans_workspace=ws) == (None, "hidden")
+    other = _file(tmp_path / "other" / ".agent-team" / "plans" / "r.html")
+    assert media.resolve_outbound(str(other), [ws], plans_workspace=ws) == (None, "outside")
+
+
+def test_a_workspace_inside_a_hidden_folder_still_sends_no_plans(home: Path) -> None:
+    root = home / ".hidden" / "proj"
+    f = _file(root / ".agent-team" / "plans" / "r.html")
+    assert media.resolve_outbound(str(f), [root], plans_workspace=root) == (None, "hidden")
