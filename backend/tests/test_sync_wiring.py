@@ -8,6 +8,7 @@ switch, and the debounced round after a local save.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import pytest
@@ -460,3 +461,56 @@ async def test_switching_back_after_a_failed_switch_reopens_sync(tmp_path, monke
     assert server_link._switch_pending is True
     await server_link._note_account("ns-a")
     assert server_link._switch_pending is False
+
+
+async def test_a_reply_over_the_frame_limit_reaches_the_engine_as_frame_too_large(monkeypatch):
+    # A server with no reply byte cap: the socket closes with 1009 and the
+    # engine has to hear that, not a plain drop, to ask for smaller pages.
+    import websockets
+
+    from agent_team_backend import sync_engine
+
+    async def handler(ws):
+        await ws.recv()
+        await ws.send("x" * (2 * 1024 * 1024))
+        with contextlib.suppress(Exception):
+            await ws.wait_closed()
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as srv:
+        port = srv.sockets[0].getsockname()[1]
+        ws = await websockets.connect(f"ws://127.0.0.1:{port}")
+        await ws.send("hi")
+        with contextlib.suppress(websockets.ConnectionClosed):
+            async for _ in ws:
+                pass
+        assert server_link._close_code_sent(ws) == 1009
+
+        link = server_link.ServerLink()
+        link._ws = ws
+
+        async def dropped(msg_type, payload):
+            raise ConnectionError("navide-server connection closed")
+
+        monkeypatch.setattr(link, "_request", dropped)
+        with pytest.raises(sync_engine.FrameTooLarge):
+            await link._sync_request("sync.pull", {"scope": "prompts"})
+
+
+async def test_an_ordinary_drop_stays_a_connection_error_for_the_engine(monkeypatch):
+    from agent_team_backend import sync_engine
+
+    link = server_link.ServerLink()
+    link._ws = None
+
+    async def dropped(msg_type, payload):
+        raise ConnectionError("navide-server connection closed")
+
+    monkeypatch.setattr(link, "_request", dropped)
+    with pytest.raises(ConnectionError) as caught:
+        await link._sync_request("sync.pull", {"scope": "prompts"})
+    assert not isinstance(caught.value, sync_engine.FrameTooLarge)
+
+
+def test_the_sync_engine_is_handed_the_sync_request():
+    link = server_link.ServerLink()
+    assert link.sync_engine()._request == link._sync_request

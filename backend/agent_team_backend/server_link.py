@@ -583,6 +583,16 @@ def _dial(url: str, **kwargs: Any) -> Any:
     return websockets.connect(url, **kwargs)
 
 
+def _close_code_sent(ws: Any) -> int | None:
+    """The close code this side sent on *ws*, if it sent one. A frame over
+    ``max_size`` makes websockets close with 1009 and record it here; the code
+    the connection reports (``close_code``) is the far side's, 1006 when it
+    sent none. Read-only, for ``_sync_request``."""
+    sent = getattr(getattr(ws, "protocol", None), "close_sent", None)
+    code = getattr(sent, "code", None)
+    return int(code) if isinstance(code, int) else None
+
+
 async def _warm_tls(url: str) -> None:
     """Build the trust store on a worker thread, before anything dials.
 
@@ -1055,7 +1065,7 @@ class ServerLink:
 
             engine = engine_mod.SyncEngine(
                 app.sync_store,
-                self._request,
+                self._sync_request,
                 device_id=lambda: self._device_id,
                 enabled=lambda scope: not _switch_pending and sync_scopes.scope_enabled(scope),
                 on_result=_result,
@@ -1337,6 +1347,21 @@ class ServerLink:
         finally:
             self._pending.pop(msg_id, None)
         return reply if isinstance(reply, dict) else {}
+
+    async def _sync_request(self, msg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """``_request`` for the sync engine only. A drop caused by a reply too
+        big for one frame — this side closed the socket with 1009 — is raised
+        as ``sync_engine.FrameTooLarge`` so a pull can ask for smaller pages.
+        Only reads the closed connection; the link itself is untouched."""
+        ws = self._ws
+        try:
+            return await self._request(msg_type, payload)
+        except ConnectionError as err:
+            if _close_code_sent(ws) == 1009:
+                from . import sync_engine
+
+                raise sync_engine.FrameTooLarge(str(err)) from err
+            raise
 
     async def _authenticate(self, config: ServerLinkConfig) -> None:
         """Say hello, and settle which id this machine presents to this account.

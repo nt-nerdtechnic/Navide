@@ -1077,3 +1077,77 @@ def test_round_is_current_follows_the_store_generation(tmp_path):
 
     asyncio.run(inside())
     assert seen == [True, False]
+
+
+# ── a pull page over one WebSocket frame on a server with no byte cap ────────
+async def _rounds(device, n):
+    """``n`` rounds; True for one that went through, the exception otherwise."""
+    out = []
+    for _ in range(n):
+        try:
+            await device.sync()
+            out.append(True)
+        except Exception as err:  # noqa: BLE001 - recorded for the assertions
+            out.append(err)
+    return out
+
+
+async def test_a_page_too_big_for_one_frame_halves_until_it_fits_then_recovers(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {f"p{i}": {"n": i} for i in range(10)})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    forward = b.engine._request
+    full = b.engine._pull_limit("prompts")
+    fits = 3
+    limits: list[int] = []
+
+    async def request(msg_type, payload):
+        if msg_type == "sync.pull":
+            limits.append(payload["limit"])
+            if payload["limit"] > fits:
+                # What the link raises when the socket closed with 1009.
+                raise sync_engine.FrameTooLarge("navide-server connection closed")
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    halvings, n = [], full
+    while n > fits:
+        halvings.append(n)
+        n = max(1, n // 2)
+    outcomes = await _rounds(b, len(halvings) + 1)
+    assert limits[: len(halvings) + 1] == [*halvings, n]
+    assert all(isinstance(o, sync_engine.FrameTooLarge) for o in outcomes[:-1])
+    assert outcomes[-1] is True
+    assert b.adapter.items == a.adapter.items
+    # A whole pull went through: the page is back to the size the rows suggest.
+    assert b.engine._pull_limit("prompts") == full
+
+
+async def test_halving_stops_at_one_row(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+    limits: list[int] = []
+
+    async def request(msg_type, payload):
+        if msg_type == "sync.pull":
+            limits.append(payload["limit"])
+        raise sync_engine.FrameTooLarge("navide-server connection closed")
+
+    b.engine._request = request
+    await _rounds(b, 12)
+    assert limits[-2:] == [1, 1]
+    assert all(later <= earlier for earlier, later in zip(limits, limits[1:]))
+
+
+async def test_an_ordinary_drop_does_not_shrink_the_page(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+    full = b.engine._pull_limit("prompts")
+
+    async def request(msg_type, payload):
+        raise ConnectionError("navide-server connection closed")
+
+    b.engine._request = request
+    await _rounds(b, 3)
+    assert b.engine._pull_limit("prompts") == full

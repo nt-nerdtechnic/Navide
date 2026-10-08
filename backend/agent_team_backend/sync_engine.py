@@ -136,6 +136,12 @@ class StaleRound(SyncError):
     """A round that began under the previous account tried to write."""
 
 
+class FrameTooLarge(ConnectionError):
+    """The link closed because a reply was over the WebSocket frame limit (the
+    socket went down with 1009). Raised by the request function the link hands
+    the engine; a pull answers it by asking for smaller pages."""
+
+
 #: The store and the generation the running round began under (None outside a
 #: round). Carried into worker threads by ``asyncio.to_thread``, which copies
 #: context.
@@ -627,6 +633,13 @@ class SyncEngine:
         self._last: dict[str, dict[str, Any]] = {}
         #: Per scope, the largest pulled row seen in this process, in bytes.
         self._row_bytes: dict[str, int] = {}
+        #: Per scope, a page size the server's replies forced down: a page that
+        #: closed the socket (``FrameTooLarge``) halves it, down to one row, and
+        #: a pull that reads to the end drops it. A server with no reply byte
+        #: cap would otherwise close the shared link on the same page every
+        #: round, for good — the page that is too big never arrives, so its
+        #: rows can never teach ``_row_bytes`` their size.
+        self._pull_caps: dict[str, int] = {}
         #: Items whose ``apply`` deferred, by (scope, item id): attempts, first
         #: and next-allowed time. In memory on purpose: the stored cursor
         #: already keeps a held row coming back across restarts, so all that
@@ -847,11 +860,19 @@ class SyncEngine:
         finished = False
         while True:
             pages += 1
-            reply = _payload(
-                await self._call(
-                    "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
+            limit = self._pull_limit(scope)
+            try:
+                raw_reply = await self._call(
+                    "sync.pull", {"scope": scope, "since": since, "limit": limit}
                 )
-            )
+            except FrameTooLarge:
+                self._pull_caps[scope] = max(1, limit // 2)
+                log.warning(
+                    "sync.pull on %s: a page of %d rows closed the link as too large; asking for %d next",
+                    scope, limit, self._pull_caps[scope],
+                )
+                raise
+            reply = _payload(raw_reply)
             if not reset and since > 0 and int(reply.get("cursor") or 0) < since:
                 last = self._last_reset.get(scope)
                 if last is not None and self._clock() - last < RESET_THROTTLE_S:
@@ -934,6 +955,8 @@ class SyncEngine:
             # The re-read reached the end: a remembered delete whose item was
             # not on the server at all goes up from rev 0 as it stands.
             self._reset_deletes.pop(scope, None)
+            # The rows read on the way have taught ``_row_bytes`` their size.
+            self._pull_caps.pop(scope, None)
         return applied
 
     def _pending_deletes(self, adapter: ScopeAdapter) -> set[str]:
@@ -1158,7 +1181,8 @@ class SyncEngine:
     def _pull_limit(self, scope: str) -> int:
         """How many rows to ask one pull page for; see ``PULL_FRAME_BUDGET``."""
         row = max(self._row_bytes.get(scope, 0), PULL_ROW_GUESS.get(scope, MAX_BODY_BYTES))
-        return max(1, min(PULL_PAGE, PULL_FRAME_BUDGET // max(row, 1)))
+        limit = max(1, min(PULL_PAGE, PULL_FRAME_BUDGET // max(row, 1)))
+        return min(limit, self._pull_caps.get(scope, limit))
 
     def _learn_rows(self, scope: str, rows: list[Any]) -> None:
         sizes = [len(canonical(r).encode("utf-8")) for r in rows if isinstance(r, dict)]
