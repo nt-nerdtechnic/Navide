@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ def test_a_value_may_contain_an_equals_sign() -> None:
     assert report.parse_attach("/w/r.html | summary=a=b").summary == "a=b"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot contain |")
 def test_an_existing_file_whose_name_has_a_bar_is_one_path(tmp_path: Path) -> None:
     f = tmp_path / "a | title=b.txt"
     f.write_text("x")
