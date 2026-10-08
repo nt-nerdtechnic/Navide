@@ -419,3 +419,87 @@ def test_memory_apply_does_not_overwrite_an_edit_made_since_the_snapshot(tmp_pat
     os.utime(target, (1, 1))
     assert scope.apply(".claude:CLAUDE.md", {"text": "from the cloud\n"}) is False
     assert target.read_text() == "typed just now\n"
+
+
+# ── security review C ────────────────────────────────────────────────────────
+@pytest.mark.parametrize("relative", [
+    "C:/Users/Public/evil.bat", "D:evil.bat", "SKILL.md:ads", "notes/a:b.md",
+    "CON", "nul.txt", "scripts/Aux.md", "COM1", "lpt9.log", "trailing.", "trailing ", "dir./a.md",
+])
+def test_a_skill_path_windows_would_read_differently_is_refused(relative):
+    from pathlib import PureWindowsPath
+
+    from agent_team_backend import skills_store
+
+    assert skills_store._safe_relative(relative) is None
+    # What the refusal is for: on Windows these leave (or alias) the staging dir.
+    staging = PureWindowsPath(r"C:\Users\me\.agents\skills\.demo-abc123")
+    joined = staging / relative
+    if ":" in relative:
+        assert not str(joined).lower().startswith(str(staging).lower()) or ":" in joined.name
+
+
+@pytest.mark.parametrize("relative", ["SKILL.md", "scripts/run.sh", "console.md", "com10.txt", "a.b/c.md"])
+def test_ordinary_skill_paths_still_pass(relative):
+    from agent_team_backend import skills_store
+
+    assert skills_store._safe_relative(relative) == relative
+
+
+def test_import_refuses_a_file_that_would_land_outside_the_skill(tmp_path):
+    from agent_team_backend import skills_store
+
+    store, root = _skills(tmp_path, "S")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for relative in ("C:/evil.bat", "SKILL.md:ads", "CON"):
+        assert store.import_content("demo", {
+            "SKILL.md": {"t": "text", "v": "---\nname: demo\ndescription: d\n---\n"},
+            relative: {"t": "text", "v": "x"}}) is False
+        src = tmp_path / "blob"
+        src.write_bytes(b"x")
+        assert store.import_files("demo", {"SKILL.md": src, relative: src}) is False
+    assert not (root / "demo").exists()
+
+
+async def test_a_local_file_this_machine_cannot_read_is_never_overwritten(tmp_path, account_key, monkeypatch):
+    server = StrictServer()
+    ha, hb = _home(tmp_path, "a"), _home(tmp_path, "b")
+    (ha / ".claude" / "CLAUDE.md").write_text("from A\n")
+    big = "B" * (native_memory.FILE_SIZE_LIMIT + 10)
+    (hb / ".claude" / "CLAUDE.md").write_text(big)
+    a = Dev(tmp_path, server, "A", monkeypatch, sync_scopes.MemoryScope(), home=ha)
+    b = Dev(tmp_path, server, "B", monkeypatch, sync_scopes.MemoryScope(), home=hb)
+    await a.sync()
+    await b.sync()
+    assert (hb / ".claude" / "CLAUDE.md").read_text() == big
+
+
+def test_a_dangling_link_is_not_written_through(tmp_path, monkeypatch):
+    home = _home(tmp_path, "h")
+    outside = tmp_path / "outside" / "deep" / "new.txt"
+    (home / ".claude" / "CLAUDE.md").symlink_to(outside)
+    monkeypatch.setattr(native_memory, "_home", lambda: home)
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    assert sync_scopes.MemoryScope().apply(".claude:CLAUDE.md", {"text": "pwn\n"}) is False
+    assert not (tmp_path / "outside").exists()
+    with pytest.raises(ValueError):
+        native_memory.save(str(home / ".claude" / "CLAUDE.md"), "pwn\n", home=home)
+    assert not (tmp_path / "outside").exists()
+
+
+def test_memory_item_ids_are_one_to_one():
+    import hashlib
+    import random
+
+    long = ".cursor/rules/" + "x" * 250 + ".mdc"
+    digest = hashlib.sha256(long.encode()).hexdigest()
+    assert sync_scopes.memory_item_id(long) != sync_scopes.memory_item_id("sha256/" + digest)
+    assert sync_scopes.memory_item_id(long) != sync_scopes.memory_item_id("sha256:" + digest)
+    assert ITEM_ID.match(sync_scopes.memory_item_id(long))
+    rnd = random.Random(1)
+    alphabet = list("ab./:+@-_ %Z9") + ["\u00e9", "e\u0301", "\\", "\x00", "規"]
+    seen: dict[str, str] = {}
+    for _ in range(20000):
+        s = "".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 12)))
+        assert seen.setdefault(sync_scopes.memory_item_id(s), s) == s

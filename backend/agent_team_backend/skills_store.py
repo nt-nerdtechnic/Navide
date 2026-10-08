@@ -930,6 +930,8 @@ class SkillsStore:
             (staging / MARKER_FILE).write_text("", encoding="utf-8")
             for relative, raw in decoded.items():
                 target = staging / relative
+                if not _inside(target, staging):
+                    raise SkillValidationError(f"skill {name}: {relative} leaves the skill directory")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(raw)
                 if relative in executable:
@@ -1020,6 +1022,8 @@ class SkillsStore:
             (staging / MARKER_FILE).write_text("", encoding="utf-8")
             for relative, source in safe_files.items():
                 target = staging / relative
+                if not _inside(target, staging):
+                    raise SkillValidationError(f"skill {name}: {relative} leaves the skill directory")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
                 if executable and relative in executable:
@@ -1446,6 +1450,24 @@ def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: b
                 raise SkillValidationError(f"skill path is both a file and directory: {prefix}")
 
 
+#: Device names Windows reserves in every directory, with any extension.
+_WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$")
+
+
+def _windows_reserved(part: str) -> bool:
+    return bool(_WINDOWS_RESERVED.match(part.rstrip(" .")))
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """Whether *path*, resolved, is *root* or under it."""
+    try:
+        resolved = path.resolve()
+        base = root.resolve()
+    except OSError:
+        return False
+    return resolved == base or base in resolved.parents
+
+
 def _safe_relative(relative: Any, *, allow_hidden: bool = False) -> str | None:
     """``relative`` as a path that cannot leave the skill directory, or None.
 
@@ -1459,6 +1481,13 @@ def _safe_relative(relative: Any, *, allow_hidden: bool = False) -> str | None:
         return None
     parts = relative.split("/")
     if any(part in ("", ".", "..") for part in parts):
+        return None
+    # What Windows reads differently, on every platform, because the skill
+    # lands on all of them: a ":" is a drive ("C:/x", "D:x") or an alternate
+    # data stream ("SKILL.md:ads") and leaves the directory joined onto; a
+    # reserved device name (any extension) opens the device; a trailing dot or
+    # space is stripped, so two names land on one file.
+    if any(":" in part or _windows_reserved(part) or part[-1] in ". " for part in parts):
         return None
     # Every dotfile is refused, the marker included: this side writes its own
     # marker, and nothing else hidden has a reason to travel between machines.
