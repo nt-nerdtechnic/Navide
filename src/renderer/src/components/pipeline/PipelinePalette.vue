@@ -8,6 +8,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Role } from '../../composables/useRoles'
 import { DND_PALETTE, type PaletteItem } from './pipelineEditorModel'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 const props = defineProps<{
   roles: Role[]
@@ -95,8 +96,8 @@ onMounted(() => {
         >
           <span class="pp-glyph pp-glyph--role" aria-hidden="true">{{ item.label.charAt(0).toUpperCase() }}</span>
           <span class="pp-text">
-            <span class="pp-label">{{ item.label }}</span>
-            <span v-if="item.description" class="pp-desc">{{ item.description }}</span>
+            <span class="pp-label" v-truncate>{{ item.label }}</span>
+            <span v-if="item.description" class="pp-desc" v-truncate>{{ item.description }}</span>
           </span>
         </button>
       </template>
@@ -111,8 +112,8 @@ onMounted(() => {
             <svg viewBox="0 0 16 16"><path d="M8 1.8 14.2 8 8 14.2 1.8 8z" /></svg>
           </span>
           <span class="pp-text">
-            <span class="pp-label">{{ item.label }}</span>
-            <span class="pp-desc">{{ item.description }}</span>
+            <span class="pp-label" v-truncate>{{ item.label }}</span>
+            <span class="pp-desc" v-truncate>{{ item.description }}</span>
           </span>
         </button>
         <p v-if="!compact" class="pp-tip">{{ t('pipelineEditor.palette.branch-tip') }}</p>

@@ -11,6 +11,7 @@ import type { LaneBadge } from '../../lib/pipelineGraphEdits'
 import type { Stage } from '../../data/stages'
 import PipelineNodeCard from './PipelineNodeCard.vue'
 import { DND_NODE, DND_PALETTE, stagesByLayer, type PaletteItem } from './pipelineEditorModel'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 export interface LaneTarget {
   mode: 'into' | 'newLayer'
@@ -199,7 +200,7 @@ function shiftColumn(index: number, delta: -1 | 1): void {
         >
           <header class="lane-head">
             <span class="lane-index">{{ col.index + 1 }}</span>
-            <span class="lane-title">{{ columnTitle(col) }}</span>
+            <span class="lane-title" v-truncate>{{ columnTitle(col) }}</span>
             <span v-if="col.nodes.length > 1" class="lane-par">{{ t('pipelineEditor.lane.parallel', { n: col.nodes.length }) }}</span>
             <span class="lane-tools">
               <button

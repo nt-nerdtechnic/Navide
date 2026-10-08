@@ -7,7 +7,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import type { TerminalDockPort } from '@navide/terminal'
-import { useNotify } from '@navide/plugin-ui/foundation'
+import { useNotify, vTruncate } from '@navide/plugin-ui/foundation'
 import { AiCliDock } from '@navide/plugin-shell'
 import type { useRoles, Role, RoleUsage } from '../composables/useRoles'
 import type { usePipelines, PipelineSummary } from '../composables/usePipelines'
@@ -659,7 +659,7 @@ function buildAiContext(): string {
             @click="plEnterDetail(p.id)"
             @keydown.enter.prevent="plEnterDetail(p.id)"
             @keydown.space.prevent="plEnterDetail(p.id)">
-            <span class="pl-name">{{ p.name }}</span>
+            <span class="pl-name" v-truncate>{{ p.name }}</span>
             <span class="pl-tags">
               <span v-if="p.id === pipelinesApi.activePipelineId.value" class="pl-badge">{{ $t('label.default') }}</span>
               <span v-if="p.builtin" class="pl-badge pl-badge--builtin">{{ $t('label.builtin') }}</span>
@@ -699,7 +699,7 @@ function buildAiContext(): string {
         </div>
         <div v-if="pipelinesApi.pipelinesPath.value" class="pl-source">
           <span>{{ $t('label.pipeline-definition-file') }}</span>
-          <span class="pl-source-path" :title="pipelinesApi.pipelinesPath.value">{{ pipelinesApi.pipelinesPath.value }}</span>
+          <span class="pl-source-path" v-truncate>{{ pipelinesApi.pipelinesPath.value }}</span>
         </div>
       </template>
 
@@ -727,7 +727,7 @@ function buildAiContext(): string {
               <button class="ghost tiny" @click="plRenamingId = ''">✕</button>
             </template>
             <h2 v-else class="pl-detail-title">
-              <span class="pl-detail-name" :title="plCurrentPipeline?.name ?? plEditingId">{{ plCurrentPipeline?.name ?? plEditingId }}</span>
+              <span class="pl-detail-name" v-truncate>{{ plCurrentPipeline?.name ?? plEditingId }}</span>
               <button
                 class="icon-btn" :disabled="plBusy" :title="$t('action.rename')"
                 @click="plStartRename(plEditingId, plCurrentPipeline?.name ?? '')">✎</button>
@@ -777,7 +777,7 @@ function buildAiContext(): string {
               @click="rSelectKey(r.key)">
               <div class="row-g"><span class="mono-key">{{ r.key }}</span><span v-if="r.is_default" class="badge">{{ $t('label.default') }}</span></div>
               <div class="item-label">{{ r.label }}</div>
-              <div class="item-sub">{{ r.one_line }}</div>
+              <div class="item-sub" v-truncate>{{ r.one_line }}</div>
             </li>
           </ul>
         </aside>

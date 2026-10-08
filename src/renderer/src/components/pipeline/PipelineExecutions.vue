@@ -9,6 +9,7 @@ import type { useBackend } from '../../composables/useBackend'
 import type { NodeRunState, PipelineGraph } from '../../lib/pipelineGraph'
 import PipelineCanvas from './PipelineCanvas.vue'
 import { formatElapsed, formatTokens, type RunSnapshot } from './pipelineEditorModel'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 interface RunRecord {
   run_id: string
@@ -140,7 +141,7 @@ const gateComment = ref('')
             <span class="px-dot px-dot--running" aria-hidden="true"></span>
             <span class="px-run-main">
               <span class="px-run-title">{{ t('pipelineEditor.exec.live') }}</span>
-              <span class="px-run-task">{{ liveRun.task || t('pipelineEditor.exec.no-task') }}</span>
+              <span class="px-run-task" v-truncate>{{ liveRun.task || t('pipelineEditor.exec.no-task') }}</span>
             </span>
             <span class="px-run-meta"><span>{{ duration(liveRun) }}</span><span>{{ tokensOf(liveRun) }}</span></span>
           </button>
@@ -153,7 +154,7 @@ const gateComment = ref('')
                 {{ t('pipelineEditor.exec.run-n', { n: runs.length - i }) }}
                 <span class="px-outcome">{{ t(`pipelineEditor.exec.outcome-${outcomeOf(r)}`) }}</span>
               </span>
-              <span class="px-run-task">{{ r.task || t('pipelineEditor.exec.no-task') }}</span>
+              <span class="px-run-task" v-truncate>{{ r.task || t('pipelineEditor.exec.no-task') }}</span>
             </span>
             <span class="px-run-meta"><span>{{ when(r) }}</span><span>{{ duration(r) }}</span><span v-if="tokensOf(r)">{{ tokensOf(r) }}</span></span>
           </button>
@@ -181,7 +182,7 @@ const gateComment = ref('')
       <header v-if="selected" class="px-head">
         <span class="px-dot" :class="`px-dot--${outcomeOf(selected)}`" aria-hidden="true"></span>
         <span class="px-head-text">
-          <strong>{{ selected.task || t('pipelineEditor.exec.no-task') }}</strong>
+          <strong v-truncate>{{ selected.task || t('pipelineEditor.exec.no-task') }}</strong>
           <span>{{ t(`pipelineEditor.exec.outcome-${outcomeOf(selected)}`) }} · {{ when(selected) }} · {{ duration(selected) }}</span>
         </span>
       </header>

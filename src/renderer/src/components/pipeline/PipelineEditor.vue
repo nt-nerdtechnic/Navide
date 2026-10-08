@@ -7,7 +7,7 @@
 // Executions tab.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useNotify } from '@navide/plugin-ui/foundation'
+import { useNotify, vTruncate } from '@navide/plugin-ui/foundation'
 import { invokeCommand } from '@navide/plugin-ui/shared'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import type { useBackend } from '../../composables/useBackend'
@@ -546,13 +546,13 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
       <span class="pe-run-count">{{ t('pipelineEditor.exec.progress', runProgress) }}</span>
       <template v-if="waitingGate">
         <span class="pe-run-sep" aria-hidden="true"></span>
-        <span class="pe-run-text">{{ t('pipelineEditor.run.gate', { name: nodeTitle(waitingGate) }) }}</span>
+        <span class="pe-run-text" v-truncate>{{ t('pipelineEditor.run.gate', { name: nodeTitle(waitingGate) }) }}</span>
         <button type="button" class="pe-run-act" @click="reviewGate">{{ t('pipelineEditor.run.review') }}</button>
       </template>
       <template v-else-if="runningNames.length">
         <span class="pe-run-sep" aria-hidden="true"></span>
         <span class="pe-run-dot" aria-hidden="true"></span>
-        <span class="pe-run-text">{{ t('pipelineEditor.run.running', { names: listNames(runningNames) }) }}</span>
+        <span class="pe-run-text" v-truncate>{{ t('pipelineEditor.run.running', { names: listNames(runningNames) }) }}</span>
       </template>
     </div>
 
@@ -592,7 +592,7 @@ const modKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
              link has, so it is edited right where the link is. -->
         <div v-if="view === 'canvas' && selectedRejectEdge" class="pe-edge-panel" role="group" :aria-label="t('pipelineEditor.edge.title')">
           <span class="pe-edge-title">{{ t('pipelineEditor.edge.title') }}</span>
-          <span class="pe-edge-desc">{{ t('pipelineEditor.edge.desc', { from: edgeEndName(selectedRejectEdge.from), to: edgeEndName(selectedRejectEdge.to) }) }}</span>
+          <span class="pe-edge-desc" v-truncate>{{ t('pipelineEditor.edge.desc', { from: edgeEndName(selectedRejectEdge.from), to: edgeEndName(selectedRejectEdge.to) }) }}</span>
           <span class="pe-stepper">
             <button type="button" :disabled="locked || loopsOf(selectedRejectEdge) <= 1" :aria-label="t('pipelineEditor.edge.fewer')" @click="setLoops(selectedRejectEdge, loopsOf(selectedRejectEdge) - 1)">−</button>
             <span class="pe-stepper-value" aria-live="polite">{{ t('pipelineEditor.edge.max', { n: loopsOf(selectedRejectEdge) }) }}</span>

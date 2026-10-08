@@ -5,7 +5,7 @@ import { SafeAiCliPanel } from '@navide/plugin-ui'
 import {
   preparePlanDocHtml,
 } from './planSecurity'
-import { useNotify, useTheme } from '@navide/plugin-ui/foundation'
+import { useNotify, useTheme, vTruncate } from '@navide/plugin-ui/foundation'
 import {
   backendErrorMessage,
   callCapability,
@@ -1426,7 +1426,7 @@ onUnmounted(() => {
                 @keydown.enter.prevent="void openPlan(plan.rel_path)"
                 @contextmenu.prevent="openContextMenu($event, plan.rel_path)"
               >
-                <span class="plan-row-title plan-row-name">{{ planTitle(plan) }}</span>
+                <span class="plan-row-title plan-row-name" v-truncate>{{ planTitle(plan) }}</span>
                 <span v-if="planStage(plan)" class="plan-chip" :class="`plan-chip--stage-${planStage(plan)}`">
                   {{ planStageLabel(planStage(plan)) }}
                 </span>
@@ -1477,11 +1477,11 @@ onUnmounted(() => {
                 @click="void openPlan(plan.rel_path)"
                 @contextmenu.prevent="openContextMenu($event, plan.rel_path)"
               >
-                <span class="plan-row-title plan-row-name">{{ planTitle(plan) }}</span>
-                <span v-if="plan.meta?.overview || plan.overview" class="plan-row-overview">
+                <span class="plan-row-title plan-row-name" v-truncate>{{ planTitle(plan) }}</span>
+                <span v-if="plan.meta?.overview || plan.overview" class="plan-row-overview" v-truncate>
                   {{ plan.meta?.overview || plan.overview }}
                 </span>
-                <span class="plan-row-path" :title="plan.rel_path">{{ plan.rel_path }}</span>
+                <span class="plan-row-path" v-truncate>{{ plan.rel_path }}</span>
                 <span class="plan-row-meta">
                   <span class="plan-row-progress">
                     <span class="plan-progress-bar" :class="`plan-progress-bar--${planStage(plan) ?? 'draft'}`">
@@ -1559,11 +1559,11 @@ onUnmounted(() => {
                 @click="void openPlan(plan.rel_path)"
                 @contextmenu.prevent="openContextMenu($event, plan.rel_path)"
               >
-                <span class="plan-row-title plan-row-name">{{ planTitle(plan) }}</span>
-                <span v-if="plan.meta?.overview || plan.overview" class="plan-row-overview">
+                <span class="plan-row-title plan-row-name" v-truncate>{{ planTitle(plan) }}</span>
+                <span v-if="plan.meta?.overview || plan.overview" class="plan-row-overview" v-truncate>
                   {{ plan.meta?.overview || plan.overview }}
                 </span>
-                <span class="plan-row-path" :title="plan.rel_path">{{ plan.rel_path }}</span>
+                <span class="plan-row-path" v-truncate>{{ plan.rel_path }}</span>
                 <span class="plan-row-meta">
                   <span v-if="planStage(plan)" class="plan-chip" :class="`plan-chip--stage-${planStage(plan)}`">
                     {{ planStageLabel(planStage(plan)) }}

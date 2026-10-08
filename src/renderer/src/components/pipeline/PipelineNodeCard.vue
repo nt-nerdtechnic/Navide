@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import type { GraphNode, NodeRunState } from '../../lib/pipelineGraph'
 import type { LaneBadge } from '../../lib/pipelineGraphEdits'
 import { elapsedOf, formatElapsed, formatTokens, nodeTitle } from './pipelineEditorModel'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 const props = defineProps<{
   node: GraphNode
@@ -65,7 +66,7 @@ function badgeText(b: LaneBadge): string {
     </span>
     <span class="pnc-body">
       <span class="pnc-title">
-        <span class="pnc-title-text">{{ title }}</span>
+        <span class="pnc-title-text" v-truncate>{{ title }}</span>
         <svg v-if="node.slot?.isCommander" class="pnc-mark" viewBox="0 0 16 16" :aria-label="t('pipelineEditor.node.commander')">
           <title>{{ t('pipelineEditor.node.commander') }}</title>
           <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -79,7 +80,7 @@ function badgeText(b: LaneBadge): string {
       <!-- Title > role > CLI: when space runs out the role yields first, the
            title never does. -->
       <span class="pnc-meta">
-        <span class="pnc-sub">{{ subtitle }}</span>
+        <span class="pnc-sub" v-truncate>{{ subtitle }}</span>
         <span v-if="agentTag" class="pnc-agent" :title="agentLabel">{{ agentTag }}</span>
       </span>
     </span>
