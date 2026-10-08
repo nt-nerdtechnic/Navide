@@ -449,10 +449,13 @@ task: Review the diff on this branch and report blocking issues.
 スを解放できます：
 
 ```
-ui_invoke(action="ui.pane.reclaim", args={"paneId": "<子の pane_id>"})
+cli_reclaim_agent(target="<子の名前>")
 ```
 
-`paneId` は配列も受け付けます。各 CLI プロセスは終了し、Pane はその場に会話を保った
+`cli_close_agent` と同じ `target` / `pane_id` を受け付け、子 Pane を持つウィンドウに
+届きます。複数をまとめて回収するには、自分のウィンドウで
+`ui_invoke(action="ui.pane.reclaim", args={"paneId": [...]})` を使ってください。各 CLI
+プロセスは終了し、Pane はその場に会話を保った
 ままクリックで再開できるカードとして残ります — ステータスバーの「今すぐ回収」と同じ
 動作なので、ユーザーは開いて成果を確認できます。ステータスバーのガードはそのまま適用
 され、ビジーまたは回答待ちの Pane、ユーザーがフォーカスしている Pane、未送信の入力や

@@ -467,10 +467,13 @@ Once a child has reported and its work is done, the parent can free its memory
 without taking it away from the user:
 
 ```
-ui_invoke(action="ui.pane.reclaim", args={"paneId": "<child pane_id>"})
+cli_reclaim_agent(target="<child name>")
 ```
 
-`paneId` also takes an array. Each CLI process ends and the pane stays where it
+It takes the same `target` / `pane_id` as `cli_close_agent` and reaches the
+child in whichever window holds it. To release several at once, use
+`ui_invoke(action="ui.pane.reclaim", args={"paneId": [...]})` in your own
+window. Each CLI process ends and the pane stays where it
 was as a click-to-resume card with its conversation intact — the same "reclaim
 now" the status bar offers, so the user can open it and check the work. The
 status bar's guards apply: a pane that is busy or awaiting an answer, the one

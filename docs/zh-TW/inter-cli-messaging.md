@@ -388,10 +388,12 @@ Pane 之一。若 parent 在子 Agent 工作期間就關閉了，或該回合沒
 子 Pane 回報完、工作結束後，母 Pane 可以釋放它的資源，又不從使用者手上拿走它：
 
 ```
-ui_invoke(action="ui.pane.reclaim", args={"paneId": "<子 pane_id>"})
+cli_reclaim_agent(target="<子 Pane 名稱>")
 ```
 
-`paneId` 也可以給陣列。每個 CLI 行程會結束，Pane 留在原位、變成可點擊接續的卡片，
+它吃跟 `cli_close_agent` 一樣的 `target` / `pane_id`，送到持有那個子 Pane 的視窗。要一次
+回收多個，在自己的視窗用 `ui_invoke(action="ui.pane.reclaim", args={"paneId": [...]})`。
+每個 CLI 行程會結束，Pane 留在原位、變成可點擊接續的卡片，
 對話完整保留——跟狀態列的「立即回收」是同一件事，使用者點開就能核對成果。狀態列的
 守衛照樣適用：忙碌或等待回答中的 Pane、使用者正在聚焦的 Pane、有未送出輸入或有排隊
 訊息的 Pane、以及無法接續 session 的 Pane 都會被拒絕。回傳
