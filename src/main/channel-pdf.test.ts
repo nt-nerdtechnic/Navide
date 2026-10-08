@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 vi.mock('electron', () => ({ BrowserWindow: vi.fn(), session: { fromPartition: vi.fn() } }))
-vi.mock('./backend', () => ({ backendDataDir: () => '/data' }))
+// resolve(): on Windows '/data' gains the current drive, like every path the backend sends.
+vi.mock('./backend', async () => {
+  const { resolve: resolvePath } = await import('node:path')
+  return { backendDataDir: () => resolvePath('/data') }
+})
 
 import {
   PDF_RENDER_RESULT,
@@ -14,7 +18,7 @@ import {
   type PdfRenderDeps,
 } from './channel-pdf'
 
-const ROOT = join('/data', 'channels-pdf')
+const ROOT = resolve('/data', 'channels-pdf')
 const WORK = join(ROOT, '0123456789abcdef')
 const HTML = join(WORK, 'print.html')
 const PDF = join(WORK, 'out.pdf')
@@ -74,6 +78,34 @@ describe('parsePdfRenderRequest', () => {
     const parsed = parsePdfRenderRequest(request(overrides), ROOT)
     expect(parsed).toMatchObject({ requestId: 'pdf:1' })
     expect('error' in parsed).toBe(true)
+  })
+
+  describe('with Windows paths', () => {
+    const winRoot = 'C:\\Users\\me\\AppData\\Roaming\\Agent-Team\\channels-pdf'
+    const winWork = `${winRoot}\\0123456789abcdef`
+    const winRequest = (overrides: Record<string, unknown> = {}) =>
+      request({ html_path: `${winWork}\\print.html`, pdf_path: `${winWork}\\out.pdf`, ...overrides })
+
+    it('accepts the conversion folder the backend names with str(Path)', () => {
+      expect(parsePdfRenderRequest(winRequest(), winRoot, win32)).toEqual({
+        requestId: 'pdf:1', htmlPath: `${winWork}\\print.html`, pdfPath: `${winWork}\\out.pdf`, timeoutMs: 1000,
+      })
+    })
+
+    it('compares without regard to case, as NTFS does', () => {
+      expect(parsePdfRenderRequest(winRequest(), winRoot.replace('C:', 'c:').toLowerCase(), win32))
+        .toMatchObject({ htmlPath: `${winWork}\\print.html` })
+    })
+
+    it.each([
+      ['another folder', { html_path: 'C:\\Windows\\print.html', pdf_path: 'C:\\Windows\\out.pdf' }],
+      ['another drive', { html_path: `D${winWork.slice(1)}\\print.html`, pdf_path: `D${winWork.slice(1)}\\out.pdf` }],
+      ['a path without a drive', { html_path: `${winWork.slice(2)}\\print.html`, pdf_path: `${winWork.slice(2)}\\out.pdf` }],
+      ['a parent reference', { html_path: `${winWork}\\..\\0123456789abcdef\\print.html` }],
+      ['a UNC share', { html_path: '\\\\host\\share\\0123456789abcdef\\print.html' }],
+    ])('refuses %s', (_label, overrides) => {
+      expect('error' in parsePdfRenderRequest(winRequest(overrides), winRoot, win32)).toBe(true)
+    })
   })
 
   it('has no id to answer when the request carries none', () => {

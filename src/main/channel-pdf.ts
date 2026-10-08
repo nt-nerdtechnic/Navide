@@ -12,7 +12,7 @@
 import { BrowserWindow, session as electronSession } from 'electron'
 import type { BrowserWindowConstructorOptions, PrintToPDFOptions, Session } from 'electron'
 import { writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import path, { join, type PlatformPath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { backendDataDir } from './backend'
 
@@ -41,11 +41,18 @@ export interface PdfRenderRequest {
   timeoutMs: number
 }
 
-/** The request, or why it is refused (with its id when it had one, to answer it). */
+/** The request, or why it is refused (with its id when it had one, to answer it).
+ *  `paths` is the platform's path module; tests pass `path.win32` to check Windows. */
 export function parsePdfRenderRequest(
   payload: unknown,
   root: string,
+  paths: PlatformPath = path,
 ): PdfRenderRequest | { requestId: string | null; error: string } {
+  const { basename, dirname, isAbsolute, resolve } = paths
+  // NTFS and the Windows API ignore case: C:\Users and c:\users are one folder.
+  const same = paths.sep === '\\'
+    ? (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+    : (a: string, b: string) => a === b
   const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
     ? payload as Record<string, unknown>
     : {}
@@ -66,7 +73,7 @@ export function parsePdfRenderRequest(
   const work = dirname(resolve(htmlPath))
   if (resolve(htmlPath) !== htmlPath || resolve(pdfPath) !== pdfPath ||
       basename(htmlPath) !== 'print.html' || basename(pdfPath) !== 'out.pdf' ||
-      dirname(pdfPath) !== work || dirname(work) !== resolve(root) || !WORK_DIR_RE.test(basename(work))) {
+      !same(dirname(pdfPath), work) || !same(dirname(work), resolve(root)) || !WORK_DIR_RE.test(basename(work))) {
     return { requestId, error: 'not a conversion folder' }
   }
   return { requestId, htmlPath, pdfPath, timeoutMs }
