@@ -11570,6 +11570,11 @@ from .channels import ws_api as channels_ws_api  # noqa: E402
 
 handler(*channels_ws_api.MESSAGE_TYPES)(channels_ws_api.handle)
 
+# The Host's answer to a channel attachment's PDF print (channels/pdf.py).
+from .channels import pdf as channels_pdf  # noqa: E402
+
+handler(channels_pdf.RESULT_TYPE)(channels_pdf.handle_result)
+
 # ── Navide Guard (guard.*) ──
 # Renderer-only: ws request types, unreachable through MCP ui_invoke.
 from .guard import ws_api as guard_ws_api  # noqa: E402

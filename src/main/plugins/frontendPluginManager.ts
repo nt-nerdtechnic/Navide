@@ -9,6 +9,7 @@
 
 import { BrowserWindow, WebContentsView, ipcMain, webFrameMain, type WebContents, type WebFrameMain } from 'electron'
 import { warnMain } from '../main-log'
+import { PDF_RENDER_REQUEST, handlePdfRenderRequest } from '../channel-pdf'
 import { validateSupportedLocale } from '../hostLocale'
 import { composePluginFrameQuery } from './pluginContributionQuery'
 import { systemFrameUnlessMac } from '../window-controls'
@@ -7745,6 +7746,10 @@ export class FrontendPluginManager {
       }
       client.on('agent.capability.request', (payload) => {
         void this.handleAgentCapabilityRequest(client, payload)
+      })
+      client.on(PDF_RENDER_REQUEST, (payload) => {
+        // Only the live client answers: a replaced one's backend is gone.
+        if (this.wsClient === client) void handlePdfRenderRequest(client, payload)
       })
       client.connect(this.backendWsUrl)
     }
