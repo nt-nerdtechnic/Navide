@@ -385,3 +385,35 @@ def test_a_skill_whose_files_are_refused_is_reported_not_held(tmp_path, monkeypa
     # A decision with no files still waits in the intent map, as before.
     assert scope.apply("elsewhere", {"enabled": False, "targets": []}) is not False
     assert scope.snapshot()["elsewhere"]["enabled"] is False
+
+
+# ── memory: what does not travel is said, and an edit is never overwritten ──
+async def test_a_memory_file_too_large_for_a_record_is_reported_and_kept(tmp_path, account_key, monkeypatch):
+    server = StrictServer()
+    ha = _home(tmp_path, "a")
+    (ha / ".claude" / "CLAUDE.md").write_text("x" * 400_000)  # under the editor's 1 MB, over a record
+    (ha / ".codex").mkdir()
+    (ha / ".codex" / "AGENTS.md").write_text("small\n")
+    scope = sync_scopes.MemoryScope()
+    a = Dev(tmp_path, server, "A", monkeypatch, scope, home=ha)
+    await a.sync()
+    assert ("memory", ".codex:AGENTS.md") in server.rows
+    assert ("memory", ".claude:CLAUDE.md") not in server.rows
+    assert scope.oversized() == [".claude:CLAUDE.md"]
+    assert ".claude:CLAUDE.md" in scope.snapshot()  # held: absence would read as a delete
+
+
+def test_memory_apply_does_not_overwrite_an_edit_made_since_the_snapshot(tmp_path, monkeypatch):
+    import os
+
+    home = _home(tmp_path, "h")
+    target = home / ".claude" / "CLAUDE.md"
+    target.write_text("before\n")
+    monkeypatch.setattr(native_memory, "_home", lambda: home)
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    scope = sync_scopes.MemoryScope()
+    scope.snapshot()                       # what the engine compared against
+    target.write_text("typed just now\n")  # the editor saves mid-page
+    os.utime(target, (1, 1))
+    assert scope.apply(".claude:CLAUDE.md", {"text": "from the cloud\n"}) is False
+    assert target.read_text() == "typed just now\n"

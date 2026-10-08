@@ -997,6 +997,18 @@ class MemoryScope:
 
     scope = "memory"
 
+    def __init__(self) -> None:
+        #: mtime of each file as the last snapshot read it, by absolute path:
+        #: ``apply`` refuses to write over a file that has moved on since.
+        self._read_mtimes: dict[str, float] = {}
+        #: Items over the record limit, as of the last snapshot. They stay in
+        #: the snapshot — absence would read as a delete — and are listed here.
+        self._oversized: set[str] = set()
+
+    def oversized(self) -> list[str]:
+        """Item ids too large for one record, as of the last snapshot."""
+        return sorted(self._oversized)
+
     def _files(self) -> dict[str, Any]:
         from . import native_memory
 
@@ -1016,6 +1028,8 @@ class MemoryScope:
         from . import native_memory
 
         out: dict[str, Any] = {}
+        oversized: set[str] = set()
+        mtimes: dict[str, float] = {}
         for relative, entry in self._files().items():
             try:
                 doc = native_memory.read(entry.path)
@@ -1025,6 +1039,14 @@ class MemoryScope:
             text = doc.get("text")
             if isinstance(text, str):
                 out[relative] = {"text": text}
+                if isinstance(doc.get("modified"), (int, float)):
+                    mtimes[str(entry.path)] = float(doc["modified"])
+                if _over_record_limit(out[relative]):
+                    oversized.add(memory_item_id(relative))
+        # A file absent from this snapshot is absent from the map too, so an
+        # earlier mtime cannot refuse a file that was deleted and comes back.
+        self._read_mtimes = mtimes
+        self._oversized = oversized
         return out
 
     def apply(self, item_id: str, payload: Any | None) -> bool:
@@ -1049,10 +1071,17 @@ class MemoryScope:
             log.warning("no known instruction file matches %s on this machine", item_id)
             return False
         try:
-            native_memory.save(target, payload["text"])
+            # Against the mtime the snapshot read: an editor save in between
+            # is refused rather than overwritten, and the next round sees it
+            # as the local edit it is.
+            saved = native_memory.save(
+                target, payload["text"], expected_modified=self._read_mtimes.get(target)
+            )
         except Exception as err:  # noqa: BLE001 - a refused write is not fatal
             log.warning("the synced instruction file %s was not written: %s", item_id, err)
             return False
+        if isinstance(saved, dict) and isinstance(saved.get("modified"), (int, float)):
+            self._read_mtimes[target] = float(saved["modified"])
         attach(self.scope, item_id)
         return True
 
@@ -1071,6 +1100,14 @@ class MemoryScope:
             if relative in (rel, memory_item_id(rel)):
                 return str(path)
         return None
+
+
+def _over_record_limit(payload: Any) -> bool:
+    """Whether the engine's sealed body for *payload* would pass its limit."""
+    try:
+        return sync_keyring.sealed_length(sync_engine.canonical(payload)) > sync_engine.MAX_BODY_BYTES
+    except Exception:  # noqa: BLE001 - no key: nothing goes up anyway
+        return False
 
 
 def _declared(readers: Any) -> bool:
