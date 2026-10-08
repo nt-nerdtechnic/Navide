@@ -404,7 +404,7 @@ export function renderEnvelope(
     const echo = opts.correlationId ? 're 欄位請原樣帶回，' : ''
     const attach = isChannelTarget(sender)
       ? `要傳檔案回聊天室，就在訊息內容中單獨一行寫 ${ATTACH_MARKER} <絕對路徑>（同樣頂格；` +
-        '只限這個 workspace 內或收到的附件，不傳隱藏檔與金鑰）。'
+        '只限這個 workspace 內或收到的附件，不傳金鑰與憑證）。'
       : ''
     lines.push(
       `（回覆方式：第一行完整寫成 ${MSG_START} ${head}，下一行起為訊息內容，` +

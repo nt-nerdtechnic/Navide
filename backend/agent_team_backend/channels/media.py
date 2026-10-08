@@ -5,9 +5,9 @@ a random prefix and a name of safe characters only, and are pruned after
 ``RETENTION_S``. Outbound, a pane names a file on a ``---ATTACH--- <absolute path>``
 line inside an MSG block addressed to the chat; ``resolve_outbound`` admits only a
 regular file inside the pane's workspace or the media directory, judged after
-symlinks are resolved, and never a dotfile, a credential-shaped name or a system file.
-The one hidden folder a pane may send from is its workspace's plan documents,
-``<workspace>/.agent-team/plans/*.html`` (``plans_workspace``).
+symlinks are resolved, and never a credential-shaped name or a system file. A hidden
+file or a file in a hidden folder may go: the pane judges what to send, and the
+manager logs it (``Outbound.hidden``).
 """
 
 from __future__ import annotations
@@ -175,8 +175,8 @@ def _too_broad(base: Path) -> bool:
 
 def _scope(real: Path) -> tuple[str, ...]:
     """The segments of ``real`` the name rules judge: everything below home (or below the
-    anchor, outside home), so a workspace that itself sits in ~/.ssh or a secrets/ folder
-    is caught, not only what lies below the workspace."""
+    anchor, outside home), so a workspace that itself sits in a secrets/ folder is
+    caught, not only what lies below the workspace."""
     home = _home()
     return real.parts[len(home.parts):] if _inside(real, home) else real.parts[1:]
 
@@ -193,35 +193,20 @@ def _inside(path: PurePath, folder: PurePath) -> bool:
     return inner[: len(outer)] == outer
 
 
-PLANS_DIR = (".agent-team", "plans")
-
-
-def resolve_outbound(raw: str, roots: list[str | Path],
-                     plans_workspace: str | Path | None = None) -> tuple[Path | None, str]:
+def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, str]:
     """(the real file, "") when a pane may send ``raw``, else (None, reason): one of
-    not_absolute, parent_ref, missing, not_file, outside, broad_workspace, hidden,
+    not_absolute, parent_ref, missing, not_file, outside, broad_workspace,
     denied_name, system, hard_link."""
-    real, _st, reason = _check(raw, roots, plans_workspace)
+    real, _st, reason = _check(raw, roots)
     return real, reason
 
 
-def _plan_document(real: Path, base: Path, plans_workspace: str | Path | None) -> bool:
-    """``real`` is a plan document right in ``base``'s ``.agent-team/plans/`` and ``base``
-    is the workspace whose plans may be sent: then ``.agent-team`` is not a hidden folder."""
-    if not plans_workspace:
-        return False
-    try:
-        if Path(plans_workspace).resolve(strict=True) != base:
-            return False
-    except (OSError, RuntimeError):
-        return False
-    rel = real.relative_to(base).parts
-    return (len(rel) == 3 and rel[:2] == PLANS_DIR and rel[2].lower().endswith(".html")
-            and not rel[2].startswith("."))
+def is_hidden(real: Path) -> bool:
+    """A segment of ``real`` (below home, or below the anchor outside home) starts with a dot."""
+    return any(part.startswith(".") for part in _scope(real))
 
 
-def _check(raw: str, roots: list[str | Path],
-           plans_workspace: str | Path | None = None) -> tuple[Path | None, os.stat_result | None, str]:
+def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_result | None, str]:
     """``resolve_outbound`` plus the stat of the very inode that passed the rules."""
     path = Path(raw.strip())
     if not path.is_absolute():
@@ -251,10 +236,6 @@ def _check(raw: str, roots: list[str | Path],
             in_broad = True  # never usable; a narrower root later may still admit the file
             continue
         scope = _scope(real)
-        if _plan_document(real, base, plans_workspace):
-            scope = scope[:-3] + scope[-2:]  # drop the .agent-team segment, judge the rest
-        if any(part.startswith(".") for part in scope):
-            return None, None, "hidden"
         # A colon can also arrive through a symlink, after the raw path passed.
         if any(":" in part for part in scope) or any(
                 fnmatch.fnmatch(part.lower(), pat) for part in scope for pat in DENIED_NAMES):
@@ -287,10 +268,10 @@ class Outbound:
     fh: BinaryIO  # the checked file, already open; the caller closes it
     path: Path
     size: int
+    hidden: bool = False  # the path has a dot segment (logged, never refused)
 
 
-def open_outbound(raw: str, roots: list[str | Path],
-                  plans_workspace: str | Path | None = None) -> tuple[Outbound | None, str]:
+def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, str]:
     """Check ``raw``, open it, then check it again, so what is sent is what was checked.
 
     The recheck runs while the file is open, and an open file pins its inode: its number
@@ -302,7 +283,7 @@ def open_outbound(raw: str, roots: list[str | Path],
     recheck's own reason). A swap after the recheck
     no longer matters: the open file is the checked one.
     """
-    real, _seen, reason = _check(raw, roots, plans_workspace)
+    real, _seen, reason = _check(raw, roots)
     if real is None:
         return None, reason
     try:
@@ -311,7 +292,7 @@ def open_outbound(raw: str, roots: list[str | Path],
         return None, "changed"
     try:
         st = os.fstat(fd)
-        again, seen, reason = _check(raw, roots, plans_workspace)
+        again, seen, reason = _check(raw, roots)
         if again is None or seen is None:
             os.close(fd)
             return None, reason
@@ -322,7 +303,7 @@ def open_outbound(raw: str, roots: list[str | Path],
     except OSError:
         os.close(fd)
         return None, "changed"
-    return Outbound(os.fdopen(fd, "rb"), real, st.st_size), ""
+    return Outbound(os.fdopen(fd, "rb"), real, st.st_size, is_hidden(real)), ""
 
 
 # Chat-side notices, in the languages quick_menu.STRINGS covers.
@@ -352,7 +333,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.missing": "找不到這個檔案",
         "reason.not_file": "不是一般檔案",
         "reason.outside": "只能傳 workspace 或附件資料夾裡的檔案",
-        "reason.hidden": "不傳隱藏檔或隱藏資料夾裡的檔案",
         "reason.denied_name": "這個檔名看起來是憑證或金鑰",
         "reason.system": "不傳系統檔案",
         "reason.broad_workspace": "這個 pane 的 workspace 是家目錄或範圍過大的資料夾，不從那裡傳檔",
@@ -384,7 +364,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.missing": "the file does not exist",
         "reason.not_file": "it is not a regular file",
         "reason.outside": "only files in the workspace or the attachments folder can be sent",
-        "reason.hidden": "hidden files and files in hidden folders are not sent",
         "reason.denied_name": "the name looks like a credential or key",
         "reason.system": "system files are not sent",
         "reason.broad_workspace": "this pane's workspace is the home folder or another folder too broad to send from",
@@ -416,7 +395,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.missing": "ファイルが見つかりません",
         "reason.not_file": "通常のファイルではありません",
         "reason.outside": "送れるのは workspace か添付ファイルフォルダ内のファイルだけです",
-        "reason.hidden": "隠しファイルや隠しフォルダ内のファイルは送信しません",
         "reason.denied_name": "認証情報や鍵のようなファイル名です",
         "reason.system": "システムファイルは送信しません",
         "reason.broad_workspace": "この pane の workspace はホームフォルダか範囲が広すぎるフォルダなので、そこからは送信しません",

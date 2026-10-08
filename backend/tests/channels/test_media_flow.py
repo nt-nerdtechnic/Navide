@@ -181,7 +181,7 @@ async def test_a_reply_with_only_a_file_posts_no_empty_text(media_env: Env, ws: 
 
 @pytest.mark.parametrize("target, reason", [
     ("/etc/hosts", "outside"),
-    ("{ws}/.env", "hidden"),
+    ("{ws}/.env", "denied_name"),
     ("{ws}/out/../out/chart.png", "parent_ref"),
     ("{ws}/out/id_rsa", "denied_name"),
 ])
@@ -307,10 +307,10 @@ async def test_a_file_that_fails_to_open_is_refused_and_the_next_still_goes(
     (ws / "out" / "b.png").write_bytes(b"second")
     real_open = media.open_outbound
 
-    def flaky(raw, roots, plans_workspace=None):
+    def flaky(raw, roots):
         if raw.endswith("chart.png"):
             raise OSError(5, "Input/output error")
-        return real_open(raw, roots, plans_workspace)
+        return real_open(raw, roots)
 
     monkeypatch.setattr(media, "open_outbound", flaky)
     m = Media(media_env.tg)
@@ -352,3 +352,19 @@ async def test_files_still_go_when_the_reply_text_falls_back_to_the_turn_text(
     media_env.turn_complete("pane-1", _msg(f"here it is\n---ATTACH--- {ws}/out/chart.png"))
     await _until(lambda: m.files)
     assert m.files[0][2] == "chart.png" and len(calls) == 2
+
+
+async def test_a_file_in_a_hidden_folder_goes_and_is_logged(media_env: Env, ws: Path, caplog) -> None:
+    import logging
+
+    report = ws / ".reports" / "NT---20261008.pdf"
+    report.parent.mkdir()
+    report.write_bytes(b"%PDF-1.7")
+    caplog.set_level(logging.INFO, logger="agent_team_backend.channels.manager")
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"here\n---ATTACH--- {report}"))
+    await _until(lambda: m.files)
+    assert m.files[0][1:] == (b"%PDF-1.7", "NT---20261008.pdf")
+    assert not _said(media_env, "⚠️")
+    assert any("hidden path" in r.getMessage() and "NT---20261008.pdf" in r.getMessage() for r in caplog.records)

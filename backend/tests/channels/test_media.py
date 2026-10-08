@@ -126,16 +126,37 @@ def test_a_symlink_out_of_the_workspace_is_judged_by_its_target(tmp_path: Path, 
 
 
 @needs_symlinks
-def test_a_symlink_into_a_dotfolder_is_refused(ws: Path) -> None:
-    key = _file(ws / ".ssh" / "config")
-    (ws / "out" / "cfg").symlink_to(key)
-    assert media.resolve_outbound(str(ws / "out" / "cfg"), [ws]) == (None, "hidden")
+def test_a_symlink_into_a_dotfolder_is_judged_like_the_target(ws: Path) -> None:
+    cfg = _file(ws / ".ssh" / "config")
+    (ws / "out" / "cfg").symlink_to(cfg)
+    assert media.resolve_outbound(str(ws / "out" / "cfg"), [ws]) == (cfg.resolve(), "")
+    key = _file(ws / ".ssh" / "id_ed25519")
+    (ws / "out" / "k").symlink_to(key)
+    assert media.resolve_outbound(str(ws / "out" / "k"), [ws]) == (None, "denied_name")
 
 
-@pytest.mark.parametrize("rel", [".env", ".git/config", ".aws/credentials", "sub/.npmrc"])
-def test_dotfiles_and_dotfolders_are_refused(ws: Path, rel: str) -> None:
+@pytest.mark.parametrize("rel", [".git/config", ".hidden/NT-20261008.pdf", "sub/.notes.md",
+                                 ".agent-team/plans/report_abc123.html", ".agent-team/settings.json"])
+def test_hidden_files_and_folders_may_be_sent(ws: Path, rel: str) -> None:
+    """The pane judges what to send; a dot in the path is no longer a reason to refuse."""
     f = _file(ws / rel)
-    assert media.resolve_outbound(str(f), [ws]) == (None, "hidden")
+    assert media.resolve_outbound(str(f), [ws]) == (f.resolve(), "")
+    opened, reason = media.open_outbound(str(f), [ws])
+    assert reason == "" and opened is not None and opened.hidden
+    opened.fh.close()
+
+
+@pytest.mark.parametrize("rel", [".env", ".aws/credentials", "sub/.npmrc", ".ssh/id_rsa",
+                                 ".agent-team/plans/credentials.html"])
+def test_a_hidden_file_with_a_credential_name_is_still_refused(ws: Path, rel: str) -> None:
+    f = _file(ws / rel)
+    assert media.resolve_outbound(str(f), [ws]) == (None, "denied_name")
+
+
+def test_a_plain_path_is_not_marked_hidden(ws: Path) -> None:
+    opened, _ = media.open_outbound(str(ws / "out" / "chart.png"), [ws])
+    assert opened is not None and not opened.hidden
+    opened.fh.close()
 
 
 @pytest.mark.parametrize("name", ["server.pem", "PRIVATE.KEY", "id_rsa", "id_ed25519.pub", "credentials",
@@ -284,11 +305,11 @@ def _staged(monkeypatch, *, before_recheck=None, after_first=None, after_recheck
         except PermissionError:
             state["blocked"] = True
 
-    def staged(raw, roots, plans_workspace=None):
+    def staged(raw, roots):
         calls.append(raw)
         if len(calls) == 2 and before_recheck:
             attempt(before_recheck)
-        result = checked(raw, roots, plans_workspace)
+        result = checked(raw, roots)
         if len(calls) == 1 and after_first:
             attempt(after_first)
         if len(calls) == 2 and after_recheck:
@@ -410,12 +431,12 @@ def test_a_project_under_desktop_still_works(home: Path) -> None:
     assert media.resolve_outbound(str(f), [home / "Desktop" / "app"]) == (f.resolve(), "")
 
 
-@pytest.mark.parametrize("parent, reason", [(".ssh", "hidden"), (".aws/profile", "hidden"),
+@pytest.mark.parametrize("parent, reason", [(".ssh", ""), (".aws/profile", ""),
                                             ("secrets", "denied_name"), ("work/credentials", "denied_name")])
-def test_a_workspace_inside_a_hidden_or_secret_folder_sends_nothing(home: Path, parent: str, reason: str) -> None:
+def test_a_workspace_inside_a_secret_folder_sends_nothing(home: Path, parent: str, reason: str) -> None:
     root = home / "code" / parent / "proj"
     f = _file(root / "notes.txt")
-    assert media.resolve_outbound(str(f), [root]) == (None, reason)
+    assert media.resolve_outbound(str(f), [root]) == ((f.resolve(), "") if not reason else (None, reason))
 
 
 @needs_symlinks
@@ -473,48 +494,3 @@ def test_a_file_whose_stat_fails_after_resolving_is_refused_not_raised(ws: Path,
     assert media.resolve_outbound(str(target), [ws]) == (None, "changed")
     seen["n"] = 0
     assert media.open_outbound(str(target), [ws]) == (None, "changed")
-
-
-# --- Plan documents: <workspace>/.agent-team/plans/*.html ------------------------------
-
-
-def test_a_plan_document_of_the_workspace_is_allowed(ws: Path) -> None:
-    f = _file(ws / ".agent-team" / "plans" / "report_abc123.html")
-    assert media.resolve_outbound(str(f), [ws], plans_workspace=ws) == (f.resolve(), "")
-    opened, reason = media.open_outbound(str(f), [ws], plans_workspace=ws)
-    assert reason == "" and opened is not None
-    opened.fh.close()
-
-
-def test_a_plan_document_stays_hidden_unless_asked_for(ws: Path) -> None:
-    f = _file(ws / ".agent-team" / "plans" / "report_abc123.html")
-    assert media.resolve_outbound(str(f), [ws]) == (None, "hidden")
-
-
-@pytest.mark.parametrize("rel, reason", [
-    (".agent-team/plans/sub/report.html", "hidden"),
-    (".agent-team/report.html", "hidden"),
-    (".agent-team/settings.json", "hidden"),
-    (".agent-team/plans/report.md", "hidden"),
-    (".agent-team/plans/.draft.html", "hidden"),
-    (".agent-team/plans/credentials.html", "denied_name"),
-    ("sub/.agent-team/plans/report.html", "hidden"),
-    (".git/.agent-team/plans/report.html", "hidden"),
-])
-def test_only_the_workspace_plans_folder_is_opened(ws: Path, rel: str, reason: str) -> None:
-    f = _file(ws / rel)
-    assert media.resolve_outbound(str(f), [ws], plans_workspace=ws) == (None, reason)
-
-
-def test_plans_in_the_media_folder_or_another_workspace_stay_refused(tmp_path: Path, ws: Path) -> None:
-    root = tmp_path / "media" / "pane"
-    in_media = _file(root / ".agent-team" / "plans" / "r.html")
-    assert media.resolve_outbound(str(in_media), [ws, root], plans_workspace=ws) == (None, "hidden")
-    other = _file(tmp_path / "other" / ".agent-team" / "plans" / "r.html")
-    assert media.resolve_outbound(str(other), [ws], plans_workspace=ws) == (None, "outside")
-
-
-def test_a_workspace_inside_a_hidden_folder_still_sends_no_plans(home: Path) -> None:
-    root = home / ".hidden" / "proj"
-    f = _file(root / ".agent-team" / "plans" / "r.html")
-    assert media.resolve_outbound(str(f), [root], plans_workspace=root) == (None, "hidden")

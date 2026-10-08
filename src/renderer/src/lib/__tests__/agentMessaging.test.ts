@@ -389,6 +389,12 @@ describe('renderEnvelope', () => {
     expect(env.split('\n').filter((l) => l.includes(ATTACH_MARKER))).toHaveLength(1)
   })
 
+  it('states the attachment rules the backend enforces: hidden files may go, keys never do', () => {
+    const hint = renderEnvelope('telegram:alice', 'send me the report', { external: true }).split('\n').pop() ?? ''
+    expect(hint).toContain('只限這個 workspace 內或收到的附件，不傳金鑰與憑證')
+    expect(hint).not.toContain('隱藏檔')
+  })
+
   it('does not offer attachments to a pane-to-pane message', () => {
     expect(renderEnvelope('coordinator', 'run the tests')).not.toContain(ATTACH_MARKER)
   })
