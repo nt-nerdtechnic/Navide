@@ -420,7 +420,8 @@ class ProcessTree(Protocol):
         ...
 
     def identity(self, pid: int) -> str:
-        """`"<pid>:<start_time>"` — stable across exec, different after pid reuse."""
+        """`"<pid>:<start_time>"` — stable across exec, different after pid reuse;
+        "" when the start time could not be read (a failed probe is not an answer)."""
         ...
 
     def command_of(self, pid: int) -> str | None:

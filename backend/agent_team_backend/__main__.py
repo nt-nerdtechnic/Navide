@@ -122,13 +122,23 @@ def _watch_parent_for_shutdown(
     """
     alive = is_alive or osplat.process_tree.is_alive
     identity_of = identity or osplat.process_tree.identity
-    # "" means the identity could not be read (e.g. the parent already exited):
-    # fall back to the liveness check alone rather than exit on an empty match.
+    log = logging.getLogger("agent_team_backend.main")
+    # "" means the probe could not read the identity (a `ps` that timed out on a
+    # loaded machine): that is "unknown", never "gone". An unread original is
+    # captured on a later poll; until then liveness is the only check.
     original_identity = identity_of(pid)
     while not server.should_exit:
-        if not alive(pid) or (original_identity and identity_of(pid) != original_identity):
-            logging.getLogger("agent_team_backend.main").info(
-                "parent process %d is gone; shutting down", pid
+        if not alive(pid):
+            log.info("parent process %d is gone (no such process); shutting down", pid)
+            server.should_exit = True
+            return
+        current = identity_of(pid)
+        if current and not original_identity:
+            original_identity = current
+        elif current and current != original_identity:
+            log.info(
+                "parent process %d is gone (identity changed %r -> %r); shutting down",
+                pid, original_identity, current,
             )
             server.should_exit = True
             return
