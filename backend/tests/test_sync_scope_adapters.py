@@ -328,3 +328,37 @@ async def test_an_mcp_conflict_preview_never_shows_env_or_header_values(tmp_path
     assert rows[0]["local"]["env"] == {"API_KEY": sync_scopes.MASKED_VALUE}
     # resolve still works from the real payloads
     assert b.store.conflict_payloads("mcp", "api")["local"]["env"] == {"API_KEY": "sk-new-b"}
+
+
+# ── skills: what export sends is what import takes ──────────────────────────
+async def test_a_dotfile_in_a_skill_does_not_stop_it_syncing(tmp_path, account_key, monkeypatch):
+    server, a, b, sa, ra, sb, rb = _skill_pair(tmp_path, monkeypatch)
+    a.use(); sa.create_skill("tool", "t", consent=True)
+    (ra / "tool" / ".env.example").write_bytes(b"X=1\n")
+    assert ".env.example" not in sa.export_content("tool")  # import would refuse the whole skill
+    revs = []
+    for _ in range(3):
+        await a.sync(); await b.sync()
+        revs.append(server.rows[("skills", "tool")]["rev"])
+    assert (rb / "tool" / "SKILL.md").is_file()
+    assert revs[-1] == revs[0]  # settled
+
+
+@pytest.mark.skipif(not sync_scopes._EXEC_BITS, reason="no executable bit on this platform")
+async def test_a_small_skill_keeps_its_executable_bit(tmp_path, account_key, monkeypatch):
+    import stat
+
+    server, a, b, sa, ra, sb, rb = _skill_pair(tmp_path, monkeypatch)
+    a.use(); sa.create_skill("runner", "r", consent=True)
+    script = ra / "runner" / "scripts" / "go.sh"
+    script.parent.mkdir(parents=True)
+    script.write_bytes(b"#!/bin/sh\necho hi\n")
+    script.chmod(0o755)
+    (ra / "runner" / "notes.txt").write_bytes(b"plain\n")
+    await a.sync(); await b.sync()
+    landed = rb / "runner" / "scripts" / "go.sh"
+    assert landed.stat().st_mode & stat.S_IXUSR
+    assert not ((rb / "runner" / "notes.txt").stat().st_mode & stat.S_IXUSR)
+    pushes = server.pushes
+    await b.sync(); await a.sync()
+    assert server.pushes == pushes  # the bit round-trips without a re-push
