@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import functools
+import itertools
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -10726,6 +10727,12 @@ async def ui_invoke_result(session: "Session", msg_id: str, msg_type: str, paylo
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
 
 
+# Focus order for app.unicast_any. A counter rather than a clock reading:
+# Windows' monotonic clock ticks every ~15.6ms, so two focus changes in quick
+# succession would tie and the request could go to the window focused first.
+_UI_FOCUS_SEQ = itertools.count(1)
+
+
 @handler("ui.invoke.ready")
 async def ui_invoke_ready(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """A main window announcing that it answers ui.invoke.request — sent on
@@ -10734,7 +10741,7 @@ async def ui_invoke_ready(session: "Session", msg_id: str, msg_type: str, payloa
     answer it, preferring the one the user touched last."""
     session.ui_bus_ready = True
     if payload.get("focused"):
-        session.ui_focused_at = time.monotonic()
+        session.ui_focused_at = next(_UI_FOCUS_SEQ)
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 

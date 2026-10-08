@@ -81,6 +81,30 @@ async def test_a_global_request_goes_to_the_most_recently_focused_window(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("order", [0, 1])
+async def test_the_latest_focus_wins_when_the_clock_does_not_advance(
+    monkeypatch: pytest.MonkeyPatch, order: int,
+) -> None:
+    # Windows' monotonic clock ticks every ~15.6ms, so two focus changes in
+    # quick succession read the same time. The later one must still win,
+    # whichever order the session set happens to iterate in.
+    from agent_team_backend import ws_handlers
+
+    monkeypatch.setattr(ws_handlers, "time", SimpleNamespace(monotonic=lambda: 1000.0))
+    earlier, later = _session(), _session()
+    # A dict keeps insertion order, so both iteration orders are exercised.
+    windows = [earlier, later] if order == 0 else [later, earlier]
+    monkeypatch.setattr(app, "_SESSIONS", dict.fromkeys(windows))
+    await _ready(earlier, focused=True)
+    await _ready(later, focused=True)
+
+    await app.unicast_any({"type": "ui.invoke.request", "payload": {}})
+
+    assert len(_requests(later)) == 1
+    assert _requests(earlier) == []
+
+
+@pytest.mark.asyncio
 async def test_a_dead_ready_window_is_passed_over(sessions: set[app.Session]) -> None:
     gone, alive = _session(), _session()
     sessions.update({gone, alive})
