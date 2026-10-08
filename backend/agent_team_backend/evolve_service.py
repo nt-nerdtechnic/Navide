@@ -96,6 +96,8 @@ _INT_BOUNDS = {
     "max_minutes": (10, 600),
 }
 _AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+_PANE_ID_RE = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
+_LEDGER_RE = re.compile(r"^\.agent-team/plans/[A-Za-z0-9._\-]+\.(?:html|plan\.md)$")
 _MAX_EXTRA = 4000
 
 #: Same families the rules ask the agent to mask; applied again on the way in.
@@ -190,12 +192,38 @@ def normalize_settings(raw: Any, current: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(value, str) or len(value) > 512:
                 raise SettingsInvalid(f"{key} must be a short string")
             value = value.strip()
+            _check_word(key, value)
         out[key] = value
     if out["mode"] == "pane" and not out["pane_id"]:
         raise SettingsInvalid('mode "pane" needs a pane_id')
     if not out["agent"]:
         raise SettingsInvalid("agent is required")
     return out
+
+
+def _check_word(key: str, value: str) -> None:
+    """The fields that reach a command line or the rules text, held to the
+    shapes Navide itself uses for them."""
+    if key == "agent":
+        from .cli_vendors import registry
+
+        if value not in registry.VENDORS:
+            raise SettingsInvalid(f"unknown CLI {value!r}")
+    elif key in ("model", "effort"):
+        from .model_args import refuse_unsafe_shape
+
+        why = refuse_unsafe_shape(value if key == "model" else "", value if key == "effort" else "")
+        if why:
+            raise SettingsInvalid(why)
+    elif key == "pane_id":
+        if value and not _PANE_ID_RE.match(value):
+            raise SettingsInvalid("pane_id is not a pane id")
+    elif key == "ledger_plan":
+        if value and not _LEDGER_RE.match(value):
+            raise SettingsInvalid("ledger_plan must be a plan file under .agent-team/plans/")
+    elif key == "pane_name":
+        if re.search(r"[\x00-\x1f\x7f]", value):
+            raise SettingsInvalid("pane_name contains a control character")
 
 
 # ── persistence ─────────────────────────────────────────────────────────────
@@ -777,14 +805,18 @@ class EvolveService:
         scope = settings["scope"] if git["is_repo"] else "propose"
         if not git["is_repo"] and settings["scope"] == "fix":
             await self._notice(workspace, "not_git", run)
-        task = evolve_rules.render({
+        render = {
             "run_id": run["id"], "run_token": token, "workspace": workspace, "repo_root": git["root"],
             "branch": git["branch"], "is_repo": git["is_repo"], "scope": scope,
             "token_budget": settings["token_budget"], "max_minutes": settings["max_minutes"],
             "max_fixes": settings["max_fixes"], "ledger_plan": settings["ledger_plan"],
             "extra": settings["extra"],
-        })
+        }
         fields: dict[str, Any] = {"scope": scope}
+        try:
+            task = evolve_rules.render(render)
+        except evolve_rules.UnsafeValue as err:
+            return await self._fail(workspace, run, fields, "error", "unsafe_value", str(err))
         mode = settings["mode"]
         if mode == "pane":
             entry = self.host.pane(settings["pane_id"])
