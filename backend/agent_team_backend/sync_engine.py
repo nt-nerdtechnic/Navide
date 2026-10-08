@@ -853,6 +853,7 @@ class SyncEngine:
         origin = self._origin(raw, scope=scope, item_id=item_id)
         if origin == _ORIGIN_FORGED:
             log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
+            self._note(scope, "refused", item_id)
             return False
         if item_id in self._reset_deletes.get(scope, ()):
             # Deleted here before a reset (see ``_pull``): the row is not
@@ -1030,7 +1031,10 @@ class SyncEngine:
                 key = ""
         else:
             key = self._signing_key_for(device)
-        if not key:
+        if not key or not str(raw.get("sig") or ""):
+            # No key to check against — or no signature to check: releases up
+            # to 0.2.3 did not sign. Either way nothing proves who wrote it,
+            # which is the unknown-origin rule, not a forgery.
             return _ORIGIN_UNKNOWN
         return _ORIGIN_VERIFIED if self._origin_ok(raw, scope=scope, item_id=item_id, key=key) else _ORIGIN_FORGED
 

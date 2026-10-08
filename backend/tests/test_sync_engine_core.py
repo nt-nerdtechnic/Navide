@@ -622,3 +622,48 @@ def test_the_engine_checks_pins_against_the_signed_in_member(tmp_path, monkeypat
         account_member=lambda: "m-me",
     )
     assert engine._signing_key_for("dev-x") == ""
+
+
+# ── records from releases that did not sign (≤ 0.2.3) ───────────────────────
+def _unsigned(server: FakeServer, item_id: str, payload, *, device: str, deleted: bool = False) -> None:
+    import json
+
+    from agent_team_backend import sync_keyring
+
+    rev = server.cursors.get("prompts", 0) + 1
+    server.cursors["prompts"] = rev
+    body = None if deleted else sync_keyring.encrypt(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")), scope="prompts", item_id=item_id
+    )
+    server.rows[("prompts", item_id)] = {
+        "itemId": item_id, "rev": rev, "updatedAt": "t", "deviceId": device,
+        "deleted": 1 if deleted else 0, "body": body, "sig": "",
+    }
+
+
+async def test_an_unsigned_record_from_a_pinned_device_is_taken(tmp_path, account_key):
+    server = FakeServer()
+    _unsigned(server, "p1", {"v": 1}, device="old-dev")
+    b = Device(tmp_path, server, "dev-b")  # pins every device, old-dev included
+    await b.sync()
+    assert b.adapter.items == {"p1": {"v": 1}}
+
+
+async def test_an_unsigned_tombstone_over_an_item_held_here_asks(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    _unsigned(server, "x", None, device="old-dev", deleted=True)
+    await b.sync()
+    assert b.adapter.items == {"x": {"v": 1}}
+    assert b.store.conflict_ids("prompts") == {"x"}
+
+
+async def test_a_record_whose_signature_does_not_match_is_reported(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    _forged(server, "x", device="dev-a", deleted=True)
+    result = await b.sync()
+    assert result["refused"] == ["x"]
+    assert b.adapter.items == {"x": {"v": 1}}
