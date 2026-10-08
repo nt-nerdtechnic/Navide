@@ -138,7 +138,9 @@ def test_memory_apply_writes_through_a_symlinked_file(tmp_path, monkeypatch):
     link.symlink_to(real)
     monkeypatch.setattr(native_memory, "_home", lambda: home)
     monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
-    assert sync_scopes.MemoryScope().apply(".claude:CLAUDE.md", {"text": "new\n"}) is True
+    scope = sync_scopes.MemoryScope()
+    scope.snapshot()  # the engine always reads before it writes
+    assert scope.apply(".claude:CLAUDE.md", {"text": "new\n"}) is True
     assert link.is_symlink()
     assert real.read_text() == "new\n"
 

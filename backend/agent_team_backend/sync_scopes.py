@@ -963,7 +963,7 @@ def memory_item_id(relative: str) -> str:
     — ``:``, ``@`` and ``+`` included — becomes ``+XX`` per UTF-8 byte, so the
     mapping is one-to-one and ``.claude/CLAUDE.md`` still reads as
     ``.claude:CLAUDE.md``. An id that would pass the protocol's 200-character
-    limit is a digest of the path instead. Ids are only ever matched against
+    limit is ``@sha256:`` and a digest of the path instead. Ids are only ever matched against
     this machine's own candidates (``MemoryScope._resolve``), never decoded.
     """
     out: list[str] = []
@@ -979,7 +979,9 @@ def memory_item_id(relative: str) -> str:
         return encoded
     import hashlib
 
-    return "sha256:" + hashlib.sha256(relative.encode("utf-8")).hexdigest()
+    # "@" never appears in an encoded path (it is escaped as +40), so a digest
+    # id cannot collide with one.
+    return "@sha256:" + hashlib.sha256(relative.encode("utf-8")).hexdigest()
 
 
 class MemoryScope:
@@ -1069,6 +1071,12 @@ class MemoryScope:
         target = self._resolve(item_id)
         if target is None:
             log.warning("no known instruction file matches %s on this machine", item_id)
+            return False
+        if target not in self._read_mtimes and os.path.lexists(target):
+            # There is a file here the snapshot could not read (over the
+            # editor's size limit, unreadable): the engine never saw it, so
+            # writing would replace it unseen.
+            log.warning("instruction file %s exists here but could not be read; not overwriting it", item_id)
             return False
         try:
             # Against the mtime the snapshot read: an editor save in between
