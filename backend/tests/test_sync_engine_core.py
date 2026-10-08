@@ -534,3 +534,244 @@ async def test_a_held_item_survives_a_restart(tmp_path, account_key):
     restarted.adapter.items = dict(b.adapter.items)
     await restarted.sync()
     assert restarted.adapter.items["stuck"] == {"v": 1}
+
+
+# ── security review (sync審-資安) ────────────────────────────────────────────
+async def test_a_refusal_is_logged_without_what_the_adapter_said(tmp_path, account_key, caplog):
+    # D7: an adapter's exception text can quote the payload it refused.
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"secret": "hunter2"}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+
+    def apply(item_id, payload):
+        raise ValueError(f"cannot take {payload}")
+
+    b.adapter.apply = apply
+    with caplog.at_level("WARNING"):
+        await b.sync()
+    assert "hunter2" not in caplog.text
+    assert "ValueError" in caplog.text
+
+
+async def test_a_pull_round_stops_after_a_bounded_number_of_pages(tmp_path, account_key, monkeypatch):
+    # A4: a server that always says "more" with fresh revs.
+    monkeypatch.setattr(sync_engine, "MAX_PULL_PAGES", 7)
+    b = Device(tmp_path, FakeServer(), "dev-b")
+    calls = 0
+
+    async def request(msg_type, payload):
+        nonlocal calls
+        if msg_type != "sync.pull":
+            return {"ok": True, "payload": {"accepted": [], "conflicts": [], "cursor": 0}}
+        calls += 1
+        since = int(payload.get("since") or 0)
+        row = {"itemId": f"junk{since}", "rev": since + 1, "updatedAt": "x", "deviceId": "dev-z",
+               "deleted": 1, "body": None, "sig": None}
+        return {"ok": True, "payload": {"scope": "prompts", "cursor": since + 1, "items": [row], "more": True}}
+
+    b.engine._request = request
+    await b.sync()
+    assert calls == 7
+
+
+async def test_a_reset_keeps_a_local_delete_that_was_waiting_to_go_up(tmp_path, account_key):
+    # A3: x was deleted here and the round that would carry it up met a reset.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("x")
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and not lied and int(payload.get("since") or 0) > 0:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        return reply
+
+    b.engine._request = request
+    await b.sync()
+    await b.sync()
+    assert "x" not in b.adapter.items
+    assert server.rows[("prompts", "x")]["deleted"] == 1
+
+
+async def test_a_pin_for_another_account_is_not_a_pin(tmp_path, account_key, monkeypatch):
+    # A2: a device pinned under a different member does not vouch for this account.
+    from agent_team_backend import trust_store
+
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-other"})
+    assert sync_engine._pinned_signing_key("dev-x", "m-me") == ""
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-me"})
+    assert sync_engine._pinned_signing_key("dev-x", "m-me") == "KEY"
+
+
+def test_the_engine_checks_pins_against_the_signed_in_member(tmp_path, monkeypatch):
+    from agent_team_backend import trust_store
+    from agent_team_backend.db import Database
+
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-other"})
+    engine = sync_engine.SyncEngine(
+        sync_engine.SyncStore(Database(tmp_path / "e.db")),
+        lambda *_a: None,
+        device_id=lambda: "me",
+        enabled=lambda _s: True,
+        account_member=lambda: "m-me",
+    )
+    assert engine._signing_key_for("dev-x") == ""
+
+
+# ── records from releases that did not sign (≤ 0.2.3) ───────────────────────
+def _unsigned(server: FakeServer, item_id: str, payload, *, device: str, deleted: bool = False) -> None:
+    import json
+
+    from agent_team_backend import sync_keyring
+
+    rev = server.cursors.get("prompts", 0) + 1
+    server.cursors["prompts"] = rev
+    body = None if deleted else sync_keyring.encrypt(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")), scope="prompts", item_id=item_id
+    )
+    server.rows[("prompts", item_id)] = {
+        "itemId": item_id, "rev": rev, "updatedAt": "t", "deviceId": device,
+        "deleted": 1 if deleted else 0, "body": body, "sig": "",
+    }
+
+
+async def test_an_unsigned_record_from_a_pinned_device_is_taken(tmp_path, account_key):
+    server = FakeServer()
+    _unsigned(server, "p1", {"v": 1}, device="old-dev")
+    b = Device(tmp_path, server, "dev-b")  # pins every device, old-dev included
+    await b.sync()
+    assert b.adapter.items == {"p1": {"v": 1}}
+
+
+async def test_an_unsigned_tombstone_over_an_item_held_here_asks(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    _unsigned(server, "x", None, device="old-dev", deleted=True)
+    await b.sync()
+    assert b.adapter.items == {"x": {"v": 1}}
+    assert b.store.conflict_ids("prompts") == {"x"}
+
+
+async def test_a_record_whose_signature_does_not_match_is_reported(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    _forged(server, "x", device="dev-a", deleted=True)
+    result = await b.sync()
+    assert result["refused"] == ["x"]
+    assert b.adapter.items == {"x": {"v": 1}}
+
+
+# ── rows the server would not put in a frame (tooLarge stubs) ────────────────
+def _stub(item_id: str, rev: int) -> dict:
+    return {"itemId": item_id, "rev": rev, "updatedAt": "t", "deviceId": "dev-a",
+            "deleted": 0, "body": None, "sig": None, "tooLarge": True}
+
+
+async def test_a_too_large_stub_in_a_pull_is_reported_not_applied(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"big": {"v": "local"}})
+    await b.sync()
+    a = Device(tmp_path, server, "dev-a", {"after": {"v": 2}})
+    await a.sync()
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            items = reply["payload"]["items"]
+            reply["payload"]["items"] = [_stub("big", 99)] + items
+            reply["payload"]["cursor"] = max(99, reply["payload"]["cursor"])
+        return reply
+
+    b.engine._request = request
+    result = await b.sync()
+    assert result["tooLarge"] == ["big"] and result["ok"] is True
+    assert b.adapter.items["big"] == {"v": "local"}   # not a delete, not applied
+    assert b.adapter.items["after"] == {"v": 2}
+    assert b.store.cursor("prompts") >= 99             # the cursor moves on
+    assert b.store.conflict_ids("prompts") == set()
+
+
+async def test_a_too_large_stub_in_a_push_conflict_is_not_a_delete(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"big": {"v": 1}})
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        if msg_type == "sync.push":
+            return {"ok": True, "payload": {"scope": "prompts", "cursor": 5, "accepted": [],
+                                            "conflicts": [_stub("big", 5)]}}
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    result = await b.sync()
+    assert result["tooLarge"] == ["big"]
+    assert b.store.conflict_ids("prompts") == set()
+    assert b.adapter.items == {"big": {"v": 1}}
+
+
+# ── B6: a round that began under the previous account writes nothing ─────────
+async def test_a_round_that_outlives_an_account_switch_writes_nothing(tmp_path, account_key):
+    import asyncio
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            # The account changes while this round is on the wire — on another
+            # task, outside this round's context (run_in_executor copies none).
+            def switch():
+                b.store.new_generation()
+                b.store.forget("prompts")
+
+            await asyncio.get_running_loop().run_in_executor(None, switch)
+        return reply
+
+    b.engine._request = request
+    result = await b.engine.sync_all()
+    assert result[0]["ok"] is False and "account changed" in result[0]["error"]
+    assert b.store.cursor("prompts") == 0 and b.store.states("prompts") == {}
+
+
+async def test_a_reset_inside_a_round_does_not_count_as_a_switch(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    b.store.set_cursor("prompts", 50)  # beyond the server: the next pull resets
+    result = await b.sync()
+    assert result["ok"] is True
+
+
+async def test_rounds_started_by_a_kick_can_be_cancelled(tmp_path, account_key):
+    import asyncio
+
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+    gate = asyncio.Event()
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        await gate.wait()
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    b.engine._kick("prompts")
+    await asyncio.sleep(0)
+    assert b.engine._kicked
+    b.engine.cancel_rounds()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert all(t.done() for t in list(b.engine._kicked)) or not b.engine._kicked

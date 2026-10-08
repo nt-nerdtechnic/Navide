@@ -34,6 +34,7 @@ is only worth making if it carries real work.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -75,6 +76,10 @@ MAX_PUSH_BYTES = 768 * 1024
 #: the client asks for no more rows than this budget holds at the largest row
 #: size it expects. A guess first, then the largest row actually seen.
 PULL_FRAME_BUDGET = 768 * 1024
+#: Pull pages one round reads at most. A server that keeps saying ``more``
+#: with fresh revs would otherwise hold the round (and the scope's lock)
+#: forever; the next round carries on from where this one stopped.
+MAX_PULL_PAGES = 200
 #: An adapter's ``DeferItem`` (files still downloading) is retried at once the
 #: first time, then with an exponential backoff from the base to the cap, and
 #: reported as given up —
@@ -121,6 +126,17 @@ INVENTORY_DISABLED = "disabled"
 
 class SyncError(Exception):
     """A sync round could not be completed. Always recoverable by retrying."""
+
+
+class StaleRound(SyncError):
+    """A round that began under the previous account tried to write."""
+
+
+#: The store generation the running round began under (None outside a round).
+#: Carried into worker threads by ``asyncio.to_thread``, which copies context.
+_round_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "sync_round_generation", default=None
+)
 
 
 class DeferItem(Exception):
@@ -273,6 +289,22 @@ class SyncStore:
         self._db.migrate(_COMPONENT, 1, _create_schema)
         self._db.migrate(_COMPONENT, 2, _schema_v2)
         self._redactors: dict[str, Callable[[Any], dict[str, Any] | None]] = {}
+        #: Bumped when the account changes. A round records the generation it
+        #: began under, and a write from a round of an older one is refused:
+        #: what it read belongs to the previous account.
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def new_generation(self) -> None:
+        self._generation += 1
+
+    def _check_round(self) -> None:
+        began = _round_generation.get()
+        if began is not None and began != self._generation:
+            raise StaleRound("the account changed while this round was running; nothing was recorded")
 
     def set_redactor(self, scope: str, fn: Callable[[Any], dict[str, Any] | None]) -> None:
         self._redactors[scope] = fn
@@ -309,6 +341,7 @@ class SyncStore:
         deleted: bool,
         sealed_kid: str = "",
     ) -> None:
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 """
@@ -332,6 +365,7 @@ class SyncStore:
         return int(row[0]) if row else 0
 
     def set_cursor(self, scope: str, value: int) -> None:
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 """
@@ -367,6 +401,7 @@ class SyncStore:
         else:
             local_text = canonical(local)
             remote_text = canonical(remote)
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 """
@@ -508,6 +543,7 @@ class SyncStore:
         return {str(r[0]) for r in rows}
 
     def clear_conflict(self, scope: str, item_id: str) -> None:
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute(
                 "DELETE FROM sync_conflicts WHERE scope = ? AND item_id = ?", (scope, item_id)
@@ -515,6 +551,7 @@ class SyncStore:
 
     def forget(self, scope: str) -> None:
         """Drop everything known about a scope — used when it is switched off."""
+        self._check_round()
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM sync_state WHERE scope = ?", (scope,))
             cur.execute("DELETE FROM sync_cursor WHERE scope = ?", (scope,))
@@ -536,12 +573,25 @@ class SyncEngine:
         enabled: Callable[[str], bool],
         signing_key_for: Callable[[str], str] | None = None,
         on_result: Callable[[dict[str, Any]], None] | None = None,
+        account_member: Callable[[], str] | None = None,
+        on_forget: Callable[[str], None] | None = None,
     ) -> None:
         self._store = store
         self._request = request
         self._device_id = device_id
         self._enabled = enabled
-        self._signing_key_for = signing_key_for or _pinned_signing_key
+        if signing_key_for is None:
+            # A pin taken under another member does not vouch for a device of
+            # this account: the member is part of what was pinned.
+            signing_key_for = (
+                (lambda device: _pinned_signing_key(device, account_member()))
+                if account_member is not None
+                else _pinned_signing_key
+            )
+        self._signing_key_for = signing_key_for
+        #: Told when a cursor reset forgets a scope, so state kept outside the
+        #: store about that scope's items (detached marks) goes with it.
+        self._on_forget = on_forget or (lambda _scope: None)
         #: Told every round's result (see ``sync``) — the link broadcasts it
         #: to the renderer as ``sync.result``. Must not raise; it is guarded.
         self._on_result = on_result
@@ -555,6 +605,8 @@ class SyncEngine:
         #: is lost on a restart is the backoff, which then starts over.
         self._defers: dict[tuple[str, str], dict[str, float]] = {}
         self._clock: Callable[[], float] = time.monotonic
+        #: Per scope, local deletes carried across a cursor reset.
+        self._reset_deletes: dict[str, set[str]] = {}
         self._adapters: dict[str, ScopeAdapter] = {}
         #: Per scope, the highest cursor a push reply may move to while a
         #: pulled row is waiting for its key. Set by ``_pull``, honoured by
@@ -614,15 +666,22 @@ class SyncEngine:
         if not await asyncio.to_thread(sync_keyring.has_account_key):
             return {"skipped": "no-key"}
         async with self._locks.setdefault(scope, asyncio.Lock()):
-            self._notes[scope] = {}
-            # An adapter that needs the server for more than records (blob
-            # transfers) is handed the connection here, and may decline the
-            # round when the server cannot serve it.
-            prepare = getattr(adapter, "prepare", None)
-            if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
-                return {"skipped": "unsupported"}
-            pulled = await self._pull(adapter)
-            pushed = await self._push(adapter)
+            token = _round_generation.set(self._store.generation)
+            try:
+                return await self._locked_round(scope, adapter)
+            finally:
+                _round_generation.reset(token)
+
+    async def _locked_round(self, scope: str, adapter: ScopeAdapter) -> dict[str, Any]:
+        self._notes[scope] = {}
+        # An adapter that needs the server for more than records (blob
+        # transfers) is handed the connection here, and may decline the
+        # round when the server cannot serve it.
+        prepare = getattr(adapter, "prepare", None)
+        if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
+            return {"skipped": "unsupported"}
+        pulled = await self._pull(adapter)
+        pushed = await self._push(adapter)
         return {"pulled": pulled, "pushed": pushed}
 
     def _finish(self, scope: str, outcome: dict[str, Any]) -> dict[str, Any]:
@@ -674,6 +733,12 @@ class SyncEngine:
         """Drop the remembered results — they belonged to another account."""
         self._last.clear()
 
+    def cancel_rounds(self) -> None:
+        """Cancel the rounds ``_kick`` started — on an account change, so one
+        begun for the previous account does not run on into the next."""
+        for task in list(self._kicked):
+            task.cancel()
+
     def _kick(self, scope: str) -> None:
         """Run one more round of *scope* soon. For an adapter whose background
         work (a finished download) has made a held record appliable."""
@@ -706,7 +771,9 @@ class SyncEngine:
         #: behind it — one item that cannot land must not hold the whole scope.
         since = self._store.cursor(scope)
         barrier: int | None = None
+        pages = 0
         while True:
+            pages += 1
             reply = _payload(
                 await self._request(
                     "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
@@ -722,7 +789,15 @@ class SyncEngine:
                     "sync.pull on %s: the server's cursor is behind ours; starting %s over",
                     scope, scope,
                 )
+                # A delete made here and not yet carried up would be lost with
+                # the state it is computed from — and the re-read below would
+                # bring the item back. Remembered across the reset instead.
+                self._reset_deletes[scope] = await asyncio.to_thread(self._pending_deletes, adapter)
                 self._store.forget(scope)
+                try:
+                    await asyncio.to_thread(self._on_forget, scope)
+                except Exception as err:  # noqa: BLE001 - the reset itself happened
+                    log.warning("could not let go of %s's marks after a reset: %s", scope, err)
                 reset = True
                 since = 0
                 continue
@@ -757,10 +832,26 @@ class SyncEngine:
                 # than loop forever on a server that disagrees with itself.
                 log.warning("sync.pull on %s made no progress; stopping this round", scope)
                 break
+            if pages >= MAX_PULL_PAGES:
+                log.warning("sync.pull on %s read %d pages; the next round carries on", scope, pages)
+                break
             since = cursor
         if barrier is not None:
             self._cursor_barrier[scope] = max(barrier, self._store.cursor(scope))
+        self._reset_deletes.pop(scope, None)
         return applied
+
+    def _pending_deletes(self, adapter: ScopeAdapter) -> set[str]:
+        """Items this machine deleted that the next push would carry up."""
+        if _sensitive(adapter):
+            return set()
+        snapshot = adapter.snapshot()
+        oversized = set(_adapter_ids(adapter, "oversized"))
+        return {
+            item_id
+            for item_id, state in self._store.states(adapter.scope).items()
+            if not state.deleted and item_id not in snapshot and item_id not in oversized
+        }
 
     def _apply_page(
         self, adapter: ScopeAdapter, items: list[Any]
@@ -813,9 +904,22 @@ class SyncEngine:
         updated_at = str(raw.get("updatedAt") or "")
         deleted = bool(raw.get("deleted"))
         body = str(raw.get("body") or "")
+        if raw.get("tooLarge"):
+            # A row the server would not fit in a frame: it names the item and
+            # its rev and carries no body. Neither a delete nor anything to
+            # apply; reported, and the cursor moves past it as usual.
+            self._note(scope, "tooLarge", item_id)
+            return False
         origin = self._origin(raw, scope=scope, item_id=item_id)
         if origin == _ORIGIN_FORGED:
             log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
+            self._note(scope, "refused", item_id)
+            return False
+        if item_id in self._reset_deletes.get(scope, ()):
+            # Deleted here before a reset (see ``_pull``): the row is not
+            # applied, only its rev recorded, so the push that follows sends
+            # the delete against it.
+            self._store.set_state(scope, item_id, rev=rev, synced_hash="", deleted=deleted)
             return False
         if device == self._device_id() and not explicit:
             # Our own write coming back. Record the rev so the next push edits
@@ -906,7 +1010,8 @@ class SyncEngine:
             except Exception as err:  # noqa: BLE001 - a refusal, see below
                 if _sensitive(adapter):
                     raise
-                log.warning("%s refused %s: %s", scope, item_id, err)
+                # The class only: an adapter's message may quote the payload.
+                log.warning("%s refused %s (%s)", scope, item_id, type(err).__name__)
                 held = False
             if not held and not _sensitive(adapter):
                 # A refusal of an ordinary scope records nothing. Writing the
@@ -986,7 +1091,10 @@ class SyncEngine:
                 key = ""
         else:
             key = self._signing_key_for(device)
-        if not key:
+        if not key or not str(raw.get("sig") or ""):
+            # No key to check against — or no signature to check: releases up
+            # to 0.2.3 did not sign. Either way nothing proves who wrote it,
+            # which is the unknown-origin rule, not a forgery.
             return _ORIGIN_UNKNOWN
         return _ORIGIN_VERIFIED if self._origin_ok(raw, scope=scope, item_id=item_id, key=key) else _ORIGIN_FORGED
 
@@ -1225,6 +1333,12 @@ class SyncEngine:
             return
         item_id = str(entry.get("itemId") or "")
         if item_id not in by_id:
+            return
+        if entry.get("tooLarge"):
+            # The server's copy is too large to send back (see ``_apply_one``).
+            # Not recorded as a conflict with a deleted remote, which keeping
+            # local would then push over; reported, and pushed again next round.
+            self._note(scope, "tooLarge", item_id)
             return
         # A conflict can also mean "the row you were editing is gone": the
         # server answers rev 0 with every field null, which reads here as a
@@ -1754,7 +1868,12 @@ def _unique(item_ids: Any) -> list[str]:
     return out
 
 
-def _pinned_signing_key(device_id: str) -> str:
+def _pinned_signing_key(device_id: str, member_id: str | None = None) -> str:
+    """The signing key pinned for *device_id*, or "" when there is none.
+
+    With *member_id*, a pin recorded under any other member — or with none,
+    or when the signed-in member is not known yet — counts as no pin.
+    """
     from . import trust_store
 
     try:
@@ -1762,6 +1881,8 @@ def _pinned_signing_key(device_id: str) -> str:
     except Exception:  # noqa: BLE001 - an unreadable pin is "not pinned yet"
         return ""
     if not isinstance(pin, dict):
+        return ""
+    if member_id is not None and (not member_id or pin.get("memberId") != member_id):
         return ""
     # ``signKey`` is the field trust_store writes; the other two names never
     # existed there, which left every signature unchecked.
