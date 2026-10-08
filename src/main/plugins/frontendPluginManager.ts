@@ -1373,6 +1373,8 @@ export class FrontendPluginManager {
   /** Main-process-only bearer used to authenticate this Host WS session. */
   private backendHostToken: string | null = null
   private hostSessionRegistered = false
+  /** The `plans_backend_v2` feature the current registration advertised. */
+  private hostSessionPlansBackendV2: boolean | null = null
   private hostRegistrationTask: Promise<void> | null = null
   /** Lazily-created shared transport to the backend plugin host. */
   private wsClient: WsClient | null = null
@@ -7841,6 +7843,14 @@ export class FrontendPluginManager {
       !client.isHealthyFor(url) ||
       this.hostRegistrationTask
     ) return
+    // Re-registering only re-advertises the features. Dropping a registration
+    // that already advertises the current value would fail every agent request
+    // in flight as "lapsed" - and in Plans legacy recovery each Plans request
+    // re-marks the backend unavailable, so every one of them lapsed.
+    if (
+      this.hostSessionRegistered &&
+      this.hostSessionPlansBackendV2 === this.hasActivePlansBackend()
+    ) return
     this.hostSessionRegistered = false
     this.registerHostSession(client)
   }
@@ -7864,6 +7874,7 @@ export class FrontendPluginManager {
           this.backendHostToken === token
         ) {
           this.hostSessionRegistered = response.ok && response.payload?.registered === true
+          this.hostSessionPlansBackendV2 = plansBackendV2
           if (!this.hostSessionRegistered) {
             console.warn('[plugin-backend] Host session registration was rejected')
           }

@@ -15012,6 +15012,84 @@ describe('agent capability requests the Host cannot serve', () => {
     }
   })
 
+  it('keeps the registration through a Plans call that re-marks an already withdrawn backend', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '1.0.0'
+    mgr.registerDescriptor({
+      id: PLANS_PLUGIN_ID, packageVersion, packageDir: process.cwd(), requires: ['fs'],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+      devUrl: '', entryFile: '/plugins/navide.plans/frontend/window/index.html', views: [],
+    }, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID, packageVersion, packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend/navide-plans', protocolVersion: 1, activation: 'startup',
+      approvedMethods: ['plans.list'], agentMethods: ['plans.list'], approvedEvents: ['plans.changed'],
+      approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: ['fs'], shell: [] }, revision: 1, state: 'user',
+    }))
+    // Legacy recovery: storage readiness stays false for the rest of the session.
+    mgr.setPlansStorageReadinessHandler(async () => false)
+    mgr.open(
+      asHost(new FakeBrowserWindow()),
+      { id: 'acme.agent-plans-recovery', requires: ['terminal'], devUrl: '', entryFile: '/plugins/acme.agent-plans-recovery/index.html' },
+      { x: 0, y: 0, width: 10, height: 10 },
+    )
+    mgr.setBackendHostToken('host-token')
+    mgr.setBackendWsUrl('ws://acme.agent-plans-recovery')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const answered = new Set<string>()
+    const answerRegistrations = (): void => {
+      for (const message of sentOf(socket)) {
+        if (message.type !== 'host.register' || answered.has(message.id)) continue
+        answered.add(message.id)
+        socket.receive({
+          id: message.id, type: 'host.register', ok: true,
+          payload: { registered: true }, error: null, timestamp: '',
+        })
+      }
+    }
+    answerRegistrations()
+    await flush()
+    // The child dies once; the withdrawn feature is re-advertised and accepted.
+    mgr.markPlansBackendUnavailable('child-unavailable')
+    await flush()
+    answerRegistrations()
+    await flush()
+    const registrationsBefore = sentOf(socket).filter((message) => message.type === 'host.register').length
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      request(socket, {
+        request_id: 'req-plans-recovery',
+        target: { plugin_id: PLANS_PLUGIN_ID, workspace_path: '/workspace' },
+        operation: 'backend',
+        payload: { reqId: 'mcp:1', name: 'plans.list', args: {} },
+      })
+      await flush()
+
+      const results = resultsOf(socket)
+      expect(results).toHaveLength(1)
+      // The legacy fallback verdict reaches the MCP caller instead of
+      // "Host backend session lapsed while the request ran".
+      expect(results[0].payload).toEqual({
+        request_id: 'req-plans-recovery',
+        response: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: 'BACKEND_UNAVAILABLE', message: 'Plans storage is unavailable' }),
+          recoveryDisposition: 'legacy-safe-before-dispatch',
+        }),
+      })
+      // Nothing about the advertised features changed, so nothing is re-sent.
+      expect(sentOf(socket).filter((message) => message.type === 'host.register')).toHaveLength(registrationsBefore)
+    } finally {
+      warn.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
   it('answers BACKEND_ERROR when executing the request throws', async () => {
     const { mgr, socket } = connectHost('acme.agent-throws', true)
     await flush()
