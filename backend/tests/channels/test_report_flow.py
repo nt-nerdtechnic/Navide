@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from agent_team_backend.channels import pdf, report
+from agent_team_backend.channels.base import InboundMessage
 
-from .test_manager import Env, _armed, _until, env, fast_timers  # noqa: F401 — fixtures
+from .test_manager import _MIDS, Env, _armed, _until, env, fast_timers  # noqa: F401 — fixtures
 from .test_media_flow import Media, _msg, media_env, ws  # noqa: F401 — fixtures
 
 PDF = b"%PDF-1.7\n<</Type /Pages>> <</Type /Page>> <</Type /Page>>\n%%EOF"
@@ -52,6 +54,9 @@ async def _reply(env: Env, m: Media, body: str, count: int = 1) -> None:
     await _armed(env)
     env.turn_complete("pane-1", _msg(body))
     await _until(lambda: len(m.files) >= count)
+    # The reply's sending runs past wait_idle (inbound jobs only): its last step is
+    # remembering the cards, after the PDF folder is gone.
+    await _until(lambda: sum(len(t) for t in env.m.mirror.reports._by_chat.values()) >= count)
     await env.m.wait_idle()
 
 
@@ -131,3 +136,41 @@ async def test_start_clears_what_an_earlier_run_left(pdf_env: Env, tmp_path: Pat
     left.write_bytes(PDF)
     await pdf_env.m.start()
     assert not (tmp_path / "channels-pdf").exists()
+
+
+# --- replying to a card ----------------------------------------------------------------
+
+
+async def _reply_to(env: Env, message_id: str, text: str, quoted: str = "") -> None:
+    await env.m.handle_inbound(InboundMessage(
+        platform="telegram", account="default", chat_id="-100", thread_id="50", sender_id="7",
+        sender_name="alice", text=text, message_id=f"m{next(_MIDS)}", is_direct=False, ts=time.time(),
+        reply_to_id=message_id, reply_to_text=quoted, reply_to_sender="navide_bot", reply_to_sender_id="123",
+        reply_to_self=True))
+    await env.m.wait_idle()
+
+
+async def test_a_reply_to_a_card_names_the_report(pdf_env: Env, ws: Path) -> None:
+    m = Media(pdf_env.tg)
+    plan = _plan(ws)
+    await _reply(pdf_env, m, f"---ATTACH--- {plan}")
+    await _reply_to(pdf_env, "f1", "第二階段先做哪個？", quoted=m.captions[0].plain())
+    body = pdf_env.fake.delivered[-1][1]
+    assert body.startswith(f'[Replying to report "Channel 溝通能力優化" — {plan}]\n> 📄 Channel 溝通能力優化\n')
+    assert body.endswith("\n第二階段先做哪個？")
+
+
+async def test_a_reply_without_quoted_text_still_names_the_report(pdf_env: Env, ws: Path) -> None:
+    """Slack: a thread reply carries no quote."""
+    m = Media(pdf_env.tg)
+    plan = _plan(ws)
+    await _reply(pdf_env, m, f"---ATTACH--- {plan}")
+    await _reply_to(pdf_env, "f1", "OK")
+    assert pdf_env.fake.delivered[-1][1] == f'[Replying to report "Channel 溝通能力優化" — {plan}]\nOK'
+
+
+async def test_a_reply_to_another_message_is_quoted_as_before(pdf_env: Env, ws: Path) -> None:
+    m = Media(pdf_env.tg)
+    await _reply(pdf_env, m, f"---ATTACH--- {ws}/out/chart.png")
+    await _reply_to(pdf_env, "unknown", "hm", quoted="hello")
+    assert pdf_env.fake.delivered[-1][1] == "[Replying to navide_bot]\n> hello\nhm"

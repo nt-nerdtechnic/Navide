@@ -226,6 +226,34 @@ class OwnerMap:
                     table[mid] = new
 
 
+class ReportMap:
+    """message id -> the report a card announced (its title, the path the pane named),
+    bounded, per chat. Keyed by chat, not topic: a Slack reply in a card's thread
+    arrives with that thread as its location."""
+
+    def __init__(self) -> None:
+        self._by_chat: dict[str, OrderedDict[str, tuple[str, str]]] = {}
+
+    @staticmethod
+    def _chat(platform: str, account: str, chat_id: str) -> str:
+        return f"{platform}:{account}:{chat_id}"
+
+    def remember(self, loc: Any, message_ids: list[str], title: str, path: str) -> None:
+        table = self._by_chat.setdefault(self._chat(loc.platform, loc.account, loc.chat_id), OrderedDict())
+        for mid in message_ids:
+            if mid:
+                table[str(mid)] = (title, path)
+                table.move_to_end(str(mid))
+        while len(table) > OWNER_MAP_MAX:
+            table.popitem(last=False)
+
+    def get(self, msg: Any) -> tuple[str, str] | None:
+        """The report ``msg`` replies to, if it replies to a card."""
+        if not msg.reply_to_id:
+            return None
+        return self._by_chat.get(self._chat(msg.platform, msg.account, msg.chat_id), {}).get(str(msg.reply_to_id))
+
+
 # --- outbound pacing -----------------------------------------------------------
 
 
@@ -356,6 +384,7 @@ class Mirror:
         self.m = manager
         self.echo = EchoGuard(manager._clock)
         self.owners = OwnerMap()
+        self.reports = ReportMap()
         self._outboxes: dict[str, Outbox] = {}
         self._seen_children: set[str] = set()
         self._topic_failed: set[str] = set()

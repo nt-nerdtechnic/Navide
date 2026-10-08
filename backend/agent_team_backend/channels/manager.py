@@ -1621,7 +1621,7 @@ class ChannelManager:
                 await note(media.text(lang, "refused", name=name, reason=media.text(lang, f"reason.{reason}")))
                 continue
             try:
-                ids = await self._send_one(adapter, loc, opened, spec, lang, limit, budget_end, note)
+                ids, title = await self._send_one(adapter, loc, opened, spec, lang, limit, budget_end, note)
             except Exception as exc:  # noqa: BLE001
                 await note(media.text(lang, "send_failed", name=name, error=redact.redact_text(str(exc))))
                 continue
@@ -1629,13 +1629,16 @@ class ChannelManager:
                 opened.fh.close()
             if ids and pending.owner:
                 self.mirror.owners.remember(loc.key(), ids, pending.owner)
+            # A reply to the card tells the pane which report it is about.
+            self.mirror.reports.remember(loc, ids, title, spec.path)
         if len(paths) > media.MAX_ATTACHMENTS_PER_REPLY:
             await note(media.text(lang, "too_many", max=media.MAX_ATTACHMENTS_PER_REPLY))
 
     async def _send_one(self, adapter: Any, loc: Location, opened: media.Outbound, spec: report.AttachSpec,
                         lang: str, limit: int, budget_end: float,
-                        note: Callable[[str], Awaitable[None]]) -> list[str]:
-        """Send one checked file with its card; [] when it was refused (the chat was told)."""
+                        note: Callable[[str], Awaitable[None]]) -> tuple[list[str], str]:
+        """Send one checked file with its card: (message ids, card title); no ids when it
+        was refused (the chat was told)."""
         path = opened.path
         name = media.safe_name(path.name)
         kind = path.suffix.lstrip(".").lower()
@@ -1656,7 +1659,7 @@ class ChannelManager:
                         with os.fdopen(fd, "rb") as fh:
                             # The adapter reads the PDF before the context removes it.
                             return await adapter.send_file(loc, fh, f"{path.stem}.pdf", caption=report.caption(
-                                card.sent_as("pdf", result.size, result.pages), lang))
+                                card.sent_as("pdf", result.size, result.pages), lang)), card.title
             opened.fh.seek(0)
             card = card.sent_as(kind, opened.size, failure=failure)
         else:
@@ -1664,9 +1667,9 @@ class ChannelManager:
         if limit and opened.size > limit:
             await note(media.text(lang, "too_large_out", name=name, size=media.human_size(opened.size),
                                   limit=media.human_size(limit)))
-            return []
+            return [], card.title
         # The adapter reads the file already open: a swap after the check cannot change it.
-        return await adapter.send_file(loc, opened.fh, path.name, caption=report.caption(card, lang))
+        return await adapter.send_file(loc, opened.fh, path.name, caption=report.caption(card, lang)), card.title
 
     def _quote_trusted(self, msg: InboundMessage) -> bool:
         """The replied-to message may be quoted into the pane (see ``_with_reply_quote``)."""
@@ -1687,7 +1690,8 @@ class ChannelManager:
         text = "\n".join(part for part in (msg.text, *files) if part)
         if msg.attachments and not text:
             return False  # every file was refused, and the chat was told why
-        body = _with_reply_quote(dataclasses.replace(msg, text=text), self._quote_trusted(msg))
+        body = _with_reply_quote(dataclasses.replace(msg, text=text), self._quote_trusted(msg),
+                                 self.mirror.reports.get(msg))
         try:
             result = await self._seams.deliver(pane_id, body, f"{msg.platform}:{msg.sender_name}")
         except Exception as exc:  # noqa: BLE001
@@ -2151,15 +2155,20 @@ def _chat_msg_bodies(text: str) -> list[str]:
             if target.split(":", 1)[0] in PLATFORMS and ":" in target]
 
 
-def _with_reply_quote(msg: InboundMessage, trusted: bool) -> str:
+def _with_reply_quote(msg: InboundMessage, trusted: bool, report_ref: tuple[str, str] | None = None) -> str:
     """``msg.text`` under a quote of the message it natively replies to, when known.
+    A reply to a report card (``report_ref``: title, path) names that report, quote or not.
 
     An untrusted author's text is left out: the allowlist screens who may reach a pane,
     and quoting would let anyone in the group speak through an allowed sender's reply.
     """
+    report_header = ""
+    if report_ref is not None:
+        title, path = (" ".join(_strip_controls(part, keep="").split()) for part in report_ref)
+        report_header = f'[Replying to report "{title}" — {path}]'
     quoted = msg.reply_to_text.strip()
     if not quoted:
-        return msg.text
+        return f"{report_header}\n{msg.text}" if report_header else msg.text
     if not trusted:
         return f"{REPLY_QUOTE_OMITTED}\n{msg.text}"
     if len(quoted) > REPLY_QUOTE_MAX_CHARS:
@@ -2168,7 +2177,7 @@ def _with_reply_quote(msg: InboundMessage, trusted: bool) -> str:
     # MSG marker or "[Navide MSG]" prefix can never sit at the start of a line.
     lines = "\n".join(f"> {_strip_controls(line)}" for line in quoted.splitlines())
     name = " ".join(_strip_controls(msg.reply_to_sender, keep="").split())[:REPLY_QUOTE_NAME_MAX_CHARS]
-    header = f"[Replying to {name}]" if name else "[Replying to a message]"
+    header = report_header or (f"[Replying to {name}]" if name else "[Replying to a message]")
     return f"{header}\n{lines}\n{msg.text}"
 
 
