@@ -378,10 +378,12 @@ def test_a_refused_record_leaves_the_others_alone_and_says_so(settings, mcp_stor
 
 # ── memory ───────────────────────────────────────────────────────────────────
 def test_project_scope_instruction_files_are_never_collected(
-    settings, mcp_store, skills, monkeypatch
+    settings, mcp_store, skills, monkeypatch, tmp_path
 ):
     """Repository files belong to git; two systems writing one file is how both
     of them end up wrong."""
+    (tmp_path / "home.md").write_text("home\n")
+    (tmp_path / "repo.md").write_text("repo\n")
 
     class FakeFile:
         def __init__(self, scope, relative, path):
@@ -393,11 +395,13 @@ def test_project_scope_instruction_files_are_never_collected(
         native_memory,
         "scan",
         lambda *a, **k: [
-            FakeFile(native_memory.USER_SCOPE, ".claude/CLAUDE.md", "/home/u/.claude/CLAUDE.md"),
-            FakeFile(native_memory.PROJECT_SCOPE, "CLAUDE.md", "/repo/CLAUDE.md"),
+            FakeFile(native_memory.USER_SCOPE, ".claude/CLAUDE.md", str(tmp_path / "home.md")),
+            FakeFile(native_memory.PROJECT_SCOPE, "CLAUDE.md", str(tmp_path / "repo.md")),
         ],
     )
-    monkeypatch.setattr(native_memory, "read", lambda path, *a, **k: {"text": f"text of {path}"})
+    monkeypatch.setattr(
+        native_memory, "read", lambda path, *a, **k: {"text": f"text of {path}", "exists": True}
+    )
 
     listed = {row["id"] for row in settings_bundle.inventory()["memory"]}
     assert listed == {".claude/CLAUDE.md"}
