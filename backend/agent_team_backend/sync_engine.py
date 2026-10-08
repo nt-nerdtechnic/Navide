@@ -666,6 +666,10 @@ class SyncEngine:
         updated_at = str(raw.get("updatedAt") or "")
         deleted = bool(raw.get("deleted"))
         body = str(raw.get("body") or "")
+        origin = self._origin(raw, scope=scope, item_id=item_id)
+        if origin == _ORIGIN_FORGED:
+            log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
+            return False
         if device == self._device_id() and not explicit:
             # Our own write coming back. Record the rev so the next push edits
             # from the right base, but there is nothing to apply. The key it
@@ -681,9 +685,6 @@ class SyncEngine:
                     deleted=deleted,
                     sealed_kid="" if deleted else (_kid_of(body) or state.sealed_kid),
                 )
-            return False
-        if not self._origin_ok(raw, scope=scope, item_id=item_id):
-            log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
             return False
         try:
             remote = None if deleted else json.loads(
@@ -717,7 +718,19 @@ class SyncEngine:
         # sends no tombstone, so an incoming record is offered to the adapter
         # rather than parked as a clash.
         absent_ok = _sensitive(adapter) and item_id not in snapshot
-        if local_hash != agreed_hash and local_hash != remote_hash and not absent_ok:
+        # A tombstone carries no ciphertext, so nothing but the signature says
+        # who wrote it — and a device this machine never pinned has nothing to
+        # check that against. A server could mint one for any item. Such a
+        # delete is not applied over something this machine holds; it is asked
+        # about, the same way a clash is. A live record needs no such care: its
+        # body opened under the account key, which is the proof of origin.
+        unproven_delete = (
+            remote is None and origin == _ORIGIN_UNKNOWN and item_id in snapshot
+            and not _sensitive(adapter)
+        )
+        if unproven_delete or (
+            local_hash != agreed_hash and local_hash != remote_hash and not absent_ok
+        ):
             self._store.record_conflict(
                 scope,
                 item_id,
@@ -749,7 +762,31 @@ class SyncEngine:
         )
         return held
 
-    def _origin_ok(self, raw: dict[str, Any], *, scope: str, item_id: str) -> bool:
+    def _origin(self, raw: dict[str, Any], *, scope: str, item_id: str) -> str:
+        """Whether the record provably came from the device it names.
+
+        ``_ORIGIN_VERIFIED`` when it carries that device's signature under the
+        key pinned for it — or under this machine's own key, for a record that
+        names this machine: the server stamps ``deviceId``, so "it says it is
+        ours" is the server's word, not proof. ``_ORIGIN_FORGED`` when a key is
+        known and the signature does not match. ``_ORIGIN_UNKNOWN`` when no key
+        is known to check against.
+        """
+        device = str(raw.get("deviceId") or "")
+        if device and device == self._device_id():
+            try:
+                key = device_signing.public_key()
+            except Exception:  # noqa: BLE001 - no own key to check with
+                key = ""
+        else:
+            key = self._signing_key_for(device)
+        if not key:
+            return _ORIGIN_UNKNOWN
+        return _ORIGIN_VERIFIED if self._origin_ok(raw, scope=scope, item_id=item_id, key=key) else _ORIGIN_FORGED
+
+    def _origin_ok(
+        self, raw: dict[str, Any], *, scope: str, item_id: str, key: str | None = None
+    ) -> bool:
         """Whether the record really came from the device it names.
 
         Trust on first use, the same rule the message path already follows: a
@@ -757,7 +794,8 @@ class SyncEngine:
         key no longer matches what was pinned is refused rather than re-pinned.
         """
         device = str(raw.get("deviceId") or "")
-        key = self._signing_key_for(device)
+        if key is None:
+            key = self._signing_key_for(device)
         if not key:
             return True
         return device_signing.verify_sync(
@@ -1374,6 +1412,11 @@ class SyncEngine:
     async def _require_key(self) -> None:
         if not await asyncio.to_thread(sync_keyring.has_account_key):
             raise SyncError("this machine does not hold the account sync key")
+
+
+_ORIGIN_VERIFIED = "verified"
+_ORIGIN_UNKNOWN = "unknown"
+_ORIGIN_FORGED = "forged"
 
 
 class _HoldPull(Exception):

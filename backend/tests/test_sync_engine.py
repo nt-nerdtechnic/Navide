@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-from agent_team_backend import sync_engine, sync_keyring, sync_scopes
+from agent_team_backend import device_signing, sync_engine, sync_keyring, sync_scopes
 from agent_team_backend.db import Database
 
 
@@ -183,9 +183,15 @@ class Device:
             request,
             device_id=lambda: name,
             enabled=lambda _scope: True,
-            signing_key_for=lambda _device: "",
+            # Every simulated device signs with this process's one key, and
+            # each is pinned: the real arrangement for an account's own devices.
+            signing_key_for=lambda _device: self.own_key,
         )
         self.engine.register(self.adapter)
+
+    @property
+    def own_key(self) -> str:
+        return device_signing.public_key()
 
     async def sync(self) -> dict:
         return await self.engine.sync("prompts")

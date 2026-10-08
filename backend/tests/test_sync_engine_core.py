@@ -54,3 +54,67 @@ def test_the_pinned_signing_key_is_read_from_the_field_pins_store(monkeypatch):
 
     monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m"})
     assert sync_engine._pinned_signing_key("dev-x") == "KEY"
+
+
+def _forged(server: FakeServer, item_id: str, *, device: str, deleted: bool, body: str = "") -> int:
+    rev = server.cursors.get("prompts", 0) + 1
+    server.cursors["prompts"] = rev
+    server.rows[("prompts", item_id)] = {
+        "itemId": item_id, "rev": rev, "updatedAt": "2030-01-01T00:00:00+00:00",
+        "deviceId": device, "deleted": 1 if deleted else 0,
+        "body": body or None, "sig": "forged",
+    }
+    return rev
+
+
+async def test_a_forged_record_from_a_pinned_device_is_dropped(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    _forged(server, "x", device="dev-a", deleted=True)
+    await b.sync()
+    assert b.adapter.items == {"x": {"v": 1}}
+    assert not b.store.state("prompts", "x").deleted
+
+
+async def test_a_record_claiming_to_be_ours_must_carry_our_signature(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    before = b.store.state("prompts", "x")
+    _forged(server, "x", device="dev-b", deleted=True)
+    await b.sync()
+    assert b.store.state("prompts", "x") == before
+    assert b.adapter.items == {"x": {"v": 1}}
+
+
+async def test_a_tombstone_from_an_unknown_device_asks_instead_of_deleting(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    b.engine._signing_key_for = lambda d: "" if d == "dev-stranger" else b.own_key
+    await b.sync()
+    _forged(server, "x", device="dev-stranger", deleted=True)
+    await b.sync()
+    assert b.adapter.items == {"x": {"v": 1}}
+    assert [c["itemId"] for c in b.store.conflicts("prompts")] == ["x"]
+
+
+async def test_a_live_record_from_an_unknown_device_is_still_taken(tmp_path, account_key):
+    # Its body opened under the account key, which only the account's own
+    # devices hold: that is the proof of origin a missing pin cannot give.
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    b.engine._signing_key_for = lambda _d: ""
+    await b.sync()
+    assert b.adapter.items == {"x": {"v": 1}}
+
+
+async def test_a_tombstone_from_an_unknown_device_for_an_item_we_lack_is_taken(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+    b.engine._signing_key_for = lambda _d: ""
+    _forged(server, "gone", device="dev-stranger", deleted=True)
+    await b.sync()
+    assert b.store.conflicts("prompts") == []
