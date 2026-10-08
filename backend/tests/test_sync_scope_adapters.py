@@ -236,3 +236,72 @@ def test_the_loop_prompt_follows_the_renderers_default_rule(monkeypatch):
     monkeypatch.setattr(app, "ui_settings_store", settings)
     sync_scopes.PromptsScope().apply("c", {"id": "c", "prompt": "C", "isDefault": False})
     assert settings.doc[sync_scopes.LOOP_PROMPT_KEY] == "B"
+
+
+async def test_a_pulled_prompt_tells_the_windows_without_failing_the_round(tmp_path, account_key, monkeypatch):
+    """The engine applies a page in a worker thread; server_link's broadcast
+    schedules a task, which only works on the loop. The round must finish and
+    the windows must still hear about the change."""
+    import asyncio
+
+    server = StrictServer()
+    a, _sa = _prompts_dev(tmp_path, server, "A", monkeypatch,
+                          [{"id": "p1", "prompt": "1", "isDefault": True}, {"id": "p2", "prompt": "2"}])
+    told = []
+
+    async def deliver(delta):
+        told.append(delta)
+
+    def broadcast(delta):
+        asyncio.get_running_loop().create_task(deliver(delta))  # what server_link._spawn does
+
+    b, sb = _prompts_dev(tmp_path, server, "B", monkeypatch)
+    b.adapter._broadcast = broadcast
+    await a.sync()
+    result = await b.sync()
+    await asyncio.sleep(0.05)
+    assert result["pulled"] == 2
+    assert {s["id"] for s in sb.doc[sync_scopes.PROMPT_SKILLS_KEY]} == {"p1", "p2"}
+    assert told
+
+
+# ── mcp ──────────────────────────────────────────────────────────────────────
+def _mcp(name):
+    return {"name": name, "transport": "stdio", "command": "npx", "args": [], "env": {}, "enabled": True}
+
+
+def test_a_refused_mcp_document_is_reported_not_swallowed(tmp_path, monkeypatch):
+    from agent_team_backend.mcp_settings import MCPSettingsStore
+
+    store = MCPSettingsStore(tmp_path / "mcp.json")
+    store.replace_servers([_mcp(f"s{i}") for i in range(32)])  # the document's cap
+    monkeypatch.setattr(app, "mcp_settings_store", store)
+    scope = sync_scopes.McpScope()
+    assert scope.apply("one-too-many", _mcp("one-too-many")) is False
+    assert scope.apply("s0", "not an object") is False
+    assert len(store.list_servers()) == 32
+
+
+async def test_a_synced_mcp_change_reloads_the_servers_and_tells_the_windows(tmp_path, account_key, monkeypatch):
+    import asyncio
+
+    from agent_team_backend.mcp_settings import MCPSettingsStore
+
+    server = StrictServer()
+    a_store, b_store = MCPSettingsStore(tmp_path / "a.json"), MCPSettingsStore(tmp_path / "b.json")
+    a_store.replace_servers([_mcp("docs")])
+    changed = []
+
+    async def on_change():
+        changed.append(asyncio.get_running_loop())
+
+    a = Dev(tmp_path, server, "A", monkeypatch, sync_scopes.McpScope(), mcp_settings_store=a_store)
+    b = Dev(tmp_path, server, "B", monkeypatch, sync_scopes.McpScope(on_change=on_change), mcp_settings_store=b_store)
+    await a.sync()
+    await b.sync()
+    await asyncio.sleep(0.05)
+    assert "docs" in {s["name"] for s in b_store.list_servers()}
+    assert len(changed) == 1
+    await b.sync()  # nothing new: no reload
+    await asyncio.sleep(0.05)
+    assert len(changed) == 1

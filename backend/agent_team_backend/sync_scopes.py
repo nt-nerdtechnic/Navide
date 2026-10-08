@@ -169,6 +169,27 @@ def without_detached(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _call_on_loop(loop: asyncio.AbstractEventLoop | None, fn: Callable[..., Any], *args: Any) -> None:
+    """Run *fn* on *loop*, from whichever thread this is.
+
+    The engine applies a pull page in a worker thread, and what an adapter
+    tells the rest of the app (a broadcast, a reload) schedules tasks, which
+    only the loop can do. Without a loop (no round has run, or a caller that
+    is not the engine) *fn* runs here.
+    """
+    if loop is None or loop.is_closed():
+        fn(*args)
+        return
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        fn(*args)
+    else:
+        loop.call_soon_threadsafe(fn, *args)
+
+
 class PromptsScope:
     """Prompt skills — the Settings → Prompts list.
 
@@ -184,6 +205,12 @@ class PromptsScope:
         #: Called with the settings delta after a write, so other windows
         #: converge instead of waiting for a reload.
         self._broadcast = broadcast
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def prepare(self, _request: Any, _kick: Callable[[], None]) -> bool:
+        """Called by the engine at the start of each round, on the loop."""
+        self._loop = asyncio.get_running_loop()
+        return True
 
     # ── reading ─────────────────────────────────────────────────────────
     def _list(self) -> list[dict[str, Any]]:
@@ -235,7 +262,7 @@ class PromptsScope:
             updates[LOOP_PROMPT_KEY] = default["prompt"]
         delta = _settings().set(updates)
         if delta and self._broadcast is not None:
-            self._broadcast(delta)
+            _call_on_loop(self._loop, self._broadcast, delta)
 
 
 def _single_default(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -270,27 +297,61 @@ class McpScope:
 
     scope = "mcp"
 
+    def __init__(self, on_change: Callable[[], Any] | None = None) -> None:
+        #: Coroutine function run on the loop after a synced write, so the
+        #: running servers and the open windows follow it the way they follow
+        #: a save in Settings. One run covers every write before it starts.
+        self._on_change = on_change
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._change_pending = False
+        self._change_tasks: set[asyncio.Task[Any]] = set()
+
+    async def prepare(self, _request: Any, _kick: Callable[[], None]) -> bool:
+        """Called by the engine at the start of each round, on the loop."""
+        self._loop = asyncio.get_running_loop()
+        return True
+
     def _store(self):
         from . import app
 
         return app.mcp_settings_store
 
+    def _changed(self) -> None:
+        if self._on_change is None or self._change_pending or self._loop is None:
+            return
+        self._change_pending = True
+        _call_on_loop(self._loop, self._run_change)
+
+    def _run_change(self) -> None:
+        async def run() -> None:
+            self._change_pending = False
+            try:
+                await self._on_change()
+            except Exception as err:  # noqa: BLE001 - the write itself stands
+                log.warning("the MCP servers could not be reloaded after a sync: %s", err)
+
+        task = asyncio.get_running_loop().create_task(run())
+        self._change_tasks.add(task)
+        task.add_done_callback(self._change_tasks.discard)
+
     def snapshot(self) -> dict[str, Any]:
         servers = self._store().list_servers()
         return {str(s["name"]): s for s in servers if isinstance(s.get("name"), str) and s["name"]}
 
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Write one record in. False means the store refused it (malformed,
+        over the document's limits) and this machine does not hold it."""
         store = self._store()
         servers = [s for s in store.list_servers() if isinstance(s, dict)]
         index = next((i for i, s in enumerate(servers) if s.get("name") == item_id), -1)
         if payload is None:
             if index < 0:
-                return
+                return True
             servers.pop(index)
         else:
             if not isinstance(payload, dict):
                 log.warning("MCP record %s arrived as %s", item_id, type(payload).__name__)
-                return
+                return False
             incoming = dict(payload)
             incoming["name"] = item_id
             if index < 0:
@@ -301,6 +362,9 @@ class McpScope:
             store.replace_servers(servers)
         except Exception as err:  # noqa: BLE001 - a rejected document is not fatal
             log.warning("the synced MCP document was refused: %s", err)
+            return False
+        self._changed()
+        return True
 
 
 #: Where a synced skill decision waits when the skill itself is not here yet.

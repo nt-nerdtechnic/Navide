@@ -1951,7 +1951,11 @@ function onKeyDown(e: KeyboardEvent) {
 // check) badge the Extensions nav item.
 const pluginUpdates = usePluginUpdates()
 let stopPluginUpdates: (() => void) | null = null
+// A synced MCP change lands in the store behind this pane; re-read the list
+// the way a reopen would (mLoad leaves an unsaved edit alone).
+let offMcpChanged: (() => void) | null = null
 onMounted(() => {
+  offMcpChanged = props.backend.on('mcp.servers_changed', () => { void mLoad() })
   window.addEventListener('keydown', onKeyDown)
   stopPluginUpdates = pluginUpdates.subscribe()
   refreshLaunchOverrides()
@@ -1962,6 +1966,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  offMcpChanged?.()
   stopPluginUpdates?.()
   // The onboarding instance is this component's now, so its timers are too:
   // an install watched from the CLI management panel keeps a poll and an

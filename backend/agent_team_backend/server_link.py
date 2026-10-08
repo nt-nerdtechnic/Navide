@@ -1054,7 +1054,15 @@ class ServerLink:
                 enabled=sync_scopes.scope_enabled,
             )
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
-            engine.register(sync_scopes.McpScope())
+            async def _mcp_changed() -> None:
+                # What a save in Settings does (mcp.save_servers), plus telling
+                # the windows, which re-read the list unless mid-edit.
+                await app.mcp_manager.reload(app.mcp_settings_store.path)
+                await app.broadcast(
+                    make_event("mcp.servers_changed", {"revision": str(app.mcp_settings_store.revision)})
+                )
+
+            engine.register(sync_scopes.McpScope(on_change=_mcp_changed))
             engine.register(sync_scopes.SkillsStateScope())
             # Files of skills too large for one record, as blobs; rides with
             # the Skills switch. Its transfers report progress to every window.
