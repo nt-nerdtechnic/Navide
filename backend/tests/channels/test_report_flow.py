@@ -120,14 +120,12 @@ async def test_an_htm_file_in_the_workspace_is_converted_too(pdf_env: Env, ws: P
     assert m.files[0][1:] == (PDF, "page.pdf") and m.captions[0].title == "頁面"
 
 
-async def test_another_panes_plan_folder_stays_refused(pdf_env: Env, tmp_path: Path) -> None:
+async def test_another_workspaces_plan_goes_too(pdf_env: Env, tmp_path: Path) -> None:
     other = tmp_path / "other"
     plan = _plan(other)
     m = Media(pdf_env.tg)
-    await _armed(pdf_env)
-    pdf_env.turn_complete("pane-1", _msg(f"---ATTACH--- {plan}"))
-    await pdf_env.m.wait_idle()
-    assert m.files == []
+    await _reply(pdf_env, m, f"---ATTACH--- {plan}")
+    assert m.files[0][1:] == (PDF, "channel-communication-upgrade_37afb4.pdf")
 
 
 async def test_start_clears_what_an_earlier_run_left(pdf_env: Env, tmp_path: Path) -> None:

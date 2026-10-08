@@ -180,7 +180,7 @@ async def test_a_reply_with_only_a_file_posts_no_empty_text(media_env: Env, ws: 
 
 
 @pytest.mark.parametrize("target, reason", [
-    ("/etc/hosts", "outside"),
+    ("/etc/hosts", "system"),
     ("{ws}/.env", "denied_name"),
     ("{ws}/out/../out/chart.png", "parent_ref"),
     ("{ws}/out/id_rsa", "denied_name"),
@@ -243,22 +243,38 @@ async def test_a_reply_sends_the_panes_own_received_file(media_env: Env, tmp_pat
     assert m.files[0][1:] == (b"JPEG", "abcd1234-photo.jpg")
 
 
-async def test_another_panes_received_file_is_not_sent(media_env: Env, tmp_path: Path) -> None:
-    """Each pane's media folder holds files from its own chat; sending another's leaks a chat."""
-    theirs = tmp_path / "media" / "pane-2" / "abcd1234-secret.png"
+async def test_a_file_outside_the_workspace_goes_and_is_logged(media_env: Env, tmp_path: Path, caplog) -> None:
+    """No scope any more (2026-10-08): another pane's received file goes too; the log records it."""
+    import logging
+
+    theirs = tmp_path / "media" / "pane-2" / "abcd1234-photo.png"
     theirs.parent.mkdir(parents=True)
     theirs.write_bytes(b"PNG")
+    caplog.set_level(logging.INFO, logger="agent_team_backend.channels.manager")
     m = Media(media_env.tg)
     await _armed(media_env)
-    media_env.turn_complete("pane-1", _msg(f"leak\n---ATTACH--- {theirs}"))
-    await _until(lambda: _said(media_env, "⚠️"))
-    assert m.files == []
+    media_env.turn_complete("pane-1", _msg(f"here\n---ATTACH--- {theirs}"))
+    await _until(lambda: m.files)
+    assert m.files[0][1:] == (b"PNG", "abcd1234-photo.png") and not _said(media_env, "⚠️")
+    assert any("outside the pane's workspace" in r.getMessage() and "abcd1234-photo.png" in r.getMessage()
+               for r in caplog.records)
+
+
+async def test_a_file_in_the_workspace_is_not_logged_as_outside(media_env: Env, ws: Path, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO, logger="agent_team_backend.channels.manager")
+    m = Media(media_env.tg)
+    await _armed(media_env)
+    media_env.turn_complete("pane-1", _msg(f"here\n---ATTACH--- {ws}/out/chart.png"))
+    await _until(lambda: m.files)
+    assert not any("outside the pane's workspace" in r.getMessage() for r in caplog.records)
 
 
 # --- Hardening ----------------------------------------------------------------------
 
 
-async def test_a_home_folder_workspace_sends_nothing(media_env: Env, tmp_path: Path, monkeypatch) -> None:
+async def test_a_home_folder_workspace_sends_its_files(media_env: Env, tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "Users" / "me"
     (home / "Documents").mkdir(parents=True)
     (home / "Documents" / "tax.pdf").write_bytes(b"PDF")
@@ -267,8 +283,8 @@ async def test_a_home_folder_workspace_sends_nothing(media_env: Env, tmp_path: P
     m = Media(media_env.tg)
     await _armed(media_env)
     media_env.turn_complete("pane-1", _msg(f"here\n---ATTACH--- {home}/Documents/tax.pdf"))
-    await _until(lambda: _said(media_env, "家目錄"))
-    assert m.files == []
+    await _until(lambda: m.files)
+    assert m.files[0][1:] == (b"PDF", "tax.pdf")
 
 
 async def test_a_refusal_names_the_file_but_not_its_folders(media_env: Env, ws: Path) -> None:
@@ -307,10 +323,10 @@ async def test_a_file_that_fails_to_open_is_refused_and_the_next_still_goes(
     (ws / "out" / "b.png").write_bytes(b"second")
     real_open = media.open_outbound
 
-    def flaky(raw, roots):
+    def flaky(raw):
         if raw.endswith("chart.png"):
             raise OSError(5, "Input/output error")
-        return real_open(raw, roots)
+        return real_open(raw)
 
     monkeypatch.setattr(media, "open_outbound", flaky)
     m = Media(media_env.tg)

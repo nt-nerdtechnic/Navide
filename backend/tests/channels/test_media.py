@@ -94,13 +94,13 @@ def ws(tmp_path: Path) -> Path:
 
 
 def test_a_workspace_file_is_allowed(ws: Path) -> None:
-    assert media.resolve_outbound(str(ws / "out" / "chart.png"), [ws]) == ((ws / "out" / "chart.png").resolve(), "")
+    assert media.resolve_outbound(str(ws / "out" / "chart.png")) == ((ws / "out" / "chart.png").resolve(), "")
 
 
 def test_the_media_folder_is_allowed(tmp_path: Path, ws: Path) -> None:
     root = tmp_path / "media"
     f = _file(root / "pane" / "abcd-a.png")
-    assert media.resolve_outbound(str(f), [ws, root]) == (f.resolve(), "")
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
 
 
 @pytest.mark.parametrize("raw, reason", [
@@ -108,31 +108,43 @@ def test_the_media_folder_is_allowed(tmp_path: Path, ws: Path) -> None:
     ("{ws}/out/../out/chart.png", "parent_ref"),
     ("{ws}/out/missing.png", "missing"),
     ("{ws}/out", "not_file"),
-    ("{outside}", "outside"),
 ])
 def test_paths_outside_the_rules_are_refused(tmp_path: Path, ws: Path, raw: str, reason: str) -> None:
     outside = _file(tmp_path / "elsewhere" / "x.txt")
     raw = raw.format(ws=ws, outside=outside)
-    assert media.resolve_outbound(raw, [ws]) == (None, reason)
+    assert media.resolve_outbound(raw) == (None, reason)
+
+
+def test_a_file_anywhere_on_the_machine_may_be_sent(tmp_path: Path) -> None:
+    """The user's call (2026-10-08): no workspace or attachments-folder scope; the pane judges."""
+    f = _file(tmp_path / "elsewhere" / "deep" / "report.pdf")
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
+    opened, reason = media.open_outbound(str(f))
+    assert reason == "" and opened is not None
+    with opened.fh:
+        assert opened.fh.read() == b"x"
 
 
 @needs_symlinks
-def test_a_symlink_out_of_the_workspace_is_judged_by_its_target(tmp_path: Path, ws: Path) -> None:
-    secret = _file(tmp_path / "home" / "notes.txt")
-    (ws / "out" / "notes.txt").symlink_to(secret)
+def test_a_symlink_is_judged_by_its_target(tmp_path: Path, ws: Path) -> None:
+    notes = _file(tmp_path / "home" / "notes.txt")
+    (ws / "out" / "notes.txt").symlink_to(notes)
     (ws / "linkdir").symlink_to(tmp_path / "home", target_is_directory=True)
-    assert media.resolve_outbound(str(ws / "out" / "notes.txt"), [ws]) == (None, "outside")
-    assert media.resolve_outbound(str(ws / "linkdir" / "notes.txt"), [ws]) == (None, "outside")
+    assert media.resolve_outbound(str(ws / "out" / "notes.txt")) == (notes.resolve(), "")
+    assert media.resolve_outbound(str(ws / "linkdir" / "notes.txt")) == (notes.resolve(), "")
+    key = _file(tmp_path / "home" / "server.pem")
+    (ws / "out" / "cert.txt").symlink_to(key)
+    assert media.resolve_outbound(str(ws / "out" / "cert.txt")) == (None, "denied_name")
 
 
 @needs_symlinks
 def test_a_symlink_into_a_dotfolder_is_judged_like_the_target(ws: Path) -> None:
     cfg = _file(ws / ".ssh" / "config")
     (ws / "out" / "cfg").symlink_to(cfg)
-    assert media.resolve_outbound(str(ws / "out" / "cfg"), [ws]) == (cfg.resolve(), "")
+    assert media.resolve_outbound(str(ws / "out" / "cfg")) == (cfg.resolve(), "")
     key = _file(ws / ".ssh" / "id_ed25519")
     (ws / "out" / "k").symlink_to(key)
-    assert media.resolve_outbound(str(ws / "out" / "k"), [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(ws / "out" / "k")) == (None, "denied_name")
 
 
 @pytest.mark.parametrize("rel", [".git/config", ".hidden/NT-20261008.pdf", "sub/.notes.md",
@@ -140,8 +152,8 @@ def test_a_symlink_into_a_dotfolder_is_judged_like_the_target(ws: Path) -> None:
 def test_hidden_files_and_folders_may_be_sent(ws: Path, rel: str) -> None:
     """The pane judges what to send; a dot in the path is no longer a reason to refuse."""
     f = _file(ws / rel)
-    assert media.resolve_outbound(str(f), [ws]) == (f.resolve(), "")
-    opened, reason = media.open_outbound(str(f), [ws])
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
+    opened, reason = media.open_outbound(str(f))
     assert reason == "" and opened is not None and opened.hidden
     opened.fh.close()
 
@@ -150,11 +162,11 @@ def test_hidden_files_and_folders_may_be_sent(ws: Path, rel: str) -> None:
                                  ".agent-team/plans/credentials.html"])
 def test_a_hidden_file_with_a_credential_name_is_still_refused(ws: Path, rel: str) -> None:
     f = _file(ws / rel)
-    assert media.resolve_outbound(str(f), [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(f)) == (None, "denied_name")
 
 
 def test_a_plain_path_is_not_marked_hidden(ws: Path) -> None:
-    opened, _ = media.open_outbound(str(ws / "out" / "chart.png"), [ws])
+    opened, _ = media.open_outbound(str(ws / "out" / "chart.png"))
     assert opened is not None and not opened.hidden
     opened.fh.close()
 
@@ -163,18 +175,18 @@ def test_a_plain_path_is_not_marked_hidden(ws: Path) -> None:
                                   "credentials.json", "cert.p12", "vault.kdbx", "terraform.tfstate"])
 def test_credential_shaped_names_are_refused(ws: Path, name: str) -> None:
     f = _file(ws / "keys" / name)
-    assert media.resolve_outbound(str(f), [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(f)) == (None, "denied_name")
 
 
-def test_a_filesystem_root_is_never_a_workspace(ws: Path) -> None:
-    f = ws / "out" / "chart.png"
-    assert media.resolve_outbound(str(f), [Path(f.resolve().anchor)]) == (None, "broad_workspace")
+def test_credential_names_are_refused_wherever_the_file_is(tmp_path: Path) -> None:
+    for rel in ("elsewhere/server.pem", "elsewhere/.env", "elsewhere/credentials/notes.txt", "x/app.sqlite"):
+        assert media.resolve_outbound(str(_file(tmp_path / rel))) == (None, "denied_name")
 
 
 def test_system_folders_are_refused_inside_a_workspace(tmp_path: Path, monkeypatch) -> None:
     f = _file(tmp_path / "deep" / "sys" / "hosts")
     monkeypatch.setattr(media, "_system_dirs", lambda: [tmp_path / "deep" / "sys"])
-    assert media.resolve_outbound(str(f), [tmp_path / "deep"]) == (None, "system")
+    assert media.resolve_outbound(str(f)) == (None, "system")
 
 
 def test_the_platforms_system_dirs_are_used() -> None:
@@ -187,21 +199,12 @@ def test_the_platforms_system_dirs_are_used() -> None:
 def test_an_alternate_data_stream_is_refused(ws: Path, suffix: str) -> None:
     """NTFS reads ``file:stream`` as a hidden stream of the file; a colon is refused
     below the anchor everywhere, before the path is resolved."""
-    assert media.resolve_outbound(str(ws / "out" / "chart.png") + suffix, [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(ws / "out" / "chart.png") + suffix) == (None, "denied_name")
 
 
 @pytest.mark.parametrize("raw", ["C:foo\\bar.txt", "\\foo\\bar.txt", "out/chart.png", "~/chart.png"])
 def test_relative_and_drive_relative_paths_are_refused(ws: Path, raw: str) -> None:
-    assert media.resolve_outbound(raw, [ws]) == (None, "not_absolute")
-
-
-def test_a_unc_share_root_is_too_broad(monkeypatch) -> None:
-    from pathlib import PureWindowsPath
-
-    monkeypatch.setattr(media, "_home", lambda: PureWindowsPath(r"C:\Users\me"))
-    assert media._too_broad(PureWindowsPath("\\\\server\\share\\"))
-    assert media._too_broad(PureWindowsPath("\\\\server\\share\\team"))
-    assert not media._too_broad(PureWindowsPath("\\\\server\\share\\team\\app"))
+    assert media.resolve_outbound(raw) == (None, "not_absolute")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="8.3 short names exist only on Windows (NTFS)")
@@ -213,7 +216,7 @@ def test_a_short_name_cannot_hide_a_denied_folder(ws: Path) -> None:
     ctypes.windll.kernel32.GetShortPathNameW(str(f.parent), buf, 1024)
     if not buf.value or Path(buf.value).name.lower() == "credentials_store":
         pytest.skip("8.3 name generation is off on this volume")
-    assert media.resolve_outbound(str(Path(buf.value) / "notes.txt"), [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(Path(buf.value) / "notes.txt")) == (None, "denied_name")
 
 
 def test_human_size() -> None:
@@ -238,24 +241,16 @@ def home(tmp_path: Path, monkeypatch) -> Path:
     return root
 
 
-def test_a_home_workspace_sends_nothing(home: Path) -> None:
-    assert media.resolve_outbound(str(home / "Documents" / "tax.pdf"), [home]) == (None, "broad_workspace")
-
-
-def test_a_workspace_above_home_sends_nothing(home: Path) -> None:
-    assert media.resolve_outbound(str(home / "Documents" / "tax.pdf"), [home.parent]) == (None, "broad_workspace")
+def test_a_file_in_home_or_a_user_data_folder_may_be_sent(home: Path) -> None:
+    f = home / "Documents" / "tax.pdf"
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
 
 
 def test_a_project_inside_home_and_the_media_folder_still_work(home: Path) -> None:
     proj = _file(home / "code" / "app" / "out.png")
     pane = _file(home / "Library" / "Agent-Team" / "channels-media" / "pane-1" / "ab-x.png")
-    assert media.resolve_outbound(str(proj), [home / "code" / "app"]) == (proj.resolve(), "")
-    assert media.resolve_outbound(str(pane), [home, pane.parent]) == (pane.resolve(), "")
-
-
-@pytest.mark.parametrize("path", ["/", "/Users", "/Volumes", "/home", "/opt"])
-def test_shallow_folders_are_too_broad(path: str) -> None:
-    assert media._too_broad(Path(path))
+    assert media.resolve_outbound(str(proj)) == (proj.resolve(), "")
+    assert media.resolve_outbound(str(pane)) == (pane.resolve(), "")
 
 
 @pytest.mark.parametrize("rel", [
@@ -265,17 +260,17 @@ def test_shallow_folders_are_too_broad(path: str) -> None:
 ])
 def test_credential_shaped_names_are_refused_in_any_segment(ws: Path, rel: str) -> None:
     f = _file(ws / rel)
-    assert media.resolve_outbound(str(f), [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(f)) == (None, "denied_name")
 
 
 def test_a_hard_link_to_another_file_is_refused(tmp_path: Path, ws: Path) -> None:
     outside = _file(tmp_path / "elsewhere" / "secret.txt", b"S")
     os.link(outside, ws / "out" / "copy.txt")
-    assert media.resolve_outbound(str(ws / "out" / "copy.txt"), [ws]) == (None, "hard_link")
+    assert media.resolve_outbound(str(ws / "out" / "copy.txt")) == (None, "hard_link")
 
 
 def test_open_outbound_reads_the_checked_file(ws: Path) -> None:
-    opened, reason = media.open_outbound(str(ws / "out" / "chart.png"), [ws])
+    opened, reason = media.open_outbound(str(ws / "out" / "chart.png"))
     assert reason == "" and opened is not None
     with opened.fh:
         assert (opened.fh.read(), opened.size, opened.path.name) == (b"x", 1, "chart.png")
@@ -305,11 +300,11 @@ def _staged(monkeypatch, *, before_recheck=None, after_first=None, after_recheck
         except PermissionError:
             state["blocked"] = True
 
-    def staged(raw, roots):
+    def staged(raw):
         calls.append(raw)
         if len(calls) == 2 and before_recheck:
             attempt(before_recheck)
-        result = checked(raw, roots)
+        result = checked(raw)
         if len(calls) == 1 and after_first:
             attempt(after_first)
         if len(calls) == 2 and after_recheck:
@@ -336,7 +331,7 @@ def test_a_file_replaced_between_the_open_and_the_recheck_is_caught(ws: Path, mo
         target.write_bytes(b"OTHER")  # a new file under the same, still-real path
 
     state = _staged(monkeypatch, before_recheck=swap)
-    result = media.open_outbound(str(target), [ws])
+    result = media.open_outbound(str(target))
     assert _sends_the_original(result) if state["blocked"] else result == (None, "changed")
 
 
@@ -345,20 +340,20 @@ def test_a_file_opened_through_a_folder_swapped_and_back_is_caught(tmp_path: Pat
                                                                    monkeypatch) -> None:
     """The open follows a folder symlink to a secret, then the folder is put back so the
     recheck passes: only comparing the open file with the path catches it."""
-    _file(tmp_path / "elsewhere" / "chart.png", b"SECRET")
+    _file(tmp_path / "secrets" / "chart.png", b"SECRET")
 
     def swap_out() -> None:
         (ws / "out").rename(ws / "moved")
-        (ws / "out").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+        (ws / "out").symlink_to(tmp_path / "secrets", target_is_directory=True)
 
     def swap_back() -> None:
         (ws / "out").unlink()
         (ws / "moved").rename(ws / "out")
 
     state = _staged(monkeypatch, after_first=swap_out, before_recheck=swap_back)
-    opened, reason = media.open_outbound(str(ws / "out" / "chart.png"), [ws])
+    opened, reason = media.open_outbound(str(ws / "out" / "chart.png"))
     # Put back or not, the secret opened through the link is never handed out.
-    assert opened is None and reason == ("outside" if state["blocked"] else "changed")
+    assert opened is None and reason == ("denied_name" if state["blocked"] else "changed")
 
 
 @needs_symlinks
@@ -371,8 +366,8 @@ def test_a_symlink_swapped_in_before_the_recheck_is_refused(tmp_path: Path, ws: 
         target.symlink_to(secret)
 
     state = _staged(monkeypatch, before_recheck=swap)
-    result = media.open_outbound(str(target), [ws])
-    assert _sends_the_original(result) if state["blocked"] else result == (None, "outside")
+    result = media.open_outbound(str(target))
+    assert _sends_the_original(result) if state["blocked"] else result == (None, "denied_name")
 
 
 @needs_symlinks
@@ -387,8 +382,8 @@ def test_a_swap_before_the_open_is_never_sent(tmp_path: Path, ws: Path, monkeypa
         target.symlink_to(secret)
 
     _staged(monkeypatch, after_first=swap)
-    expected = "changed" if hasattr(os, "O_NOFOLLOW") else "outside"
-    assert media.open_outbound(str(target), [ws]) == (None, expected)
+    expected = "changed" if hasattr(os, "O_NOFOLLOW") else "denied_name"
+    assert media.open_outbound(str(target)) == (None, expected)
 
 
 def test_a_replacement_before_the_open_is_judged_by_the_recheck(tmp_path: Path, ws: Path,
@@ -403,7 +398,7 @@ def test_a_replacement_before_the_open_is_judged_by_the_recheck(tmp_path: Path, 
         os.link(outside, target)
 
     _staged(monkeypatch, after_first=swap)
-    assert media.open_outbound(str(target), [ws]) == (None, "hard_link")
+    assert media.open_outbound(str(target)) == (None, "hard_link")
 
 
 def test_a_swap_after_the_recheck_still_sends_the_checked_file(ws: Path, monkeypatch) -> None:
@@ -414,21 +409,21 @@ def test_a_swap_after_the_recheck_still_sends_the_checked_file(ws: Path, monkeyp
         target.write_bytes(b"OTHER")
 
     _staged(monkeypatch, after_recheck=swap)
-    assert _sends_the_original(media.open_outbound(str(target), [ws]))
+    assert _sends_the_original(media.open_outbound(str(target)))
 
 
 # --- Review 2: user-data folders, the root's own path, resolved colons -----------------
 
 
 @pytest.mark.parametrize("folder", ["Desktop", "Documents", "Downloads", "Pictures", "Library", "OneDrive"])
-def test_a_user_data_folder_as_workspace_is_too_broad(home: Path, folder: str) -> None:
+def test_a_user_data_folder_is_no_longer_off_limits(home: Path, folder: str) -> None:
     f = _file(home / folder / "report.pdf")
-    assert media.resolve_outbound(str(f), [home / folder]) == (None, "broad_workspace")
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
 
 
 def test_a_project_under_desktop_still_works(home: Path) -> None:
     f = _file(home / "Desktop" / "app" / "out.png")
-    assert media.resolve_outbound(str(f), [home / "Desktop" / "app"]) == (f.resolve(), "")
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
 
 
 @pytest.mark.parametrize("parent, reason", [(".ssh", ""), (".aws/profile", ""),
@@ -436,7 +431,7 @@ def test_a_project_under_desktop_still_works(home: Path) -> None:
 def test_a_workspace_inside_a_secret_folder_sends_nothing(home: Path, parent: str, reason: str) -> None:
     root = home / "code" / parent / "proj"
     f = _file(root / "notes.txt")
-    assert media.resolve_outbound(str(f), [root]) == ((f.resolve(), "") if not reason else (None, reason))
+    assert media.resolve_outbound(str(f)) == ((f.resolve(), "") if not reason else (None, reason))
 
 
 @needs_symlinks
@@ -447,7 +442,7 @@ def test_a_colon_reached_through_a_symlink_is_refused(ws: Path) -> None:
     except OSError:
         pytest.skip("this filesystem cannot name a file with a colon")
     (ws / "out" / "plain.txt").symlink_to(target)
-    assert media.resolve_outbound(str(ws / "out" / "plain.txt"), [ws]) == (None, "denied_name")
+    assert media.resolve_outbound(str(ws / "out" / "plain.txt")) == (None, "denied_name")
 
 
 # --- Review 3: case-insensitive volumes ------------------------------------------------
@@ -457,14 +452,15 @@ def test_a_system_folder_matches_whatever_case_the_path_uses(tmp_path: Path, mon
     """APFS and NTFS are case-insensitive: /etc/HOSTS and /ETC/hosts name the same file."""
     f = _file(tmp_path / "deep" / "Sys" / "hosts")
     monkeypatch.setattr(media, "_system_dirs", lambda: [tmp_path / "deep" / "SYS"])
-    assert media.resolve_outbound(str(f), [tmp_path / "deep"]) == (None, "system")
+    assert media.resolve_outbound(str(f)) == (None, "system")
 
 
 def test_home_and_user_folders_match_whatever_case_the_path_uses(home: Path, monkeypatch) -> None:
     monkeypatch.setattr(media, "_home", lambda: Path(str(home).upper()))
     f = _file(home / "Desktop" / "report.pdf")
-    assert media.resolve_outbound(str(f), [home / "Desktop"]) == (None, "broad_workspace")
-    assert media.resolve_outbound(str(f), [home]) == (None, "broad_workspace")
+    assert media.resolve_outbound(str(f)) == (f.resolve(), "")
+    k = _file(home / "Desktop" / "Keychains" / "login.keychain-db")
+    assert media.resolve_outbound(str(k)) == (None, "denied_name")
 
 
 # --- Review 4: CRLF output ----------------------------------------------------------
@@ -491,6 +487,6 @@ def test_a_file_whose_stat_fails_after_resolving_is_refused_not_raised(ws: Path,
         return real_stat(self, *a, **kw)
 
     monkeypatch.setattr(Path, "stat", stat)
-    assert media.resolve_outbound(str(target), [ws]) == (None, "changed")
+    assert media.resolve_outbound(str(target)) == (None, "changed")
     seen["n"] = 0
-    assert media.open_outbound(str(target), [ws]) == (None, "changed")
+    assert media.open_outbound(str(target)) == (None, "changed")

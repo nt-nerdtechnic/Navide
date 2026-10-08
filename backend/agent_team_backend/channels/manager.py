@@ -1651,7 +1651,7 @@ class ChannelManager:
 
     async def _send_attachments(self, pending: _Pending, paths: list[str]) -> None:
         """Send the files a reply named on ``---ATTACH---`` lines, each checked by
-        ``media.resolve_outbound`` against the replying pane's workspace and the media folder. Each goes with a report card; an HTML
+        ``media.resolve_outbound``. Each goes with a report card; an HTML
         file goes as an A4 PDF, or as itself with the card saying why it is not one."""
         loc = pending.loc
         adapter = self._adapters.get((loc.platform, loc.account))
@@ -1664,8 +1664,8 @@ class ChannelManager:
         if adapter is None or not callable(getattr(adapter, "send_file", None)):
             await note(media.text(lang, "unsupported"))
             return
-        # The replying pane's own media folder only: another pane's files came from another chat.
-        roots = [self._seams.pane_workspace(pending.owner), media.pane_dir(self._seams.media_root(), pending.owner)
+        # Where a pane's files usually come from; anything else is sent and logged.
+        usual = [self._seams.pane_workspace(pending.owner), media.pane_dir(self._seams.media_root(), pending.owner)
                  ] if pending.owner else []
         limit = int(getattr(adapter, "upload_max_bytes", 0) or 0)
         budget_end = self._clock() + pdf.REPLY_BUDGET_S
@@ -1674,16 +1674,18 @@ class ChannelManager:
             # Only the file name ever goes back to the chat, never the folders above it.
             name = media.safe_name(Path(spec.path).name)
             try:
-                opened, reason = await asyncio.to_thread(media.open_outbound, spec.path, roots)
+                opened, reason = await asyncio.to_thread(media.open_outbound, spec.path)
             except Exception as exc:  # noqa: BLE001 — refuse this one, keep sending the rest
                 log.warning("channels: opening an attachment for %s failed: %s", loc.key(), exc)
                 opened, reason = None, "changed"
             if opened is None:
                 await note(media.text(lang, "refused", name=name, reason=media.text(lang, f"reason.{reason}")))
                 continue
-            if opened.hidden:
+            unusual = [why for why, flag in (("a hidden path", opened.hidden), (
+                "outside the pane's workspace", not media.is_inside(opened.path, usual))) if flag]
+            if unusual:
                 # Sent, not refused: the pane decides. The log keeps a record of it.
-                log.info("channels: sending %s from a hidden path to %s", opened.path, loc.key())
+                log.info("channels: sending %s (%s) to %s", opened.path, ", ".join(unusual), loc.key())
             try:
                 ids, title = await self._send_one(adapter, loc, opened, spec, lang, limit, budget_end, note)
             except Exception as exc:  # noqa: BLE001

@@ -3,11 +3,11 @@
 Inbound files from an allowed sender go to ``<app data>/channels-media/<pane>/`` under
 a random prefix and a name of safe characters only, and are pruned after
 ``RETENTION_S``. Outbound, a pane names a file on a ``---ATTACH--- <absolute path>``
-line inside an MSG block addressed to the chat; ``resolve_outbound`` admits only a
-regular file inside the pane's workspace or the media directory, judged after
-symlinks are resolved, and never a credential-shaped name or a system file. A hidden
-file or a file in a hidden folder may go: the pane judges what to send, and the
-manager logs it (``Outbound.hidden``).
+line inside an MSG block addressed to the chat; ``resolve_outbound`` admits any
+regular file on this machine, judged after symlinks are resolved, but never a
+credential-shaped name, a system file or a second hard link. Where the file lives is
+the pane's call (the user's, 2026-10-08): a hidden file, or one outside the pane's
+workspace, goes as usual and the manager logs it.
 """
 
 from __future__ import annotations
@@ -154,25 +154,6 @@ def _system_dirs() -> list[Path]:
     return osplat.paths.system_dirs()
 
 
-# Folders right under home that hold a user's own files; none is a workspace to send from.
-USER_DATA_FOLDERS = frozenset({
-    "desktop", "documents", "downloads", "pictures", "movies", "music", "videos", "library",
-    "public", "onedrive", "dropbox", "icloud drive", "google drive", "applications",
-})
-
-
-def _too_broad(base: Path) -> bool:
-    """A folder no pane may send from wholesale: a filesystem root or other shallow
-    folder (/Users, /Volumes, /opt), a mount point, the home folder or one above it, or
-    one of the user-data folders right under home (Desktop, Documents, Downloads ...)."""
-    if base == type(base)(base.anchor) or len(base.parts) < 3 or os.path.ismount(base):
-        return True
-    home = _home()
-    if _inside(home, base):  # home itself or a folder above it
-        return True
-    return _folded(base.parent) == _folded(home) and base.name.casefold() in USER_DATA_FOLDERS
-
-
 def _scope(real: Path) -> tuple[str, ...]:
     """The segments of ``real`` the name rules judge: everything below home (or below the
     anchor, outside home), so a workspace that itself sits in a secrets/ folder is
@@ -187,17 +168,15 @@ def _folded(path: PurePath) -> tuple[str, ...]:
 
 def _inside(path: PurePath, folder: PurePath) -> bool:
     """``path`` is ``folder`` or below it, ignoring case: APFS and NTFS volumes are
-    case-insensitive, so /Users/me/library/keychains is ~/Library/Keychains. Used only
-    where a match refuses; where a match admits (the workspace), case must agree."""
+    case-insensitive, so /Users/me/library/keychains is ~/Library/Keychains."""
     inner, outer = _folded(path), _folded(folder)
     return inner[: len(outer)] == outer
 
 
-def resolve_outbound(raw: str, roots: list[str | Path]) -> tuple[Path | None, str]:
+def resolve_outbound(raw: str) -> tuple[Path | None, str]:
     """(the real file, "") when a pane may send ``raw``, else (None, reason): one of
-    not_absolute, parent_ref, missing, not_file, outside, broad_workspace,
-    denied_name, system, hard_link."""
-    real, _st, reason = _check(raw, roots)
+    not_absolute, parent_ref, missing, not_file, denied_name, system, hard_link."""
+    real, _st, reason = _check(raw)
     return real, reason
 
 
@@ -206,7 +185,12 @@ def is_hidden(real: Path) -> bool:
     return any(part.startswith(".") for part in _scope(real))
 
 
-def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_result | None, str]:
+def is_inside(real: Path, folders: list[str | Path]) -> bool:
+    """``real`` lies in one of ``folders`` (resolved; "" entries are skipped)."""
+    return any(folder and _within(real, Path(folder)) for folder in folders)
+
+
+def _check(raw: str) -> tuple[Path | None, os.stat_result | None, str]:
     """``resolve_outbound`` plus the stat of the very inode that passed the rules."""
     path = Path(raw.strip())
     if not path.is_absolute():
@@ -222,35 +206,21 @@ def _check(raw: str, roots: list[str | Path]) -> tuple[Path | None, os.stat_resu
         return None, None, "missing"
     if not real.is_file():
         return None, None, "not_file"
-    in_broad = False
-    for root in roots:
-        if not root:
-            continue
-        try:
-            base = Path(root).resolve(strict=True)
-        except (OSError, RuntimeError):
-            continue
-        if not real.is_relative_to(base):
-            continue
-        if _too_broad(base):
-            in_broad = True  # never usable; a narrower root later may still admit the file
-            continue
-        scope = _scope(real)
-        # A colon can also arrive through a symlink, after the raw path passed.
-        if any(":" in part for part in scope) or any(
-                fnmatch.fnmatch(part.lower(), pat) for part in scope for pat in DENIED_NAMES):
-            return None, None, "denied_name"
-        if any(_within(real, s) for s in _system_dirs()):
-            return None, None, "system"
-        try:
-            st = real.stat()
-        except OSError:
-            return None, None, "changed"  # gone or unreadable since it resolved
-        # A second name for the same inode may be a file from anywhere on the disk.
-        if st.st_nlink > 1:
-            return None, None, "hard_link"
-        return real, st, ""
-    return None, None, "broad_workspace" if in_broad else "outside"
+    scope = _scope(real)
+    # A colon can also arrive through a symlink, after the raw path passed.
+    if any(":" in part for part in scope) or any(
+            fnmatch.fnmatch(part.lower(), pat) for part in scope for pat in DENIED_NAMES):
+        return None, None, "denied_name"
+    if any(_within(real, s) for s in _system_dirs()):
+        return None, None, "system"
+    try:
+        st = real.stat()
+    except OSError:
+        return None, None, "changed"  # gone or unreadable since it resolved
+    # A second name for the same inode may be a credential filed under a denied name.
+    if st.st_nlink > 1:
+        return None, None, "hard_link"
+    return real, st, ""
 
 
 def _within(path: Path, folder: Path) -> bool:
@@ -271,7 +241,7 @@ class Outbound:
     hidden: bool = False  # the path has a dot segment (logged, never refused)
 
 
-def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, str]:
+def open_outbound(raw: str) -> tuple[Outbound | None, str]:
     """Check ``raw``, open it, then check it again, so what is sent is what was checked.
 
     The recheck runs while the file is open, and an open file pins its inode: its number
@@ -283,7 +253,7 @@ def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, s
     recheck's own reason). A swap after the recheck
     no longer matters: the open file is the checked one.
     """
-    real, _seen, reason = _check(raw, roots)
+    real, _seen, reason = _check(raw)
     if real is None:
         return None, reason
     try:
@@ -292,7 +262,7 @@ def open_outbound(raw: str, roots: list[str | Path]) -> tuple[Outbound | None, s
         return None, "changed"
     try:
         st = os.fstat(fd)
-        again, seen, reason = _check(raw, roots)
+        again, seen, reason = _check(raw)
         if again is None or seen is None:
             os.close(fd)
             return None, reason
@@ -332,10 +302,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.parent_ref": "路徑不可含 ..",
         "reason.missing": "找不到這個檔案",
         "reason.not_file": "不是一般檔案",
-        "reason.outside": "只能傳 workspace 或附件資料夾裡的檔案",
         "reason.denied_name": "這個檔名看起來是憑證或金鑰",
         "reason.system": "不傳系統檔案",
-        "reason.broad_workspace": "這個 pane 的 workspace 是家目錄或範圍過大的資料夾，不從那裡傳檔",
         "reason.hard_link": "這個檔案有其他硬連結，可能是 workspace 外的檔案",
         "reason.changed": "檢查後檔案被更動或換成連結",
     },
@@ -363,10 +331,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.parent_ref": "the path may not contain ..",
         "reason.missing": "the file does not exist",
         "reason.not_file": "it is not a regular file",
-        "reason.outside": "only files in the workspace or the attachments folder can be sent",
         "reason.denied_name": "the name looks like a credential or key",
         "reason.system": "system files are not sent",
-        "reason.broad_workspace": "this pane's workspace is the home folder or another folder too broad to send from",
         "reason.hard_link": "the file has other hard links and may be a file from outside the workspace",
         "reason.changed": "the file changed or became a link after it was checked",
     },
@@ -394,10 +360,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.parent_ref": "パスに .. は使えません",
         "reason.missing": "ファイルが見つかりません",
         "reason.not_file": "通常のファイルではありません",
-        "reason.outside": "送れるのは workspace か添付ファイルフォルダ内のファイルだけです",
         "reason.denied_name": "認証情報や鍵のようなファイル名です",
         "reason.system": "システムファイルは送信しません",
-        "reason.broad_workspace": "この pane の workspace はホームフォルダか範囲が広すぎるフォルダなので、そこからは送信しません",
         "reason.hard_link": "このファイルには別のハードリンクがあり、workspace 外のファイルの可能性があります",
         "reason.changed": "確認した後にファイルが変更されたか、リンクに置き換えられました",
     },

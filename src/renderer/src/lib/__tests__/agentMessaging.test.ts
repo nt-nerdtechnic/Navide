@@ -389,10 +389,11 @@ describe('renderEnvelope', () => {
     expect(env.split('\n').filter((l) => l.includes(ATTACH_MARKER))).toHaveLength(1)
   })
 
-  it('states the attachment rules the backend enforces: hidden files may go, keys never do', () => {
+  it('states the attachment rule the backend enforces: any file but keys and credentials', () => {
     const hint = renderEnvelope('telegram:alice', 'send me the report', { external: true }).split('\n').pop() ?? ''
-    expect(hint).toContain('只限這個 workspace 內或收到的附件，不傳金鑰與憑證')
+    expect(hint).toContain(`${ATTACH_MARKER} <絕對路徑>（同樣頂格；不傳金鑰類檔案）`)
     expect(hint).not.toContain('隱藏檔')
+    expect(hint).not.toContain('workspace 內')
   })
 
   it('does not offer attachments to a pane-to-pane message', () => {
