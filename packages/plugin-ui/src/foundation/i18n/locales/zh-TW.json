@@ -9336,7 +9336,36 @@
       "rename": "重新命名",
       "remove-ask": "要移除這個 bot 嗎？透過它連接的 {n} 個 pane 會中斷連接。"
     },
-    "manage": "管理",
+    "platform-summary": "{bots} 個 bot · {chats} 個聊天室 · {panes} 個 pane 綁定中",
+    "menu": {
+      "label": "{bot} 的更多動作",
+      "connection": "連線設定（token、權限）",
+      "create-off": "需先在 BotFather 開啟 Bot Management Mode",
+      "remove": "移除 bot…"
+    },
+    "bindings": {
+      "topics": "主題",
+      "unbound": "尚未綁定任何 pane · 到 pane 標題列的 💬 按鈕選這個聊天室",
+      "select": "選取 {name}",
+      "topic": "主題「{title}」→",
+      "gone": "pane 已不存在",
+      "orphan-hint": "關閉時沒有解除綁定 · 聊天室的訊息不會送到任何地方",
+      "clear": "清除",
+      "focus": "跳到 pane ↗",
+      "unbind": "解除綁定",
+      "unbind-confirm": "確定解除？",
+      "children": "{n} 個子代理主題",
+      "auto": "自動",
+      "follows-parent": "隨上層解除",
+      "selected": "已選 {n} 個綁定",
+      "unbind-n": "解除 {n} 個綁定",
+      "batch-ask": "要解除這 {n} 個綁定嗎？",
+      "batch-note": "會通知這 {n} 個聊天室已中斷連接。",
+      "partial": "有 {n} 個沒能解除：",
+      "bound-at": "綁定於 {at}",
+      "focus-no-window": "「{name}」目前沒有在任何視窗開著。",
+      "focus-failed": "沒能跳到 pane：{error}"
+    },
     "quick": {
       "add": "快速新增",
       "verifying": "驗證中…",
@@ -9358,7 +9387,9 @@
     "managed": {
       "create": "一鍵建立新 bot",
       "disclose": "{manager} 能隨時取得並更換新 bot 的 token。拿到 {manager} token 的人能控制它建立的所有 bot。",
-      "enable-mode": "要用這隻 bot 建立新 bot，請先在 BotFather 開啟「Bot Management Mode」。",
+      "enable-hint": "想讓 bot 一鍵建立新 bot？到 BotFather 開啟「Bot Management Mode」。目前有 {n} 個 bot 還沒開。",
+      "open-botfather": "開啟 BotFather",
+      "dismiss": "不再顯示",
       "waiting": "請在 Telegram 按「建立」…",
       "timeout": "10 分鐘內沒有收到建立結果，請再試一次。",
       "token-unavailable": "bot 已在 Telegram 建立，但無法取得 token。請到 BotFather 查看。",
@@ -9443,7 +9474,6 @@
     "link": {
       "next-step": "下一步：連結你的聊天帳號",
       "next-step-desc": "按下面的按鈕，在 {platform} 完成後 Navide 會自動連結，不必再核准配對碼。",
-      "linked-summary": "已連結 {n} 個聊天室 · 在 pane 標題列的聊天按鈕選擇",
       "link-account": "連結我的帳號",
       "open-telegram": "在 Telegram 開啟（私訊）",
       "add-group": "加到群組",

@@ -9336,7 +9336,36 @@
       "rename": "名前を変更",
       "remove-ask": "この bot を削除しますか？この bot 経由で接続している {n} 個の pane は切断されます。"
     },
-    "manage": "管理",
+    "platform-summary": "bot {bots} 個 · チャット {chats} 件 · 接続中の pane {panes} 個",
+    "menu": {
+      "label": "{bot} のその他の操作",
+      "connection": "接続設定（トークン・権限）",
+      "create-off": "先に BotFather で Bot Management Mode をオンにしてください",
+      "remove": "bot を削除…"
+    },
+    "bindings": {
+      "topics": "トピック",
+      "unbound": "まだ pane に接続されていません · pane のタイトルバーの 💬 ボタンからこのチャットを選んでください",
+      "select": "{name} を選択",
+      "topic": "トピック「{title}」→",
+      "gone": "pane はもうありません",
+      "orphan-hint": "接続を解除せずに閉じられました · このチャットのメッセージはどこにも届きません",
+      "clear": "消去",
+      "focus": "pane へ移動 ↗",
+      "unbind": "接続を解除",
+      "unbind-confirm": "解除しますか？",
+      "children": "サブエージェントのトピック {n} 件",
+      "auto": "自動",
+      "follows-parent": "親と一緒に解除",
+      "selected": "{n} 件を選択中",
+      "unbind-n": "{n} 件の接続を解除",
+      "batch-ask": "{n} 件の接続を解除しますか？",
+      "batch-note": "{n} 件のチャットに切断を通知します。",
+      "partial": "{n} 件を解除できませんでした：",
+      "bound-at": "{at} に接続",
+      "focus-no-window": "「{name}」はどのウィンドウにも開かれていません。",
+      "focus-failed": "pane へ移動できませんでした：{error}"
+    },
     "quick": {
       "add": "クイック追加",
       "verifying": "確認中…",
@@ -9358,7 +9387,9 @@
     "managed": {
       "create": "新しい bot を作成",
       "disclose": "{manager} は新しい bot のトークンをいつでも取得・再発行できます。{manager} のトークンを持つ人は、作成したすべての bot を操作できます。",
-      "enable-mode": "この bot で新しい bot を作るには、先に BotFather で「Bot Management Mode」をオンにしてください。",
+      "enable-hint": "bot から新しい bot をワンタップで作りたい場合は、BotFather で「Bot Management Mode」をオンにしてください。まだオンになっていない bot が {n} 個あります。",
+      "open-botfather": "BotFather を開く",
+      "dismiss": "今後表示しない",
       "waiting": "Telegram で「作成」をタップしてください…",
       "timeout": "10 分以内に bot が作成されませんでした。もう一度お試しください。",
       "token-unavailable": "bot は Telegram で作成されましたが、トークンを取得できませんでした。BotFather で確認してください。",
@@ -9443,7 +9474,6 @@
     "link": {
       "next-step": "次へ：チャットアカウントをリンク",
       "next-step-desc": "下のボタンから {platform} で操作を完了すると自動でリンクされます。ペアリングコードの承認は不要です。",
-      "linked-summary": "{n} 件のチャットをリンク済み · ペインのタイトルバーのチャットボタンで選択",
       "link-account": "アカウントをリンク",
       "open-telegram": "Telegram で開く（DM）",
       "add-group": "グループに追加",

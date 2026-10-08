@@ -9336,7 +9336,36 @@
       "rename": "Rename",
       "remove-ask": "Remove this bot? {n} pane(s) connected through it will be disconnected."
     },
-    "manage": "Manage",
+    "platform-summary": "{bots} bot(s) · {chats} chat(s) · {panes} pane(s) bound",
+    "menu": {
+      "label": "More actions for {bot}",
+      "connection": "Connection settings (token, permissions)",
+      "create-off": "Turn on Bot Management Mode in BotFather first",
+      "remove": "Remove bot…"
+    },
+    "bindings": {
+      "topics": "Topics",
+      "unbound": "No pane bound yet · pick this chat with the 💬 button in a pane's title bar",
+      "select": "Select {name}",
+      "topic": "Topic “{title}” →",
+      "gone": "Pane no longer exists",
+      "orphan-hint": "Closed without being unbound · messages from this chat go nowhere",
+      "clear": "Clear",
+      "focus": "Jump to pane ↗",
+      "unbind": "Unbind",
+      "unbind-confirm": "Unbind?",
+      "children": "{n} sub-agent topic(s)",
+      "auto": "Auto",
+      "follows-parent": "Released with its parent",
+      "selected": "{n} binding(s) selected",
+      "unbind-n": "Unbind {n}",
+      "batch-ask": "Unbind {n} binding(s)?",
+      "batch-note": "Each of the {n} chat(s) will be told it was disconnected.",
+      "partial": "{n} could not be unbound:",
+      "bound-at": "bound {at}",
+      "focus-no-window": "“{name}” is not open in any window.",
+      "focus-failed": "Could not jump to the pane: {error}"
+    },
     "quick": {
       "add": "Quick add",
       "verifying": "Verifying…",
@@ -9358,7 +9387,9 @@
     "managed": {
       "create": "Create a new bot",
       "disclose": "{manager} can read and replace the new bot's token at any time. Whoever holds {manager}'s token controls every bot it creates.",
-      "enable-mode": "To create bots with this bot, turn on \"Bot Management Mode\" in BotFather first.",
+      "enable-hint": "Want a bot to create new bots in one tap? Turn on “Bot Management Mode” in BotFather. {n} of your bots don't have it on yet.",
+      "open-botfather": "Open BotFather",
+      "dismiss": "Don't show again",
       "waiting": "Tap Create in Telegram…",
       "timeout": "No bot was created within 10 minutes. Try again.",
       "token-unavailable": "The bot was created in Telegram, but its token could not be read. Check it in BotFather.",
@@ -9443,7 +9474,6 @@
     "link": {
       "next-step": "Next: link your chat account",
       "next-step-desc": "Use a button below and finish in {platform}; Navide links it automatically, no pairing code to approve.",
-      "linked-summary": "{n} chat(s) linked · pick one with the chat button in a pane's title bar",
       "link-account": "Link my account",
       "open-telegram": "Open in Telegram (DM)",
       "add-group": "Add to a group",
