@@ -3759,9 +3759,10 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 data-test="evolve-badge"
                 :data-state="evolveStateOf(ws.path)"
                 :title="$t('evolve.badge.title', { state: evolveLabelOf(ws.path) })"
+                :aria-label="$t('evolve.badge.title', { state: evolveLabelOf(ws.path) })"
                 @click.stop="openEvolveFor(ws.path)"
                 @dblclick.stop
-              >✦ {{ evolveLabelOf(ws.path) }}</button>
+              ><span aria-hidden="true">✦</span></button>
             </span>
             <span class="ws-path">{{ ws.displayPath }}</span>
           </span>
@@ -6080,12 +6081,10 @@ button.icon-btn.muted:hover {
    Same defaults and the same --status-badge-* override hooks as the pane row's
    .state pill: one status vocabulary, painted once per surface, so recolouring
    a status in Settings moves the tally with everything else. */
+/* Icon only: the state reads from the colour; its words live in the tooltip
+   and the aria-label. */
 .ws-evolve {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 9em;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
   white-space: nowrap;
   appearance: none;
   height: 15px;

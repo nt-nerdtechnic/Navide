@@ -81,7 +81,9 @@ function mountWith(): VueWrapper {
       existingProject: null,
       workspaces: [wsRow(A, 'alpha'), wsRow(B, 'beta')],
     } as never,
-    global: { mocks: { $t: (key: string) => key } },
+    global: {
+      mocks: { $t: (key: string, params?: { state?: string }) => (params?.state ? `${key}:${params.state}` : key) },
+    },
   })
 }
 
@@ -116,7 +118,7 @@ describe('ControlPane – workspace self-evolution entry', () => {
     await flushPromises()
     expect(badgeOf(wrapper, 0).attributes('data-state')).toBe('on')
     expect(badgeOf(wrapper, 1).attributes('data-state')).toBe('off')
-    expect(badgeOf(wrapper, 1).text()).toContain('自我優化 關')
+    expect(badgeOf(wrapper, 1).attributes('title')).toContain('自我優化 關')
 
     setEvolveBadge(B, badge({ enabled: true, running: true, running_since: Date.now() }))
     await flushPromises()
@@ -126,6 +128,30 @@ describe('ControlPane – workspace self-evolution entry', () => {
     setEvolveBadge(A, badge({ enabled: true, last_status: 'error' }))
     await flushPromises()
     expect(badgeOf(wrapper, 0).attributes('data-state')).toBe('failed')
+  })
+
+  it('shows only the icon, with the state words in the tooltip and aria-label', async () => {
+    setEvolveBadge(A, badge({ enabled: true, running: true, running_since: Date.now() }))
+    setEvolveBadge(B, badge())
+    wrapper = mountWith()
+    await flushPromises()
+    for (const [n, state, words] of [
+      [0, 'running', '執行中 0m'],
+      [1, 'off', '自我優化 關'],
+    ] as const) {
+      const b = badgeOf(wrapper, n)
+      expect(b.text()).toBe('✦')
+      expect(b.get('[aria-hidden="true"]').text()).toBe('✦')
+      expect(b.attributes('data-state')).toBe(state)
+      expect(b.attributes('title')).toBe(`evolve.badge.title:${words}`)
+      expect(b.attributes('aria-label')).toBe(`evolve.badge.title:${words}`)
+    }
+
+    setEvolveBadge(B, badge({ enabled: true }))
+    await flushPromises()
+    expect(badgeOf(wrapper, 1).text()).toBe('✦')
+    expect(badgeOf(wrapper, 1).attributes('data-state')).toBe('on')
+    expect(badgeOf(wrapper, 1).attributes('aria-label')).toBe('evolve.badge.title:已啟用')
   })
 
   it('opens the clicked heading workspace panel from the badge, without switching workspace', async () => {
