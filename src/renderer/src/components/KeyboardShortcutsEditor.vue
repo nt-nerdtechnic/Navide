@@ -8,6 +8,7 @@
 // sequences, the Electron menu) are appended as read-only reference sections.
 import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import {
   buildRows,
   classifyRow,
@@ -380,7 +381,7 @@ const visibleReference = computed(() => {
             <tr v-for="row in group.rows" :key="row.id" :class="{ customized: row.customized }">
               <td class="kse-td-command">
                 <span class="kse-label">{{ labelFor(row) }}</span>
-                <span class="kse-id">{{ row.command }}</span>
+                <span class="kse-id" v-truncate>{{ row.command }}</span>
               </td>
 
               <td class="kse-td-keys">

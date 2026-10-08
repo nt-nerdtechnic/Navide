@@ -10,7 +10,7 @@ import type { useStages } from '../composables/useStages'
 import type { useAnalyzer } from '../composables/useAnalyzer'
 import type { usePipelines } from '../composables/usePipelines'
 import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCatalog'
-import { useTheme } from '@navide/plugin-ui/foundation'
+import { useTheme, vTruncate } from '@navide/plugin-ui/foundation'
 import { useSettings } from '../composables/useSettings'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import {
@@ -2420,7 +2420,7 @@ watch(activeTab, (tab) => {
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4"/></svg>
             </div>
             <div class="s-ws-meta">
-              <span class="s-ws-name">{{ $t('settings.nav.title') }}</span>
+              <span class="s-ws-name" v-truncate>{{ $t('settings.nav.title') }}</span>
             </div>
           </div>
 
@@ -2441,7 +2441,7 @@ watch(activeTab, (tab) => {
                 @click="openSettingsSearchResult(item)"
               >
                 <span class="s-search-result-main">
-                  <span class="s-search-result-title">{{ item.title }}</span>
+                  <span class="s-search-result-title" v-truncate>{{ item.title }}</span>
                   <span class="s-search-result-group">{{ item.group }}</span>
                 </span>
                 <span class="s-search-result-summary">{{ item.summary }}</span>
@@ -2604,7 +2604,7 @@ watch(activeTab, (tab) => {
             </div>
             <div class="settings-meta-row">
               <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.mcp.scope) }}</span>
-              <span class="settings-path" :title="pathForTab('mcp')">{{ pathForTab('mcp') }}</span>
+              <span class="settings-path" v-truncate>{{ pathForTab('mcp') }}</span>
               <button class="settings-path-btn" :disabled="!settingsPaths.mcp" @click="openSettingsPath(settingsPaths.mcp)">{{ $t('action.open') }}</button>
             </div>
             <p v-if="mError" class="err-msg" style="margin:6px 22px 0">{{ mError }}</p>
@@ -2756,7 +2756,7 @@ watch(activeTab, (tab) => {
           <h1 class="s-page-title">{{ $t('settings.nav.skills') }}</h1>
           <div class="settings-meta-row">
             <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.skills.scope) }}</span>
-            <span class="settings-path" :title="pathForTab('skills')">{{ pathForTab('skills') }}</span>
+            <span class="settings-path" v-truncate>{{ pathForTab('skills') }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.skills" @click="openSettingsPath(settingsPaths.skills)">{{ $t('action.open') }}</button>
           </div>
           <SkillsPane :backend="props.backend" />
@@ -2790,10 +2790,10 @@ watch(activeTab, (tab) => {
           <h1 class="s-page-title">{{ $t('settings.nav.analyzer') }}</h1>
           <div class="settings-meta-row">
             <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.analyzer.scope) }}</span>
-            <span class="settings-path" :title="settingsPaths.analyzer">{{ settingsPaths.analyzer }}</span>
+            <span class="settings-path" v-truncate>{{ settingsPaths.analyzer }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.analyzer" @click="openSettingsPath(settingsPaths.analyzer)">{{ $t('action.open') }}</button>
             <span class="settings-path-divider">·</span>
-            <span class="settings-path" :title="settingsPaths.ai_chat">{{ $t('settings.analyzer.ai-keys-label') }} {{ settingsPaths.ai_chat }}</span>
+            <span class="settings-path" v-truncate>{{ $t('settings.analyzer.ai-keys-label') }} {{ settingsPaths.ai_chat }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.ai_chat" @click="openSettingsPath(settingsPaths.ai_chat)">{{ $t('action.open') }}</button>
           </div>
 
@@ -3036,7 +3036,7 @@ watch(activeTab, (tab) => {
                     :key="r.name"
                     :class="{ 'az-row-fail': !r.passed }"
                   >
-                    <td class="az-td-model">{{ r.name }}</td>
+                    <td class="az-td-model" v-truncate>{{ r.name }}</td>
                     <td v-for="tid in ['T1','T2','T3','T4']" :key="tid" class="az-td-task">
                       <template v-if="r.tasks.find(t => t.task_id === tid)">
                         <span :class="r.tasks.find(t => t.task_id === tid)!.passed ? 'az-pass' : 'az-fail'">
@@ -3096,7 +3096,7 @@ watch(activeTab, (tab) => {
                   <span v-if="row.needsAttention" class="cli-card-attention" :title="$t('settings.cliAgents.filter-attention')" :aria-label="$t('settings.cliAgents.filter-attention')">!</span>
                 </div>
                 <div class="cli-card-status">
-                  <span v-for="chip in row.chips.filter((chip) => chip.id === 'install' || chip.id === 'account' || chip.id === 'push')" :key="chip.id" class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span>
+                  <span v-for="chip in row.chips.filter((chip) => chip.id === 'install' || chip.id === 'account' || chip.id === 'push')" :key="chip.id" v-truncate class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span>
                   <span v-if="!row.chips.some((chip) => chip.id === 'install')" class="cli-agent-hint">{{ $t('settings.cliAgents.not-detected') }}</span>
                 </div>
                 <div class="cli-card-footer">
@@ -3728,7 +3728,7 @@ watch(activeTab, (tab) => {
               <div class="s-fullrow">
                 <div class="settings-meta-row inline">
                   <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.general.scope) }}</span>
-                  <span class="settings-path" :title="pathForTab('general')">{{ pathForTab('general') }}</span>
+                  <span class="settings-path" v-truncate>{{ pathForTab('general') }}</span>
                 </div>
                 <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
                 <p v-if="settingsBundleError" class="err-msg">{{ settingsBundleError }}</p>
@@ -3935,7 +3935,7 @@ watch(activeTab, (tab) => {
               <div class="s-fullrow">
                 <div class="settings-meta-row inline">
                   <span class="scope-badge">{{ $t('updater.current-version') }}</span>
-                  <span class="settings-path">v{{ updateState.currentVersion }}</span>
+                  <span class="settings-path" v-truncate>v{{ updateState.currentVersion }}</span>
                 </div>
 
                 <!-- Where the update actually is. Each stage below owns the
@@ -4258,7 +4258,7 @@ watch(activeTab, (tab) => {
           <h1 class="s-page-title">{{ $t('settings.nav.accounts') }}</h1>
           <div class="settings-meta-row">
             <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.accounts.scope) }}</span>
-            <span class="settings-path">{{ pathForTab('accounts') }}</span>
+            <span class="settings-path" v-truncate>{{ pathForTab('accounts') }}</span>
           </div>
           <GitAccountsPane :api="accountsApi" />
           <div data-settings-section="cli-accounts" style="margin: 4px 22px 22px; padding-top: 22px; border-top: 1px solid var(--border-default);">
@@ -4305,7 +4305,7 @@ watch(activeTab, (tab) => {
               <h2 class="ext-policy-block-title">{{ $t('settings.nav.executionPolicy') }}</h2>
               <div class="settings-meta-row inline">
                 <span class="scope-badge">{{ scopeLabel(executionPolicyScopeNote.scope) }}</span>
-                <span class="settings-path">{{ pathForStorage(executionPolicyScopeNote.storage) }}</span>
+                <span class="settings-path" v-truncate>{{ pathForStorage(executionPolicyScopeNote.storage) }}</span>
               </div>
               <ExecutionPolicyPane :workspace-path="props.workspacePath" />
             </section>

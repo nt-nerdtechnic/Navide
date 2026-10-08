@@ -9,6 +9,7 @@
 // does. Without it the content sits flush against the modal edge.
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import PromptSkillIcon from './PromptSkillIcon.vue'
 import { usePromptSkills } from '../composables/usePromptSkills'
 import { reorderByIds } from '../lib/paneOrder'
@@ -242,12 +243,12 @@ function applyCustomIcon(): void {
           >
             <span class="prompt-card-head">
               <PromptSkillIcon :name="skill.icon" />
-              <strong>{{ skill.name }}</strong>
+              <strong v-truncate>{{ skill.name }}</strong>
               <span v-if="skill.isDefault" class="prompt-badge default">{{
                 t('settings.prompts.default-badge')
               }}</span>
             </span>
-            <span class="prompt-card-desc">{{ skill.description || skill.prompt }}</span>
+            <span class="prompt-card-desc" v-truncate>{{ skill.description || skill.prompt }}</span>
             <span class="prompt-card-tags">
               <span class="pchip">{{ skill.category }}</span>
               <span v-if="skill.isDefault" class="pchip">{{

@@ -13,6 +13,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../composables/useBackend'
 import SettingRow from './settings/SettingRow.vue'
 import SettingsCard from './settings/SettingsCard.vue'
@@ -214,6 +215,11 @@ function preview(value: unknown, sealed = false): string {
   return text.length > 160 ? `${text.slice(0, 160)}…` : text
 }
 
+/** The whole value behind a preview cut at 160 characters, for its hover. */
+function previewFull(value: unknown, sealed = false): string | undefined {
+  return sealed || value === null || value === undefined ? undefined : JSON.stringify(value)
+}
+
 onMounted(load)
 </script>
 
@@ -284,7 +290,7 @@ onMounted(load)
         </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ t('settings.sync.this-device') }}</span>
-          <code class="sync-side-body">{{ preview(c.local, c.sealed) }}</code>
+          <code class="sync-side-body" v-truncate="previewFull(c.local, c.sealed)">{{ preview(c.local, c.sealed) }}</code>
           <button
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"
@@ -295,7 +301,7 @@ onMounted(load)
         </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ c.remoteDevice || t('settings.sync.other-device') }}</span>
-          <code class="sync-side-body">{{ preview(c.remote, c.sealed) }}</code>
+          <code class="sync-side-body" v-truncate="previewFull(c.remote, c.sealed)">{{ preview(c.remote, c.sealed) }}</code>
           <button
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"

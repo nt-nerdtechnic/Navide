@@ -16,7 +16,7 @@ import type {
 import { usePluginInventory } from '../composables/usePluginInventory'
 import { usePluginUpdates } from '../composables/usePluginUpdates'
 import { confirmUninstall, ipcErrorMessage, usePluginInstallFlow } from '../composables/usePluginInstallFlow'
-import { useNotify } from '@navide/plugin-ui/foundation'
+import { useNotify, vTruncate } from '@navide/plugin-ui/foundation'
 import PluginTrustDialog from './PluginTrustDialog.vue'
 import PackUninstallDialog from './PackUninstallDialog.vue'
 import NativeBackendPanel from './NativeBackendPanel.vue'
@@ -291,7 +291,7 @@ watch(installed, () => void refreshPacks())
           <div class="ext-row-head">
             <MarketplaceIcon v-bind="idParts(p.id)" :label="idParts(p.id).name" :size="32" />
             <div class="ext-row-title">
-              <span class="ext-id">{{ p.id === 'navide.git' ? $t('settings.extensions.bundledGit') : p.id }}</span>
+              <span class="ext-id" v-truncate>{{ p.id === 'navide.git' ? $t('settings.extensions.bundledGit') : p.id }}</span>
               <span v-if="p.installed?.packageVersion ?? p.version" class="ext-requires">
                 {{ p.installed?.packageVersion ?? p.version }}
               </span>

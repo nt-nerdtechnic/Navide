@@ -14,6 +14,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../../composables/useBackend'
 import { formatBytes } from '../../lib/formatBytes'
 import {
@@ -341,7 +342,7 @@ onMounted(load)
           />
           <label class="sh-item-body" :for="'sh-' + scope + '-' + item.id">
             <span class="sh-item-line">
-              <span class="sh-item-label">{{ item.label }}</span>
+              <span class="sh-item-label" v-truncate>{{ item.label }}</span>
               <span class="sh-item-size">{{ formatBytes(item.size) }}</span>
               <span v-if="item.hasSecrets" class="sh-tag sh-tag--secret">
                 {{ t('settings.sharing.bundle.has-secrets') }}
@@ -427,7 +428,7 @@ onMounted(load)
           <label class="sh-item-body" :for="'shp-' + row.scope + '-' + row.id">
             <span class="sh-item-line">
               <span class="sh-item-scope">{{ t('settings.sync.scope-' + row.scope) }}</span>
-              <span class="sh-item-label">{{ row.id }}</span>
+              <span class="sh-item-label" v-truncate>{{ row.id }}</span>
               <span class="sh-tag" :class="'sh-tag--' + row.action">
                 {{ t('settings.sharing.bundle.action-' + row.action) }}
               </span>
@@ -468,7 +469,7 @@ onMounted(load)
           <span class="sh-item-body">
             <span class="sh-item-line">
               <span class="sh-item-scope">{{ t('settings.sync.scope-' + row.scope) }}</span>
-              <span class="sh-item-label">{{ row.id }}</span>
+              <span class="sh-item-label" v-truncate>{{ row.id }}</span>
               <span class="sh-tag" :class="'sh-tag--' + row.action">
                 {{ t('settings.sharing.bundle.action-' + row.action) }}
               </span>

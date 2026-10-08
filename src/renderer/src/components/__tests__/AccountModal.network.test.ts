@@ -87,7 +87,7 @@ describe('account modal — your network', () => {
     // been opened, distinguishable only by a pill read one row at a time.
     expect(MODAL).toMatch(/v-for="group in visibleGroups\(device\)"/)
     expect(MODAL).toMatch(/v-for="row in group\.rows"/)
-    expect(MODAL).toMatch(/pane-name" :title="row\.pane\.title">\{\{ row\.pane\.title \}\}/)
+    expect(MODAL).toMatch(/pane-name" v-truncate>\{\{ row\.pane\.title \}\}/)
     // The section header is the status, so the rows below carry no pill. A pill
     // reappearing here would be the repetition this structure removed.
     const grouped = MODAL.slice(

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import type { useBackend } from '../../composables/useBackend'
 import {
@@ -628,8 +629,8 @@ function formatTime(ts: number | null | undefined): string {
                 <div
                   v-if="bot.status.last_error"
                   class="ch-row-error"
+                  v-truncate
                   :class="statusTone(bot)"
-                  :title="bot.status.last_error"
                   data-testid="channel-last-error"
                 >{{ bot.status.last_error }}</div>
               </div>
@@ -814,8 +815,8 @@ function formatTime(ts: number | null | undefined): string {
         <div v-for="req in store.pairing.value" :key="`${req.platform}:${req.code}`" class="ch-item" data-testid="pairing-row">
           <span class="ch-mark sm" aria-hidden="true">{{ badgeOf(req.platform) }}</span>
           <div class="ch-item-text">
-            <span class="ch-item-name">{{ req.sender_name || req.sender_id }}</span>
-            <span class="ch-item-meta">{{ platformName(req.platform) }}<template v-if="entryBot(req.platform, req.account)"> · <span data-testid="pairing-bot">{{ entryBot(req.platform, req.account) }}</span></template> · {{ formatTime(req.created_at) }}</span>
+            <span class="ch-item-name" v-truncate>{{ req.sender_name || req.sender_id }}</span>
+            <span class="ch-item-meta" v-truncate>{{ platformName(req.platform) }}<template v-if="entryBot(req.platform, req.account)"> · <span data-testid="pairing-bot">{{ entryBot(req.platform, req.account) }}</span></template> · {{ formatTime(req.created_at) }}</span>
           </div>
           <code class="ch-code">{{ req.code }}</code>
           <div class="ch-row-actions">
@@ -831,8 +832,8 @@ function formatTime(ts: number | null | undefined): string {
         <div v-for="entry in store.allow.value" :key="`${entry.platform}:${entry.account}:${entry.sender_id}`" class="ch-item" data-testid="allow-row">
           <span class="ch-mark sm" aria-hidden="true">{{ badgeOf(entry.platform) }}</span>
           <div class="ch-item-text">
-            <span class="ch-item-name">{{ entry.sender_name || entry.sender_id }}</span>
-            <span class="ch-item-meta">{{ platformName(entry.platform) }}<template v-if="entryBot(entry.platform, entry.account)"> · <span data-testid="allow-bot">{{ entryBot(entry.platform, entry.account) }}</span></template> · {{ entry.sender_id }}</span>
+            <span class="ch-item-name" v-truncate>{{ entry.sender_name || entry.sender_id }}</span>
+            <span class="ch-item-meta" v-truncate>{{ platformName(entry.platform) }}<template v-if="entryBot(entry.platform, entry.account)"> · <span data-testid="allow-bot">{{ entryBot(entry.platform, entry.account) }}</span></template> · {{ entry.sender_id }}</span>
           </div>
           <div class="ch-row-actions">
             <button type="button" class="ch-btn ghost sm" :disabled="busy" data-testid="allow-remove" @click="run(null, () => store.removeAllow(entry.platform, entry.sender_id, entry.account))">{{ t('channels.allow.remove') }}</button>

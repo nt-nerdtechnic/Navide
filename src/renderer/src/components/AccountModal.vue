@@ -13,6 +13,7 @@
 import { canonicalJson } from '../../../shared/canonicalJson'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { LegalRoute } from '../../../shared/legalLinks'
 import { linkErrorKey } from '../lib/linkStatus'
 import { usePairingState } from '../composables/usePairingState'
@@ -1462,7 +1463,7 @@ onUnmounted(() => {
                      now sits over this window rather than under it, so the two
                      were on screen together saying different things about the
                      same exchange — and this was the half that was wrong. -->
-                <span class="dev-name">
+                <span class="dev-name" v-truncate>
                   {{ row.role === 'responder'
                     ? t('settings.p2p.pair.asked-by', { device: row.deviceName || row.deviceId })
                     : t(row.code ? 'settings.p2p.pair.with-device' : 'settings.p2p.pair.asking',
@@ -1560,7 +1561,7 @@ onUnmounted(() => {
                      the two surfaces name the same machine the same way. The id
                      is a tooltip: it is what the logs show, and it is not the
                      question anybody is being asked. -->
-                <span class="dev-name" :title="row.deviceId">
+                <span class="dev-name" v-truncate :title="row.deviceId">
                   {{ row.deviceName || row.deviceId }}
                 </span>
               </div>
@@ -1617,7 +1618,7 @@ onUnmounted(() => {
             <div v-for="req in accessRequests" :key="req.key" class="req">
               <div class="req-head">
                 <span class="dev-tag">{{ t('settings.p2p.trust.kind-access') }}</span>
-                <span class="dev-name">{{ req.deviceName || req.deviceId }}</span>
+                <span class="dev-name" v-truncate>{{ req.deviceName || req.deviceId }}</span>
                 <span v-if="req.attempts > 1" class="dev-count">
                   {{ t('settings.p2p.trust.attempts', { count: req.attempts }) }}
                 </span>
@@ -1731,7 +1732,7 @@ onUnmounted(() => {
             >
               <template v-if="n.kind === 'device-key-changed'">
                 <div class="req-head">
-                  <span class="dev-name danger-text">
+                  <span class="dev-name danger-text" v-truncate>
                     {{ t('settings.p2p.trust.key-changed', { device: n.deviceId }) }}
                   </span>
                   <!-- Present tense, and a standing state rather than a line of
@@ -1756,7 +1757,7 @@ onUnmounted(() => {
 
               <template v-else-if="n.kind === 'plaintext-refused'">
                 <div class="req-head">
-                  <span class="dev-name danger-text">
+                  <span class="dev-name danger-text" v-truncate>
                     {{ t('settings.p2p.trust.plaintext-refused', { device: n.deviceId }) }}
                   </span>
                 </div>
@@ -1766,7 +1767,7 @@ onUnmounted(() => {
 
               <template v-else-if="n.kind === 'member-changed'">
                 <div class="req-head">
-                  <span class="dev-name danger-text">
+                  <span class="dev-name danger-text" v-truncate>
                     {{ t('settings.p2p.trust.member-changed', { device: n.deviceId }) }}
                   </span>
                 </div>
@@ -1776,7 +1777,7 @@ onUnmounted(() => {
 
               <template v-else-if="n.kind === 'policy-unverified'">
                 <div class="req-head">
-                  <span class="dev-name danger-text">
+                  <span class="dev-name danger-text" v-truncate>
                     {{ t('settings.p2p.trust.policy-unverified') }}
                   </span>
                 </div>
@@ -1819,7 +1820,7 @@ onUnmounted(() => {
                    is exactly the complaint the two-sided exchange answers. -->
               <template v-else-if="n.kind === 'device-pairing'">
                 <div class="req-head">
-                  <span class="dev-name">
+                  <span class="dev-name" v-truncate>
                     {{ t('settings.p2p.pair.' + n.pairing, { device: n.deviceName || n.deviceId }) }}
                   </span>
                 </div>
@@ -1827,7 +1828,7 @@ onUnmounted(() => {
 
               <template v-else-if="n.kind === 'device-first-seen'">
                 <div class="req-head">
-                  <span class="dev-name">
+                  <span class="dev-name" v-truncate>
                     {{ t('settings.p2p.trust.first-seen', { device: n.deviceId }) }}
                   </span>
                   <span v-if="n.own" class="dev-tag">
@@ -1852,7 +1853,7 @@ onUnmounted(() => {
                    panel came to announce member changes as first sightings. -->
               <template v-else>
                 <div class="req-head">
-                  <span class="dev-name danger-text">
+                  <span class="dev-name danger-text" v-truncate>
                     {{ t('settings.p2p.trust.unknown-notice', { kind: n.kind }) }}
                   </span>
                 </div>
@@ -2060,9 +2061,9 @@ onUnmounted(() => {
                 <ul v-if="paneHits.length" class="panes flat">
                   <li v-for="hit in paneHits" :key="hit.key" class="pane">
                     <span class="pane-agent">{{ hit.pane.agentKey || '—' }}</span>
-                    <span class="pane-name" :title="hit.pane.title">{{ hit.pane.title }}</span>
+                    <span class="pane-name" v-truncate>{{ hit.pane.title }}</span>
                     <span v-if="dockWindowLabelKey(hit.pane.surface)" class="pane-window">{{ t(dockWindowLabelKey(hit.pane.surface)!) }}</span>
-                    <span class="pane-ws">{{ hit.device }} · {{ hit.pane.workspace }}</span>
+                    <span class="pane-ws" v-truncate>{{ hit.device }} · {{ hit.pane.workspace }}</span>
                     <!-- The pill comes back here and only here: out of its
                          section, the row has nothing else saying what state it
                          is in. -->
@@ -2103,7 +2104,7 @@ onUnmounted(() => {
                        line with five other elements and was clipped to "M…"
                        while a two-line sentence about being offline sat beside
                        it. -->
-                  <span class="dev-name">{{ deviceLabel(device) }}</span>
+                  <span class="dev-name" v-truncate="device.deviceName || device.deviceId">{{ deviceLabel(device) }}</span>
                   <span v-if="device.isLocal" class="dev-tag">
                     {{ t('settings.p2p.network.this-device') }}
                   </span>
@@ -2111,7 +2112,7 @@ onUnmounted(() => {
                        name rather than under it: a second line turned every row
                        into two, which is a lot of height for the secondary
                        half of the sentence. -->
-                  <span class="dev-meta" :title="deviceMetaTitle(device)">
+                  <span class="dev-meta" v-truncate :title="deviceMetaTitle(device)">
                     {{ deviceMeta(device) }}
                   </span>
                   <!-- Without this the list said nothing about trust, so a
@@ -2205,7 +2206,7 @@ onUnmounted(() => {
                           <!-- `title` because the longest name is the one
                                carrying the most information, and it was the one
                                being clipped. -->
-                          <span class="pane-name" :title="row.pane.title">{{ row.pane.title }}</span>
+                          <span class="pane-name" v-truncate>{{ row.pane.title }}</span>
                           <!-- An embedded AI panel says which window it lives in. -->
                           <span v-if="dockWindowLabelKey(row.pane.surface)" class="pane-window">{{ t(dockWindowLabelKey(row.pane.surface)!) }}</span>
                           <PaneGitChip v-if="device.isLocal && row.pane.git" :git="row.pane.git" />
@@ -2254,7 +2255,7 @@ onUnmounted(() => {
           <div class="card net-card">
             <div v-for="entry in blocked" :key="entry.deviceId || entry.memberId" class="req">
               <div class="req-head">
-                <span class="dev-name">{{ blockedLabel(entry) }}</span>
+                <span class="dev-name" v-truncate>{{ blockedLabel(entry) }}</span>
                 <span v-if="entry.reason" class="dev-count">{{ entry.reason }}</span>
               </div>
               <div class="req-acts">

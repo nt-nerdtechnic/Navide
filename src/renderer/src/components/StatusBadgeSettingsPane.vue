@@ -11,6 +11,7 @@
 // swatches render their real resolved colour under the current theme by binding
 // the palette's token expressions straight into the button.
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 import { paneStatusLabelKey, type PaneStatusValue } from '../lib/paneStatusLabel'
 import {
@@ -95,13 +96,13 @@ function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US' | 'ja-JP', v
         <span class="sb-preview" :style="previewStyle(status)">
           {{ previewLabel(status, locale) }}
         </span>
-        <span class="sb-key">
+        <span class="sb-key" v-truncate>
           {{ status }}
           <em v-if="ROW_ONLY.includes(status)" class="sb-rowonly">
             {{ $t('statusBadges.row-only') }}
           </em>
         </span>
-        <span class="sb-when">{{ $t(`statusBadges.when.${status}`) }}</span>
+        <span class="sb-when" v-truncate>{{ $t(`statusBadges.when.${status}`) }}</span>
       </div>
 
       <label class="sb-field">

@@ -1247,8 +1247,9 @@ describe('MarketplacePane', () => {
       // Each row keeps its fields apart: name, id · version, permissions, state.
       expect(members[0].get('.mkt-pack-member-name').text()).toBe('Hello')
       expect(members[0].get('.mkt-pack-member-id').text()).toBe('acme.hello · 1.0.0')
-      expect(members[0].get('.mkt-pack-member-id').attributes('title')).toBe('acme.hello · 1.0.0')
-      expect(members[0].get('.mkt-pack-member-name').attributes('title')).toBe('Hello')
+      // The full value is shown on hover by v-truncate when cut off, not by a title.
+      expect(members[0].get('.mkt-pack-member-id').attributes('data-truncate')).toBe('')
+      expect(members[0].get('.mkt-pack-member-name').attributes('data-truncate')).toBe('')
       expect(members[0].findAll('.mkt-pack-cap').map((c) => c.text())).toEqual(['ui'])
       expect(members[0].find('.mkt-pack-status').exists()).toBe(false)
       // The same "fs · sensitive" label as the install dialog, spaces included.
