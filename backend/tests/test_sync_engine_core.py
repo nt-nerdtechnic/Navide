@@ -844,3 +844,85 @@ async def test_a_second_reset_within_the_hour_is_refused_and_reported(tmp_path, 
     clock.now += 2 * 3600
     third = await b.sync()
     assert not third.get("resetThrottled")
+
+
+# ── security re-review (sync審-資安, round 2) ────────────────────────────────
+
+
+async def test_a_round_queued_across_an_account_switch_writes_nothing(tmp_path, account_key):
+    # R-B1: it passed its checks under A, waited for the lock, and must not
+    # then run under B's generation.
+    import asyncio
+
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"a-only": {"v": 1}})
+    lock = b.engine._locks.setdefault("prompts", asyncio.Lock())
+    await lock.acquire()
+    queued = asyncio.create_task(b.sync())
+    await asyncio.sleep(0.05)
+    b.store.new_generation()
+    lock.release()
+    with pytest.raises(sync_engine.StaleRound):
+        await queued
+    assert server.rows == {}
+
+
+async def test_push_items_waits_for_the_running_round_and_checks_the_generation(tmp_path, account_key):
+    # R-B2.
+    import asyncio
+
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    lock = b.engine._locks.setdefault("prompts", asyncio.Lock())
+    await lock.acquire()
+    task = asyncio.create_task(b.engine.push_items("prompts", ["x"]))
+    await asyncio.sleep(0.05)
+    assert server.pushes == 0   # waiting behind the round
+    b.store.new_generation()
+    lock.release()
+    with pytest.raises(sync_engine.StaleRound):
+        await task
+    assert server.pushes == 0
+
+
+async def test_pull_items_records_nothing_once_the_account_changed(tmp_path, account_key):
+    import asyncio
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        await asyncio.get_running_loop().run_in_executor(None, b.store.new_generation)
+        return reply
+
+    b.engine._request = request
+    with pytest.raises(sync_engine.StaleRound):
+        await b.engine.pull_items("prompts", ["x"])
+    assert b.adapter.items == {}
+
+
+async def test_a_stale_round_never_reaches_the_adapter(tmp_path, account_key):
+    # R-B3: no apply (and so no detach) once the round is stale.
+    import asyncio
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    applied: list[str] = []
+    b.adapter.apply = lambda item_id, payload: applied.append(item_id)
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            await asyncio.get_running_loop().run_in_executor(None, b.store.new_generation)
+        return reply
+
+    b.engine._request = request
+    await b.engine.sync_all()
+    assert applied == []

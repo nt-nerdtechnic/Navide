@@ -664,19 +664,25 @@ class SyncEngine:
         return self._finish(scope, result)
 
     async def _round(self, scope: str) -> dict[str, Any]:
-        adapter = self._adapters.get(scope)
-        if adapter is None:
-            raise SyncError(f"no adapter registered for {scope!r}")
-        if not self._enabled(scope):
-            return {"skipped": "disabled"}
-        if not await asyncio.to_thread(sync_keyring.has_account_key):
-            return {"skipped": "no-key"}
-        async with self._locks.setdefault(scope, asyncio.Lock()):
-            token = _round_generation.set(self._store.generation)
-            try:
+        # The generation is taken before anything is checked: a round that
+        # passed its checks for one account and then waited for the lock
+        # while the account changed must find out, not run for the next one.
+        token = _round_generation.set(self._store.generation)
+        try:
+            adapter = self._adapters.get(scope)
+            if adapter is None:
+                raise SyncError(f"no adapter registered for {scope!r}")
+            if not self._enabled(scope):
+                return {"skipped": "disabled"}
+            if not await asyncio.to_thread(sync_keyring.has_account_key):
+                return {"skipped": "no-key"}
+            async with self._locks.setdefault(scope, asyncio.Lock()):
+                self._store._check_round()
+                if not self._enabled(scope):
+                    return {"skipped": "disabled"}
                 return await self._locked_round(scope, adapter)
-            finally:
-                _round_generation.reset(token)
+        finally:
+            _round_generation.reset(token)
 
     async def _locked_round(self, scope: str, adapter: ScopeAdapter) -> dict[str, Any]:
         self._notes[scope] = {}
@@ -753,6 +759,14 @@ class SyncEngine:
         for task in list(self._kicked):
             task.cancel()
 
+    async def _call(self, msg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """``_request``, refused for a stale round on either side of the wire:
+        nothing goes out for the previous account, and its reply is not read."""
+        self._store._check_round()
+        reply = await self._request(msg_type, payload)
+        self._store._check_round()
+        return reply
+
     def _kick(self, scope: str) -> None:
         """Run one more round of *scope* soon. For an adapter whose background
         work (a finished download) has made a held record appliable."""
@@ -789,7 +803,7 @@ class SyncEngine:
         while True:
             pages += 1
             reply = _payload(
-                await self._request(
+                await self._call(
                     "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
                 )
             )
@@ -919,6 +933,7 @@ class SyncEngine:
         name (``pull_items``): then even this device's own write is applied,
         because asking for it means this machine no longer holds it."""
         scope = adapter.scope
+        self._store._check_round()
         if not isinstance(raw, dict):
             return False
         item_id = str(raw.get("itemId") or "")
@@ -1310,13 +1325,14 @@ class SyncEngine:
         self, scope: str, wire: list[dict[str, Any]], pending: list[tuple[str, Any, str]]
     ) -> int:
         by_id = {item_id: (payload, item_hash) for item_id, payload, item_hash in pending}
-        reply = _payload(await self._request("sync.push", {"scope": scope, "items": wire}))
+        reply = _payload(await self._call("sync.push", {"scope": scope, "items": wire}))
         return await asyncio.to_thread(self._record_reply, scope, reply, by_id)
 
     def _record_reply(
         self, scope: str, reply: dict[str, Any], by_id: dict[str, tuple[Any, str]]
     ) -> int:
         """Write what the server said into the local record. Off the loop."""
+        self._store._check_round()
         accepted = reply.get("accepted")
         for entry in accepted if isinstance(accepted, list) else []:
             if not isinstance(entry, dict):
@@ -1532,7 +1548,7 @@ class SyncEngine:
         since = 0
         while True:
             reply = _payload(
-                await self._request(
+                await self._call(
                     "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
                 )
             )
@@ -1643,21 +1659,29 @@ class SyncEngine:
         local WebSocket could put a credential on the wire while the UI showed
         the scope switched off and said nothing.
         """
-        adapter = self._require_adapter(scope)
-        self._require_enabled(scope)
-        await self._require_key()
-        wanted = _unique(item_ids)
-        blocked_before = self._store.conflict_ids(scope)
-        pending, built = await asyncio.to_thread(self._prepare_push, adapter)
-        chosen_pending = [entry for entry in pending if entry[0] in wanted]
-        chosen_built = [
-            entry for entry in built if str(entry[0].get("itemId") or "") in wanted
-        ]
-        if chosen_built:
-            await self._send_all(scope, chosen_pending, chosen_built)
-        return await asyncio.to_thread(
-            self._push_outcomes, scope, wanted, chosen_pending, chosen_built, blocked_before
-        )
+        token = _round_generation.set(self._store.generation)
+        try:
+            adapter = self._require_adapter(scope)
+            self._require_enabled(scope)
+            await self._require_key()
+            # One transfer per scope at a time, like a round, and under the
+            # generation it began with (see ``_round``).
+            async with self._locks.setdefault(scope, asyncio.Lock()):
+                self._store._check_round()
+                wanted = _unique(item_ids)
+                blocked_before = self._store.conflict_ids(scope)
+                pending, built = await asyncio.to_thread(self._prepare_push, adapter)
+                chosen_pending = [entry for entry in pending if entry[0] in wanted]
+                chosen_built = [
+                    entry for entry in built if str(entry[0].get("itemId") or "") in wanted
+                ]
+                if chosen_built:
+                    await self._send_all(scope, chosen_pending, chosen_built)
+                return await asyncio.to_thread(
+                    self._push_outcomes, scope, wanted, chosen_pending, chosen_built, blocked_before
+                )
+        finally:
+            _round_generation.reset(token)
 
     def _push_outcomes(
         self,
@@ -1709,19 +1733,27 @@ class SyncEngine:
         down and putting it into use on this machine is the same decision as
         sending one, and it answers to the same switch.
         """
-        adapter = self._require_adapter(scope)
-        self._require_enabled(scope)
-        await self._require_key()
-        wanted = _unique(item_ids)
-        requested = getattr(adapter, "request_items", None)
-        if requested is not None:
-            # Naming an item is asking for it: an adapter that keeps a "not on
-            # this machine" mark for some items lifts it here, before the
-            # rows are read, so the pull below can take them.
-            await asyncio.to_thread(requested, wanted)
-        rows = await self._list_remote(scope)
-        by_id = {str(row.get("itemId") or ""): row for row in rows if row.get("itemId")}
-        return await asyncio.to_thread(self._apply_chosen, adapter, wanted, by_id)
+        token = _round_generation.set(self._store.generation)
+        try:
+            adapter = self._require_adapter(scope)
+            self._require_enabled(scope)
+            await self._require_key()
+            # One transfer per scope at a time, like a round, and under the
+            # generation it began with (see ``_round``).
+            async with self._locks.setdefault(scope, asyncio.Lock()):
+                self._store._check_round()
+                wanted = _unique(item_ids)
+                requested = getattr(adapter, "request_items", None)
+                if requested is not None:
+                    # Naming an item is asking for it: an adapter that keeps a "not on
+                    # this machine" mark for some items lifts it here, before the
+                    # rows are read, so the pull below can take them.
+                    await asyncio.to_thread(requested, wanted)
+                rows = await self._list_remote(scope)
+                by_id = {str(row.get("itemId") or ""): row for row in rows if row.get("itemId")}
+                return await asyncio.to_thread(self._apply_chosen, adapter, wanted, by_id)
+        finally:
+            _round_generation.reset(token)
 
     def _apply_chosen(
         self, adapter: ScopeAdapter, wanted: list[str], by_id: dict[str, dict[str, Any]]
