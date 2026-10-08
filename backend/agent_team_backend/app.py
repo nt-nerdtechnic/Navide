@@ -1551,6 +1551,20 @@ def track_live_session(
     _schedule_live_scan(key)
 
 
+def pane_token_total(pane_id: str) -> dict[str, int] | None:
+    """The live token totals of every session ``pane_id`` is bound to, summed;
+    None when the pane has no tracked session. Read-only."""
+    found = False
+    total = _empty_totals()
+    for state in list(_live_scans.values()):
+        if pane_id and pane_id in state["panes"]:
+            found = True
+            for key, value in (state.get("totals") or {}).items():
+                if isinstance(value, int):
+                    total[key] = total.get(key, 0) + value
+    return total if found else None
+
+
 def refresh_live_scans(workspace_path: str) -> None:
     """os.stat sweep over a workspace's tracked sessions, rescanning only the
     logs that changed. Called from `tokens.snapshot` so the panel is
@@ -2180,6 +2194,15 @@ async def _start_log_watcher() -> None:
     except Exception as err:  # noqa: BLE001
         log.warning("scheduler startup failed: %s", err)
 
+    # Each workspace's self-evolution: its watchdog notices runs that ran past
+    # their time or budget, and runs a missed slot once its workspace opens.
+    from . import evolve_service
+
+    try:
+        await evolve_service.get_service().start()
+    except Exception as err:  # noqa: BLE001
+        log.warning("evolve startup failed: %s", err)
+
     # Name a frozen backend the moment it freezes: a daemon thread logs the
     # loop thread's stack when the loop stops turning (issue #24), instead of
     # the freeze being reproducible only under sample(1).
@@ -2309,6 +2332,9 @@ async def _stop_log_watcher() -> None:
     from . import scheduler
 
     await scheduler.shutdown()
+    from . import evolve_service
+
+    await evolve_service.shutdown()
     from . import voice_handlers
 
     await voice_handlers.shutdown()

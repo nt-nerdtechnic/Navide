@@ -11474,6 +11474,74 @@ async def scheduler_runs(session: "Session", msg_id: str, msg_type: str, payload
     )
 
 
+# ── A workspace's self-evolution (evolve.*) ─────────────────────────────────
+# Thin wrappers over evolve_service. Every request names the workspace it is
+# about; settings and runs live in that workspace's own database.
+
+
+def _evolve_workspace(payload: dict) -> str | None:
+    workspace = payload.get("workspace")
+    return workspace if isinstance(workspace, str) and workspace.strip() else None
+
+
+@handler("evolve.get")
+async def evolve_get(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import evolve_service
+
+    workspace = _evolve_workspace(payload)
+    if workspace is None:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "evolve.get needs a workspace"))
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await evolve_service.get_service().get(workspace))
+    )
+
+
+@handler("evolve.set")
+async def evolve_set(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import evolve_service, scheduler
+
+    workspace = _evolve_workspace(payload)
+    settings = payload.get("settings")
+    if workspace is None or not isinstance(settings, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "evolve.set needs a workspace and a settings object")
+        )
+        return
+    result = await evolve_service.get_service().set(workspace, settings)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed()
+
+
+@handler("evolve.run_now")
+async def evolve_run_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import evolve_service
+
+    workspace = _evolve_workspace(payload)
+    if workspace is None:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "evolve.run_now needs a workspace"))
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await evolve_service.get_service().run_now(workspace))
+    )
+
+
+@handler("evolve.badges")
+async def evolve_badges(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import evolve_service
+
+    workspaces = payload.get("workspaces")
+    if not isinstance(workspaces, list) or len(workspaces) > 200:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "evolve.badges needs a list of at most 200 workspaces")
+        )
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await evolve_service.get_service().badges(workspaces))
+    )
+
+
 # ── Voice input (voice.*) ───────────────────────────────────────────────────
 # Handlers live in voice_handlers; the sidecar and model in stt_service. Both
 # stay inert until one of these messages arrives.

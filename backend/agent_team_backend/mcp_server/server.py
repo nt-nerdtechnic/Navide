@@ -7905,6 +7905,42 @@ async def scheduler_runs(id: str, ctx: Context, limit: int = 20) -> dict[str, An
     return await _scheduler_service().runs(str(id or ""), limit)
 
 
+@server.tool()
+async def evolve_report(
+    run_id: str,
+    status: str,
+    summary: str,
+    ctx: Context,
+    commits: list[dict[str, Any]] | None = None,
+    proposals: list[dict[str, Any]] | None = None,
+    panes: list[str] | None = None,
+    tokens: int | None = None,
+) -> dict[str, Any]:
+    """Finish a Navide self-evolution run. Only for a pane Navide opened (or
+    sent) a self-evolution task to: its task names the run_id.
+
+    Call it exactly once, as the last step. `status` is "ok" or "error";
+    `summary` 3–8 lines for the user (mask secrets first); `commits` is
+    [{hash, title}] of fixes now on the main branch; `proposals` is
+    [{rel_path, name}] of plans created; `panes` the names of panes you opened;
+    `tokens` your estimate of tokens used. Navide records it in the workspace's
+    self-evolution history and then reclaims the run's pane. Only the run's own
+    pane, or a pane it opened, may report it. Returns {ok, run_id, status}.
+    """
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    if caller.kind != "pane":
+        return {"ok": False, "error": "evolve_report must come from the run's own Navide pane"}
+    from agent_team_backend import evolve_service
+
+    return await evolve_service.get_service().report(caller.pane_id, {
+        "run_id": run_id, "status": status, "summary": summary, "commits": commits,
+        "proposals": proposals, "panes": panes, "tokens": tokens,
+    })
+
+
 # ── The CLI permission switch ───────────────────────────────────────────────
 # Global, not per project and not per pipeline: yolo feeds skipFlagFor() in the
 # renderer, which every spawn / resume / restore path calls, and it persists in
