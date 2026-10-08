@@ -80,6 +80,15 @@ async def _dispatch(m: ChannelManager, msg_type: str, p: dict) -> dict[str, Any]
         return await m.set_binding_options(_s(p, "pane_id"), _s(p, "verbosity"))
     if msg_type == "channels.bindings":
         return m.bindings()
+    if msg_type == "channels.overview":
+        return m.overview()
+    if msg_type == "channels.unbind_many":
+        pane_ids = p.get("pane_ids")
+        if not isinstance(pane_ids, list) or not all(isinstance(x, str) and x for x in pane_ids):
+            return {"ok": False, "error": "pane_ids must be a list of pane ids"}
+        return await m.unbind_many(pane_ids)
+    if msg_type == "channels.focus_pane":
+        return m.focus_pane(_s(p, "pane_id"))
     return {"ok": False, "error": f"unknown request {msg_type}"}
 
 
@@ -89,6 +98,7 @@ MESSAGE_TYPES = (
     "channels.remove", "channels.pairing.list", "channels.pairing.approve", "channels.pairing.reject",
     "channels.link.create", "channels.allow.list", "channels.allow.remove", "channels.locations", "channels.bind",
     "channels.unbind", "channels.rebind", "channels.bindings", "channels.set_binding_options",
+    "channels.overview", "channels.unbind_many", "channels.focus_pane",
 )
 
 

@@ -511,7 +511,14 @@ class ChannelManager:
                 await self._seams.broadcast("channels.status",
                                             {"platform": platform, "account": account, "status": status})
 
+    # unbind_many holds channels.changed so a batch goes out as one event.
+    _changed_hold = 0
+    _changed_missed = False
+
     async def _changed(self) -> None:
+        if self._changed_hold:
+            self._changed_missed = True
+            return
         await self._seams.broadcast("channels.changed", {})
 
     # --- WS-facing API ------------------------------------------------------------
@@ -2103,6 +2110,89 @@ class ChannelManager:
         self._awaiting_posted.discard(pane_id)
         self._awaiting_failures.pop(pane_id, None)
         self._awaiting_shown.pop(pane_id, None)
+
+
+    # --- Settings overview (channels.overview / unbind_many / focus_pane) ------------
+
+    def _pane_info(self, binding: Binding, directory: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        """Who a binding drives, from the messaging registry (no I/O). A pane that no
+        longer resolves keeps the title it was bound under so the row still says who."""
+        current = self._seams.resolve_pane(binding.pane_id)
+        entry = directory.get(current) if current else None
+        if not current:
+            return {"exists": False, "name": binding.title.removeprefix("↳ "), "qualified_name": "",
+                    "workspace_path": "", "display_status": "", "agent_key": ""}
+        return {
+            "exists": True,
+            "name": str((entry or {}).get("name") or binding.title.removeprefix("↳ ")),
+            "qualified_name": str((entry or {}).get("qualified_name") or ""),
+            "workspace_path": self._seams.pane_workspace(current),
+            "display_status": str((entry or {}).get("display_status") or ""),
+            "agent_key": self._seams.pane_agent(current),
+        }
+
+    def overview(self) -> dict[str, Any]:
+        """Every bot with the chats it knows and the panes bound to each, in one answer."""
+        self._sync_bindings()
+        directory = {str(p.get("pane_id")): p for p in self._seams.pane_directory()}
+        bots: dict[BotKey, dict[str, Any]] = {}
+
+        def bot(platform: str, account: str) -> dict[str, Any]:
+            if (platform, account) not in bots:
+                chats: dict[str, dict[str, Any]] = {}
+                if (platform, account) in self._adapters:
+                    for loc in self.locations(platform, account)["locations"]:
+                        chat_id = str(loc.get("chat_id"))
+                        chats[chat_id] = {"chat_id": chat_id, "title": str(loc.get("title") or ""),
+                                          "kind": str(loc.get("kind") or ""),
+                                          "supports_topics": bool(loc.get("supports_topics")),
+                                          "bindings": []}
+                bots[(platform, account)] = {"platform": platform, "account": account,
+                                             "chats": chats, "orphans": []}
+            return bots[(platform, account)]
+
+        for platform, account in self.store.accounts():
+            bot(platform, account)
+        for b in self.store.bindings():
+            entry = bot(b.platform, b.account)
+            # A chat bound under another token (or never seen again) still shows up.
+            chat = entry["chats"].setdefault(b.chat_id, {
+                "chat_id": b.chat_id, "title": "" if b.thread_id else b.title, "kind": "",
+                "supports_topics": bool(b.thread_id), "bindings": []})
+            pane = self._pane_info(b, directory)
+            chat["bindings"].append({**b.public(), "pane_id": self._seams.resolve_pane(b.pane_id) or b.pane_id,
+                                     "created_at": b.created_at, "pane": pane})
+            if not pane["exists"]:
+                entry["orphans"].append(b.pane_id)
+        return {"ok": True, "bots": [{**v, "chats": list(v["chats"].values())} for v in bots.values()]}
+
+    async def unbind_many(self, pane_ids: list[str]) -> dict[str, Any]:
+        """unbind() each pane (each chat is told, auto children are released) with one
+        channels.changed at the end; a failure is reported per pane, not for the batch."""
+        names = {str(p.get("pane_id")): str(p.get("name") or "") for p in self._seams.pane_directory()}
+        results: list[dict[str, Any]] = []
+        self._changed_hold += 1
+        try:
+            for pane_id in pane_ids:
+                try:
+                    res = await self.unbind(pane_id, pane_name=names.get(self._seams.resolve_pane(pane_id), ""))
+                    results.append({"pane_id": pane_id, "ok": True, "removed": bool(res.get("removed"))})
+                except Exception as exc:  # noqa: BLE001 — one bad row must not stop the rest
+                    log.warning("channels: unbind of %s failed", pane_id, exc_info=True)
+                    results.append({"pane_id": pane_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            self._changed_hold -= 1
+        if not self._changed_hold and self._changed_missed:
+            self._changed_missed = False
+            await self._changed()
+        return {"ok": True, "results": results}
+
+    def focus_pane(self, pane_id: str) -> dict[str, Any]:
+        """The pane a binding row names, as it is now: the window raises it by this id."""
+        current = self._seams.resolve_pane(pane_id) if pane_id else ""
+        if not current:
+            return {"ok": False, "error": "pane not found"}
+        return {"ok": True, "pane_id": current, "workspace_path": self._seams.pane_workspace(current)}
 
 
 def _default_managed_username(manager_username: str) -> str:
