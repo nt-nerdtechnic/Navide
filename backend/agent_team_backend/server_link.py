@@ -3819,6 +3819,47 @@ async def sync_now(scope: str = "") -> list[dict[str, Any]]:
     return await engine.sync_all()
 
 
+#: How long a local save waits for the next one before its round starts.
+SYNC_SOON_DELAY_S = 2.0
+#: The pending round of each scope, replaced by every save inside the delay.
+_sync_soon_tasks: dict[str, "asyncio.Task[None]"] = {}
+
+
+def sync_soon(scope: str) -> None:
+    """A local save of *scope* happened: carry it up shortly.
+
+    Debounced per scope, so a burst of saves (typing in a prompt, toggling
+    several skills) becomes one round. Whether the scope is on and the link
+    is up is decided when the round would start, not when it was asked for —
+    by then either may have changed. Must be called on the event loop.
+    """
+    pending = _sync_soon_tasks.pop(scope, None)
+    if pending is not None and not pending.done():
+        pending.cancel()
+    task = asyncio.get_running_loop().create_task(_sync_soon(scope))
+    _sync_soon_tasks[scope] = task
+    task.add_done_callback(
+        lambda done: _sync_soon_tasks.pop(scope, None) if _sync_soon_tasks.get(scope) is done else None
+    )
+
+
+async def _sync_soon(scope: str) -> None:
+    try:
+        await asyncio.sleep(SYNC_SOON_DELAY_S)
+        from . import sync_scopes
+
+        link = _link
+        if link is None or not link._authenticated:  # noqa: SLF001 - same module
+            return
+        if not await asyncio.to_thread(sync_scopes.scope_enabled, scope):
+            return
+        await sync_now(scope)
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:  # noqa: BLE001 - the save itself already succeeded
+        log.warning("the sync round after a local %s save failed: %s", scope, err)
+
+
 def sync_last_results() -> dict[str, dict[str, Any]]:
     """The last round's result of each scope, as ``sync.result`` sent it.
 

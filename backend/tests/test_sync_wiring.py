@@ -127,3 +127,123 @@ async def test_a_first_sign_in_on_a_fresh_install_clears_nothing(monkeypatch):
     monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
     await server_link._note_account("ns-a")
     assert calls == []
+
+
+# ── local saves start a round ────────────────────────────────────────────────
+class _Linked:
+    _authenticated = True
+
+
+@pytest.fixture
+def rounds(monkeypatch):
+    """Record the rounds sync_soon starts; scopes on, link up, no delay."""
+    from agent_team_backend import sync_scopes
+
+    started: list[str] = []
+
+    async def sync_now(scope=""):
+        started.append(scope)
+        return []
+
+    monkeypatch.setattr(server_link, "sync_now", sync_now)
+    monkeypatch.setattr(server_link, "SYNC_SOON_DELAY_S", 0.01)
+    monkeypatch.setattr(server_link, "_link", _Linked())
+    monkeypatch.setattr(sync_scopes, "scope_enabled", lambda _s: True)
+    return started
+
+
+async def _settle() -> None:
+    await asyncio.sleep(0.05)
+
+
+async def test_saves_in_quick_succession_start_one_round(rounds):
+    for _ in range(3):
+        server_link.sync_soon("prompts")
+    await _settle()
+    assert rounds == ["prompts"]
+
+
+async def test_a_save_to_a_scope_that_is_off_starts_nothing(rounds, monkeypatch):
+    from agent_team_backend import sync_scopes
+
+    monkeypatch.setattr(sync_scopes, "scope_enabled", lambda _s: False)
+    server_link.sync_soon("prompts")
+    await _settle()
+    assert rounds == []
+
+
+async def test_a_save_while_not_connected_starts_nothing(rounds, monkeypatch):
+    monkeypatch.setattr(server_link, "_link", None)
+    server_link.sync_soon("mcp")
+    await _settle()
+    assert rounds == []
+
+
+async def test_saving_the_prompt_list_starts_a_prompts_round(rounds, monkeypatch):
+    from agent_team_backend import sync_scopes
+
+    monkeypatch.setattr(app.ui_settings_store, "set", lambda updates: dict(updates))
+
+    async def broadcast(event, exclude=None):
+        return None
+
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    session = _session()
+    await app.handle_message(session, {
+        "id": "u1", "type": "ui.settings.set",
+        "payload": {"updates": {sync_scopes.PROMPT_SKILLS_KEY: []}},
+    })
+    await app.handle_message(session, {
+        "id": "u2", "type": "ui.settings.set", "payload": {"updates": {"theme": "dark"}},
+    })
+    await _settle()
+    assert rounds == ["prompts"]
+
+
+async def test_saving_a_memory_file_starts_a_memory_round(rounds, monkeypatch):
+    from agent_team_backend import native_memory
+
+    monkeypatch.setattr(native_memory, "save", lambda *a, **k: {"ok": True})
+    session = _session()
+    await app.handle_message(session, {
+        "id": "m1", "type": "memory.save", "payload": {"path": "/x/CLAUDE.md", "text": "hi"},
+    })
+    await _settle()
+    assert rounds == ["memory"]
+
+
+async def test_a_skill_change_starts_a_skills_round(rounds, monkeypatch):
+    from agent_team_backend import ws_handlers
+
+    async def notify(name, change):
+        return None
+
+    monkeypatch.setattr(ws_handlers, "notify_skills_changed", notify)
+    await ws_handlers._run_skill_operation(
+        _session(), "k1", "skills.set_enabled", lambda: {"ok": True}, name="s"
+    )
+    await _settle()
+    assert rounds == ["skills"]
+
+
+async def test_saving_mcp_servers_starts_an_mcp_round(rounds, monkeypatch):
+    class Store:
+        path = "/nowhere/mcp.json"
+        revision = 1
+
+        def replace_servers(self, servers, expected_revision=None):
+            return servers
+
+    class Manager:
+        async def reload(self, path):
+            return None
+
+    monkeypatch.setattr(app, "mcp_settings_store", Store())
+    monkeypatch.setattr(app, "mcp_manager", Manager())
+    session = _session()
+    await app.handle_message(session, {
+        "id": "c1", "type": "mcp.save_servers", "payload": {"servers": []},
+    })
+    assert session.websocket.sent[0]["payload"].get("ok") is True, session.websocket.sent  # type: ignore[attr-defined]
+    await _settle()
+    assert rounds == ["mcp"]

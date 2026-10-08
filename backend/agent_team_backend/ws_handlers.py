@@ -3160,6 +3160,7 @@ async def mcp_save_servers(session: "Session", msg_id: str, msg_type: str, paylo
             },
         )
     )
+    server_link.sync_soon("mcp")
 
 
 # ── Managed Skills (skills.*) ────────────────────────────────────────────────
@@ -3181,6 +3182,7 @@ async def _run_skill_operation(
             "skills.delete",
         }:
             await notify_skills_changed(name, msg_type.removeprefix("skills."))
+            server_link.sync_soon("skills")
         return result
     except SkillNotFoundError as err:
         await session.send_json(
@@ -3539,6 +3541,7 @@ async def memory_save(session: "Session", msg_id: str, msg_type: str, payload: d
         )
         return
     await session.send_json(make_response(msg_id, msg_type, result))
+    server_link.sync_soon("memory")
 
 
 # ── Cross-device sync (sync.*) ──────────────────────────────────────────────
@@ -3969,6 +3972,11 @@ async def ui_settings_set(session: "Session", msg_id: str, msg_type: str, payloa
     )
     delta = app.ui_settings_store.set(updates) if isinstance(updates, dict) else {}
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    from . import sync_scopes
+
+    if sync_scopes.PROMPT_SKILLS_KEY in delta or sync_scopes.LOOP_PROMPT_KEY in delta:
+        # The prompt list is saved as a setting; nothing else tells sync.
+        server_link.sync_soon("prompts")
     if push_delivery.DISABLED_SETTING_KEY in delta:
         # A pane already running keeps its port and its watch file; what changes
         # is whether anything is pushed to it. Both directions are announced —
