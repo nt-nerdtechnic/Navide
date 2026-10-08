@@ -138,7 +138,9 @@ def test_memory_apply_writes_through_a_symlinked_file(tmp_path, monkeypatch):
     link.symlink_to(real)
     monkeypatch.setattr(native_memory, "_home", lambda: home)
     monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
-    assert sync_scopes.MemoryScope().apply(".claude:CLAUDE.md", {"text": "new\n"}) is True
+    scope = sync_scopes.MemoryScope()
+    scope.snapshot()  # the engine always reads before it writes
+    assert scope.apply(".claude:CLAUDE.md", {"text": "new\n"}) is True
     assert link.is_symlink()
     assert real.read_text() == "new\n"
 
@@ -419,3 +421,123 @@ def test_memory_apply_does_not_overwrite_an_edit_made_since_the_snapshot(tmp_pat
     os.utime(target, (1, 1))
     assert scope.apply(".claude:CLAUDE.md", {"text": "from the cloud\n"}) is False
     assert target.read_text() == "typed just now\n"
+
+
+# ── security review C ────────────────────────────────────────────────────────
+class _WindowsNames:
+    """``osplat.paths`` as Windows answers the one question skills ask."""
+
+    def file_name_refused(self, name):
+        from agent_team_backend.osplat import spec
+
+        return spec.windows_refused_file_name(name)
+
+
+@pytest.fixture
+def on_windows(monkeypatch):
+    from agent_team_backend import osplat
+
+    monkeypatch.setattr(osplat, "paths", _WindowsNames())
+
+
+@pytest.mark.parametrize("relative", ["C:/Users/Public/evil.bat", "D:evil.bat", "SKILL.md:ads", "notes/a:b.md"])
+def test_a_skill_path_naming_a_drive_or_stream_is_refused_everywhere(relative):
+    from pathlib import PureWindowsPath
+
+    from agent_team_backend import skills_store
+
+    assert skills_store._safe_relative(relative) is None
+    # What the refusal is for: on Windows these leave the staging dir or
+    # write an alternate data stream.
+    staging = PureWindowsPath(r"C:\Users\me\.agents\skills\.demo-abc123")
+    joined = staging / relative
+    assert not str(joined).lower().startswith(str(staging).lower()) or ":" in joined.name
+
+
+_WINDOWS_ONLY = ["CON", "nul.txt", "scripts/Aux.md", "COM1", "lpt9.log", "aux.c", "trailing.", "trailing ", "dir./a.md"]
+
+
+@pytest.mark.parametrize("relative", _WINDOWS_ONLY)
+def test_a_name_windows_reserves_is_refused_on_windows(relative, on_windows):
+    from agent_team_backend import skills_store
+
+    assert skills_store._safe_relative(relative) is None
+
+
+@pytest.mark.parametrize("relative", _WINDOWS_ONLY)
+def test_a_name_windows_reserves_is_fine_elsewhere(relative, monkeypatch):
+    from agent_team_backend import osplat, skills_store
+    from agent_team_backend.osplat import _posix_paths
+
+    class Posix:
+        def file_name_refused(self, name):
+            return _posix_paths.file_name_refused(name)
+
+    monkeypatch.setattr(osplat, "paths", Posix())
+    assert skills_store._safe_relative(relative) == relative
+
+
+@pytest.mark.parametrize("relative", ["SKILL.md", "scripts/run.sh", "console.md", "com10.txt", "a.b/c.md"])
+def test_ordinary_skill_paths_still_pass(relative, on_windows):
+    from agent_team_backend import skills_store
+
+    assert skills_store._safe_relative(relative) == relative
+
+
+def test_import_refuses_a_file_that_would_land_outside_the_skill(tmp_path, on_windows):
+    from agent_team_backend import skills_store
+
+    store, root = _skills(tmp_path, "S")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for relative in ("C:/evil.bat", "SKILL.md:ads", "CON"):
+        assert store.import_content("demo", {
+            "SKILL.md": {"t": "text", "v": "---\nname: demo\ndescription: d\n---\n"},
+            relative: {"t": "text", "v": "x"}}) is False
+        src = tmp_path / "blob"
+        src.write_bytes(b"x")
+        assert store.import_files("demo", {"SKILL.md": src, relative: src}) is False
+    assert not (root / "demo").exists()
+
+
+async def test_a_local_file_this_machine_cannot_read_is_never_overwritten(tmp_path, account_key, monkeypatch):
+    server = StrictServer()
+    ha, hb = _home(tmp_path, "a"), _home(tmp_path, "b")
+    (ha / ".claude" / "CLAUDE.md").write_text("from A\n")
+    big = "B" * (native_memory.FILE_SIZE_LIMIT + 10)
+    (hb / ".claude" / "CLAUDE.md").write_text(big)
+    a = Dev(tmp_path, server, "A", monkeypatch, sync_scopes.MemoryScope(), home=ha)
+    b = Dev(tmp_path, server, "B", monkeypatch, sync_scopes.MemoryScope(), home=hb)
+    await a.sync()
+    await b.sync()
+    assert (hb / ".claude" / "CLAUDE.md").read_text() == big
+
+
+def test_a_dangling_link_is_not_written_through(tmp_path, monkeypatch):
+    home = _home(tmp_path, "h")
+    outside = tmp_path / "outside" / "deep" / "new.txt"
+    (home / ".claude" / "CLAUDE.md").symlink_to(outside)
+    monkeypatch.setattr(native_memory, "_home", lambda: home)
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    assert sync_scopes.MemoryScope().apply(".claude:CLAUDE.md", {"text": "pwn\n"}) is False
+    assert not (tmp_path / "outside").exists()
+    with pytest.raises(ValueError):
+        native_memory.save(str(home / ".claude" / "CLAUDE.md"), "pwn\n", home=home)
+    assert not (tmp_path / "outside").exists()
+
+
+def test_memory_item_ids_are_one_to_one():
+    import hashlib
+    import random
+
+    long = ".cursor/rules/" + "x" * 250 + ".mdc"
+    digest = hashlib.sha256(long.encode()).hexdigest()
+    assert sync_scopes.memory_item_id(long) != sync_scopes.memory_item_id("sha256/" + digest)
+    assert sync_scopes.memory_item_id(long) != sync_scopes.memory_item_id("sha256:" + digest)
+    assert ITEM_ID.match(sync_scopes.memory_item_id(long))
+    rnd = random.Random(1)
+    alphabet = list("ab./:+@-_ %Z9") + ["\u00e9", "e\u0301", "\\", "\x00", "規"]
+    seen: dict[str, str] = {}
+    for _ in range(20000):
+        s = "".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 12)))
+        assert seen.setdefault(sync_scopes.memory_item_id(s), s) == s

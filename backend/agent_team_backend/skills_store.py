@@ -32,7 +32,7 @@ from typing import Any
 import yaml
 from send2trash import send2trash
 
-from . import native_skills
+from . import native_skills, osplat
 from .applog import app_data_dir
 
 log = logging.getLogger("agent_team_backend.skills_store")
@@ -930,6 +930,8 @@ class SkillsStore:
             (staging / MARKER_FILE).write_text("", encoding="utf-8")
             for relative, raw in decoded.items():
                 target = staging / relative
+                if not _inside(target, staging):
+                    raise SkillValidationError(f"skill {name}: {relative} leaves the skill directory")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(raw)
                 if relative in executable:
@@ -1020,6 +1022,8 @@ class SkillsStore:
             (staging / MARKER_FILE).write_text("", encoding="utf-8")
             for relative, source in safe_files.items():
                 target = staging / relative
+                if not _inside(target, staging):
+                    raise SkillValidationError(f"skill {name}: {relative} leaves the skill directory")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
                 if executable and relative in executable:
@@ -1372,7 +1376,7 @@ class SkillsStore:
 def _carries_exec_bit(path: Path, raw: bytes) -> bool:
     """Whether a synced copy of *path* should be executable. Windows keeps no
     such bit, so there a script is taken by its shebang."""
-    if os.name != "nt":
+    if osplat.paths.enforces_posix_modes():
         return bool(path.stat().st_mode & 0o111)
     return raw[:2] == b"#!"
 
@@ -1446,6 +1450,16 @@ def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: b
                 raise SkillValidationError(f"skill path is both a file and directory: {prefix}")
 
 
+def _inside(path: Path, root: Path) -> bool:
+    """Whether *path*, resolved, is *root* or under it."""
+    try:
+        resolved = path.resolve()
+        base = root.resolve()
+    except OSError:
+        return False
+    return resolved == base or base in resolved.parents
+
+
 def _safe_relative(relative: Any, *, allow_hidden: bool = False) -> str | None:
     """``relative`` as a path that cannot leave the skill directory, or None.
 
@@ -1459,6 +1473,14 @@ def _safe_relative(relative: Any, *, allow_hidden: bool = False) -> str | None:
         return None
     parts = relative.split("/")
     if any(part in ("", ".", "..") for part in parts):
+        return None
+    # A ":" is refused on every platform: on Windows it is a drive ("C:/x",
+    # "D:x") or an alternate data stream ("SKILL.md:ads") and leaves the
+    # directory it is joined onto. Names only Windows reads differently
+    # (reserved devices, a trailing dot or space) are refused where they
+    # would be misread; "aux.c" is an ordinary file on macOS and Linux, and a
+    # skill carrying one is refused by the Windows device it reaches.
+    if any(":" in part or osplat.paths.file_name_refused(part) for part in parts):
         return None
     # Every dotfile is refused, the marker included: this side writes its own
     # marker, and nothing else hidden has a reason to travel between machines.
