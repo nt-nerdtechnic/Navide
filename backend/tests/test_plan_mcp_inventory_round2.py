@@ -907,6 +907,7 @@ async def test_the_round_two_tools_are_registered_with_their_declared_arguments(
         "cli_token_stats",
         "memory_list",
         "cli_close_agent",
+        "cli_reclaim_agent",
         "mcp_list",
         "prompt_list",
     }
@@ -923,6 +924,10 @@ async def test_the_round_two_tools_are_registered_with_their_declared_arguments(
         "path",
     }
     assert set(tools["cli_close_agent"].inputSchema.get("properties") or {}) == {
+        "target",
+        "pane_id",
+    }
+    assert set(tools["cli_reclaim_agent"].inputSchema.get("properties") or {}) == {
         "target",
         "pane_id",
     }

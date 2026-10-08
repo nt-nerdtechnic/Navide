@@ -4638,6 +4638,7 @@
             "cli_interrupt": "Send that CLI's interrupt key to a local pane; this is not the same as stopping it — it may only clear the input box, so check the result yourself",
             "cli_answer_prompt": "Answer a local pane's permission prompt or option menu by pressing one choice; refuses permanent allows, Guard-flagged approvals and a changed prompt, and records the answer in the pane's Guard audit",
             "cli_close_agent": "Close another pane, the other half of cli_open_agent; this kills whatever it was doing and cannot be undone, so check with cli_get_status that it is not busy first",
+            "cli_reclaim_agent": "Reclaim a finished pane: its CLI process ends and the pane stays as a click-to-resume card, the status bar's \"reclaim now\". A busy, focused or not-yet-resumable pane is refused with the reason; a window older than v0.2.16 answers reclaim-unsupported",
             "cli_message_log": "The history of messages I sent and received; once delivered a message disappears from inbox_summary and pending_incoming, and this is the only place left to find it",
             "cli_usage": "How much quota each CLI has left; check before handing out work, or the message lands on a CLI that has already run out",
             "cli_token_stats": "This workspace's current token usage",

@@ -4638,6 +4638,7 @@
             "cli_interrupt": "送出該 CLI 的中斷鍵給本機 pane；這不等於停止，可能只是清空輸入框，結果要自己去確認",
             "cli_answer_prompt": "替本機 pane 的權限確認或選單按下一個選項；永久允許、被 Guard 判定高風險的核准、題目已換都會拒絕，並把代答記進該 pane 的 Guard 稽核紀錄",
             "cli_close_agent": "關掉另一個 pane，補上 cli_open_agent 的另一半；這會終止對方正在做的事且無法復原，先用 cli_get_status 確認它不忙",
+            "cli_reclaim_agent": "回收做完的 pane：CLI 行程結束、pane 留成可點擊接續的卡片，等同狀態列的「立即回收」；忙碌、被聚焦或無法接續的 pane 會附理由拒絕，早於 v0.2.16 的視窗回 reclaim-unsupported",
             "cli_message_log": "自己收送過的訊息歷史；訊息一旦送達就從 inbox_summary 與 pending_incoming 消失，這裡是唯一還查得到的地方",
             "cli_usage": "各家 CLI 還剩多少額度；派工前先看，否則訊息會送達到一個已經用完額度的 CLI 手上",
             "cli_token_stats": "這個工作區目前的 token 用量",

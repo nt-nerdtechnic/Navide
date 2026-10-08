@@ -5266,7 +5266,8 @@ async def ui_invoke(
     permission bypass on are the user's to do.
 
     ui.pane.reclaim frees a finished pane's resources without closing it — the
-    same "reclaim now" the status bar and Resource Manager offer. args
+    same "reclaim now" the status bar and Resource Manager offer; cli_reclaim_agent
+    does the same for one pane addressed by name, in whichever window has it. args
     {"paneId": id} or {"paneId": [id, ...]} (pane ids from cli_list_targets).
     Each CLI process ends and the pane stays as a click-to-resume card holding
     its conversation; the user resumes it by clicking. Use it from a parent pane
@@ -6609,8 +6610,8 @@ async def cli_close_agent(target: str, ctx: Context, pane_id: str = "") -> dict[
     Use it to clean up a pane you opened with cli_open_agent and no longer
     need. Panes the user opened are the user's; closing one takes their work
     away with no warning they will see first. To free a finished pane's memory
-    but leave it for the user to check, use ui_invoke "ui.pane.reclaim"
-    instead: the CLI process ends and the pane stays as a click-to-resume card.
+    but leave it for the user to check, use cli_reclaim_agent instead: the CLI
+    process ends and the pane stays as a click-to-resume card.
 
     `target` uses the same addressing as cli_send and `pane_id` names one exact
     pane instead. Panes on this machine only: closing one is an action taken by
@@ -6694,6 +6695,118 @@ async def cli_close_agent(target: str, ctx: Context, pane_id: str = "") -> dict[
     if advisories:
         answer["advisories"] = advisories
     return answer
+
+
+# ── Reclaiming another pane ──────────────────────────────────────────────────
+@server.tool()
+async def cli_reclaim_agent(target: str, ctx: Context, pane_id: str = "") -> dict[str, Any]:
+    """Reclaim a finished CLI pane: end its CLI process, keep the pane.
+
+    The pane stays where it is as a click-to-resume card holding its
+    conversation — the same "reclaim now" the status bar and Resource Manager
+    offer (ui_invoke "ui.pane.reclaim"). Use it on a pane whose work is done
+    and reported, to free its memory while leaving it for the user to check or
+    resume. cli_close_agent is the permanent version: it removes the pane.
+
+    The status bar's guards apply unchanged, so a pane that is busy or awaiting
+    an answer, the one the user has focused, one with unsent input, one with
+    queued messages or a running pipeline/loop, and one whose session cannot be
+    resumed are refused rather than reclaimed.
+
+    `target` uses the same addressing as cli_send and `pane_id` names one exact
+    pane instead. Panes on this machine only: a `<device>/<workspace>/<pane>`
+    address fails with "reclaim-local-only", and your own pane with
+    "self-reclaim".
+
+    Returns {ok, target, name, reclaimed}. A refused pane answers ok false,
+    reclaimed false, `reason` (the guard's code, e.g. "focused", "not-idle")
+    and `error` saying why, with error_code "reclaim-refused". A Navide window
+    older than v0.2.16 cannot reclaim and answers error_code
+    "reclaim-unsupported": the app needs updating — do not fall back to
+    cli_close_agent, which ends the session instead of parking it.
+    """
+    from agent_team_backend import message_routing
+
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    me = caller.pane_id if caller.kind == "pane" else ""
+    result, failure = _resolve_pane_target(caller, me, target, pane_id)
+    if failure is not None:
+        # Same re-read as cli_close_agent: a remote address is not a bad one.
+        if not (pane_id or "").strip():
+            routed = message_routing.route(me, target)
+            if routed.remote is not None:
+                return {
+                    "ok": False,
+                    "error": (
+                        f'cannot reclaim "{target}": it names a pane on another '
+                        f"device, and reclaiming one is an action taken by the "
+                        f"window that owns it — there is no relay for that. Only "
+                        f"panes on this machine can be reclaimed from here."
+                    ),
+                    "error_code": "reclaim-local-only",
+                }
+        return failure
+    pane = result.pane
+    if caller.kind == "pane" and pane.pane_id == caller.pane_id:
+        return {
+            "ok": False,
+            "target": pane.qualified_name,
+            "error": (
+                "that is your own pane — reclaiming it would end the CLI making "
+                "this call, so you would never see the answer."
+            ),
+            "error_code": "self-reclaim",
+        }
+
+    reply = await _ui_request(
+        pane.workspace_path,
+        "invoke",
+        caller=_pane_caller(pane.pane_id),
+        action="ui.pane.reclaim",
+        args={"paneId": pane.pane_id},
+    )
+    if not reply.get("ok"):
+        error = str(reply.get("error") or "the window owning this pane did not answer")
+        # A window before v0.2.16 has no such command; its wording reads like
+        # a typo when the real answer is the app's version.
+        if "unknown command: ui.pane.reclaim" in error:
+            return {
+                "ok": False,
+                "target": pane.qualified_name,
+                "error": (
+                    "the Navide window holding this pane is older than v0.2.16 "
+                    "and cannot reclaim panes; update the app. Do not use "
+                    "cli_close_agent instead — it ends the session for good."
+                ),
+                "error_code": "reclaim-unsupported",
+            }
+        return {
+            "ok": False,
+            "target": pane.qualified_name,
+            "error": error,
+            "error_code": str(reply.get("error_code") or "ui_action_failed"),
+        }
+    # The window answers for a batch; one pane was asked about, so its entry
+    # is the answer.
+    payload = reply.get("result") or {}
+    answer: dict[str, Any] = {"target": pane.qualified_name, "name": pane.name}
+    if pane.pane_id in (payload.get("reclaimed") or []):
+        return {"ok": True, **answer, "reclaimed": True}
+    refused = next(
+        (r for r in (payload.get("refused") or []) if r.get("paneId") == pane.pane_id),
+        {},
+    )
+    return {
+        "ok": False,
+        **answer,
+        "reclaimed": False,
+        "reason": str(refused.get("reason") or "unknown"),
+        "error": str(refused.get("detail") or "the window did not reclaim this pane"),
+        "error_code": "reclaim-refused",
+    }
 
 
 # ── Pipelines: starting and aborting a run ──────────────────────────────────

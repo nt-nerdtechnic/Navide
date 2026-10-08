@@ -29,4 +29,4 @@ def test_ui_invoke_documents_reclaim() -> None:
 
 def test_close_agent_points_at_reclaim() -> None:
     doc = plan_mcp.cli_close_agent.__doc__ or ""
-    assert "ui.pane.reclaim" in doc
+    assert "cli_reclaim_agent" in doc

@@ -45,6 +45,7 @@ const cliTools = [
   'cli_interrupt',
   'cli_answer_prompt',
   'cli_close_agent',
+  'cli_reclaim_agent',
   'cli_place_pane',
   'cli_message_log',
   'cli_usage',
