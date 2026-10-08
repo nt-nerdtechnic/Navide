@@ -76,6 +76,10 @@ MAX_PUSH_BYTES = 768 * 1024
 #: the client asks for no more rows than this budget holds at the largest row
 #: size it expects. A guess first, then the largest row actually seen.
 PULL_FRAME_BUDGET = 768 * 1024
+#: A scope starts over (its cursor ahead of the server's) at most once in
+#: this long. A server that answers "cursor 0" every round would otherwise
+#: make a client forget and re-read the whole scope every time.
+RESET_THROTTLE_S = 3600.0
 #: Pull pages one round reads at most. A server that keeps saying ``more``
 #: with fresh revs would otherwise hold the round (and the scope's lock)
 #: forever; the next round carries on from where this one stopped.
@@ -605,6 +609,8 @@ class SyncEngine:
         #: is lost on a restart is the backoff, which then starts over.
         self._defers: dict[tuple[str, str], dict[str, float]] = {}
         self._clock: Callable[[], float] = time.monotonic
+        #: Per scope, when it last started over (``_pull``); in memory.
+        self._last_reset: dict[str, float] = {}
         #: Per scope, local deletes carried across a cursor reset.
         self._reset_deletes: dict[str, set[str]] = {}
         self._adapters: dict[str, ScopeAdapter] = {}
@@ -680,7 +686,12 @@ class SyncEngine:
         prepare = getattr(adapter, "prepare", None)
         if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
             return {"skipped": "unsupported"}
-        pulled = await self._pull(adapter)
+        try:
+            pulled = await self._pull(adapter)
+        except _ResetThrottled:
+            # Nothing is pushed either: this machine's revs and the server's
+            # disagree, and edits pushed from them would be guesses.
+            return {"resetThrottled": True}
         pushed = await self._push(adapter)
         return {"pulled": pulled, "pushed": pushed}
 
@@ -714,6 +725,9 @@ class SyncEngine:
             # Held items that have deferred too often or too long; a subset
             # of ``held``, still retried.
             "gaveUp": list(notes.get("gaveUp", [])),
+            # The server asked this scope to start over again within the hour
+            # and was refused; nothing was pulled, pushed or forgotten.
+            "resetThrottled": False,
             **outcome,
             "at": now_iso(),
         }
@@ -780,6 +794,17 @@ class SyncEngine:
                 )
             )
             if not reset and since > 0 and int(reply.get("cursor") or 0) < since:
+                last = self._last_reset.get(scope)
+                if last is not None and self._clock() - last < RESET_THROTTLE_S:
+                    # A second reset within the hour. A real account switch
+                    # or server reset happens once; one that keeps coming is
+                    # the server asking, and nothing is forgotten for it.
+                    log.warning(
+                        "sync.pull on %s: the server asked for another reset within the hour; refused",
+                        scope,
+                    )
+                    raise _ResetThrottled()
+                self._last_reset[scope] = self._clock()
                 # The server has never issued the revs this machine has read up
                 # to: another account behind the same link, or a server that
                 # started over. Everything recorded against the old revs is
@@ -1770,6 +1795,10 @@ class SyncEngine:
 _ORIGIN_VERIFIED = "verified"
 _ORIGIN_UNKNOWN = "unknown"
 _ORIGIN_FORGED = "forged"
+
+
+class _ResetThrottled(Exception):
+    """The server asked a scope to start over again too soon (see ``_pull``)."""
 
 
 class _HoldPull(Exception):

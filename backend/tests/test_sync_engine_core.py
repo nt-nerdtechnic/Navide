@@ -778,8 +778,6 @@ async def test_rounds_started_by_a_kick_can_be_cancelled(tmp_path, account_key):
 
 
 # ── X-4: after a rotation, nothing stays under a key that is not the active one
-
-
 async def test_a_v1_record_is_resealed_after_a_rotation(tmp_path, account_key):
     from agent_team_backend import sync_keyring
 
@@ -819,3 +817,30 @@ async def test_a_record_pulled_under_a_retired_key_is_resealed(tmp_path, account
     await b.sync()
     await b.sync()
     assert not sync_keyring.needs_reseal(server.rows[("prompts", "x")]["body"])
+
+
+# ── F4b: a server cannot make a scope start over every round ─────────────────
+async def test_a_second_reset_within_the_hour_is_refused_and_reported(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {f"p{i}": {"n": i} for i in range(5)})
+    await b.sync()
+    clock = _Clock()
+    b.engine._clock = clock
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0:
+            reply["payload"] = dict(reply["payload"], cursor=0)
+        return reply
+
+    b.engine._request = request
+    first = await b.sync()
+    assert not first.get("resetThrottled")
+    before = b.store.states("prompts")
+    second = await b.sync()
+    assert second["resetThrottled"] is True
+    assert b.store.states("prompts") == before          # nothing forgotten
+    clock.now += 2 * 3600
+    third = await b.sync()
+    assert not third.get("resetThrottled")
