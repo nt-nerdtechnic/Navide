@@ -123,3 +123,19 @@ def test_memory_leaves_out_files_only_aider_config_names(tmp_path, monkeypatch):
     assert scope._resolve("work/repo/NOTES.md") is None
     assert scope.apply(sync_scopes.memory_item_id("work/repo/NOTES.md"), {"text": "x"}) is False
     assert (home / "work" / "repo" / "NOTES.md").read_text() == "project notes\n"
+
+
+def test_memory_apply_writes_through_a_symlinked_file(tmp_path, monkeypatch):
+    """Keeping ~/.claude/CLAUDE.md as a link into a dotfiles repo is common;
+    a synced write must land in the repo, not replace the link."""
+    home = _home(tmp_path, "h")
+    (home / "dotfiles").mkdir()
+    real = home / "dotfiles" / "CLAUDE.md"
+    real.write_text("old\n")
+    link = home / ".claude" / "CLAUDE.md"
+    link.symlink_to(real)
+    monkeypatch.setattr(native_memory, "_home", lambda: home)
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    assert sync_scopes.MemoryScope().apply(".claude:CLAUDE.md", {"text": "new\n"}) is True
+    assert link.is_symlink()
+    assert real.read_text() == "new\n"
