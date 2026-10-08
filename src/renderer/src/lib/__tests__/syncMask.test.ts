@@ -110,3 +110,65 @@ describe('maskMcpRecord', () => {
     expect(out.headers).toEqual({ 'X-Key': MASK })
   })
 })
+
+// Second review (R-C3, sec-review2/C/mask2.ts): values glued to short flags,
+// JSON inside an argument, more secret names, space-separated headers and
+// URLs WHATWG would accept with backslashes.
+describe('second review (R-C3)', () => {
+  const ARGS2: Array<[string[], string]> = [
+    [['-HX-Api-Key:S61'], 'S61'],
+    [['-HAuthorization: Bearer S86'], 'S86'],
+    [['-uadmin:S92'], 'S92'],
+    [['-pS93'], 'S93'],
+    [['{"apiKey":"S66"}'], 'S66'],
+    [['--config', '{"apiKey":"S67x"}'], 'S67x'],
+    [['--json={"token":"S68"}'], 'S68'],
+    [['--config', '{"apiKey":S67y'], 'S67y'],
+    [['--passphrase', 'S89'], 'S89'],
+    [['--header', 'apikey S101'], 'S101'],
+    [['https:/\\/u:S51@h/x'], 'S51'],
+    [['--url', 'https:\\\\u:S52@h/x'], 'S52'],
+    [['--ＡＰＩ-ＫＥＹ', 'S79'], 'S79'],
+    [['-a', 'S82'], 'S82'],
+  ]
+
+  it.each(ARGS2)('masks the secret in %j', (args, secret) => {
+    expect(leaks(JSON.stringify(maskArgs(args)), secret)).toBe(false)
+  })
+
+  it('keeps the JSON readable apart from its secret values', () => {
+    const out = maskArgs(['--config', '{"apiKey":"S66","model":"gpt","url":"https://u:S9@h/"}'])[1] as string
+    expect(JSON.parse(out)).toEqual({ apiKey: MASK, model: 'gpt', url: `https://${MASK}@h/` })
+  })
+
+  it('masks a WHATWG-normalised URL and a path segment after a secret name', () => {
+    expect(leaks(maskUrl('https:/\\/u:S51@h/x'), 'S51')).toBe(false)
+    expect(leaks(maskUrl('https://host/sse/key/S46'), 'S46')).toBe(false)
+    expect(maskUrl('https://host/sse/key/S46')).toContain('/key/')
+  })
+
+  it('masks secrets in any field of an MCP record, nested ones included', () => {
+    const record = {
+      command: 'x',
+      url: 'https://u:S200@h/?token=S201',
+      args: ['--token', 'S202'],
+      env: { A: 'S203' },
+      headers: { H: 'S204' },
+      envFile: 'S205',
+      auth: { token: 'S206' },
+      oauth: { clientSecret: 'S207' },
+      transport: { headers: { Authorization: 'S208' } },
+      cwd: '/home/x',
+      bearer_token: 'S209',
+      apiKey: 'S210',
+      http_headers: { A: 'S211' },
+      env_http_headers: { A: 'S212' },
+    }
+    const out = JSON.stringify(maskMcpRecord(record))
+    for (let i = 200; i <= 212; i += 1) expect(leaks(out, `S${i}`)).toBe(false)
+    const shown = maskMcpRecord(record) as Record<string, unknown>
+    expect(shown.command).toBe('x')
+    expect(shown.cwd).toBe('/home/x')
+    expect(shown.transport).toEqual({ headers: { Authorization: MASK } })
+  })
+})
