@@ -1059,6 +1059,7 @@ class ServerLink:
                 device_id=lambda: self._device_id,
                 enabled=sync_scopes.scope_enabled,
                 on_result=_result,
+                account_member=lambda: self.member_id,
             )
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
             engine.register(sync_scopes.McpScope())

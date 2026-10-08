@@ -540,12 +540,21 @@ class SyncEngine:
         enabled: Callable[[str], bool],
         signing_key_for: Callable[[str], str] | None = None,
         on_result: Callable[[dict[str, Any]], None] | None = None,
+        account_member: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
         self._request = request
         self._device_id = device_id
         self._enabled = enabled
-        self._signing_key_for = signing_key_for or _pinned_signing_key
+        if signing_key_for is None:
+            # A pin taken under another member does not vouch for a device of
+            # this account: the member is part of what was pinned.
+            signing_key_for = (
+                (lambda device: _pinned_signing_key(device, account_member()))
+                if account_member is not None
+                else _pinned_signing_key
+            )
+        self._signing_key_for = signing_key_for
         #: Told every round's result (see ``sync``) — the link broadcasts it
         #: to the renderer as ``sync.result``. Must not raise; it is guarded.
         self._on_result = on_result
@@ -1789,7 +1798,12 @@ def _unique(item_ids: Any) -> list[str]:
     return out
 
 
-def _pinned_signing_key(device_id: str) -> str:
+def _pinned_signing_key(device_id: str, member_id: str | None = None) -> str:
+    """The signing key pinned for *device_id*, or "" when there is none.
+
+    With *member_id*, a pin recorded under any other member — or with none,
+    or when the signed-in member is not known yet — counts as no pin.
+    """
     from . import trust_store
 
     try:
@@ -1797,6 +1811,8 @@ def _pinned_signing_key(device_id: str) -> str:
     except Exception:  # noqa: BLE001 - an unreadable pin is "not pinned yet"
         return ""
     if not isinstance(pin, dict):
+        return ""
+    if member_id is not None and (not member_id or pin.get("memberId") != member_id):
         return ""
     # ``signKey`` is the field trust_store writes; the other two names never
     # existed there, which left every signature unchecked.

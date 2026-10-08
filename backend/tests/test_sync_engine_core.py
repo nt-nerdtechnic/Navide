@@ -537,8 +537,6 @@ async def test_a_held_item_survives_a_restart(tmp_path, account_key):
 
 
 # ── security review (sync審-資安) ────────────────────────────────────────────
-
-
 async def test_a_refusal_is_logged_without_what_the_adapter_said(tmp_path, account_key, caplog):
     # D7: an adapter's exception text can quote the payload it refused.
     server = FakeServer()
@@ -599,3 +597,28 @@ async def test_a_reset_keeps_a_local_delete_that_was_waiting_to_go_up(tmp_path, 
     await b.sync()
     assert "x" not in b.adapter.items
     assert server.rows[("prompts", "x")]["deleted"] == 1
+
+
+async def test_a_pin_for_another_account_is_not_a_pin(tmp_path, account_key, monkeypatch):
+    # A2: a device pinned under a different member does not vouch for this account.
+    from agent_team_backend import trust_store
+
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-other"})
+    assert sync_engine._pinned_signing_key("dev-x", "m-me") == ""
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-me"})
+    assert sync_engine._pinned_signing_key("dev-x", "m-me") == "KEY"
+
+
+def test_the_engine_checks_pins_against_the_signed_in_member(tmp_path, monkeypatch):
+    from agent_team_backend import trust_store
+    from agent_team_backend.db import Database
+
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-other"})
+    engine = sync_engine.SyncEngine(
+        sync_engine.SyncStore(Database(tmp_path / "e.db")),
+        lambda *_a: None,
+        device_id=lambda: "me",
+        enabled=lambda _s: True,
+        account_member=lambda: "m-me",
+    )
+    assert engine._signing_key_for("dev-x") == ""

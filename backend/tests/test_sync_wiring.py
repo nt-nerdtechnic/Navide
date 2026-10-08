@@ -247,3 +247,14 @@ async def test_saving_mcp_servers_starts_an_mcp_round(rounds, monkeypatch):
     assert session.websocket.sent[0]["payload"].get("ok") is True, session.websocket.sent  # type: ignore[attr-defined]
     await _settle()
     assert rounds == ["mcp"]
+
+
+def test_the_links_engine_checks_pins_against_its_member(monkeypatch):
+    from agent_team_backend import trust_store
+
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m-other"})
+    link = server_link.ServerLink()
+    link.member_id = "m-me"
+    assert link.sync_engine()._signing_key_for("dev-x") == ""
+    link.member_id = "m-other"
+    assert link.sync_engine()._signing_key_for("dev-x") == "KEY"
