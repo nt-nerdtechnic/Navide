@@ -453,8 +453,12 @@ def test_files_that_never_download_stop_holding_the_scope(tmp_path, monkeypatch,
         return await real(request, ref, dest, layout, **kw)
 
     monkeypatch.setattr(skill_blobs, "download", flaky)
+    # Step the engine's clock past any retry backoff, so every round asks again.
+    now = [0.0]
+    b.engine._clock = lambda: now[0]
     for _ in range(sync_scopes.MAX_DOWNLOAD_ATTEMPTS + 2):
         _run(b.settle(monkeypatch))
+        now[0] += 3600
     assert (b.store.root / "big2" / "clip.bin").is_file()
     assert not (b.store.root / "big").exists()
     assert b.adapter.failed() == ["big"]
