@@ -413,3 +413,29 @@ def test_the_links_engine_forgets_detached_marks_when_a_reset_forgets_a_scope(mo
     link = server_link.ServerLink()
     link.sync_engine()._on_forget("memory")
     assert calls == ["memory"]
+
+
+def test_an_account_change_forgets_the_marks_detach_wrote(tmp_path, monkeypatch):
+    # The marks the scope adapters write (detach) and the ones an account
+    # change drops (forget_detached) live under one ui_settings key.
+    from agent_team_backend import sync_scopes
+
+    settings = _Settings({})
+    _seeded(tmp_path, monkeypatch, settings)
+    sync_scopes.detach("memory", "X", {"text": "kept"})
+    assert sync_scopes.without_detached("memory", {"X": {"text": "kept"}}) == {}
+    sync_scopes.on_account_changed()
+    assert sync_scopes.without_detached("memory", {"X": {"text": "kept"}}) == {"X": {"text": "kept"}}
+
+
+def test_an_account_change_resets_the_registered_skill_files_adapter(tmp_path, monkeypatch):
+    # B7 against the real adapter the link registers, not a stand-in.
+    from agent_team_backend import sync_scopes
+
+    _seeded(tmp_path, monkeypatch, _Settings({}))
+    monkeypatch.setattr(sync_scopes, "_skill_files", None)
+    adapter = sync_scopes.skill_files_scope()
+    adapter._download_failures["old"] = ("digest", sync_scopes.MAX_DOWNLOAD_ATTEMPTS)
+    assert adapter.failed() == ["old"]
+    sync_scopes.on_account_changed()
+    assert adapter.failed() == []

@@ -1758,28 +1758,22 @@ def on_account_changed() -> None:
         raise sync_engine.SyncError("; ".join(failures))
 
 
-#: ui_settings key of the "kept here, not pushed back" marks the scope
-#: adapters keep for items deleted on another device (``DETACHED_KEY`` where
-#: they are defined): ``{scope: {item_id: digest}}``.
-_DETACHED_SETTING = "sync-detached"
-
-
 def forget_detached(scope: str | None = None) -> None:
     """Drop the detached marks of *scope*, or of every scope.
 
     They describe items of the account they were made under, so they go when
     that account does and when a scope is read again from the start.
     """
-    raw = _settings().get().get(_DETACHED_SETTING)
+    raw = _settings().get().get(DETACHED_KEY)
     if not raw:
         return
     if scope is None or not isinstance(raw, dict):
-        _settings().set({_DETACHED_SETTING: None})
+        _settings().set({DETACHED_KEY: None})
         return
     if scope not in raw:
         return
     rest = {k: v for k, v in raw.items() if k != scope}
-    _settings().set({_DETACHED_SETTING: rest or None})
+    _settings().set({DETACHED_KEY: rest or None})
 
 
 def _reset_credentials_for_test() -> None:
