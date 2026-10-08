@@ -139,19 +139,38 @@ function asTurns(value: unknown): number {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
-/** Slugify `name` into an id that doesn't collide with `taken`. Non-ASCII
- *  names (the common case here) leave nothing to slugify, hence the `skill`
- *  stem plus a counter. */
-export function nextSkillId(taken: readonly string[], name: string): string {
-  const stem =
+function skillIdStem(name: string): string {
+  return (
     name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 32) || 'skill'
+  )
+}
+
+/** Slugify `name` into an id that doesn't collide with `taken`. Non-ASCII
+ *  names (the common case here) leave nothing to slugify, hence the `skill`
+ *  stem plus a counter. */
+export function nextSkillId(taken: readonly string[], name: string): string {
+  const stem = skillIdStem(name)
   if (!taken.includes(stem)) return stem
   for (let i = 2; ; i += 1) {
     const candidate = `${stem}-${i}`
+    if (!taken.includes(candidate)) return candidate
+  }
+}
+
+/** The id for a prompt someone just created: the slug plus 6 random hex.
+ *  Prompts sync across devices by id, and the slug alone ('skill', 'skill-2')
+ *  is what two devices would both pick. Only for new prompts — an existing id
+ *  never changes, since that would sync as a delete plus an add. */
+export function newSkillId(taken: readonly string[], name: string): string {
+  const stem = skillIdStem(name)
+  for (;;) {
+    const bytes = crypto.getRandomValues(new Uint8Array(3))
+    const suffix = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    const candidate = `${stem}-${suffix}`
     if (!taken.includes(candidate)) return candidate
   }
 }
