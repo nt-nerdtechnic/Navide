@@ -343,3 +343,70 @@ async def test_keeping_an_unchanged_local_copy_pushes_it_again(tmp_path, account
     b.engine.resolve("prompts", "x", sync_engine.KEEP_LOCAL)
     await b.sync()
     assert not server.rows[("prompts", "x")]["deleted"]
+
+
+# ── X-3: a pull page must fit in one WebSocket frame ─────────────────────────
+class FramedServer(FakeServer):
+    """A server that, like the real link, cannot deliver a reply over 1 MiB:
+    the client's websocket closes with 1009 and the request never answers."""
+
+    MAX_FRAME = 1024 * 1024
+
+    def _pull(self, payload: dict) -> dict:
+        import json
+
+        reply = super()._pull(payload)
+        if len(json.dumps({"ok": True, "payload": reply})) > self.MAX_FRAME:
+            raise ConnectionError("1009 message too big")
+        return reply
+
+
+def _big(n: int) -> dict:
+    return {"text": "x" * n}
+
+
+async def test_a_scope_of_large_records_is_pulled_in_pages_that_fit_a_frame(tmp_path, account_key):
+    from .test_sync_engine import DictScope
+
+    server = FramedServer()
+    a = Device(tmp_path, server, "dev-a")
+    a.engine.register(DictScope("memory", {f"m{i}": _big(250 * 1024) for i in range(4)}))
+    await a.engine.sync("memory")
+    b = Device(tmp_path, server, "dev-b")
+    mine = DictScope("memory")
+    b.engine.register(mine)
+    result = await b.engine.sync("memory")
+    assert result["pulled"] == 4 and len(mine.items) == 4
+
+
+async def test_large_rows_seen_once_shrink_the_next_pages(tmp_path, account_key):
+    server = FramedServer()
+    b = Device(tmp_path, server, "dev-b")
+    assert b.engine._pull_limit("prompts") > 1
+    b.engine._learn_rows("prompts", [{"body": "x" * (400 * 1024)}])
+    assert b.engine._pull_limit("prompts") == 1
+
+
+async def test_a_conflict_the_server_deferred_is_pushed_again(tmp_path, account_key):
+    # Navide-Server answers a conflict it has no room for in the frame as a
+    # rejection (CONFLICT_DEFERRED): it must not be recorded as synced.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    forward = b.engine._request
+    deferred = True
+
+    async def request(msg_type, payload):
+        nonlocal deferred
+        if msg_type == "sync.push" and deferred:
+            deferred = False
+            return {"ok": True, "payload": {
+                "scope": "prompts", "cursor": 0, "accepted": [], "conflicts": [],
+                "rejected": [{"itemId": "x", "code": "CONFLICT_DEFERRED", "rev": 0}],
+            }}
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    first = await b.sync()
+    assert first["pushed"] == 0 and b.store.state("prompts", "x") is None
+    await b.sync()
+    assert ("prompts", "x") in server.rows

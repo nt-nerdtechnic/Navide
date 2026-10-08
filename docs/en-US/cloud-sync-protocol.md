@@ -89,8 +89,19 @@ payload   {scope, since?: number = 0, limit?: number = 200}   limit ≤ 500
 result    {scope, cursor, items: [...], more: boolean}
 ```
 
-Returns items with `rev > since`, ascending, tombstones included. `cursor` is
-the account's current max `rev` for the scope; `more` says another page waits.
+Returns items with `rev > since`, ascending, tombstones included. `more` says
+another page waits. A page is also capped by bytes (768 KiB of rows, at least
+one row), because the reply is one WebSocket frame and a frame over 1 MiB
+closes the client's link instead of arriving; a page cut short sets `more`.
+
+`cursor` is the `rev` of the page's last row while `more` is true, and the
+account's current max `rev` for the scope once it is false. Servers before the
+byte cap always answer the max, so a client pages by the highest `rev` among
+the rows it received — correct against both — and takes `cursor` only from the
+last page. A client must also keep `limit` small enough that a page fits a
+frame on a server without the byte cap. A `cursor` below the client's own
+`since` means the server never issued the revs the client has read (another
+account, or a reset server); the client starts that scope over from 0.
 
 ### `sync.push`
 
@@ -106,6 +117,16 @@ item, like a conflict, and without spending a `rev`. The ids replace the
 item's previous set; a tombstone (which may not carry refs) empties it. The
 server cannot read the sealed record, so this list is what blob garbage
 collection goes by. A push without `refs` gets exactly the old result shape.
+
+Conflict rows are capped by bytes too; one that does not fit the reply comes
+back as `rejected: [{itemId, code: "CONFLICT_DEFERRED", rev}]` with no body. A
+client records nothing for a rejected item, so the next round pushes it again
+and meets the conflict then.
+
+The push `cursor` is the scope's max `rev`, which may include another device's
+write that landed after this client's pull. A client moves its read cursor
+only across its own accepted revs that follow on from it without a gap, and
+leaves the rest to the next pull.
 
 A pushed item carries no `deviceId`: the server stamps the connection's own
 device on every row it writes. One may be sent, and then it must equal the

@@ -68,6 +68,24 @@ PULL_PAGE = 200
 #: because the server is forbidden to decode it to find out how big it is.
 MAX_BODY_BYTES = 512 * 1024
 MAX_PUSH_BYTES = 768 * 1024
+#: A pull reply is one frame too, and this client's websocket refuses a frame
+#: over 1 MiB by closing the whole link (1009) — messaging included — after
+#: which the next round asks for the same page again. Navide-Server caps a page
+#: by bytes from fix/sync-page-bytes on; an older server only by row count, so
+#: the client asks for no more rows than this budget holds at the largest row
+#: size it expects. A guess first, then the largest row actually seen.
+PULL_FRAME_BUDGET = 768 * 1024
+#: The row size a scope's first page is sized for. Instruction files and
+#: inline skills run up to the record limit, so those scopes page one row at a
+#: time until their rows are seen; prompt and MCP records are small.
+PULL_ROW_GUESS: dict[str, int] = {
+    "memory": MAX_BODY_BYTES,
+    "skills": MAX_BODY_BYTES,
+    "credentials": 16 * 1024,
+    "prompts": 32 * 1024,
+    "mcp": 16 * 1024,
+    "skill-files": 64 * 1024,
+}
 
 KEEP_LOCAL = "local"
 KEEP_REMOTE = "remote"
@@ -521,6 +539,8 @@ class SyncEngine:
         self._on_result = on_result
         #: The last result of each scope, for ``sync.status``.
         self._last: dict[str, dict[str, Any]] = {}
+        #: Per scope, the largest pulled row seen in this process, in bytes.
+        self._row_bytes: dict[str, int] = {}
         self._adapters: dict[str, ScopeAdapter] = {}
         #: Per scope, the highest cursor a push reply may move to while a
         #: pulled row is waiting for its key. Set by ``_pull``, honoured by
@@ -651,7 +671,9 @@ class SyncEngine:
         while True:
             since = self._store.cursor(scope)
             reply = _payload(
-                await self._request("sync.pull", {"scope": scope, "since": since, "limit": PULL_PAGE})
+                await self._request(
+                    "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
+                )
             )
             if not reset and since > 0 and int(reply.get("cursor") or 0) < since:
                 # The server has never issued the revs this machine has read up
@@ -668,6 +690,7 @@ class SyncEngine:
                 continue
             items = reply.get("items")
             items = items if isinstance(items, list) else []
+            self._learn_rows(scope, items)
             count, held_rev = await asyncio.to_thread(self._apply_page, adapter, items)
             applied += count
             # The reply's ``cursor`` is the scope's current maximum rev, not the
@@ -853,6 +876,16 @@ class SyncEngine:
             sealed_kid=_kid_of(body) if (held and not deleted) else "",
         )
         return held
+
+    def _pull_limit(self, scope: str) -> int:
+        """How many rows to ask one pull page for; see ``PULL_FRAME_BUDGET``."""
+        row = max(self._row_bytes.get(scope, 0), PULL_ROW_GUESS.get(scope, MAX_BODY_BYTES))
+        return max(1, min(PULL_PAGE, PULL_FRAME_BUDGET // max(row, 1)))
+
+    def _learn_rows(self, scope: str, rows: list[Any]) -> None:
+        sizes = [len(canonical(r).encode("utf-8")) for r in rows if isinstance(r, dict)]
+        if sizes and max(sizes) > self._row_bytes.get(scope, 0):
+            self._row_bytes[scope] = max(sizes)
 
     def _note(self, scope: str, reason: str, item_id: str) -> None:
         ids = self._notes.setdefault(scope, {}).setdefault(reason, [])
@@ -1277,11 +1310,12 @@ class SyncEngine:
         while True:
             reply = _payload(
                 await self._request(
-                    "sync.pull", {"scope": scope, "since": since, "limit": PULL_PAGE}
+                    "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
                 )
             )
             page = reply.get("items")
             page = [r for r in page if isinstance(r, dict)] if isinstance(page, list) else []
+            self._learn_rows(scope, page)
             rows.extend(page)
             if not reply.get("more"):
                 break
