@@ -152,7 +152,7 @@ import {
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import { PlanWindowRegistry } from './plan-windows'
 import { createTokenMonitorWindowOpener } from './token-monitor-window'
-import { warnMain } from './main-log'
+import { errorMain, infoMain, warnMain } from './main-log'
 import { watchRendererCrashes } from './renderer-crash-reload'
 import { createPlansBackendStoppedRelay } from './plansBackendStoppedRelay'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
@@ -2004,7 +2004,7 @@ ipcMain.handle('backend:info', () => backendInfoPayload())
 // visible rather than respawning forever.
 function watchBackendCrash(b: BackendHandle): void {
   watchBackendExit(b.proc, () => backend === b, (message) => {
-    console.error(`[main] ${message}`)
+    errorMain(`[main] ${message}`)
     backend = null
     const attempt = backendAutoRestart.onCrash()
     if (attempt === null) {
@@ -2013,7 +2013,7 @@ function watchBackendCrash(b: BackendHandle): void {
     } else {
       const max = backendAutoRestart.maxAttempts()
       backendRestartPending = { attempt, max, reason: message }
-      console.log(`[main] backend auto-restart scheduled (attempt ${attempt}/${max})`)
+      infoMain(`[main] backend auto-restart scheduled (attempt ${attempt}/${max})`)
     }
     broadcastBackendChanged()
   })
@@ -2034,7 +2034,7 @@ const backendAutoRestart = createBackendAutoRestart({
   restart: () => { void autoRestartBackend() },
   onGiveUp: (attempts) => {
     backendGaveUp = true
-    console.error(`[main] backend auto-restart gave up after ${attempts} attempts`)
+    errorMain(`[main] backend auto-restart gave up after ${attempts} attempts`)
   },
   // A backend that survived the stability window vindicates whatever
   // workspaces this launch restored — pay back their attempt charges.
@@ -2088,7 +2088,7 @@ async function autoRestartBackend(): Promise<void> {
       // for wins; this process must not become the live backend, and must not
       // be left running either.
       backendRestartPending = null
-      console.log('[main] discarding auto-restarted backend: superseded by a deliberate lifecycle op')
+      infoMain('[main] discarding auto-restarted backend: superseded by a deliberate lifecycle op')
       await started.stop()
       return
     }
@@ -2098,11 +2098,11 @@ async function autoRestartBackend(): Promise<void> {
     backendRestartPending = null
     watchBackendCrash(backend)
     backendAutoRestart.onHealthy()
-    console.log(`[main] backend auto-restarted at ${backend.host}:${backend.port}`)
+    infoMain(`[main] backend auto-restarted at ${backend.host}:${backend.port}`)
   } catch (err) {
     // A failed attempt spends budget the same way a crash does; when the
     // budget is gone the error becomes terminal.
-    console.error('[main] backend auto-restart failed', err)
+    errorMain('[main] backend auto-restart failed', err)
     backend = null
     if (epoch !== backendLifecycleEpoch) {
       backendRestartPending = null
@@ -2160,9 +2160,9 @@ async function restartBackendNow(): Promise<ReturnType<typeof backendInfoPayload
       frontendPluginManager.setTerminalShell(backend.shell)
       backendLastError = null
       watchBackendCrash(backend)
-      console.log(`[main] backend restarted at ${backend.host}:${backend.port}`)
+      infoMain(`[main] backend restarted at ${backend.host}:${backend.port}`)
     } catch (err) {
-      console.error('[main] backend restart failed', err)
+      errorMain('[main] backend restart failed', err)
       backend = null
       backendLastError = String(err)
     }
@@ -5407,11 +5407,11 @@ app.whenReady().then(async () => {
       // Starts the stability window whose completion clears the restore
       // failure ledger (onStable, above); a no-op for the restart budget here.
       backendAutoRestart.onHealthy()
-      console.log(`[main] backend ready at ${b.host}:${b.port}`)
+      infoMain(`[main] backend ready at ${b.host}:${b.port}`)
       broadcastBackendChanged()
     })
     .catch((err) => {
-      console.error('[main] backend failed to start', err)
+      errorMain('[main] backend failed to start', err)
       backendLastError = String(err)
       broadcastBackendChanged()
     })
