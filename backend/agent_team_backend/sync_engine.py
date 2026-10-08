@@ -906,7 +906,8 @@ class SyncEngine:
             except Exception as err:  # noqa: BLE001 - a refusal, see below
                 if _sensitive(adapter):
                     raise
-                log.warning("%s refused %s: %s", scope, item_id, err)
+                # The class only: an adapter's message may quote the payload.
+                log.warning("%s refused %s (%s)", scope, item_id, type(err).__name__)
                 held = False
             if not held and not _sensitive(adapter):
                 # A refusal of an ordinary scope records nothing. Writing the

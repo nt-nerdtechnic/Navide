@@ -534,3 +534,23 @@ async def test_a_held_item_survives_a_restart(tmp_path, account_key):
     restarted.adapter.items = dict(b.adapter.items)
     await restarted.sync()
     assert restarted.adapter.items["stuck"] == {"v": 1}
+
+
+# ── security review (sync審-資安) ────────────────────────────────────────────
+
+
+async def test_a_refusal_is_logged_without_what_the_adapter_said(tmp_path, account_key, caplog):
+    # D7: an adapter's exception text can quote the payload it refused.
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"secret": "hunter2"}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+
+    def apply(item_id, payload):
+        raise ValueError(f"cannot take {payload}")
+
+    b.adapter.apply = apply
+    with caplog.at_level("WARNING"):
+        await b.sync()
+    assert "hunter2" not in caplog.text
+    assert "ValueError" in caplog.text
