@@ -559,6 +559,8 @@ class SyncEngine:
         #: is lost on a restart is the backoff, which then starts over.
         self._defers: dict[tuple[str, str], dict[str, float]] = {}
         self._clock: Callable[[], float] = time.monotonic
+        #: Per scope, local deletes carried across a cursor reset.
+        self._reset_deletes: dict[str, set[str]] = {}
         self._adapters: dict[str, ScopeAdapter] = {}
         #: Per scope, the highest cursor a push reply may move to while a
         #: pulled row is waiting for its key. Set by ``_pull``, honoured by
@@ -728,6 +730,10 @@ class SyncEngine:
                     "sync.pull on %s: the server's cursor is behind ours; starting %s over",
                     scope, scope,
                 )
+                # A delete made here and not yet carried up would be lost with
+                # the state it is computed from — and the re-read below would
+                # bring the item back. Remembered across the reset instead.
+                self._reset_deletes[scope] = await asyncio.to_thread(self._pending_deletes, adapter)
                 self._store.forget(scope)
                 reset = True
                 since = 0
@@ -769,7 +775,20 @@ class SyncEngine:
             since = cursor
         if barrier is not None:
             self._cursor_barrier[scope] = max(barrier, self._store.cursor(scope))
+        self._reset_deletes.pop(scope, None)
         return applied
+
+    def _pending_deletes(self, adapter: ScopeAdapter) -> set[str]:
+        """Items this machine deleted that the next push would carry up."""
+        if _sensitive(adapter):
+            return set()
+        snapshot = adapter.snapshot()
+        oversized = set(_adapter_ids(adapter, "oversized"))
+        return {
+            item_id
+            for item_id, state in self._store.states(adapter.scope).items()
+            if not state.deleted and item_id not in snapshot and item_id not in oversized
+        }
 
     def _apply_page(
         self, adapter: ScopeAdapter, items: list[Any]
@@ -825,6 +844,12 @@ class SyncEngine:
         origin = self._origin(raw, scope=scope, item_id=item_id)
         if origin == _ORIGIN_FORGED:
             log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
+            return False
+        if item_id in self._reset_deletes.get(scope, ()):
+            # Deleted here before a reset (see ``_pull``): the row is not
+            # applied, only its rev recorded, so the push that follows sends
+            # the delete against it.
+            self._store.set_state(scope, item_id, rev=rev, synced_hash="", deleted=deleted)
             return False
         if device == self._device_id() and not explicit:
             # Our own write coming back. Record the rev so the next push edits

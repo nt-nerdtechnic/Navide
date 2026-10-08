@@ -575,3 +575,27 @@ async def test_a_pull_round_stops_after_a_bounded_number_of_pages(tmp_path, acco
     b.engine._request = request
     await b.sync()
     assert calls == 7
+
+
+async def test_a_reset_keeps_a_local_delete_that_was_waiting_to_go_up(tmp_path, account_key):
+    # A3: x was deleted here and the round that would carry it up met a reset.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("x")
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and not lied and int(payload.get("since") or 0) > 0:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        return reply
+
+    b.engine._request = request
+    await b.sync()
+    await b.sync()
+    assert "x" not in b.adapter.items
+    assert server.rows[("prompts", "x")]["deleted"] == 1
