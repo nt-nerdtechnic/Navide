@@ -6234,7 +6234,12 @@
       "account": "Syncing with {email}",
       "scope-skill-files": "Skill files",
       "result-gave-up": "Stuck, still retrying: {items}",
-      "result-reset-throttled": "The server's state looks wrong, so re-syncing this section is paused; it retries in an hour."
+      "result-reset-throttled": "The server's state looks wrong, so re-syncing this section is paused; it retries in an hour.",
+      "secrets-title": "Hidden values — keeping a side changes the ones that differ:",
+      "secret-same": "same",
+      "secret-differs": "differs",
+      "secret-local-only": "only on this device",
+      "secret-remote-only": "only on the other device"
     },
     "sharing": {
       "intro": "Two ways to move these four sections between machines: a file you hand over, and the account they already share.",

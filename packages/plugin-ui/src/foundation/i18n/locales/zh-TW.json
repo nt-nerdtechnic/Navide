@@ -6234,7 +6234,12 @@
       "account": "同步帳號：{email}",
       "scope-skill-files": "Skill 檔案",
       "result-gave-up": "卡住，會持續重試：{items}",
-      "result-reset-throttled": "伺服器狀態異常，已暫停重新同步此區塊，一小時後重試。"
+      "result-reset-throttled": "伺服器狀態異常，已暫停重新同步此區塊，一小時後重試。",
+      "secrets-title": "隱藏的值 — 選擇保留哪一邊，會改到兩邊不同的那些：",
+      "secret-same": "相同",
+      "secret-differs": "兩邊不同",
+      "secret-local-only": "只有此裝置有",
+      "secret-remote-only": "只有另一台裝置有"
     },
     "sharing": {
       "intro": "把這四個區段搬到別台機器的兩條路：一份可以交出去的檔案，以及這些機器本來就共用的帳號。",
