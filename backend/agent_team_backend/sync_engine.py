@@ -627,6 +627,18 @@ class SyncEngine:
 
     def _finish(self, scope: str, outcome: dict[str, Any]) -> dict[str, Any]:
         notes = self._notes.pop(scope, {})
+        adapter = self._adapters.get(scope)
+        # The adapter's own view joins the engine's: ``oversized()`` is a
+        # standing state, not only what this round tried to send, and
+        # ``failed()`` names items it gave up on itself (it answered False,
+        # which the engine saw as a refusal) — those read as held and given
+        # up, not as refused.
+        if adapter is not None:
+            failed = _adapter_ids(adapter, "failed")
+            notes["refused"] = [i for i in notes.get("refused", []) if i not in failed]
+            for reason in ("held", "gaveUp"):
+                notes[reason] = _merged(notes.get(reason, []), failed)
+            notes["tooLarge"] = _merged(notes.get("tooLarge", []), _adapter_ids(adapter, "oversized"))
         try:
             conflicts = len(self._store.conflict_ids(scope))
         except Exception:  # noqa: BLE001 - a result is still worth reporting
@@ -1047,11 +1059,20 @@ class SyncEngine:
         snapshot = adapter.snapshot()
         states = self._store.states(scope)
         blocked = self._store.conflict_ids(scope)
+        # Items the adapter knows cannot travel for a reason the body size
+        # does not show (a skill naming more blobs than the server takes, an
+        # instruction file over the record limit). Asked after the snapshot,
+        # which is what the answer describes. Neither sent nor — present in
+        # the snapshot or not — ever taken for a delete.
+        oversized = set(_adapter_ids(adapter, "oversized"))
         pending: list[tuple[str, Any, str]] = []  # (item_id, payload|None, hash)
 
         active_kid = sync_keyring.active_key_id() or ""
         for item_id, payload in snapshot.items():
             if item_id in blocked:
+                continue
+            if item_id in oversized:
+                self._note(scope, "tooLarge", item_id)
                 continue
             item_hash = digest(payload)
             state = states.get(item_id)
@@ -1084,7 +1105,7 @@ class SyncEngine:
             # a tombstone would sign every other device out. Those scopes
             # never delete by absence; the cloud copy outlives the local one.
             for item_id, state in states.items():
-                if item_id in snapshot or item_id in blocked or state.deleted:
+                if item_id in snapshot or item_id in blocked or state.deleted or item_id in oversized:
                     continue
                 pending.append((item_id, None, ""))
 
@@ -1114,14 +1135,6 @@ class SyncEngine:
         deleted = payload is None
         body = ""
         if not deleted:
-            # An adapter may know an item cannot travel for a reason the body
-            # size does not show (a skill naming more blobs than the server
-            # takes). It stays in the snapshot — so it is never mistaken for a
-            # delete — and is reported rather than sent.
-            oversized = getattr(self._adapters.get(scope), "oversized", None)
-            if oversized is not None and oversized(item_id, payload):
-                self._note(scope, "tooLarge", item_id)
-                return None
             body = sync_keyring.encrypt(canonical(payload), scope=scope, item_id=item_id)
             if len(body.encode("utf-8")) > MAX_BODY_BYTES:
                 log.warning(
@@ -1649,6 +1662,27 @@ class _HoldPull(Exception):
 
 def _rev_of(raw: Any) -> int:
     return int(raw.get("rev") or 0) if isinstance(raw, dict) else 0
+
+
+def _adapter_ids(adapter: Any, name: str) -> list[str]:
+    """``adapter.<name>()`` as a list of item ids, or [] when it has none.
+
+    Never raises: these feed a report, and an adapter that cannot say must
+    not fail the round that asked.
+    """
+    fn = getattr(adapter, name, None)
+    if fn is None:
+        return []
+    try:
+        ids = fn()
+    except Exception as err:  # noqa: BLE001 - see docstring
+        log.warning("%s could not list its %s items: %s", getattr(adapter, "scope", "?"), name, err)
+        return []
+    return [str(i) for i in ids if i] if isinstance(ids, (list, tuple, set)) else []
+
+
+def _merged(first: list[str], second: list[str]) -> list[str]:
+    return first + [i for i in second if i not in first]
 
 
 def _contiguous_cursor(cursor: int, accepted: Any) -> int:
