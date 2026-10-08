@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import path, { join } from 'node:path'
 import { expect, it } from 'vitest'
 
 // Text cut off with an ellipsis must show its full text on hover: every element
@@ -24,12 +24,17 @@ const EXEMPT: Record<string, string> = {
   'src/renderer/src/components/sharing/SharingCloudSection.vue|sc-cell|sc-cell--check': 'holds only a checkbox',
 }
 
+/** Repo-relative path with `/` separators, whatever the platform's `path` gives. */
+function relPath(root: string, file: string, p: typeof path = path): string {
+  return p.relative(root, file).split(p.sep).join('/')
+}
+
 const FORM_TAGS = new Set(['input', 'textarea', 'select', 'option'])
 
 function vueFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name)
-    const rel = relative(ROOT, path)
+    const rel = relPath(ROOT, path)
     if (name === 'node_modules' || name === '__tests__' || SKIP_DIRS.includes(rel)) continue
     if (statSync(path).isDirectory()) vueFiles(path, out)
     else if (name.endsWith('.vue')) out.push(path)
@@ -77,26 +82,47 @@ function openingTags(template: string, cls: string): string[] {
   return tags
 }
 
+/** Elements in one .vue file that a clipping rule styles without v-truncate. */
+function missingIn(rel: string, raw: string): string[] {
+  const missing: string[] = []
+  const source = raw.replace(/\r\n/g, '\n')
+  const styleAt = source.search(/<style[\s>]/)
+  if (styleAt < 0) return missing
+  const template = source.slice(0, styleAt).replace(/<!--[\s\S]*?-->/g, '')
+  for (const cls of clippedClasses(source.slice(styleAt))) {
+    if (EXEMPT[`${rel}|${cls}`]) continue
+    for (const tag of openingTags(template, cls)) {
+      const name = /^<([\w-]+)/.exec(tag)?.[1]?.toLowerCase() ?? ''
+      if (FORM_TAGS.has(name) || /(^|\s)v-truncate(=|\s|>|\/)/.test(tag)) continue
+      const extra = /class="([^"]*)"/.exec(tag)?.[1].split(/\s+/) ?? []
+      if (extra.some((c) => EXEMPT[`${rel}|${cls}|${c}`])) continue
+      missing.push(`${rel} .${cls}: ${tag.replace(/\s+/g, ' ').slice(0, 100)}`)
+    }
+  }
+  return missing
+}
+
 it('every element a CSS rule cuts off with an ellipsis shows its full text on hover', () => {
   const missing: string[] = []
   for (const dir of SCAN) {
     for (const file of vueFiles(join(ROOT, dir))) {
-      const source = readFileSync(file, 'utf8')
-      const styleAt = source.search(/<style[\s>]/)
-      if (styleAt < 0) continue
-      const template = source.slice(0, styleAt).replace(/<!--[\s\S]*?-->/g, '')
-      const rel = relative(ROOT, file)
-      for (const cls of clippedClasses(source.slice(styleAt))) {
-        if (EXEMPT[`${rel}|${cls}`]) continue
-        for (const tag of openingTags(template, cls)) {
-          const name = /^<([\w-]+)/.exec(tag)?.[1]?.toLowerCase() ?? ''
-          if (FORM_TAGS.has(name) || /(^|\s)v-truncate(=|\s|>|\/)/.test(tag)) continue
-          const extra = /class="([^"]*)"/.exec(tag)?.[1].split(/\s+/) ?? []
-          if (extra.some((c) => EXEMPT[`${rel}|${cls}|${c}`])) continue
-          missing.push(`${rel} .${cls}: ${tag.replace(/\s+/g, ' ').slice(0, 100)}`)
-        }
-      }
+      missing.push(...missingIn(relPath(ROOT, file), readFileSync(file, 'utf8')))
     }
   }
   expect(missing).toEqual([])
+})
+
+// Windows checkouts give `\` separators and, with autocrlf, CRLF line endings;
+// the skip list and EXEMPT keys are written with `/`.
+it('matches skip and exempt entries on Windows paths and CRLF sources', () => {
+  const root = 'C:\\repo'
+  expect(relPath(root, 'C:\\repo\\src\\renderer\\src\\components\\helpMocks', path.win32)).toBe(SKIP_DIRS[0])
+  const rel = relPath(root, 'C:\\repo\\src\\renderer\\src\\components\\GitPane.vue', path.win32)
+  const style = '<style scoped>\r\n.cd-file {\r\n  text-overflow: ellipsis;\r\n}\r\n.cd-name {\r\n  text-overflow: ellipsis;\r\n}\r\n</style>\r\n'
+  const exempt = '<template>\r\n  <div class="cd-file">\r\n    x\r\n  </div>\r\n</template>\r\n'
+  expect(missingIn(rel, exempt + style)).toEqual([])
+  const bare = '<template>\r\n  <span\r\n    class="cd-name"\r\n  >x</span>\r\n</template>\r\n'
+  expect(missingIn(rel, bare + style)).toHaveLength(1)
+  const covered = '<template>\r\n  <span\r\n    v-truncate\r\n    class="cd-name"\r\n  >x</span>\r\n</template>\r\n'
+  expect(missingIn(rel, covered + style)).toEqual([])
 })
