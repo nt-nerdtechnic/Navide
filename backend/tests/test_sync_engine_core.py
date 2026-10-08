@@ -410,3 +410,13 @@ async def test_a_conflict_the_server_deferred_is_pushed_again(tmp_path, account_
     assert first["pushed"] == 0 and b.store.state("prompts", "x") is None
     await b.sync()
     assert ("prompts", "x") in server.rows
+
+
+async def test_an_explicit_pull_the_adapter_refuses_says_refused(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    _Refusing(b, {"y"})
+    assert await b.engine.pull_items("prompts", ["y"]) == [{"itemId": "y", "result": "refused"}]
+    assert b.store.state("prompts", "y") is None

@@ -1512,6 +1512,7 @@ class SyncEngine:
         snapshot = adapter.snapshot()
         blocked = self._store.conflict_ids(scope)
         out: list[dict[str, Any]] = []
+        refused = self._notes.setdefault(scope, {}).setdefault("refused", [])
         for item_id in wanted:
             row = by_id.get(item_id)
             if item_id in blocked:
@@ -1524,6 +1525,8 @@ class SyncEngine:
                 )
             elif item_id in self._store.conflict_ids(scope):
                 out.append({"itemId": item_id, "result": "conflict"})
+            elif item_id in refused:
+                out.append({"itemId": item_id, "result": "refused"})
             elif str(row.get("deviceId") or "") == self._device_id():
                 out.append({"itemId": item_id, "result": "own-write"})
             else:
