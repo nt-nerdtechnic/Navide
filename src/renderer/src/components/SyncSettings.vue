@@ -106,7 +106,14 @@ async function loadConflicts(): Promise<void> {
   conflicts.value = Array.isArray(rows) ? (rows as Conflict[]) : []
 }
 
+/** A scope outside READY may still be on (left on by an older build). Its
+ *  switch then only goes one way: off is always allowed, on never is. */
+function canToggle(scope: string): boolean {
+  return READY.has(scope) || Boolean(scopes.value[scope])
+}
+
 async function setScope(scope: string, enabled: boolean): Promise<void> {
+  if (enabled && !READY.has(scope)) return
   busy.value = scope
   error.value = ''
   try {
@@ -237,7 +244,7 @@ onMounted(load)
         <template #control>
           <ToggleSwitch
             :model-value="Boolean(scopes[scope])"
-            :disabled="busy === scope || !READY.has(scope)"
+            :disabled="busy === scope || !canToggle(scope)"
             :aria-label="t('settings.sync.scope-' + scope)"
             @update:model-value="(v: boolean) => setScope(scope, v)"
           />

@@ -184,6 +184,44 @@ describe('SyncSettings', () => {
     })
   })
 
+  // K-2: a credentials switch left on by an older build used to show ON and
+  // disabled, so it could never be switched off. Off must stay reachable;
+  // on must stay unreachable.
+  it('lets a credentials switch left on be turned off, and never back on', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'credentials'],
+          scopes: { prompts: false, credentials: true },
+          hasKey: true,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+      'sync.set_scope': { ok: true, payload: { scopes: { prompts: false, credentials: false } } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    let creds = wrapper.findAll('button[role="switch"]')[1]
+    expect(creds.attributes('aria-checked')).toBe('true')
+    expect(creds.attributes('disabled')).toBeUndefined()
+    await creds.trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('sync.set_scope', { scope: 'credentials', enabled: false })
+
+    creds = wrapper.findAll('button[role="switch"]')[1]
+    expect(creds.attributes('aria-checked')).toBe('false')
+    expect(creds.attributes('disabled')).toBeDefined()
+    await creds.trigger('click')
+    await flushPromises()
+    expect(send).not.toHaveBeenCalledWith('sync.set_scope', {
+      scope: 'credentials',
+      enabled: true,
+    })
+  })
+
   it('still lets the four reviewed scopes be turned on', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {
