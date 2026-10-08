@@ -153,6 +153,46 @@ def _local_tz() -> str:
         return "UTC"
 
 
+def _field(key: str, value: Any) -> Any:
+    """One settings field, validated; raises :class:`SettingsInvalid`."""
+    if key == "enabled":
+        if not isinstance(value, bool):
+            raise SettingsInvalid("enabled must be true or false")
+    elif key == "at":
+        if not isinstance(value, str) or not _AT_RE.match(value):
+            raise SettingsInvalid('at must be "HH:MM"')
+    elif key == "tz":
+        if not isinstance(value, str):
+            raise SettingsInvalid("tz must be a time zone name")
+        if value:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError) as err:
+                raise SettingsInvalid(f"unknown time zone {value!r}") from err
+    elif key == "catch_up":
+        if value not in ("once", "skip"):
+            raise SettingsInvalid('catch_up must be "once" or "skip"')
+    elif key == "mode":
+        if value not in ("auto", "pane"):
+            raise SettingsInvalid('mode must be "auto" or "pane"')
+    elif key == "scope":
+        if value not in ("fix", "propose"):
+            raise SettingsInvalid('scope must be "fix" or "propose"')
+    elif key in _INT_BOUNDS:
+        low, high = _INT_BOUNDS[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise SettingsInvalid(f"{key} must be an integer from {low} to {high}")
+    elif key == "extra":
+        if not isinstance(value, str) or len(value) > _MAX_EXTRA:
+            raise SettingsInvalid(f"extra must be text of at most {_MAX_EXTRA} characters")
+    else:  # pane_id, pane_name, agent, model, effort, ledger_plan
+        if not isinstance(value, str) or len(value) > 512:
+            raise SettingsInvalid(f"{key} must be a short string")
+        value = value.strip()
+        _check_word(key, value)
+    return value
+
+
 def normalize_settings(raw: Any, current: dict[str, Any]) -> dict[str, Any]:
     """Validate a partial settings change over ``current``."""
     if not isinstance(raw, dict):
@@ -161,44 +201,40 @@ def normalize_settings(raw: Any, current: dict[str, Any]) -> dict[str, Any]:
     for key, value in raw.items():
         if key not in DEFAULTS or value is None:
             continue
-        if key == "enabled":
-            if not isinstance(value, bool):
-                raise SettingsInvalid("enabled must be true or false")
-        elif key == "at":
-            if not isinstance(value, str) or not _AT_RE.match(value):
-                raise SettingsInvalid('at must be "HH:MM"')
-        elif key == "tz":
-            try:
-                ZoneInfo(str(value))
-            except (ZoneInfoNotFoundError, ValueError) as err:
-                raise SettingsInvalid(f"unknown time zone {value!r}") from err
-        elif key == "catch_up":
-            if value not in ("once", "skip"):
-                raise SettingsInvalid('catch_up must be "once" or "skip"')
-        elif key == "mode":
-            if value not in ("auto", "pane"):
-                raise SettingsInvalid('mode must be "auto" or "pane"')
-        elif key == "scope":
-            if value not in ("fix", "propose"):
-                raise SettingsInvalid('scope must be "fix" or "propose"')
-        elif key in _INT_BOUNDS:
-            low, high = _INT_BOUNDS[key]
-            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
-                raise SettingsInvalid(f"{key} must be an integer from {low} to {high}")
-        elif key == "extra":
-            if not isinstance(value, str) or len(value) > _MAX_EXTRA:
-                raise SettingsInvalid(f"extra must be text of at most {_MAX_EXTRA} characters")
-        else:  # pane_id, pane_name, agent, model, effort, ledger_plan
-            if not isinstance(value, str) or len(value) > 512:
-                raise SettingsInvalid(f"{key} must be a short string")
-            value = value.strip()
-            _check_word(key, value)
-        out[key] = value
+        out[key] = _field(key, value)
     if out["mode"] == "pane" and not out["pane_id"]:
         raise SettingsInvalid('mode "pane" needs a pane_id')
     if not out["agent"]:
         raise SettingsInvalid("agent is required")
     return out
+
+
+def sanitize_stored(stored: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Settings read back from the database, held to the same rules as a save.
+
+    The row may have been written by another build or edited by hand, so it is
+    never trusted: each field that fails validation falls back to its default
+    and is named in the second value, for the caller to disclose.
+    """
+    out = dict(DEFAULTS)
+    invalid: list[str] = []
+    for key in DEFAULTS:
+        if key not in stored:
+            continue
+        try:
+            out[key] = _field(key, stored[key])
+        except SettingsInvalid:
+            invalid.append(key)
+    out["tz"] = out["tz"] or _local_tz()
+    if out["mode"] == "pane" and not out["pane_id"]:
+        out["mode"] = DEFAULTS["mode"]
+        if "mode" not in invalid:
+            invalid.append("mode")
+    pending = stored.get("pending_catch_up", False)
+    out["pending_catch_up"] = pending if isinstance(pending, bool) else False
+    if not isinstance(pending, bool):
+        invalid.append("pending_catch_up")
+    return out, invalid
 
 
 def _check_word(key: str, value: str) -> None:
@@ -303,9 +339,18 @@ class _Store:
         return db
 
     def settings(self, workspace: str) -> dict[str, Any] | None:
+        checked = self.settings_checked(workspace)
+        return None if checked is None else checked[0]
+
+    def settings_checked(self, workspace: str) -> tuple[dict[str, Any], list[str]] | None:
+        """Stored settings, re-validated, with the names of fields reset."""
         db = self.db(workspace, create=False)
         stored = db.kv_get(_KV_KEY) if db is not None else None
-        return {**DEFAULTS, **stored} if isinstance(stored, dict) else None
+        if stored is None:
+            return None
+        if not isinstance(stored, dict):
+            return dict(DEFAULTS, pending_catch_up=False), ["*"]
+        return sanitize_stored(stored)
 
     def save_settings(self, workspace: str, settings: dict[str, Any]) -> None:
         db = self.db(workspace, create=True)
@@ -619,6 +664,7 @@ class EvolveService:
         if not os.path.isdir(workspace):
             return {"ok": False, "error": "the workspace folder does not exist", "reason": "workspace_gone"}
         settings = await self._settings(workspace)
+        checked = await asyncio.to_thread(self.store.settings_checked, workspace)
         git = await self.host.git_info(workspace)
         job = await self._job(workspace)
         runs = await asyncio.to_thread(self.store.runs, workspace)
@@ -636,6 +682,8 @@ class EvolveService:
             "runs": runs,
             "legacy": [{"id": j["id"], "name": j["name"], "enabled": j["enabled"]} for j in legacy],
             "template": {"version": evolve_rules.VERSION, "text": evolve_rules.preview()},
+            # Stored fields that failed validation and were reset to defaults.
+            "invalid_settings": checked[1] if checked else [],
         }
 
     async def badge(self, workspace: str) -> dict[str, Any]:
@@ -813,6 +861,9 @@ class EvolveService:
             "extra": settings["extra"],
         }
         fields: dict[str, Any] = {"scope": scope}
+        checked = await asyncio.to_thread(self.store.settings_checked, workspace)
+        if checked and checked[1]:
+            fields["detail"] = "stored settings reset to defaults: " + ", ".join(checked[1])
         try:
             task = evolve_rules.render(render)
         except evolve_rules.UnsafeValue as err:
@@ -822,7 +873,8 @@ class EvolveService:
             entry = self.host.pane(settings["pane_id"])
             if entry is None:
                 mode = "auto"
-                fields["detail"] = "the chosen pane is gone; opened a new pane instead"
+                fields["detail"] = (str(fields.get("detail") or "") + " the chosen pane is gone; "
+                                    "opened a new pane instead").strip()
                 await self._notice(workspace, "fallback_auto", {**run, **fields})
             else:
                 answer = await self.host.send(entry.pane_id, task)

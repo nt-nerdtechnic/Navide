@@ -622,3 +622,51 @@ async def test_a_repository_path_that_cannot_be_quoted_fails_the_run(env) -> Non
     outcome = await env.service.start_run(env.a, "manual")
     assert outcome["status"] == "error" and outcome["reason"] == "unsafe_value"
     assert env.host.opened == []
+
+
+# ── stored settings are validated again on read (security review 3) ────────
+
+
+async def _store_raw(env, ws: str, raw: dict[str, Any]) -> None:
+    db = env.databases.get(ws)
+    env.service.store.db(ws, create=True)
+    db.kv_set("evolve_settings", raw, now=1)
+
+
+async def test_tampered_stored_settings_fall_back_to_defaults_and_are_disclosed(env) -> None:
+    await enable(env, env.a)
+    await _store_raw(env, env.a, {
+        "enabled": "yes", "at": "25:99", "tz": "Mars/Base", "mode": "pane", "pane_id": "",
+        "agent": "claude; rm -rf ~", "model": "opus --yolo", "token_budget": "lots",
+        "max_runs_per_day": 10_000, "max_fixes": -1, "max_minutes": 0, "scope": "everything",
+        "extra": 42, "ledger_plan": "../../etc/passwd", "catch_up": "always", "pending_catch_up": "x",
+    })
+    answer = await env.service.get(env.a)
+    settings = answer["settings"]
+    for key in ("at", "mode", "agent", "model", "token_budget", "max_runs_per_day", "max_fixes",
+                "max_minutes", "scope", "extra", "ledger_plan", "catch_up"):
+        assert settings[key] == ev.DEFAULTS[key], key
+    assert settings["enabled"] is False and settings["pending_catch_up"] is False
+    assert settings["tz"] and settings["tz"] != "Mars/Base"
+    assert set(answer["invalid_settings"]) >= {"enabled", "at", "tz", "mode", "agent", "model", "token_budget",
+                                               "max_runs_per_day", "max_fixes", "max_minutes", "scope",
+                                               "extra", "ledger_plan", "catch_up"}
+
+
+async def test_a_run_uses_the_repaired_settings(env) -> None:
+    await enable(env, env.a)
+    await _store_raw(env, env.a, {"enabled": True, "agent": "evil; x", "scope": "everything",
+                                  "token_budget": -5, "mode": "pane", "pane_id": "p\nq"})
+    outcome = await env.service.start_run(env.a, "manual")
+    assert outcome["status"] == "ok"
+    opened = env.host.opened[0]
+    assert opened["agent"] == "claude"
+    assert "200000 tokens" in opened["task"] and "PROPOSALS ONLY" not in opened["task"]
+    run = (await env.service.get(env.a))["running"]
+    assert "reset to defaults" in run["detail"]
+
+
+async def test_valid_stored_settings_read_back_unchanged(env) -> None:
+    answer = await enable(env, env.a, at="06:45", token_budget=123_000, scope="propose", extra="hi")
+    again = await env.service.get(env.a)
+    assert again["settings"] == answer["settings"] and again["invalid_settings"] == []
