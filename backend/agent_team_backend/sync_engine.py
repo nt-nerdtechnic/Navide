@@ -524,6 +524,10 @@ class SyncEngine:
         self._locks: dict[str, asyncio.Lock] = {}
         #: Rounds started by ``_kick``, held so they are not collected mid-run.
         self._kicked: set[asyncio.Task[Any]] = set()
+        #: Per scope, the items the running round could not take or send, by
+        #: reason ("refused", "held", "tooLarge"). Filled from worker threads,
+        #: read once the round ends; one round per scope runs at a time.
+        self._notes: dict[str, dict[str, list[str]]] = {}
 
     def register(self, adapter: ScopeAdapter) -> None:
         if adapter.scope not in SCOPES + INTERNAL_SCOPES:
@@ -752,6 +756,21 @@ class SyncEngine:
                 held = adapter.apply(item_id, remote) is not False
             except DeferItem:
                 raise _HoldPull(rev) from None
+            except Exception as err:  # noqa: BLE001 - a refusal, see below
+                if _sensitive(adapter):
+                    raise
+                log.warning("%s refused %s: %s", scope, item_id, err)
+                held = False
+            if not held and not _sensitive(adapter):
+                # A refusal of an ordinary scope records nothing. Writing the
+                # rev down with an empty hash read, on the next push, as "this
+                # machine deleted it" (absent from the snapshot) or "this
+                # machine edited it" (an older copy still there) — and either
+                # one went up and erased the record on the device that wrote
+                # it. Leaving the agreed state as it was means neither: the
+                # item is listed as refused and waits for its next change.
+                self._note(scope, "refused", item_id)
+                return False
         self._store.set_state(
             scope,
             item_id,
@@ -761,6 +780,11 @@ class SyncEngine:
             sealed_kid=_kid_of(body) if (held and not deleted) else "",
         )
         return held
+
+    def _note(self, scope: str, reason: str, item_id: str) -> None:
+        ids = self._notes.setdefault(scope, {}).setdefault(reason, [])
+        if item_id not in ids:
+            ids.append(item_id)
 
     def _origin(self, raw: dict[str, Any], *, scope: str, item_id: str) -> str:
         """Whether the record provably came from the device it names.
@@ -1077,12 +1101,16 @@ class SyncEngine:
         if keep == KEEP_REMOTE:
             remote = row["remote"]
             try:
-                adapter.apply(item_id, remote)
+                refused = adapter.apply(item_id, remote) is False
             except DeferItem as err:
                 # Its files are still downloading. Keeping the conflict is the
                 # safe answer: marking it agreed now would push this machine's
                 # old files over the copy that was just chosen.
                 raise SyncError(f"{scope}/{item_id} is still downloading; try again shortly") from err
+            if refused:
+                # Marking it agreed would push this machine's copy over the one
+                # just chosen, exactly as above. The conflict stays.
+                raise SyncError(f"{scope}/{item_id} could not be written here; the conflict stays open")
             # Recorded under the key the winning body actually came sealed
             # with (empty when unknown), so a copy under a retired key is
             # still re-sealed by the next push rather than taken as current.

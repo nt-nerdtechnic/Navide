@@ -118,3 +118,67 @@ async def test_a_tombstone_from_an_unknown_device_for_an_item_we_lack_is_taken(t
     _forged(server, "gone", device="dev-stranger", deleted=True)
     await b.sync()
     assert b.store.conflicts("prompts") == []
+
+
+# ── C-1 / S-4 / M-3: an adapter that refuses a record ────────────────────────
+class _Refusing:
+    """Wraps a device's adapter so its ``apply`` refuses chosen items."""
+
+    def __init__(self, device: Device, refuse: set[str], *, raises: bool = False) -> None:
+        self.inner = device.adapter.apply
+        self.refuse = refuse
+        self.raises = raises
+        device.adapter.apply = self.apply
+
+    def apply(self, item_id, payload):
+        if item_id in self.refuse:
+            if self.raises:
+                raise ValueError("not here")
+            return False
+        return self.inner(item_id, payload)
+
+
+@pytest.mark.parametrize("raises", [False, True])
+async def test_a_refused_new_item_is_never_turned_into_a_delete(tmp_path, account_key, raises):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    _Refusing(b, {"y"}, raises=raises)
+    await b.sync()
+    await b.sync()
+    assert not server.rows[("prompts", "y")]["deleted"]
+    assert b.store.state("prompts", "y") is None
+
+
+async def test_a_refused_update_does_not_push_the_old_copy_back(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    await b.sync()
+    a.adapter.items["x"] = {"v": 2}
+    await a.sync()
+    _Refusing(b, {"x"})
+    await b.sync()
+    await b.sync()
+    await a.sync()
+    assert a.adapter.items == {"x": {"v": 2}}
+    assert b.adapter.items == {"x": {"v": 1}}
+
+
+async def test_keeping_a_remote_copy_the_adapter_refuses_keeps_the_conflict(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    await b.sync()
+    a.adapter.items["x"] = {"v": 2}
+    b.adapter.items["x"] = {"v": 3}
+    await a.sync()
+    await b.sync()
+    assert b.store.conflict_ids("prompts") == {"x"}
+    _Refusing(b, {"x"})
+    with pytest.raises(sync_engine.SyncError):
+        b.engine.resolve("prompts", "x", sync_engine.KEEP_REMOTE)
+    assert b.store.conflict_ids("prompts") == {"x"}
