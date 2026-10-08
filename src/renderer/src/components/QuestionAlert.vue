@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { extractDropPaths, stabilizeDroppedPaths } from '../lib/drop'
 import { blockTourWhile } from '../composables/useTourBlockers'
 
@@ -168,7 +169,7 @@ const queueBadge = computed(() =>
         <!-- Auto-answer status bar -->
         <div v-if="autoMode" class="auto-bar">
           <span v-if="!autoText" class="auto-spinner">🤖 Auto-answering via LLM…</span>
-          <span v-else class="auto-answer-preview">🤖 Auto-answer: {{ autoText.slice(0, 120) }}{{ autoText.length > 120 ? '…' : '' }}</span>
+          <span v-else class="auto-answer-preview" v-truncate="`🤖 Auto-answer: ${autoText}`">🤖 Auto-answer: {{ autoText.slice(0, 120) }}{{ autoText.length > 120 ? '…' : '' }}</span>
         </div>
 
         <footer>

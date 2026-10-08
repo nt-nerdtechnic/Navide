@@ -6,6 +6,7 @@
 // a lock and a 「系統」 tag, no toggle / run-now / edit / adopt / keep /
 // retarget, and one link that opens the managing workspace's evolve panel.
 import { computed } from 'vue'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { useI18n } from 'vue-i18n'
 import type { SchedulerJobsApi } from '../composables/useSchedulerJobs'
 import { openEvolvePanel } from '../composables/useEvolve'
@@ -41,10 +42,10 @@ function manage(): void {
       <span class="sj-dot" :class="light" data-test="light" />
       <template v-if="system">
         <span class="sj-lock" data-test="lock" aria-hidden="true">🔒</span>
-        <span class="sj-name sj-name-ro" data-test="system-name" :title="t('scheduler.system.locked-title')">{{ job.name }}</span>
+        <span class="sj-name sj-name-ro" v-truncate data-test="system-name" :title="t('scheduler.system.locked-title')">{{ job.name }}</span>
         <span class="sj-tag sj-system" data-test="system-tag">{{ t('scheduler.system.tag') }}</span>
       </template>
-      <button v-else class="sj-name" :title="t('scheduler.edit')" @click="$emit('edit', job)">{{ job.name }}</button>
+      <button v-else class="sj-name" v-truncate :title="t('scheduler.edit')" @click="$emit('edit', job)">{{ job.name }}</button>
       <span v-if="system && light === 'err'" class="sj-fail" data-test="fail-pill">
         <span class="sj-fail-count">{{ t('scheduler.failed', { n: job.state?.consecutive_errors ?? 0 }) }}</span>
       </span>
@@ -63,7 +64,7 @@ function manage(): void {
       <span v-else-if="light === 'skip' && !gone" class="sj-tag" data-test="skip-tag">
         {{ api.skipLabel(job) }}
       </span>
-      <span v-if="owner" class="sj-owner" data-test="owner" :title="api.ownerTitle(job)">{{ owner }}</span>
+      <span v-if="owner" class="sj-owner" v-truncate data-test="owner" :title="api.ownerTitle(job)">{{ owner }}</span>
       <span v-if="job.owner_gone && !system" class="sj-claim sj-orphan" data-test="owner-gone" :title="t('scheduler.owner.gone-title')">
         {{ t('scheduler.owner.gone') }}
         <button class="sj-claim-btn" data-test="adopt" :disabled="busy" @click="api.claim(job, 'adopt')">
@@ -105,7 +106,7 @@ function manage(): void {
       <span class="sj-desc" data-test="desc">{{ desc }}</span>
       <span v-if="backoff" class="sj-when" data-test="when">· {{ backoff }}</span>
       <span class="sj-sep">·</span>
-      <span class="sj-target" data-test="target">{{ target }}</span>
+      <span class="sj-target" v-truncate data-test="target">{{ target }}</span>
       <template v-if="updatedBy">
         <span class="sj-sep">·</span>
         <span class="sj-updated" data-test="updated-by">{{ updatedBy }}</span>

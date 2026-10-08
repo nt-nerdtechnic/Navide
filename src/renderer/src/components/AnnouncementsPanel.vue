@@ -5,7 +5,7 @@
 // Purely prop/emit driven: the feed and the updater actions live in App.vue, so
 // this component only decides layout, expansion and which button a row offers.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { i18n } from '@navide/plugin-ui/foundation'
+import { i18n, vTruncate } from '@navide/plugin-ui/foundation'
 import type {
   Announcement,
   AnnouncementActionSpec,
@@ -133,7 +133,7 @@ function fmtTime(ts: number): string {
   <div class="an-backdrop" @click="emit('close')" />
   <div class="an-pop nv-popover" @click.stop>
     <div class="an-head">
-      <span class="an-head-title">{{ $t('announce.title') }}</span>
+      <span class="an-head-title" v-truncate>{{ $t('announce.title') }}</span>
       <button class="an-btn" data-act="mark-all" @click="emit('mark-all-read')">
         {{ $t('announce.mark-all-read') }}
       </button>

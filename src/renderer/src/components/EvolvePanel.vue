@@ -9,6 +9,7 @@
 // settings and history (`evolve.get` / `evolve.set` / `evolve.run_now`); this
 // keeps an editable draft and sends only what changed.
 import { computed, ref, watch } from 'vue'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import {
@@ -327,7 +328,7 @@ async function openProposal(rel: string): Promise<void> {
       >
         <div class="ev-head">
           <span class="ev-title">✦ {{ t('evolve.panel.title') }}</span>
-          <span class="ev-ws" :title="workspace">
+          <span class="ev-ws" v-truncate :title="workspace">
             <b>{{ workspaceName }}</b> · {{ workspace }}
             <template v-if="state">
               · <span data-test="git">{{ isRepo ? `git ${state.git.branch}` : t('evolve.panel.not-git') }}</span>
