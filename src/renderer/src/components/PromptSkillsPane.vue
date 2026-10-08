@@ -15,7 +15,7 @@ import { usePromptSkills } from '../composables/usePromptSkills'
 import { reorderByIds } from '../lib/paneOrder'
 import {
   PROMPT_SKILL_ICONS,
-  nextSkillId,
+  newSkillId,
   normalizeCustomIcon,
   promptSkillIconGlyph,
   type PromptSkill,
@@ -107,7 +107,7 @@ function createSkill(): void {
   const ids = skills.value.map((s) => s.id)
   const name = t('settings.prompts.new-name')
   const skill: PromptSkill = {
-    id: nextSkillId(ids, name),
+    id: newSkillId(ids, name),
     name,
     icon: 'edit',
     description: '',
@@ -127,7 +127,7 @@ function createSkill(): void {
 function duplicate(skill: PromptSkill): void {
   const copy: PromptSkill = {
     ...skill,
-    id: nextSkillId(skills.value.map((s) => s.id), `${skill.id}-copy`),
+    id: newSkillId(skills.value.map((s) => s.id), `${skill.id}-copy`),
     name: t('settings.prompts.copy-name', { name: skill.name }),
     isDefault: false,
   }
