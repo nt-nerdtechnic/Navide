@@ -6219,7 +6219,18 @@
       "rotate-cancel": "キャンセル",
       "rotate-hint": "ローテーションすると現在のキーが置き換わり、同期済みの全データが新しいキーで再暗号化されます。他のデバイスは次回のキー交換時に新しいキーを受け取ります。キーの漏洩が疑われる場合に使用してください。",
       "legacy-key": "アカウントに関連付ける前の同期キーが、このデバイスにあります。このアカウントで使用すると、そのキーで同期したデータを引き続き読み取れます。",
-      "legacy-key-adopt": "このアカウントで使用"
+      "legacy-key-adopt": "このアカウントで使用",
+      "scope-all": "すべてのセクション",
+      "result-ok": "取得 {pulled} 件、送信 {pushed} 件。",
+      "result-conflicts": "{count} 件があなたの判断を待っています。",
+      "result-error": "失敗：{error}",
+      "skipped-not-connected": "スキップ — 未接続です。",
+      "skipped-no-key": "スキップ — このデバイスには同期キーがありません。",
+      "skipped-unsupported": "スキップ — サーバーはこのセクションのファイルを保存できません。",
+      "skipped-other": "スキップ（{reason}）。",
+      "result-held": "待機中、まだ適用されていません：{items}",
+      "result-refused": "このデバイスでは適用できません：{items}",
+      "result-too-large": "大きすぎて同期できません：{items}"
     },
     "sharing": {
       "intro": "この 4 つの項目をマシン間で移す方法は、ファイルを受け渡す方法と、共通のアカウントを使う方法の 2 つです。",

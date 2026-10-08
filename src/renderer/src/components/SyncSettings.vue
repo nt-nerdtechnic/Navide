@@ -35,6 +35,26 @@ interface Conflict {
   sealed?: boolean
 }
 
+/** One scope's outcome of a sync round, as sync.now returns it. */
+interface ScopeResult {
+  scope: string
+  ok?: boolean
+  error?: string
+  skipped?: string
+  pulled?: number
+  pushed?: number
+  conflicts?: number
+  held?: string[]
+  refused?: string[]
+  tooLarge?: string[]
+  at?: number
+}
+
+interface ResultLine {
+  text: string
+  error?: boolean
+}
+
 const props = defineProps<{ backend: Backend }>()
 const { t } = useI18n()
 
@@ -48,6 +68,8 @@ const linkState = ref('')
 const conflicts = ref<Conflict[]>([])
 const busy = ref('')
 const error = ref('')
+/** The latest outcome per scope ('all' when the round never reached one). */
+const results = ref<Record<string, ScopeResult>>({})
 
 /** Scopes whose adapter is not shipped yet still list, but cannot be turned on.
  *  Skill *content* is a later phase; what ships here is the decision layer.
@@ -65,6 +87,77 @@ const connected = computed(() => linkState.value === 'connected')
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+const SKIP_REASONS: ReadonlySet<string> = new Set(['not-connected', 'no-key', 'unsupported'])
+
+function itemIds(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : []
+}
+
+function toResult(value: unknown): ScopeResult | null {
+  if (!isRecord(value) || typeof value.scope !== 'string' || !value.scope) return null
+  return {
+    scope: value.scope,
+    ok: typeof value.ok === 'boolean' ? value.ok : undefined,
+    error: typeof value.error === 'string' && value.error ? value.error : undefined,
+    skipped: typeof value.skipped === 'string' && value.skipped ? value.skipped : undefined,
+    pulled: Number(value.pulled ?? 0) || 0,
+    pushed: Number(value.pushed ?? 0) || 0,
+    conflicts: Number(value.conflicts ?? 0) || 0,
+    held: itemIds(value.held),
+    refused: itemIds(value.refused),
+    tooLarge: itemIds(value.tooLarge),
+    at: typeof value.at === 'number' ? value.at : undefined,
+  }
+}
+
+/** Record one scope's outcome. A switched-off scope's "skipped" is dropped
+ *  rather than shown: off is the default, not something to report. */
+function noteResult(value: unknown): void {
+  const result = toResult(value)
+  if (!result) return
+  const next = { ...results.value }
+  if (result.skipped === 'disabled') delete next[result.scope]
+  else next[result.scope] = result
+  results.value = next
+}
+
+function resultLines(r: ScopeResult): ResultLine[] {
+  if (r.error) return [{ text: t('settings.sync.result-error', { error: r.error }), error: true }]
+  if (r.skipped) {
+    return [
+      {
+        text: SKIP_REASONS.has(r.skipped)
+          ? t('settings.sync.skipped-' + r.skipped)
+          : t('settings.sync.skipped-other', { reason: r.skipped }),
+      },
+    ]
+  }
+  const lines: ResultLine[] = [
+    { text: t('settings.sync.result-ok', { pulled: r.pulled ?? 0, pushed: r.pushed ?? 0 }) },
+  ]
+  if (r.conflicts) lines.push({ text: t('settings.sync.result-conflicts', { count: r.conflicts }) })
+  if (r.held?.length) lines.push({ text: t('settings.sync.result-held', { items: r.held.join(', ') }) })
+  if (r.refused?.length) {
+    lines.push({ text: t('settings.sync.result-refused', { items: r.refused.join(', ') }), error: true })
+  }
+  if (r.tooLarge?.length) {
+    lines.push({ text: t('settings.sync.result-too-large', { items: r.tooLarge.join(', ') }), error: true })
+  }
+  return lines
+}
+
+/** Results in the order the scopes are listed, the catch-all row first. */
+const resultRows = computed(() => {
+  const order = ['all', ...available.value]
+  return Object.values(results.value).sort(
+    (a, b) => (order.indexOf(a.scope) + 1 || 999) - (order.indexOf(b.scope) + 1 || 999),
+  )
+})
+
+function scopeLabel(scope: string): string {
+  return t('settings.sync.scope-' + scope)
 }
 
 function toScopes(value: unknown): Record<string, boolean> {
@@ -137,8 +230,9 @@ async function syncNow(): Promise<void> {
   busy.value = 'all'
   error.value = ''
   try {
-    const resp = await props.backend.send('sync.now', {})
+    const resp = await props.backend.send<{ results?: unknown }>('sync.now', {})
     if (!resp.ok) error.value = resp.error?.message ?? t('settings.sync.error-load')
+    else if (Array.isArray(resp.payload?.results)) resp.payload.results.forEach(noteResult)
     await loadConflicts()
   } catch (err) {
     error.value = String(err)
@@ -282,6 +376,18 @@ onMounted(load)
       </button>
     </div>
 
+    <ul v-if="resultRows.length" class="sync-results">
+      <li v-for="r in resultRows" :key="r.scope" class="sync-result">
+        <strong>{{ scopeLabel(r.scope) }}</strong>
+        <span
+          v-for="(line, i) in resultLines(r)"
+          :key="i"
+          :class="['sync-result-line', { 'sync-result-error': line.error }]"
+          >{{ line.text }}</span
+        >
+      </li>
+    </ul>
+
     <!-- The account key: which one is active (by id, never the key), the
          one-time adoption of a key from before accounts were bound, and
          rotation. -->
@@ -354,6 +460,30 @@ onMounted(load)
 }
 .sync-actions {
   margin-top: 10px;
+}
+.sync-results {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: var(--font-row-desc);
+  color: var(--text-secondary);
+}
+.sync-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 2px 0;
+  min-width: 0;
+}
+.sync-result strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.sync-result-line {
+  overflow-wrap: anywhere;
+}
+.sync-result-error {
+  color: var(--text-danger, #e07060);
 }
 .sync-key {
   margin-top: 12px;

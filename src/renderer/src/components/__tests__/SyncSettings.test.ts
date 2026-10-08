@@ -36,7 +36,14 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
   const send = vi.fn(async (type: string, _payload?: unknown) => responses[type])
-  return { backend: { send } as never, send }
+  const handlers = new Map<string, Set<(payload: unknown) => void>>()
+  const on = vi.fn((type: string, fn: (payload: unknown) => void) => {
+    if (!handlers.has(type)) handlers.set(type, new Set())
+    handlers.get(type)!.add(fn)
+    return () => handlers.get(type)?.delete(fn)
+  })
+  const emit = (type: string, payload: unknown) => handlers.get(type)?.forEach((fn) => fn(payload))
+  return { backend: { send, on } as never, send, on, emit, handlers }
 }
 
 describe('SyncSettings', () => {
@@ -310,6 +317,65 @@ describe('SyncSettings', () => {
     expect(wrapper.text()).toContain('GITHUB_TOKEN')
     expect(wrapper.text()).toContain('Authorization')
     expect(wrapper.text()).toContain('npx')
+  })
+
+  // X-5: "Sync now" used to look only at resp.ok, so a scope that failed,
+  // was skipped or left items behind looked exactly like one that synced.
+  it('shows what each scope did after "Sync now", not only that the call returned', async () => {
+    const { backend } = mockBackend({
+      'sync.now': {
+        ok: true,
+        payload: {
+          results: [
+            { scope: 'prompts', error: 'server said no' },
+            { scope: 'mcp', skipped: 'no-key' },
+            {
+              scope: 'skills',
+              pulled: 1,
+              pushed: 2,
+              conflicts: 0,
+              held: ['waiting-skill'],
+              refused: ['refused-skill'],
+              tooLarge: ['huge-skill'],
+            },
+            { scope: 'memory', skipped: 'disabled' },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.get('.sync-actions button').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    // A switched-off scope says nothing: off is the default, not news.
+    expect(rows).toHaveLength(3)
+    expect(rows[0].text()).toContain('Prompts')
+    expect(rows[0].text()).toContain('server said no')
+    expect(rows[0].find('.sync-result-error').exists()).toBe(true)
+    expect(rows[1].text()).toContain('no sync key')
+    expect(rows[2].text()).toContain('Pulled 1, pushed 2')
+    expect(rows[2].text()).toContain('waiting-skill')
+    expect(rows[2].text()).toContain('refused-skill')
+    expect(rows[2].text()).toContain('huge-skill')
+  })
+
+  it('says "not connected" when Sync now could not reach the server', async () => {
+    const { backend } = mockBackend({
+      'sync.now': { ok: true, payload: { results: [{ scope: 'all', skipped: 'not-connected' }] } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.get('.sync-actions button').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('All sections')
+    expect(rows[0].text()).toContain('not connected')
   })
 
   it('shows the active key by id and rotates only on the second click', async () => {
