@@ -33,6 +33,7 @@ import yaml
 from send2trash import send2trash
 
 from . import native_skills, osplat
+from .osplat.spec import windows_refused_file_name
 from .applog import app_data_dir
 
 log = logging.getLogger("agent_team_backend.skills_store")
@@ -1432,14 +1433,12 @@ def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: b
     directories = set(directories)
     if files & directories:
         raise SkillValidationError("skill path is both a file and directory")
-    reserved = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
-                *(f"lpt{i}" for i in range(1, 10))}
     for relative in files | directories:
         if _safe_relative(relative, allow_hidden=allow_hidden) is None or ":" in relative:
             raise SkillValidationError("invalid skill bundle path")
         parts = relative.split("/")
         for index, part in enumerate(parts):
-            if part.endswith((".", " ")) or part.split(".")[0].casefold() in reserved:
+            if windows_refused_file_name(part):
                 raise SkillValidationError(f"nonportable skill path: {relative}")
             prefix = "/".join(parts[:index + 1])
             key = unicodedata.normalize("NFC", prefix).casefold()
