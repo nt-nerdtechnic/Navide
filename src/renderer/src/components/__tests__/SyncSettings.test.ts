@@ -466,6 +466,32 @@ describe('SyncSettings', () => {
     expect(wrapper.find('.sync-account').exists()).toBe(false)
   })
 
+  // The backend also reports its internal skill-files scope; it must read as
+  // a named section, not as a missing translation key.
+  it('names the skill-files scope in a live result', async () => {
+    const { backend, emit } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    emit('sync.result', {
+      scope: 'skill-files',
+      ok: true,
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      held: [],
+      refused: [],
+      tooLarge: ['big-skill'],
+      at: '2026-10-09T05:00:00Z',
+    })
+    await flushPromises()
+
+    const row = wrapper.get('.sync-result')
+    expect(row.text()).toContain('Skill files')
+    expect(row.text()).not.toContain('settings.sync')
+    expect(row.text()).toContain('big-skill')
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

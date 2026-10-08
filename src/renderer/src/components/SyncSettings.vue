@@ -47,7 +47,8 @@ interface ScopeResult {
   held?: string[]
   refused?: string[]
   tooLarge?: string[]
-  at?: number
+  /** ISO-8601 UTC. */
+  at?: string
 }
 
 interface ResultLine {
@@ -110,7 +111,7 @@ function toResult(value: unknown): ScopeResult | null {
     held: itemIds(value.held),
     refused: itemIds(value.refused),
     tooLarge: itemIds(value.tooLarge),
-    at: typeof value.at === 'number' ? value.at : undefined,
+    at: typeof value.at === 'string' ? value.at : undefined,
   }
 }
 
@@ -152,7 +153,7 @@ function resultLines(r: ScopeResult): ResultLine[] {
 
 /** Results in the order the scopes are listed, the catch-all row first. */
 const resultRows = computed(() => {
-  const order = ['all', ...available.value]
+  const order = ['all', ...available.value, 'skill-files']
   return Object.values(results.value).sort(
     (a, b) => (order.indexOf(a.scope) + 1 || 999) - (order.indexOf(b.scope) + 1 || 999),
   )
