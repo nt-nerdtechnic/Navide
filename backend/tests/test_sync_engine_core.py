@@ -263,3 +263,83 @@ async def test_a_deferred_item_is_reported_held(tmp_path, account_key):
     b.adapter.apply = defer
     result = await b.sync()
     assert result["held"] == ["y"]
+
+
+# ── ACC: account scope ───────────────────────────────────────────────────────
+async def test_a_server_cursor_behind_ours_is_a_reset_and_everything_is_read_again(
+    tmp_path, account_key
+):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}, "y": {"v": 2}, "z": {"v": 3}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    await b.sync()
+    assert b.store.cursor("prompts") == 3
+    # A different account (or a reset server) behind the same link: rev 1.
+    fresh = FakeServer()
+    c = Device(tmp_path, fresh, "dev-c", {"w": {"v": 9}})
+    await c.sync()
+    b.engine._request = _as_device("dev-b", fresh)
+    await b.sync()
+    assert b.adapter.items["w"] == {"v": 9}
+    # B's own items went up to the new server as new ones, not as edits of
+    # revs that server never issued.
+    assert {i for (_s, i) in fresh.rows} == {"w", "x", "y", "z"}
+
+
+def _as_device(name: str, server: FakeServer):
+    async def request(msg_type, payload):
+        if msg_type == "sync.push":
+            for item in payload["items"]:
+                item["deviceId"] = name
+        return await server.request(msg_type, payload)
+
+    return request
+
+
+async def _rev0_conflict(tmp_path) -> tuple[FakeServer, Device]:
+    """B edits an item whose cloud row has vanished: the server answers rev 0."""
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"other": {"v": 0}})
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    await a.sync()  # keeps the server's cursor ahead, so this is no reset
+    del server.rows[("prompts", "x")]
+    b.adapter.items["x"] = {"v": 2}
+    await b.sync()
+    return server, b
+
+
+async def test_a_conflict_with_a_row_the_cloud_never_had_says_so(tmp_path, account_key):
+    _server, b = await _rev0_conflict(tmp_path)
+    [row] = b.store.conflicts("prompts")
+    assert row["itemId"] == "x" and row["remoteAbsent"] is True
+
+
+async def test_keeping_the_cloud_copy_of_nothing_never_deletes_the_local_item(tmp_path, account_key):
+    _server, b = await _rev0_conflict(tmp_path)
+    with pytest.raises(sync_engine.SyncError):
+        b.engine.resolve("prompts", "x", sync_engine.KEEP_REMOTE)
+    assert b.adapter.items["x"] == {"v": 2}
+    assert b.store.conflict_ids("prompts") == {"x"}
+
+
+async def test_keeping_the_local_copy_of_a_vanished_row_puts_it_back(tmp_path, account_key):
+    server, b = await _rev0_conflict(tmp_path)
+    b.engine.resolve("prompts", "x", sync_engine.KEEP_LOCAL)
+    await b.sync()
+    assert not server.rows[("prompts", "x")]["deleted"]
+
+
+async def test_keeping_an_unchanged_local_copy_pushes_it_again(tmp_path, account_key):
+    # The unproven tombstone case: B never edited x, so its copy still equals
+    # what was agreed — and "keep mine" must still re-create it in the cloud.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    b.engine._signing_key_for = lambda d: "" if d == "dev-stranger" else b.own_key
+    await b.sync()
+    _forged(server, "x", device="dev-stranger", deleted=True)
+    await b.sync()
+    b.engine.resolve("prompts", "x", sync_engine.KEEP_LOCAL)
+    await b.sync()
+    assert not server.rows[("prompts", "x")]["deleted"]

@@ -413,6 +413,11 @@ class SyncStore:
                     "remoteDevice": str(r[5]),
                     "seenAt": int(r[6]),
                     "sealed": sealed,
+                    # The server answered rev 0: it holds no row for this item
+                    # at all (it never had one, or it is another account's
+                    # server). "Keep the cloud copy" would mean deleting the
+                    # local one for nothing, so resolve refuses it.
+                    "remoteAbsent": int(r[4]) == 0,
                 }
             )
         return out
@@ -642,11 +647,25 @@ class SyncEngine:
         scope = adapter.scope
         applied = 0
         self._cursor_barrier.pop(scope, None)
+        reset = False
         while True:
             since = self._store.cursor(scope)
             reply = _payload(
                 await self._request("sync.pull", {"scope": scope, "since": since, "limit": PULL_PAGE})
             )
+            if not reset and since > 0 and int(reply.get("cursor") or 0) < since:
+                # The server has never issued the revs this machine has read up
+                # to: another account behind the same link, or a server that
+                # started over. Everything recorded against the old revs is
+                # about rows that are not there, so the scope is read again from
+                # the start and its items go up as new ones. Once per round.
+                log.warning(
+                    "sync.pull on %s: the server's cursor is behind ours; starting %s over",
+                    scope, scope,
+                )
+                self._store.forget(scope)
+                reset = True
+                continue
             items = reply.get("items")
             items = items if isinstance(items, list) else []
             count, held_rev = await asyncio.to_thread(self._apply_page, adapter, items)
@@ -1163,6 +1182,11 @@ class SyncEngine:
             raise SyncError(f"no unresolved conflict for {scope}/{item_id}")
         if keep == KEEP_REMOTE:
             remote = row["remote"]
+            if int(row["remoteRev"]) == 0:
+                raise SyncError(
+                    f"the cloud holds nothing for {scope}/{item_id}; keep the local copy "
+                    "to put it back, or remove it here yourself"
+                )
             try:
                 refused = adapter.apply(item_id, remote) is False
             except DeferItem as err:
@@ -1186,12 +1210,15 @@ class SyncEngine:
                 sealed_kid="" if remote is None else str(row.get("remoteKid") or ""),
             )
         elif keep == KEEP_LOCAL:
-            state = self._store.state(scope, item_id)
+            # The agreed hash is cleared, not kept: the local copy may well be
+            # the one that was agreed before (a delete arrived over an item
+            # nobody here touched), and an unchanged item is never pushed. The
+            # choice is only carried up if the next push sees it as changed.
             self._store.set_state(
                 scope,
                 item_id,
                 rev=int(row["remoteRev"]),
-                synced_hash=state.synced_hash if state else "",
+                synced_hash="",
                 deleted=False,
             )
         else:
