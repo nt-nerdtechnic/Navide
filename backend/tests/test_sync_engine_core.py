@@ -1007,3 +1007,73 @@ async def test_errors_are_reported_by_class_not_by_their_text(tmp_path, account_
     assert result["ok"] is False
     assert "sk-live-123" not in result["error"] and "RuntimeError" in result["error"]
     assert "sk-live-123" not in caplog.text
+
+
+# ── round 3: what the engine remembers in memory belongs to one account ──────
+async def test_a_delete_remembered_under_one_account_never_reaches_the_next(tmp_path, account_key):
+    srv_a = FakeServer()
+    b = Device(tmp_path, srv_a, "dev-b", {"x": {"v": "A"}, "y": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("x")
+    forward = b.engine._request
+    pulls = 0
+
+    async def request_a(msg_type, payload):
+        nonlocal pulls
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            pulls += 1
+            if pulls == 1:
+                reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+            else:
+                raise ConnectionError("link dropped during the reset round")
+        return reply
+
+    b.engine._request = request_a
+    with pytest.raises(ConnectionError):
+        await b.sync()
+    b.store.new_generation()      # the account changes
+    b.store.forget("prompts")
+    srv_b = FakeServer()
+    other = Device(tmp_path, srv_b, "dev-c", {"x": {"v": "B-owned"}})
+    await other.sync()
+    from .test_sync_engine_core import _as_device
+
+    b.engine._request = _as_device("dev-b", srv_b)
+    await b.sync()
+    assert not srv_b.rows[("prompts", "x")]["deleted"]
+    await other.sync()
+    assert other.adapter.items["x"] == {"v": "B-owned"}
+
+
+async def test_a_reset_under_one_account_does_not_throttle_the_next(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    b.engine._last_reset["prompts"] = b.engine._clock()
+    b.store.new_generation()
+    b.store.set_cursor("prompts", 50)  # the next account's server is behind us
+    result = await b.sync()
+    assert not result["resetThrottled"]
+
+
+def test_round_is_current_follows_the_store_generation(tmp_path):
+    import asyncio
+
+    from agent_team_backend.db import Database
+
+    store = sync_engine.SyncStore(Database(tmp_path / "g.db"))
+    assert sync_engine.round_is_current() is True   # outside any round
+    seen: list[bool] = []
+
+    async def inside():
+        token = sync_engine._round_generation.set((store, store.generation))
+        try:
+            seen.append(sync_engine.round_is_current())
+            store.new_generation()
+            seen.append(sync_engine.round_is_current())
+        finally:
+            sync_engine._round_generation.reset(token)
+
+    asyncio.run(inside())
+    assert seen == [True, False]
