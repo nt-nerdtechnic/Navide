@@ -461,3 +461,29 @@ def test_files_that_never_download_stop_holding_the_scope(tmp_path, monkeypatch,
     assert (b.store.root / "big2" / "clip.bin").is_file()
     assert not (b.store.root / "big").exists()
     assert b.adapter.failed() == ["big"]
+
+
+def test_reset_forgets_everything_the_last_account_left(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
+    adapter = sync_scopes.SkillFilesScope()
+
+    async def flow() -> None:
+        await adapter.prepare(lambda *_a: asyncio.sleep(0), lambda: None)
+        started = asyncio.Event()
+
+        async def forever() -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        adapter._start("big", forever)
+        await started.wait()
+        adapter._transfers["big"] = {"direction": "download", "done": 1, "total": 2}
+        adapter._download_failures["big"] = ("d", 3)
+        adapter._oversized.add("huge")
+        task = adapter._tasks["big"]
+        adapter.reset()
+        await asyncio.sleep(0)
+        assert task.cancelled()
+        assert adapter.failed() == [] and adapter.oversized() == []
+        assert adapter.transfer("big") is None and adapter._tasks == {}
+
+    _run(flow())

@@ -619,6 +619,20 @@ class SkillFilesScope:
         """Whether the server this machine last spoke to can hold blobs."""
         return self._layout is not None
 
+    def reset(self) -> None:
+        """Forget what the last account left: running transfers (cancelled),
+        their progress, give-ups and too-large marks. For an account change;
+        the next round asks the server about blobs afresh."""
+        for task in list(self._tasks.values()):
+            if not task.done():
+                _call_on_loop(self._loop, task.cancel)
+        self._tasks.clear()
+        self._transfers.clear()
+        self._last_note.clear()
+        self._download_failures.clear()
+        self._oversized.clear()
+        self._layout = None
+
     def failed(self) -> list[str]:
         """Skills whose files were given up on after repeated failed downloads."""
         return sorted(
