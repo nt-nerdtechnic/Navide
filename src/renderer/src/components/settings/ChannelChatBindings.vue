@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import {
   chatRows,
   type ChannelOverviewBinding,
@@ -152,7 +153,7 @@ function pressUnbind(paneId: string): void {
     <div v-for="{ chat, rows } in rowsByChat" :key="chat.chat_id" class="cb-chat" data-testid="channel-chat" :data-chat-id="chat.chat_id">
       <div class="cb-chat-head">
         <span class="cb-chat-icon" aria-hidden="true">{{ isDirect(chat) ? '💬' : '👥' }}</span>
-        <span class="cb-chat-title" data-testid="channel-chat-title">{{ chatTitle(chat) }}</span>
+        <span class="cb-chat-title" v-truncate data-testid="channel-chat-title">{{ chatTitle(chat) }}</span>
         <span class="cb-chat-kind">{{ kindText(chat) }}</span>
       </div>
       <p v-if="!rows.length" class="cb-unbound" data-testid="channel-chat-unbound">{{ t('channels.bindings.unbound') }}</p>
