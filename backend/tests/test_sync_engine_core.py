@@ -234,13 +234,42 @@ async def test_a_skipped_scope_says_why(tmp_path, account_key):
 async def test_an_item_the_adapter_calls_oversized_is_reported_and_never_sent(tmp_path, account_key):
     server = FakeServer()
     b = Device(tmp_path, server, "dev-b", {"big": {"v": 1}, "small": {"v": 2}})
-    b.adapter.oversized = lambda item_id, _payload: item_id == "big"
+    b.adapter.oversized = lambda: ["big"]
     result = await b.sync()
     assert result["tooLarge"] == ["big"]
     assert ("prompts", "big") not in server.rows
     b.adapter.items.pop("small")
     await b.sync()
     assert ("prompts", "big") not in server.rows
+
+
+async def test_an_oversized_item_the_adapter_left_out_of_its_snapshot_is_not_deleted(
+    tmp_path, account_key
+):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"grew": {"v": 1}})
+    await b.sync()
+    # It grew past the limit here: the adapter lists it as oversized and no
+    # longer offers it. That is not a local delete.
+    b.adapter.items.pop("grew")
+    b.adapter.oversized = lambda: ["grew"]
+    result = await b.sync()
+    assert result["tooLarge"] == ["grew"]
+    assert not server.rows[("prompts", "grew")]["deleted"]
+
+
+async def test_items_the_adapter_gave_up_on_are_held_and_given_up_not_refused(
+    tmp_path, account_key
+):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    _Refusing(b, {"y"})  # the adapter's own give-up answers False
+    b.adapter.failed = lambda: ["y"]
+    result = await b.sync()
+    assert result["refused"] == []
+    assert result["held"] == ["y"] and result["gaveUp"] == ["y"]
 
 
 async def test_a_record_over_the_size_limit_is_reported_too_large(tmp_path, account_key, monkeypatch):
