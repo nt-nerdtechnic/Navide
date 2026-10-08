@@ -6,7 +6,12 @@
 // this component only decides layout, expansion and which button a row offers.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
-import type { Announcement, AnnouncementActionSpec, QuotaAnnouncementAction } from '../composables/useAnnouncements'
+import type {
+  Announcement,
+  AnnouncementActionSpec,
+  EvolveAnnouncementAction,
+  QuotaAnnouncementAction,
+} from '../composables/useAnnouncements'
 import { WHATS_NEW_CHROME, pickText } from '../lib/whatsNew'
 
 const props = defineProps<{ items: Announcement[] }>()
@@ -21,6 +26,9 @@ const emit = defineEmits<{
   'quota-action': [action: QuotaAnnouncementAction]
   /** A release row's "Take the tour": the version whose tour to start. */
   tour: [version: string]
+  /** A workspace self-evolution row's button, for App.vue to map onto the
+   *  existing pane actions or the evolve panel. */
+  'evolve-action': [action: EvolveAnnouncementAction]
 }>()
 
 /** Buttons of a row: the typed list, else the single update action. */
@@ -33,6 +41,7 @@ function onAction(action: AnnouncementActionSpec): void {
   if (action.kind === 'download') emit('download')
   else if (action.kind === 'install') emit('install')
   else if (action.kind === 'tour') emit('tour', action.version)
+  else if (action.kind.startsWith('evolve-')) emit('evolve-action', action as EvolveAnnouncementAction)
   else emit('quota-action', action as QuotaAnnouncementAction)
 }
 
@@ -62,6 +71,13 @@ function actionLabel(action: AnnouncementActionSpec): string {
       return action.liveSlotId === null
         ? tq('announce.quota.reconcile', 'Complete reconciliation')
         : tq('announce.quota.reconcile-as', 'The live account is {label}', { label: action.label })
+    case 'evolve-open-pane':
+    case 'evolve-resume-pane':
+    case 'evolve-interrupt':
+    case 'evolve-reclaim':
+    case 'evolve-panel':
+    case 'evolve-result':
+      return i18n.global.t(`evolve.notice.action.${action.kind.slice('evolve-'.length)}`)
   }
 }
 
@@ -74,6 +90,7 @@ function iconOf(item: Announcement): string {
   if (item.kind === 'release') return '🏷'
   if (item.kind === 'quota') return '◔'
   if (item.kind === 'scheduler') return '⏲'
+  if (item.kind === 'evolve') return '✦'
   return '⬆'
 }
 

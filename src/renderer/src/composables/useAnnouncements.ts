@@ -4,6 +4,7 @@ import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { WHATS_NEW, cmpSemver, pickText } from '../lib/whatsNew'
 import type { CandidateTier, ExclusionReason, FailureCause } from '../lib/quotaFailover'
 import type { UpdateState } from '../../../shared/updater'
+import type { EvolveRun } from './useEvolve'
 
 /**
  * Announcements centre — the status-bar feed of version news.
@@ -21,7 +22,7 @@ import type { UpdateState } from '../../../shared/updater'
  * popover read the same feed without prop drilling.
  */
 
-export type AnnouncementKind = 'release' | 'update' | 'quota' | 'scheduler'
+export type AnnouncementKind = 'release' | 'update' | 'quota' | 'scheduler' | 'evolve'
 /** The button an update row offers, when its status affords one. */
 export type AnnouncementAction = 'download' | 'install'
 
@@ -40,7 +41,20 @@ export type QuotaAnnouncementAction =
 /** A release row's "Take the tour": that version's WhatsNewEntry.tour. */
 export type ReleaseTourAction = { kind: 'tour'; version: string }
 
-export type AnnouncementActionSpec = { kind: AnnouncementAction } | QuotaAnnouncementAction | ReleaseTourAction
+/** A workspace self-evolution row's button. Each names the workspace and,
+ *  for the pane buttons, the run's pane; App.vue maps them onto the existing
+ *  pane actions (focus / interrupt / reclaim) or opens the evolve panel. */
+export type EvolveAnnouncementAction = {
+  kind: 'evolve-open-pane' | 'evolve-resume-pane' | 'evolve-interrupt' | 'evolve-reclaim' | 'evolve-panel' | 'evolve-result'
+  workspace: string
+  paneId?: string
+}
+
+export type AnnouncementActionSpec =
+  | { kind: AnnouncementAction }
+  | QuotaAnnouncementAction
+  | ReleaseTourAction
+  | EvolveAnnouncementAction
 
 export interface Announcement {
   /** Stable across renders: `release:<version>`, `update:<version>`,
@@ -322,6 +336,111 @@ function noteSchedulerDisabled(notice: SchedulerDisabledNotice, at: number = Dat
   const id = schedulerAnnouncementId(notice.id, at)
   if (schedulerNotices.value.some((n) => schedulerAnnouncementId(n.notice.id, n.at) === id)) return
   schedulerNotices.value = [{ notice, at }, ...schedulerNotices.value]
+}
+
+// ── Workspace self-evolution ────────────────────────────────────────────────
+
+export type EvolveNoticeKind = 'started' | 'finished' | 'timeout' | 'failed' | 'skipped' | 'fallback_auto' | 'not_git'
+
+/** What the backend's `evolve.notice` broadcast carries. */
+export interface EvolveNotice {
+  workspace: string
+  kind: EvolveNoticeKind
+  run: EvolveRun | null
+}
+
+/** Evolve notices this window heard, newest first. Not persisted: the
+ *  workspace's evolve panel keeps the run history. */
+const evolveNotices = ref<{ notice: EvolveNotice; at: number }[]>([])
+const MAX_EVOLVE_NOTICES = 50
+
+function evolveAnnouncementId(notice: EvolveNotice, at: number): string {
+  return `evolve:${notice.workspace}:${notice.run?.id ?? at}:${notice.kind}`
+}
+
+function workspaceName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
+
+function evolveReason(reason: string | null | undefined): string {
+  if (!reason) return ''
+  const key = `evolve.reason.${reason}`
+  return i18n.global.te(key) ? i18n.global.t(key) : reason
+}
+
+function evolveActions(notice: EvolveNotice): EvolveAnnouncementAction[] {
+  const workspace = notice.workspace
+  const paneId = notice.run?.pane_id || undefined
+  const pane = (kind: EvolveAnnouncementAction['kind']): EvolveAnnouncementAction[] =>
+    paneId ? [{ kind, workspace, paneId }] : []
+  switch (notice.kind) {
+    case 'started':
+    case 'fallback_auto':
+      return pane('evolve-open-pane')
+    case 'finished':
+      return [{ kind: 'evolve-result', workspace }, ...pane('evolve-resume-pane')]
+    case 'timeout':
+      return [...pane('evolve-open-pane'), ...pane('evolve-interrupt'), ...pane('evolve-reclaim')]
+    default:
+      return [{ kind: 'evolve-panel', workspace }]
+  }
+}
+
+function evolveHighlights(notice: EvolveNotice): string[] {
+  const t = i18n.global.t
+  const run = notice.run
+  const pane = run?.pane_name || run?.pane_id || ''
+  const agent = [run?.agent, run?.model].filter(Boolean).join(' · ')
+  switch (notice.kind) {
+    case 'started':
+      return [t('evolve.notice.started-body', { pane, agent })]
+    case 'finished': {
+      const lines: string[] = []
+      if (run?.summary) lines.push(run.summary)
+      lines.push(
+        t('evolve.notice.finished-body', {
+          fixes: run?.commits?.length ?? 0,
+          proposals: run?.proposals?.length ?? 0,
+          tokens: typeof run?.tokens === 'number' ? `${Math.round(run.tokens / 1000)}k` : '—',
+        })
+      )
+      if (run?.reclaimed) lines.push(t('evolve.notice.reclaimed'))
+      return lines
+    }
+    case 'timeout':
+      return [t('evolve.notice.timeout-body')]
+    case 'fallback_auto':
+      return [t('evolve.notice.fallback-body', { pane })]
+    case 'not_git':
+      return [t('evolve.notice.not-git-body')]
+    default: {
+      const why = evolveReason(run?.reason) || run?.detail || ''
+      return why ? [why] : []
+    }
+  }
+}
+
+function evolveItems(): Announcement[] {
+  const t = i18n.global.t
+  return evolveNotices.value.map(({ notice, at }) => ({
+    id: evolveAnnouncementId(notice, at),
+    kind: 'evolve' as const,
+    title: t(`evolve.notice.${notice.kind}`, { workspace: workspaceName(notice.workspace) }),
+    highlights: evolveHighlights(notice),
+    note: notice.run?.detail && notice.kind !== 'failed' && notice.kind !== 'skipped' ? notice.run.detail : undefined,
+    createdAt: at,
+    read: false,
+    actions: evolveActions(notice),
+  }))
+}
+
+/** Record an evolve notice; the same run's same kind twice is one row. */
+function noteEvolveNotice(notice: EvolveNotice, at: number = Date.now()): void {
+  if (!notice?.workspace || !notice.kind) return
+  const id = evolveAnnouncementId(notice, at)
+  if (evolveNotices.value.some((n) => evolveAnnouncementId(n.notice, n.at) === id)) return
+  evolveNotices.value = [{ notice, at }, ...evolveNotices.value].slice(0, MAX_EVOLVE_NOTICES)
 }
 
 /** Live quota incidents by id, newest update first when listed. Not
@@ -643,6 +762,7 @@ const items: ComputedRef<Announcement[]> = computed(() => {
   const locale = i18n.global.locale.value
   const seen = new Set(readIds.value)
   const merged = [
+    ...evolveItems(),
     ...schedulerItems(),
     ...backendItems(),
     ...updateItems(updateSource.value?.state.value ?? null),
@@ -712,6 +832,11 @@ export function __resetQuotaAnnouncementsForTest(): void {
   quotaReadMarks.value = new Map()
 }
 
+/** Test-only: forget every evolve notice (the module is a singleton). */
+export function __resetEvolveAnnouncementsForTest(): void {
+  evolveNotices.value = []
+}
+
 export function useAnnouncements() {
   load()
   return {
@@ -722,6 +847,7 @@ export function useAnnouncements() {
     setUpdateSource,
     noteBackendUpgrade,
     noteSchedulerDisabled,
+    noteEvolveNotice,
     noteQuotaIncident,
     invalidateQuotaActions,
     dismissQuotaIncident,
