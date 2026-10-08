@@ -136,11 +136,23 @@ class StaleRound(SyncError):
     """A round that began under the previous account tried to write."""
 
 
-#: The store generation the running round began under (None outside a round).
-#: Carried into worker threads by ``asyncio.to_thread``, which copies context.
-_round_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+#: The store and the generation the running round began under (None outside a
+#: round). Carried into worker threads by ``asyncio.to_thread``, which copies
+#: context.
+_round_generation: contextvars.ContextVar[tuple[Any, int] | None] = contextvars.ContextVar(
     "sync_round_generation", default=None
 )
+
+
+def round_is_current() -> bool:
+    """Whether the running round (if any) still belongs to the signed-in account.
+
+    For code an adapter runs inside a round that writes outside the store — the
+    detached marks, for one — and must not write for the previous account once
+    the account has changed mid-apply. True outside a round.
+    """
+    began = _round_generation.get()
+    return began is None or began[0].generation == began[1]
 
 
 class DeferItem(Exception):
@@ -319,7 +331,7 @@ class SyncStore:
 
     def _check_round(self) -> None:
         began = _round_generation.get()
-        if began is not None and began != self._generation:
+        if began is not None and began[0] is self and began[1] != self._generation:
             raise StaleRound("the account changed while this round was running; nothing was recorded")
 
     def set_redactor(self, scope: str, fn: Callable[[Any], dict[str, Any] | None]) -> None:
@@ -623,6 +635,8 @@ class SyncEngine:
         self._clock: Callable[[], float] = time.monotonic
         #: Per scope, when it last started over (``_pull``); in memory.
         self._last_reset: dict[str, float] = {}
+        #: The store generation the in-memory bookkeeping above belongs to.
+        self._memory_generation = store.generation
         #: Per scope, local deletes carried across a cursor reset.
         self._reset_deletes: dict[str, set[str]] = {}
         self._adapters: dict[str, ScopeAdapter] = {}
@@ -679,7 +693,7 @@ class SyncEngine:
         # The generation is taken before anything is checked: a round that
         # passed its checks for one account and then waited for the lock
         # while the account changed must find out, not run for the next one.
-        token = _round_generation.set(self._store.generation)
+        token = _round_generation.set((self._store, self._store.generation))
         try:
             adapter = self._adapters.get(scope)
             if adapter is None:
@@ -696,7 +710,25 @@ class SyncEngine:
         finally:
             _round_generation.reset(token)
 
+    def _drop_memory_of_other_accounts(self) -> None:
+        """Forget what is kept in memory about a previous account.
+
+        Deletes remembered across a reset, reset times and deferral backoff
+        all describe items of the account they were gathered under. The store
+        forgets its half on an account change; this half is checked against
+        the store's generation whenever a transfer starts, and dropped whole
+        when it no longer matches — a delete remembered for A must never be
+        sent against B's item of the same name.
+        """
+        if self._memory_generation == self._store.generation:
+            return
+        self._reset_deletes.clear()
+        self._last_reset.clear()
+        self._defers.clear()
+        self._memory_generation = self._store.generation
+
     async def _locked_round(self, scope: str, adapter: ScopeAdapter) -> dict[str, Any]:
+        self._drop_memory_of_other_accounts()
         self._notes[scope] = {}
         # An adapter that needs the server for more than records (blob
         # transfers) is handed the connection here, and may decline the
@@ -1700,7 +1732,7 @@ class SyncEngine:
         local WebSocket could put a credential on the wire while the UI showed
         the scope switched off and said nothing.
         """
-        token = _round_generation.set(self._store.generation)
+        token = _round_generation.set((self._store, self._store.generation))
         try:
             adapter = self._require_adapter(scope)
             self._require_enabled(scope)
@@ -1709,6 +1741,7 @@ class SyncEngine:
             # generation it began with (see ``_round``).
             async with self._locks.setdefault(scope, asyncio.Lock()):
                 self._store._check_round()
+                self._drop_memory_of_other_accounts()
                 wanted = _unique(item_ids)
                 blocked_before = self._store.conflict_ids(scope)
                 pending, built = await asyncio.to_thread(self._prepare_push, adapter)
@@ -1774,7 +1807,7 @@ class SyncEngine:
         down and putting it into use on this machine is the same decision as
         sending one, and it answers to the same switch.
         """
-        token = _round_generation.set(self._store.generation)
+        token = _round_generation.set((self._store, self._store.generation))
         try:
             adapter = self._require_adapter(scope)
             self._require_enabled(scope)
@@ -1783,6 +1816,7 @@ class SyncEngine:
             # generation it began with (see ``_round``).
             async with self._locks.setdefault(scope, asyncio.Lock()):
                 self._store._check_round()
+                self._drop_memory_of_other_accounts()
                 wanted = _unique(item_ids)
                 requested = getattr(adapter, "request_items", None)
                 if requested is not None:
