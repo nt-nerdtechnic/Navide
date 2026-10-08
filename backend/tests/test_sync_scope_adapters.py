@@ -362,3 +362,26 @@ async def test_a_small_skill_keeps_its_executable_bit(tmp_path, account_key, mon
     pushes = server.pushes
     await b.sync(); await a.sync()
     assert server.pushes == pushes  # the bit round-trips without a re-push
+
+
+def test_a_skill_whose_files_are_refused_is_reported_not_held(tmp_path, monkeypatch):
+    """Recording the decision anyway would put an entry without the files in
+    the next snapshot, which pushes up and erases them from the cloud."""
+    store, root = _skills(tmp_path, "B")
+    monkeypatch.setattr(app, "skills_store", store)
+    settings = FakeSettingsStore()
+    monkeypatch.setattr(app, "ui_settings_store", settings)
+    theirs = root / "tool"
+    theirs.mkdir(parents=True)
+    (theirs / "SKILL.md").write_text("---\nname: tool\ndescription: mine\n---\n")  # the user's own, unmarked
+    scope = sync_scopes.SkillsStateScope()
+    payload = {"enabled": True, "targets": None,
+               "content": {"SKILL.md": {"t": "text", "v": "---\nname: tool\ndescription: x\n---\n"}}}
+    assert scope.apply("tool", payload) is False
+    assert (theirs / "SKILL.md").read_text().endswith("mine\n---\n")
+    bad = {"enabled": True, "targets": None, "content": {"../escape": {"t": "text", "v": "x"}}}
+    assert scope.apply("other", bad) is False
+    assert "other" not in scope.snapshot()
+    # A decision with no files still waits in the intent map, as before.
+    assert scope.apply("elsewhere", {"enabled": False, "targets": []}) is not False
+    assert scope.snapshot()["elsewhere"]["enabled"] is False

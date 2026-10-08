@@ -512,38 +512,49 @@ class SkillsStateScope:
         # entries survive for the skills this machine does not hold.
         return without_detached(self.scope, {**self._intent(), **self._present()})
 
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Take one record in. False means this machine refused it and holds
+        nothing for it: a record that is not an object, or files that would
+        not land (the name is the user's own skill here, or a path is unsafe)."""
         intent = self._intent()
         if payload is None:
             intent.pop(item_id, None)
             self._set_intent(intent)
             # The files stay (see ``detach``); they just stop syncing.
             detach(self.scope, item_id, self._present().get(item_id))
-            return
-        attach(self.scope, item_id)
+            return True
         if not isinstance(payload, dict):
             log.warning("skill decision %s arrived as %s", item_id, type(payload).__name__)
-            return
+            return False
         decision = {
             "enabled": bool(payload.get("enabled", True)),
             "targets": payload.get("targets"),
         }
-        intent[item_id] = decision
-        self._set_intent(intent)
         store = self._store()
         content = payload.get("content")
         if isinstance(content, dict):
+            # Files first: a decision recorded for files that did not land
+            # would snapshot as an entry without them, and pushing that up
+            # erases them from the cloud.
             try:
-                store.import_content(item_id, content)
+                landed = bool(store.import_content(item_id, content))
             except Exception as err:  # noqa: BLE001 - a refused write is not fatal
                 log.warning("the files of %s were not written: %s", item_id, err)
+                landed = False
+            if not landed:
+                log.warning("skill %s was not taken in: its files were refused here", item_id)
+                return False
+        attach(self.scope, item_id)
+        intent[item_id] = decision
+        self._set_intent(intent)
         if item_id not in self._present():
-            return  # the skill is not here; the decision waits in the intent map
+            return True  # the skill is not here; the decision waits in the intent map
         try:
             store.set_enabled(item_id, decision["enabled"])
             store.set_targets(item_id, decision["targets"])
         except Exception as err:  # noqa: BLE001 - a skill that moved is not fatal
             log.warning("the synced decision for %s could not be applied: %s", item_id, err)
+        return True
 
 
 #: Manifest format of a ``skill-files`` record.
