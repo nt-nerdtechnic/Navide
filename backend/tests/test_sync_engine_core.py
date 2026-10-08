@@ -182,3 +182,84 @@ async def test_keeping_a_remote_copy_the_adapter_refuses_keeps_the_conflict(tmp_
     with pytest.raises(sync_engine.SyncError):
         b.engine.resolve("prompts", "x", sync_engine.KEEP_REMOTE)
     assert b.store.conflict_ids("prompts") == {"x"}
+
+
+# ── X-5: what a round reports ────────────────────────────────────────────────
+RESULT_KEYS = {"scope", "ok", "pulled", "pushed", "conflicts", "held", "refused", "tooLarge", "at"}
+
+
+async def test_a_round_reports_its_outcome_and_tells_the_listener(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"v": 1}, "z": {"v": 2}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b", {"mine": {"v": 3}})
+    heard = []
+    b.engine._on_result = heard.append
+    _Refusing(b, {"y"})
+    result = await b.sync()
+    assert RESULT_KEYS <= set(result)
+    assert result["ok"] is True
+    assert result["pulled"] == 1 and result["pushed"] == 1
+    assert result["refused"] == ["y"] and result["held"] == [] and result["tooLarge"] == []
+    assert heard == [result]
+    assert b.engine.last_results()["prompts"] == result
+
+
+async def test_a_failing_scope_is_reported_and_the_others_still_run(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    from .test_sync_engine import DictScope
+
+    broken = DictScope("mcp", {"m": {"v": 1}})
+
+    def snapshot():
+        raise RuntimeError("disk on fire")
+
+    broken.snapshot = snapshot
+    b.engine.register(broken)
+    results = {r["scope"]: r for r in await b.engine.sync_all()}
+    assert results["mcp"]["ok"] is False and "disk on fire" in results["mcp"]["error"]
+    assert results["prompts"]["ok"] is True and results["prompts"]["pushed"] == 1
+    assert b.engine.last_results()["mcp"]["ok"] is False
+
+
+async def test_a_skipped_scope_says_why(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+    b.engine._enabled = lambda _s: False
+    result = await b.sync()
+    assert result["ok"] is True and result["skipped"] == "disabled"
+
+
+async def test_an_item_the_adapter_calls_oversized_is_reported_and_never_sent(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"big": {"v": 1}, "small": {"v": 2}})
+    b.adapter.oversized = lambda item_id, _payload: item_id == "big"
+    result = await b.sync()
+    assert result["tooLarge"] == ["big"]
+    assert ("prompts", "big") not in server.rows
+    b.adapter.items.pop("small")
+    await b.sync()
+    assert ("prompts", "big") not in server.rows
+
+
+async def test_a_record_over_the_size_limit_is_reported_too_large(tmp_path, account_key, monkeypatch):
+    monkeypatch.setattr(sync_engine, "MAX_BODY_BYTES", 200)
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"big": {"v": "x" * 400}})
+    result = await b.sync()
+    assert result["tooLarge"] == ["big"] and result["pushed"] == 0
+
+
+async def test_a_deferred_item_is_reported_held(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"y": {"v": 1}})
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+
+    def defer(item_id, payload):
+        raise sync_engine.DeferItem(item_id)
+
+    b.adapter.apply = defer
+    result = await b.sync()
+    assert result["held"] == ["y"]

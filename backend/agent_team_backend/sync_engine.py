@@ -504,12 +504,18 @@ class SyncEngine:
         device_id: Callable[[], str],
         enabled: Callable[[str], bool],
         signing_key_for: Callable[[str], str] | None = None,
+        on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._store = store
         self._request = request
         self._device_id = device_id
         self._enabled = enabled
         self._signing_key_for = signing_key_for or _pinned_signing_key
+        #: Told every round's result (see ``sync``) — the link broadcasts it
+        #: to the renderer as ``sync.result``. Must not raise; it is guarded.
+        self._on_result = on_result
+        #: The last result of each scope, for ``sync.status``.
+        self._last: dict[str, dict[str, Any]] = {}
         self._adapters: dict[str, ScopeAdapter] = {}
         #: Per scope, the highest cursor a push reply may move to while a
         #: pulled row is waiting for its key. Set by ``_pull``, honoured by
@@ -544,28 +550,75 @@ class SyncEngine:
 
     # ── one round ───────────────────────────────────────────────────────
     async def sync(self, scope: str) -> dict[str, Any]:
+        """One round of *scope*, and what came of it.
+
+        The answer always has the same shape — ``scope``, ``ok``, ``pulled``,
+        ``pushed``, ``conflicts``, ``held``, ``refused``, ``tooLarge``, ``at``,
+        plus ``skipped`` or ``error`` when they apply — and is remembered as the
+        scope's last result and handed to ``on_result``. A failed round is
+        recorded the same way and then re-raised, so a caller that asked for
+        this scope by name still hears the failure.
+        """
+        try:
+            result = await self._round(scope)
+        except Exception as err:
+            self._finish(scope, {"ok": False, "error": str(err)})
+            raise
+        return self._finish(scope, result)
+
+    async def _round(self, scope: str) -> dict[str, Any]:
         adapter = self._adapters.get(scope)
         if adapter is None:
             raise SyncError(f"no adapter registered for {scope!r}")
         if not self._enabled(scope):
-            return {"scope": scope, "skipped": "disabled"}
+            return {"skipped": "disabled"}
         if not await asyncio.to_thread(sync_keyring.has_account_key):
-            return {"scope": scope, "skipped": "no-key"}
+            return {"skipped": "no-key"}
         async with self._locks.setdefault(scope, asyncio.Lock()):
+            self._notes[scope] = {}
             # An adapter that needs the server for more than records (blob
             # transfers) is handed the connection here, and may decline the
             # round when the server cannot serve it.
             prepare = getattr(adapter, "prepare", None)
             if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
-                return {"scope": scope, "skipped": "unsupported"}
+                return {"skipped": "unsupported"}
             pulled = await self._pull(adapter)
             pushed = await self._push(adapter)
-        return {
+        return {"pulled": pulled, "pushed": pushed}
+
+    def _finish(self, scope: str, outcome: dict[str, Any]) -> dict[str, Any]:
+        notes = self._notes.pop(scope, {})
+        try:
+            conflicts = len(self._store.conflict_ids(scope))
+        except Exception:  # noqa: BLE001 - a result is still worth reporting
+            conflicts = 0
+        result: dict[str, Any] = {
             "scope": scope,
-            "pulled": pulled,
-            "pushed": pushed,
-            "conflicts": len(self._store.conflict_ids(scope)),
+            "ok": True,
+            "pulled": 0,
+            "pushed": 0,
+            "conflicts": conflicts,
+            "held": list(notes.get("held", [])),
+            "refused": list(notes.get("refused", [])),
+            "tooLarge": list(notes.get("tooLarge", [])),
+            **outcome,
+            "at": now_iso(),
         }
+        self._last[scope] = result
+        if self._on_result is not None:
+            try:
+                self._on_result(dict(result))
+            except Exception as err:  # noqa: BLE001 - a listener cannot fail a round
+                log.warning("the sync result listener failed: %s", err)
+        return result
+
+    def last_results(self) -> dict[str, dict[str, Any]]:
+        """The last result of each scope that has run since this process began."""
+        return {scope: dict(result) for scope, result in self._last.items()}
+
+    def forget_results(self) -> None:
+        """Drop the remembered results — they belonged to another account."""
+        self._last.clear()
 
     def _kick(self, scope: str) -> None:
         """Run one more round of *scope* soon. For an adapter whose background
@@ -581,7 +634,7 @@ class SyncEngine:
                 results.append(await self.sync(scope))
             except Exception as err:  # noqa: BLE001 - one bad scope must not stop the rest
                 log.warning("sync of %s failed: %s", scope, err)
-                results.append({"scope": scope, "error": str(err)})
+                results.append(self._last.get(scope) or {"scope": scope, "ok": False, "error": str(err)})
         return results
 
     # ── pull ────────────────────────────────────────────────────────────
@@ -644,6 +697,7 @@ class SyncEngine:
                 if self._apply_one(adapter, raw, snapshot, blocked):
                     applied += 1
             except _HoldPull as hold:
+                self._note(adapter.scope, "held", hold.item_id)
                 return applied, hold.rev
         return applied, None
 
@@ -695,7 +749,7 @@ class SyncEngine:
                 sync_keyring.decrypt(body, scope=scope, item_id=item_id)
             )
         except sync_keyring.UnknownKeyId:
-            raise _HoldPull(rev)
+            raise _HoldPull(rev, item_id)
         except Exception as err:  # noqa: BLE001 - an unreadable record is not fatal
             if _sensitive(adapter):
                 # A credential that will not open is not a row to step over:
@@ -755,7 +809,7 @@ class SyncEngine:
             try:
                 held = adapter.apply(item_id, remote) is not False
             except DeferItem:
-                raise _HoldPull(rev) from None
+                raise _HoldPull(rev, item_id) from None
             except Exception as err:  # noqa: BLE001 - a refusal, see below
                 if _sensitive(adapter):
                     raise
@@ -944,12 +998,21 @@ class SyncEngine:
         deleted = payload is None
         body = ""
         if not deleted:
+            # An adapter may know an item cannot travel for a reason the body
+            # size does not show (a skill naming more blobs than the server
+            # takes). It stays in the snapshot — so it is never mistaken for a
+            # delete — and is reported rather than sent.
+            oversized = getattr(self._adapters.get(scope), "oversized", None)
+            if oversized is not None and oversized(item_id, payload):
+                self._note(scope, "tooLarge", item_id)
+                return None
             body = sync_keyring.encrypt(canonical(payload), scope=scope, item_id=item_id)
             if len(body.encode("utf-8")) > MAX_BODY_BYTES:
                 log.warning(
                     "skipping %s/%s: %d bytes is over the %d byte record limit",
                     scope, item_id, len(body.encode("utf-8")), MAX_BODY_BYTES,
                 )
+                self._note(scope, "tooLarge", item_id)
                 return None
         state = states.get(item_id)
         item = {
@@ -1450,9 +1513,10 @@ _ORIGIN_FORGED = "forged"
 class _HoldPull(Exception):
     """A pulled record is sealed under a key this machine does not hold yet."""
 
-    def __init__(self, rev: int) -> None:
+    def __init__(self, rev: int, item_id: str = "") -> None:
         super().__init__(f"waiting for the key of rev {rev}")
         self.rev = rev
+        self.item_id = item_id
 
 
 def _rev_of(raw: Any) -> int:
