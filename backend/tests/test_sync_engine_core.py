@@ -667,3 +667,52 @@ async def test_a_record_whose_signature_does_not_match_is_reported(tmp_path, acc
     result = await b.sync()
     assert result["refused"] == ["x"]
     assert b.adapter.items == {"x": {"v": 1}}
+
+
+# ── rows the server would not put in a frame (tooLarge stubs) ────────────────
+def _stub(item_id: str, rev: int) -> dict:
+    return {"itemId": item_id, "rev": rev, "updatedAt": "t", "deviceId": "dev-a",
+            "deleted": 0, "body": None, "sig": None, "tooLarge": True}
+
+
+async def test_a_too_large_stub_in_a_pull_is_reported_not_applied(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"big": {"v": "local"}})
+    await b.sync()
+    a = Device(tmp_path, server, "dev-a", {"after": {"v": 2}})
+    await a.sync()
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull":
+            items = reply["payload"]["items"]
+            reply["payload"]["items"] = [_stub("big", 99)] + items
+            reply["payload"]["cursor"] = max(99, reply["payload"]["cursor"])
+        return reply
+
+    b.engine._request = request
+    result = await b.sync()
+    assert result["tooLarge"] == ["big"] and result["ok"] is True
+    assert b.adapter.items["big"] == {"v": "local"}   # not a delete, not applied
+    assert b.adapter.items["after"] == {"v": 2}
+    assert b.store.cursor("prompts") >= 99             # the cursor moves on
+    assert b.store.conflict_ids("prompts") == set()
+
+
+async def test_a_too_large_stub_in_a_push_conflict_is_not_a_delete(tmp_path, account_key):
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"big": {"v": 1}})
+    forward = b.engine._request
+
+    async def request(msg_type, payload):
+        if msg_type == "sync.push":
+            return {"ok": True, "payload": {"scope": "prompts", "cursor": 5, "accepted": [],
+                                            "conflicts": [_stub("big", 5)]}}
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    result = await b.sync()
+    assert result["tooLarge"] == ["big"]
+    assert b.store.conflict_ids("prompts") == set()
+    assert b.adapter.items == {"big": {"v": 1}}

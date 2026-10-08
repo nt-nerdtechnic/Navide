@@ -850,6 +850,12 @@ class SyncEngine:
         updated_at = str(raw.get("updatedAt") or "")
         deleted = bool(raw.get("deleted"))
         body = str(raw.get("body") or "")
+        if raw.get("tooLarge"):
+            # A row the server would not fit in a frame: it names the item and
+            # its rev and carries no body. Neither a delete nor anything to
+            # apply; reported, and the cursor moves past it as usual.
+            self._note(scope, "tooLarge", item_id)
+            return False
         origin = self._origin(raw, scope=scope, item_id=item_id)
         if origin == _ORIGIN_FORGED:
             log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
@@ -1273,6 +1279,12 @@ class SyncEngine:
             return
         item_id = str(entry.get("itemId") or "")
         if item_id not in by_id:
+            return
+        if entry.get("tooLarge"):
+            # The server's copy is too large to send back (see ``_apply_one``).
+            # Not recorded as a conflict with a deleted remote, which keeping
+            # local would then push over; reported, and pushed again next round.
+            self._note(scope, "tooLarge", item_id)
             return
         # A conflict can also mean "the row you were editing is gone": the
         # server answers rev 0 with every field null, which reads here as a
