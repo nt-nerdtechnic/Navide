@@ -594,7 +594,13 @@ class SyncEngine:
             items = items if isinstance(items, list) else []
             count, held_rev = await asyncio.to_thread(self._apply_page, adapter, items)
             applied += count
-            cursor = int(reply.get("cursor") or since)
+            # The reply's ``cursor`` is the scope's current maximum rev, not the
+            # last rev of this page. Stepping on it while ``more`` is set would
+            # skip every row between this page and the maximum — for good. So a
+            # page that is not the last one advances to its own highest row, and
+            # only the last page may take the server's maximum.
+            highest = max((_rev_of(raw) for raw in items), default=since)
+            cursor = highest if reply.get("more") else max(highest, int(reply.get("cursor") or since))
             if held_rev is not None:
                 # A record sealed under a key this machine has not been handed
                 # yet. The cursor stops just short of it, so the next round —
