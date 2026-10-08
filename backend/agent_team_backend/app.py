@@ -383,13 +383,17 @@ async def unicast_to(session: "Session | None", event: dict[str, Any]) -> bool:
 
 
 async def unicast_any(event: dict[str, Any]) -> bool:
-    """Send *event* to one arbitrary connected session.
+    """Send *event* to one connected window that runs the UI action bus.
 
     For requests any live window can service (e.g. a global UI action with no
     fixed owner), so a broadcast that every window would otherwise have to
-    ignore is unnecessary. Returns False when no session is connected.
+    ignore is unnecessary. Only sessions that announced `ui.invoke.ready` are
+    candidates — any other session (a plugin or editor window) would drop the
+    request and leave the caller to time out — and the most recently focused
+    one goes first. Returns False when no such window is connected.
     """
-    for session in list(_SESSIONS):
+    ready = [s for s in _SESSIONS if s.ui_bus_ready]
+    for session in sorted(ready, key=lambda s: s.ui_focused_at, reverse=True):
         if session.dead:
             continue
         try:
@@ -399,6 +403,9 @@ async def unicast_any(event: dict[str, Any]) -> bool:
             # than failing the request outright.
             log.warning("unicast send failed: %s", err)
             _SESSIONS.discard(session)
+            continue
+        if session.dead:
+            # send_json marks a vanished peer dead instead of raising.
             continue
         return True
     return False
@@ -488,6 +495,12 @@ class Session:
         # appears in renderer/backend-info payloads.
         self.host_authenticated = False
         self.plans_backend_v2 = False
+        # Set by `ui.invoke.ready`: only a main window runs the UI action bus,
+        # while plugin, editor and manager windows share this server and never
+        # answer a ui.invoke.request. unicast_any picks among these alone, the
+        # most recently focused first.
+        self.ui_bus_ready = False
+        self.ui_focused_at = 0.0
         # Throttle state for the slow-send probe (see _note_send_timing).
         # None rather than 0.0: the first slow send must always report, which a
         # zero baseline would swallow whenever the clock starts near zero.

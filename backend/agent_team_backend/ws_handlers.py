@@ -10726,6 +10726,18 @@ async def ui_invoke_result(session: "Session", msg_id: str, msg_type: str, paylo
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
 
 
+@handler("ui.invoke.ready")
+async def ui_invoke_ready(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """A main window announcing that it answers ui.invoke.request — sent on
+    every (re)connect, and again with focused true whenever it gains focus,
+    so app.unicast_any can hand a global UI action to a window that will
+    answer it, preferring the one the user touched last."""
+    session.ui_bus_ready = True
+    if payload.get("focused"):
+        session.ui_focused_at = time.monotonic()
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
 @handler("agent_msg.list")
 async def agent_msg_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app

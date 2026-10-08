@@ -10016,6 +10016,7 @@ useUiActionBus({
   currentWorkspace,
   buildSnapshot: buildUiActionSnapshot,
   ownsWorkspace: isLocalWorkspace,
+  connectionStatus: backend.status,
 })
 
 // Single source of truth for the 'modalOpen' keybinding context. Hoisted so

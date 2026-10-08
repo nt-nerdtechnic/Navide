@@ -5058,7 +5058,9 @@ def _caller_window(caller: "_Caller | None", workspace_path: str) -> Any | None:
     return None if session is None or getattr(session, "dead", False) else session
 
 
-def _ui_timeout_error(workspace_path: str, timeout: float, *, addressed: bool) -> dict[str, Any]:
+def _ui_timeout_error(
+    workspace_path: str, timeout: float, *, addressed: bool, global_action: str | None = None
+) -> dict[str, Any]:
     """Explain an unanswered ui.invoke.request as one of three failures.
 
     The fixes are opposite — inspect a stuck window vs. check the path — so a
@@ -5081,6 +5083,19 @@ def _ui_timeout_error(workspace_path: str, timeout: float, *, addressed: bool) -
     """
     from agent_team_backend import agent_messaging
 
+    if global_action is not None:
+        # A global request went to one window that announced it runs the UI
+        # bus; workspace_path played no part in choosing it (it is often empty).
+        return {
+            "ok": False,
+            "result": None,
+            "error": (
+                f"a Navide window received {global_action} but did not answer within "
+                f"{timeout:.0f}s — it may still be running there, or the window is "
+                "blocked (a native dialog freezes it). Retry, or check the window"
+            ),
+            "error_code": "ui_action_timeout",
+        }
     if addressed:
         return {
             "ok": False,
@@ -5184,7 +5199,12 @@ async def _ui_request(
     timeout = _UI_INVOKE_SLOW_TIMEOUT_S if action in _UI_INVOKE_SLOW_ACTIONS else _UI_INVOKE_TIMEOUT_S
     result = await _ui_invoke_pending.wait(request_id, fut, timeout=timeout)
     if result is TIMEOUT:
-        return _ui_timeout_error(workspace_path, timeout, addressed=bool(payload["addressed"]))
+        return _ui_timeout_error(
+            workspace_path,
+            timeout,
+            addressed=bool(payload["addressed"]),
+            global_action=(action or op) if is_global else None,
+        )
     return result
 
 
