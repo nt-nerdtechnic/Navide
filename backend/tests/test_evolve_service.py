@@ -168,7 +168,7 @@ async def test_enabling_one_workspace_leaves_the_other_alone(env) -> None:
     badges = (await env.service.badges([env.a, env.b]))["badges"]
     assert badges[env.a]["enabled"] is True and badges[env.a]["next_run_at"] is not None
     assert badges[env.b] == {"enabled": False, "running": False, "running_since": None,
-                             "next_run_at": None, "last_status": None}
+                             "next_run_at": None, "last_status": None, "pane_ids": []}
 
 
 async def test_turning_off_disables_the_clock(env) -> None:
@@ -253,6 +253,8 @@ async def test_auto_run_opens_a_pane_with_the_rendered_rules(env) -> None:
     assert running["pane_id"] == "p-run" and running["status"] == "running"
     assert running["id"] in opened["task"]
     assert env.host.notices() == ["started"]
+    badge = (await env.service.badges([env.a]))["badges"][env.a]
+    assert badge["running"] is True and badge["pane_ids"] == ["p-run"]
     # A second run while this one goes is skipped, recorded, disclosed.
     again = await env.service.start_run(env.a, "schedule")
     assert again == {"status": "skipped", "reason": "busy", "detail": "a run of this workspace is still going"}

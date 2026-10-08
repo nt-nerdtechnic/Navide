@@ -590,8 +590,8 @@ class EvolveService:
     async def badge(self, workspace: str) -> dict[str, Any]:
         workspace = _canonical(workspace)
         stored = await asyncio.to_thread(self.store.settings, workspace)
-        runs = await asyncio.to_thread(self.store.runs, workspace, 1) if stored is not None else []
-        running = await asyncio.to_thread(self.store.running, workspace) if stored is not None else []
+        runs = await asyncio.to_thread(self.store.runs, workspace) if stored is not None else []
+        running = [r for r in runs if r["status"] == "running"]
         job = await self._job(workspace)
         last = runs[0] if runs else None
         return {
@@ -600,6 +600,9 @@ class EvolveService:
             "running_since": running[0]["started_at"] if running else None,
             "next_run_at": job["state"].get("next_run_at") if job and job["enabled"] else None,
             "last_status": last["status"] if last else None,
+            # Panes Navide opened or used for this workspace's runs, so the
+            # sidebar can mark them without opening the panel first.
+            "pane_ids": list(dict.fromkeys(r["pane_id"] for r in runs if r["pane_id"])),
         }
 
     async def badges(self, workspaces: list[str]) -> dict[str, Any]:
