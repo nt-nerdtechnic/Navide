@@ -129,6 +129,64 @@ export interface ChannelLocation {
   supports_topics: boolean
 }
 
+/** The pane a binding drives, as the backend's pane registry has it now. */
+export interface ChannelOverviewPane {
+  /** False for an orphan: the pane closed without its binding being released. */
+  exists: boolean
+  /** The pane's current name; for an orphan, the title it was bound under. */
+  name: string
+  qualified_name: string
+  workspace_path: string
+  display_status: string
+  agent_key: string
+}
+
+export interface ChannelOverviewBinding extends ChannelBinding {
+  created_at: number
+  pane: ChannelOverviewPane
+}
+
+export interface ChannelOverviewChat extends ChannelLocation {
+  bindings: ChannelOverviewBinding[]
+}
+
+/** `channels.overview`: one bot with the chats it knows and who is bound to each. */
+export interface ChannelOverviewBot {
+  platform: ChannelPlatform
+  account: string
+  chats: ChannelOverviewChat[]
+  /** Pane ids of this bot's orphan bindings. */
+  orphans: string[]
+}
+
+export interface ChannelUnbindResult {
+  pane_id: string
+  ok: boolean
+  removed?: boolean
+  error?: string
+}
+
+/** A binding row in a chat, with the auto child topics that follow it. */
+export interface ChannelBindingRow {
+  binding: ChannelOverviewBinding
+  orphan: boolean
+  children: ChannelOverviewBinding[]
+}
+
+/** A chat's bindings as rows: auto child topics sit under the pane they report into
+ *  (when that pane is bound in the same chat), everything else is its own row. */
+export function chatRows(chat: ChannelOverviewChat): ChannelBindingRow[] {
+  const here = new Set(chat.bindings.map((b) => b.pane_id))
+  const isChild = (b: ChannelOverviewBinding) => !!b.auto && !!b.parent_pane_id && here.has(b.parent_pane_id)
+  return chat.bindings
+    .filter((b) => !isChild(b))
+    .map((b) => ({
+      binding: b,
+      orphan: !b.pane.exists,
+      children: chat.bindings.filter((c) => isChild(c) && c.parent_pane_id === b.pane_id),
+    }))
+}
+
 /** A one-time code from `channels.link.create`: whoever sends it to the bot is linked. */
 export interface ChannelLinkInvite {
   code: string
@@ -227,6 +285,12 @@ function createChannelsStore(backend: Backend) {
   const lastLinked = ref<ChannelLinkedEvent | null>(null)
   const lastLinkFailed = ref<ChannelLinkFailedEvent | null>(null)
   const lastManagedCreated = ref<ChannelManagedCreatedEvent | null>(null)
+  // Settings → Channels: fetched once the page asks for it, then on every refresh.
+  const overview = ref<ChannelOverviewBot[]>([])
+  const overviewLoaded = ref(false)
+  const overviewError = ref('')
+  let overviewWanted = false
+  let overviewLoad = 0
   // Bumped whenever the backend connection drops: invites live only in the
   // backend's memory, so a code handed out before may be gone.
   const linkEpoch = ref(0)
@@ -249,7 +313,21 @@ function createChannelsStore(backend: Backend) {
     }
   }
 
+  async function fetchOverview(): Promise<void> {
+    const load = ++overviewLoad
+    const res = await call<{ bots: ChannelOverviewBot[] }>('channels.overview')
+    if (load !== overviewLoad) return
+    if (res.ok && res.data) {
+      overview.value = res.data.bots ?? []
+      overviewError.value = ''
+    } else {
+      overviewError.value = res.error ?? 'channels.overview failed'
+    }
+    overviewLoaded.value = true
+  }
+
   async function refresh(): Promise<void> {
+    if (overviewWanted) void fetchOverview()
     const [list, binds, reqs, allowed] = await Promise.all([
       call<{ enabled: boolean; platforms: ChannelPlatformState[] }>('channels.list'),
       call<{ bindings: ChannelBinding[] }>('channels.bindings'),
@@ -355,6 +433,32 @@ function createChannelsStore(backend: Backend) {
     linkEpoch,
     configuredPlatforms,
     refresh,
+    overview,
+    overviewLoaded,
+    overviewError,
+    /** Start keeping the overview (Settings → Channels shows it) and fetch it now. */
+    loadOverview: (): Promise<void> => {
+      overviewWanted = true
+      return fetchOverview()
+    },
+    overviewFor: (platform: ChannelPlatform, account: string = DEFAULT_ACCOUNT): ChannelOverviewBot | null =>
+      overview.value.find((b) => b.platform === platform && b.account === account) ?? null,
+    /** Unbind several panes at once; each chat is told, and a failure is per pane. */
+    unbindMany: async (paneIds: string[]): Promise<ChannelResult<{ results: ChannelUnbindResult[] }>> => {
+      const res = await call<{ results: ChannelUnbindResult[] }>('channels.unbind_many', { pane_ids: paneIds })
+      await refresh()
+      return res
+    },
+    /** Raise a bound pane: the backend names its current id, then main finds the
+     *  window that owns it (any workspace) and brings it to the front. */
+    focusPane: async (paneId: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await call<{ pane_id: string }>('channels.focus_pane', { pane_id: paneId })
+      if (!res.ok || !res.data) return { ok: false, error: res.error ?? 'pane not found' }
+      const action = window.agentTeam?.requestPaneAction
+      if (!action) return { ok: false, error: 'not-found' }
+      const out = await action({ paneId: res.data.pane_id || paneId, action: 'focus' })
+      return out?.error ? { ok: false, error: out.error } : { ok: true }
+    },
     platformState: (platform: ChannelPlatform) => platforms.value.find((p) => p.platform === platform) ?? null,
     accountState: (platform: ChannelPlatform, account: string = DEFAULT_ACCOUNT): ChannelAccountState | null =>
       platforms.value.find((p) => p.platform === platform)?.accounts.find((a) => a.account === account) ?? null,
