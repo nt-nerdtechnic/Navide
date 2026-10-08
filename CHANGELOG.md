@@ -4,6 +4,19 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.17] — 2026-10-08 — signed release
+
+### Fixed
+
+- The backend no longer stops itself when a check on Navide's process fails momentarily; an unreadable process identity is treated as unknown, not as Navide having quit.
+- Backend shutdown is bounded to 3 seconds, so long-polling hook connections can no longer keep a stopped backend alive without a listener.
+- After 3 failed reconnects the window asks Navide for the backend's current address and reconnects there instead of retrying a dead port.
+- Backend lifecycle events (ready, failed to start, crash, automatic and manual restarts) are written to main.log.
+
+### Changed
+
+- The sidebar's self-evolution badge shows only ✦, coloured by state, with the state in its tooltip and accessible label.
+
 ## [0.2.16] — 2026-10-08 — signed release
 
 ### Added

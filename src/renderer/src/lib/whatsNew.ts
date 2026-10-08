@@ -111,6 +111,31 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.17',
+    title: {
+      'zh-TW': '修正後端自行停止、畫面卡在「connecting…」',
+      'en-US': 'Fixes for a Backend That Stopped Itself and a Window Stuck on "connecting…"',
+      'ja-JP': 'バックエンドが自ら停止し、画面が「connecting…」のまま止まる問題を修正',
+    },
+    highlights: [
+      {
+        'zh-TW': '電腦很忙、pane 很多時，後端偶爾會誤以為 Navide 已經關閉而自行停止，畫面就一直停在「connecting…」。現在查不到 Navide 時只會略過這一次檢查，不會再自行停止。',
+        'en-US': 'With a busy machine and many panes, the backend could mistake a momentary lookup failure for Navide having quit and stop itself, leaving the window on "connecting…". A failed lookup is now skipped, never taken as Navide being gone.',
+        'ja-JP': 'マシンが混雑しペインが多いとき、バックエンドが一時的な確認の失敗を Navide の終了と取り違えて自ら停止し、画面が「connecting…」のままになることがありました。確認に失敗しても今回は見送るだけになり、停止しなくなりました。',
+      },
+      {
+        'zh-TW': '後端關閉時最多等 3 秒，不會再被 pane 掛著的連線卡住；視窗連續重連 3 次失敗後，會向 Navide 確認後端是否換了位置並改連過去。',
+        'en-US': 'The backend now waits at most 3 seconds to shut down, so connections held open by panes can no longer keep it hanging, and after 3 failed reconnects the window asks Navide where the backend is now and follows it.',
+        'ja-JP': 'バックエンドの終了待ちは最大 3 秒になり、ペインが保持する接続で止まらなくなりました。再接続に 3 回失敗すると、ウィンドウが Navide にバックエンドの現在の場所を確認して接続し直します。',
+      },
+      {
+        'zh-TW': '後端的啟動、當掉、自動重啟都會寫進 main.log，方便追查；側欄工作區標題上的自我優化徽章縮小成只顯示 ✦，狀態用顏色區分，滑鼠移上去看說明。',
+        'en-US': 'Backend start, crash and automatic restarts are now written to main.log for troubleshooting, and the self-evolution badge on a sidebar workspace heading is just ✦, coloured by state, with the details on hover.',
+        'ja-JP': 'バックエンドの起動・クラッシュ・自動再起動が main.log に記録されるようになりました。サイドバーのワークスペース見出しにある自己進化バッジは ✦ だけになり、状態は色で示し、詳細はマウスを重ねると表示されます。',
+      },
+    ],
+  },
+  {
     version: '0.2.16',
     title: {
       'zh-TW': 'Pipeline 畫布編輯器、在聊天室收發檔案、重開後自動接回工作中的 pane',
