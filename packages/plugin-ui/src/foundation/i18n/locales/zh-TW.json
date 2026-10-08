@@ -6232,7 +6232,8 @@
       "result-refused": "無法在此裝置套用：{items}",
       "result-too-large": "太大，無法同步：{items}",
       "account": "同步帳號：{email}",
-      "scope-skill-files": "Skill 檔案"
+      "scope-skill-files": "Skill 檔案",
+      "result-gave-up": "卡住，會持續重試：{items}"
     },
     "sharing": {
       "intro": "把這四個區段搬到別台機器的兩條路：一份可以交出去的檔案，以及這些機器本來就共用的帳號。",

@@ -597,6 +597,36 @@ describe('SyncSettings', () => {
     expect(text).toContain('X-Upstream: Bearer ••••')
   })
 
+  // gaveUp is the part of held that has been deferred for long (5+ rounds or
+  // 30+ minutes): stuck, still retrying, and not the same as "waiting".
+  it('shows stuck items apart from the ones that are only waiting', async () => {
+    const { backend, emit } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    emit('sync.result', {
+      scope: 'skills',
+      ok: true,
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      held: ['fresh-skill', 'stuck-skill'],
+      gaveUp: ['stuck-skill'],
+      refused: [],
+      tooLarge: [],
+      at: '2026-10-09T05:00:00Z',
+    })
+    await flushPromises()
+
+    const lines = wrapper.findAll('.sync-result-line').map((l) => l.text())
+    const waiting = lines.find((l) => l.startsWith('Waiting'))
+    const stuck = lines.find((l) => l.startsWith('Stuck'))
+    expect(waiting).toContain('fresh-skill')
+    expect(waiting).not.toContain('stuck-skill')
+    expect(stuck).toContain('stuck-skill')
+    expect(stuck).toContain('retrying')
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

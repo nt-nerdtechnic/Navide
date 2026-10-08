@@ -6232,7 +6232,8 @@
       "result-refused": "このデバイスでは適用できません：{items}",
       "result-too-large": "大きすぎて同期できません：{items}",
       "account": "同期アカウント：{email}",
-      "scope-skill-files": "スキルファイル"
+      "scope-skill-files": "スキルファイル",
+      "result-gave-up": "停滞中、再試行を続けます：{items}"
     },
     "sharing": {
       "intro": "この 4 つの項目をマシン間で移す方法は、ファイルを受け渡す方法と、共通のアカウントを使う方法の 2 つです。",

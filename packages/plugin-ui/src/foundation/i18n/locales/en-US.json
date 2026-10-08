@@ -6232,7 +6232,8 @@
       "result-refused": "Could not be applied on this device: {items}",
       "result-too-large": "Too large to sync: {items}",
       "account": "Syncing with {email}",
-      "scope-skill-files": "Skill files"
+      "scope-skill-files": "Skill files",
+      "result-gave-up": "Stuck, still retrying: {items}"
     },
     "sharing": {
       "intro": "Two ways to move these four sections between machines: a file you hand over, and the account they already share.",

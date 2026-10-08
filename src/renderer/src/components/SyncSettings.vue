@@ -48,6 +48,9 @@ interface ScopeResult {
   pushed?: number
   conflicts?: number
   held?: string[]
+  /** The part of held deferred for long (5+ rounds or 30+ minutes); the
+   *  backend keeps retrying it. */
+  gaveUp?: string[]
   refused?: string[]
   tooLarge?: string[]
   /** ISO-8601 UTC. */
@@ -112,6 +115,7 @@ function toResult(value: unknown): ScopeResult | null {
     pushed: Number(value.pushed ?? 0) || 0,
     conflicts: Number(value.conflicts ?? 0) || 0,
     held: itemIds(value.held),
+    gaveUp: itemIds(value.gaveUp),
     refused: itemIds(value.refused),
     tooLarge: itemIds(value.tooLarge),
     at: typeof value.at === 'string' ? value.at : undefined,
@@ -144,7 +148,12 @@ function resultLines(r: ScopeResult): ResultLine[] {
     { text: t('settings.sync.result-ok', { pulled: r.pulled ?? 0, pushed: r.pushed ?? 0 }) },
   ]
   if (r.conflicts) lines.push({ text: t('settings.sync.result-conflicts', { count: r.conflicts }) })
-  if (r.held?.length) lines.push({ text: t('settings.sync.result-held', { items: r.held.join(', ') }) })
+  const stuck = new Set(r.gaveUp ?? [])
+  const waiting = (r.held ?? []).filter((id) => !stuck.has(id))
+  if (waiting.length) lines.push({ text: t('settings.sync.result-held', { items: waiting.join(', ') }) })
+  if (stuck.size) {
+    lines.push({ text: t('settings.sync.result-gave-up', { items: [...stuck].join(', ') }), error: true })
+  }
   if (r.refused?.length) {
     lines.push({ text: t('settings.sync.result-refused', { items: r.refused.join(', ') }), error: true })
   }
