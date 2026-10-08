@@ -32,7 +32,7 @@ from typing import Any
 import yaml
 from send2trash import send2trash
 
-from . import native_skills
+from . import native_skills, osplat
 from .applog import app_data_dir
 
 log = logging.getLogger("agent_team_backend.skills_store")
@@ -1376,7 +1376,7 @@ class SkillsStore:
 def _carries_exec_bit(path: Path, raw: bytes) -> bool:
     """Whether a synced copy of *path* should be executable. Windows keeps no
     such bit, so there a script is taken by its shebang."""
-    if os.name != "nt":
+    if osplat.paths.enforces_posix_modes():
         return bool(path.stat().st_mode & 0o111)
     return raw[:2] == b"#!"
 
@@ -1450,14 +1450,6 @@ def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: b
                 raise SkillValidationError(f"skill path is both a file and directory: {prefix}")
 
 
-#: Device names Windows reserves in every directory, with any extension.
-_WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$")
-
-
-def _windows_reserved(part: str) -> bool:
-    return bool(_WINDOWS_RESERVED.match(part.rstrip(" .")))
-
-
 def _inside(path: Path, root: Path) -> bool:
     """Whether *path*, resolved, is *root* or under it."""
     try:
@@ -1482,12 +1474,13 @@ def _safe_relative(relative: Any, *, allow_hidden: bool = False) -> str | None:
     parts = relative.split("/")
     if any(part in ("", ".", "..") for part in parts):
         return None
-    # What Windows reads differently, on every platform, because the skill
-    # lands on all of them: a ":" is a drive ("C:/x", "D:x") or an alternate
-    # data stream ("SKILL.md:ads") and leaves the directory joined onto; a
-    # reserved device name (any extension) opens the device; a trailing dot or
-    # space is stripped, so two names land on one file.
-    if any(":" in part or _windows_reserved(part) or part[-1] in ". " for part in parts):
+    # A ":" is refused on every platform: on Windows it is a drive ("C:/x",
+    # "D:x") or an alternate data stream ("SKILL.md:ads") and leaves the
+    # directory it is joined onto. Names only Windows reads differently
+    # (reserved devices, a trailing dot or space) are refused where they
+    # would be misread; "aux.c" is an ordinary file on macOS and Linux, and a
+    # skill carrying one is refused by the Windows device it reaches.
+    if any(":" in part or osplat.paths.file_name_refused(part) for part in parts):
         return None
     # Every dotfile is refused, the marker included: this side writes its own
     # marker, and nothing else hidden has a reason to travel between machines.

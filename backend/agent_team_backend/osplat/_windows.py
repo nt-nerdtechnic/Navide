@@ -49,7 +49,7 @@ from typing import Any, Callable
 import psutil
 
 from .proctree import children_map, walk_descendants
-from .spec import ProcInfo
+from .spec import ProcInfo, windows_refused_file_name
 
 log = logging.getLogger(__name__)
 
@@ -1345,6 +1345,9 @@ class WindowsDiscoveryLayout(WindowsLayout):
 
     def enforces_posix_modes(self) -> bool:
         return False
+
+    def file_name_refused(self, name: str) -> bool:
+        return windows_refused_file_name(name)
 
     def symlinks_available(self) -> bool:
         global _symlinks_available

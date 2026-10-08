@@ -246,6 +246,10 @@ def enforces_posix_modes() -> bool:
     return True
 
 
+def file_name_refused(name: str) -> bool:
+    return False
+
+
 def symlinks_available() -> bool:
     return True
 

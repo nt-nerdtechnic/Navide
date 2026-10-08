@@ -424,31 +424,67 @@ def test_memory_apply_does_not_overwrite_an_edit_made_since_the_snapshot(tmp_pat
 
 
 # ── security review C ────────────────────────────────────────────────────────
-@pytest.mark.parametrize("relative", [
-    "C:/Users/Public/evil.bat", "D:evil.bat", "SKILL.md:ads", "notes/a:b.md",
-    "CON", "nul.txt", "scripts/Aux.md", "COM1", "lpt9.log", "trailing.", "trailing ", "dir./a.md",
-])
-def test_a_skill_path_windows_would_read_differently_is_refused(relative):
+class _WindowsNames:
+    """``osplat.paths`` as Windows answers the one question skills ask."""
+
+    def file_name_refused(self, name):
+        from agent_team_backend.osplat import spec
+
+        return spec.windows_refused_file_name(name)
+
+
+@pytest.fixture
+def on_windows(monkeypatch):
+    from agent_team_backend import osplat
+
+    monkeypatch.setattr(osplat, "paths", _WindowsNames())
+
+
+@pytest.mark.parametrize("relative", ["C:/Users/Public/evil.bat", "D:evil.bat", "SKILL.md:ads", "notes/a:b.md"])
+def test_a_skill_path_naming_a_drive_or_stream_is_refused_everywhere(relative):
     from pathlib import PureWindowsPath
 
     from agent_team_backend import skills_store
 
     assert skills_store._safe_relative(relative) is None
-    # What the refusal is for: on Windows these leave (or alias) the staging dir.
+    # What the refusal is for: on Windows these leave the staging dir or
+    # write an alternate data stream.
     staging = PureWindowsPath(r"C:\Users\me\.agents\skills\.demo-abc123")
     joined = staging / relative
-    if ":" in relative:
-        assert not str(joined).lower().startswith(str(staging).lower()) or ":" in joined.name
+    assert not str(joined).lower().startswith(str(staging).lower()) or ":" in joined.name
+
+
+_WINDOWS_ONLY = ["CON", "nul.txt", "scripts/Aux.md", "COM1", "lpt9.log", "aux.c", "trailing.", "trailing ", "dir./a.md"]
+
+
+@pytest.mark.parametrize("relative", _WINDOWS_ONLY)
+def test_a_name_windows_reserves_is_refused_on_windows(relative, on_windows):
+    from agent_team_backend import skills_store
+
+    assert skills_store._safe_relative(relative) is None
+
+
+@pytest.mark.parametrize("relative", _WINDOWS_ONLY)
+def test_a_name_windows_reserves_is_fine_elsewhere(relative, monkeypatch):
+    from agent_team_backend import osplat, skills_store
+    from agent_team_backend.osplat import _posix_paths
+
+    class Posix:
+        def file_name_refused(self, name):
+            return _posix_paths.file_name_refused(name)
+
+    monkeypatch.setattr(osplat, "paths", Posix())
+    assert skills_store._safe_relative(relative) == relative
 
 
 @pytest.mark.parametrize("relative", ["SKILL.md", "scripts/run.sh", "console.md", "com10.txt", "a.b/c.md"])
-def test_ordinary_skill_paths_still_pass(relative):
+def test_ordinary_skill_paths_still_pass(relative, on_windows):
     from agent_team_backend import skills_store
 
     assert skills_store._safe_relative(relative) == relative
 
 
-def test_import_refuses_a_file_that_would_land_outside_the_skill(tmp_path):
+def test_import_refuses_a_file_that_would_land_outside_the_skill(tmp_path, on_windows):
     from agent_team_backend import skills_store
 
     store, root = _skills(tmp_path, "S")

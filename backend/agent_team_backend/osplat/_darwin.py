@@ -201,6 +201,9 @@ class DarwinLayout(DarwinPaths):
     def enforces_posix_modes(self) -> bool:
         return _posix_paths.enforces_posix_modes()
 
+    def file_name_refused(self, name: str) -> bool:
+        return _posix_paths.file_name_refused(name)
+
     def symlinks_available(self) -> bool:
         return _posix_paths.symlinks_available()
 

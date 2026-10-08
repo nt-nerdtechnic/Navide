@@ -17,6 +17,8 @@ degrades to "this panel shows nothing" instead of taking down the request.
 
 from __future__ import annotations
 
+import re
+
 import asyncio
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -236,6 +238,17 @@ class Paths(Protocol):
         vacuous on NTFS, where `st_mode` is synthesised and never restricts
         anyone — so a caller that would refuse an over-permissive file
         asks this first.
+        """
+        ...
+
+    def file_name_refused(self, name: str) -> bool:
+        """Whether this platform's filesystem reads *name* (one path part) as
+        something other than a file of that name.
+
+        False on POSIX. On Windows: a reserved device name (``CON``, ``NUL``,
+        ``COM1`` ..., with any extension) opens the device, and a trailing dot
+        or space is stripped, so two names land on one file. A caller writing
+        names that arrived from elsewhere (a synced skill) asks this first.
         """
         ...
 
@@ -759,3 +772,15 @@ class Scripts(Protocol):
         runs it through `powershell -NoExit -Command` there).
         """
         ...
+
+
+#: Device names Windows reserves in every directory, with any extension.
+_WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$")
+
+
+def windows_refused_file_name(name: str) -> bool:
+    """``Paths.file_name_refused`` as Windows answers it. A pure string rule,
+    kept here so the tests of any platform can exercise it."""
+    if not name:
+        return False
+    return name[-1] in ". " or bool(_WINDOWS_RESERVED.match(name.rstrip(" .")))
