@@ -199,6 +199,15 @@ describe('useEvolve', () => {
     expect(row.actions).toEqual([{ kind: 'evolve-open-pane', workspace: A, paneId: 'pane-1' }])
   })
 
+  it('v1.2: learns evolve pane ids from evolve.badges and evolve.changed badges', async () => {
+    scope.run(() => useEvolve(fakeBackend()))
+    replies['evolve.badges'] = { ok: true, badges: { [A]: badge({ pane_ids: ['p-new', 'p-older'] }) } }
+    await refreshEvolveBadges([A])
+    emit('evolve.changed', { workspace: B, badge: badge({ running: true, pane_ids: ['p-b'] }) })
+    expect(['p-new', 'p-older', 'p-b'].map(isEvolveSystemPane)).toEqual([true, true, true])
+    expect(isEvolveSystemPane('p-other')).toBe(false)
+  })
+
   it('v1.1: learns evolve pane ids from notices and get replies, by id only', async () => {
     scope.run(() => useEvolve(fakeBackend()))
     emit('evolve.notice', { workspace: A, kind: 'started', run: run({ pane_id: 'p-run' }) })

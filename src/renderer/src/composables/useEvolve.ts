@@ -69,7 +69,8 @@ export interface EvolveBadge {
   running_since: number | null
   next_run_at: number | null
   last_status: EvolveRunStatus | null
-  /** Optional: panes evolve opened for this workspace, if the backend sends them. */
+  /** v1.2: panes this workspace's recent runs used, newest first (incl. the
+   *  running one). Optional so an older backend's badge still reads. */
   pane_ids?: string[]
 }
 
