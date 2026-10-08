@@ -1144,9 +1144,14 @@ class SyncEngine:
                 key = ""
         else:
             key = self._signing_key_for(device)
-        if device and device == self._device_id() and not str(raw.get("sig") or ""):
+        if (
+            device and device == self._device_id() and not str(raw.get("sig") or "")
+            and not raw.get("tooLarge")
+        ):
             # This release signs everything it writes, so an unsigned row that
-            # names this machine was not written by it.
+            # names this machine was not written by it. A too-large stub is
+            # the exception: the server strips the signature with the body,
+            # and a stub carries nothing to apply.
             return _ORIGIN_FORGED
         if not key or not str(raw.get("sig") or ""):
             # No key to check against — or no signature to check: releases up
