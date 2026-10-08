@@ -329,6 +329,8 @@ import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntriesFor, his
 import { executeCommand, initKeybindingsPort, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
 import { useUiActionBus } from './composables/useUiActionBus'
 import { releaseAnnouncementId, useAnnouncements, type SchedulerDisabledNotice } from './composables/useAnnouncements'
+import type { EvolveAnnouncementAction } from './composables/useAnnouncements'
+import { useEvolve } from './composables/useEvolve'
 import {
   useQuotaFailover,
   type HotSwitchedPane,
@@ -374,6 +376,7 @@ const DebugModal = defineAsyncComponent(() => import('./components/DebugModal.vu
 const RestoreScopeModal = defineAsyncComponent(() => import('./components/RestoreScopeModal.vue'))
 const PipelineManagerModal = defineAsyncComponent(() => import('./components/PipelineManagerModal.vue'))
 const AnnouncementsPanel = defineAsyncComponent(() => import('./components/AnnouncementsPanel.vue'))
+const EvolvePanel = defineAsyncComponent(() => import('./components/EvolvePanel.vue'))
 const ClockPanel = defineAsyncComponent(() => import('./components/ClockPanel.vue'))
 
 const backend = useBackend()
@@ -14069,6 +14072,29 @@ backend.on('scheduler.job_disabled', (raw) => {
   announcements.noteSchedulerDisabled(ev)
 })
 
+// Workspace self-evolution: badges, the per-workspace panel and the
+// evolve.notice announcements. The buttons on those announcements reuse the
+// existing pane actions.
+const evolve = useEvolve(backend)
+function onEvolveAction(action: EvolveAnnouncementAction): void {
+  closePopover()
+  const paneId = action.paneId
+  switch (action.kind) {
+    case 'evolve-open-pane':
+    case 'evolve-resume-pane':
+      if (paneId) void focusPaneFromNotification(paneId)
+      break
+    case 'evolve-interrupt':
+      if (paneId) void onInterrupt(paneId)
+      break
+    case 'evolve-reclaim':
+      if (paneId) void reclaimPaneFromMenu(paneId)
+      break
+    default:
+      evolve.openPanel(action.workspace)
+  }
+}
+
 backend.on('session.detected', (raw) => {
   const ev = raw as { pane_id?: string; session_id?: string }
   if (!ev?.pane_id || !ev.session_id) return
@@ -21643,6 +21669,17 @@ function paneIsCommander(p: ActivePane): boolean {
       @install="onUpdateBadgeClick()"
       @quota-action="(action) => void quotaFailover.actOn(action)"
       @tour="startAnnouncementTour"
+      @evolve-action="onEvolveAction"
+    />
+
+    <!-- Workspace self-evolution panel (opened from the sidebar heading and
+         the Schedule panel's system job rows) -->
+    <EvolvePanel
+      v-if="evolve.panelWorkspace.value"
+      :backend="backend"
+      :workspace="evolve.panelWorkspace.value"
+      :agent-specs="enabledAgentSpecs"
+      @close="evolve.closePanel()"
     />
 
     <!-- Clock popover -->
