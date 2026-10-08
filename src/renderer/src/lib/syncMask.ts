@@ -7,16 +7,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/** MCP keys whose values are secrets (tokens, auth headers). */
-const MCP_SECRET_FIELDS = ['env', 'headers']
+/** Record keys whose entries are all secret values (env vars, headers,
+ *  envFile); their names stay, their values go. */
+const SECRET_CONTAINER = /env|header/i
 
 export const MASK = '••••'
 /** A flag or variable name that announces a secret value. Broad on purpose
  *  ('pat' also hits 'path'): a needless mask costs less than a leak. */
 const SECRET_NAME =
-  /token|key|secret|passw|pwd|auth|bearer|cred|pat|sig|cookie|session|apikey/i
+  /token|key|secret|pass|pwd|auth|bearer|cred|pat|sig|cookie|session|apikey/i
+
+/** Name test on the NFKC form, so full-width letters (ＡＰＩ-ＫＥＹ) count. */
+function secretName(name: string): boolean {
+  return SECRET_NAME.test(name.normalize('NFKC'))
+}
 /** Short flags that commonly take a secret (`-k key`, `-p password`, `-u user:pass`). */
-const SECRET_SHORT_FLAGS: ReadonlySet<string> = new Set(['-k', '-p', '-u', '-t'])
+const SECRET_SHORT_FLAGS: ReadonlySet<string> = new Set(['-a', '-k', '-p', '-u', '-t'])
 /** Flags whose next argument is `NAME VALUE` or `NAME=VALUE` of an environment variable. */
 const ENV_FLAGS: ReadonlySet<string> = new Set(['-e', '--env'])
 /** Token shapes recognisable without a name: GitHub, OpenAI-style, Slack and
@@ -33,7 +39,19 @@ const BARE_TOKEN = new RegExp(
   ].join('|'),
   'g',
 )
-const URL_IN_TEXT = /[a-z][a-z0-9+.-]*:\/\/\S+/gi
+/** Schemes WHATWG parses as "special": any run of '/' and '\\' after the
+ *  colon is the authority marker, and '\\' in the rest is a '/'. */
+const SPECIAL_SCHEME = /^(https?|wss?|ftp|file):[\\/]+/i
+const URL_IN_TEXT = /\b(?:(?:https?|wss?|ftp|file):[\\/]+|[a-z][a-z0-9+.-]*:\/\/)\S+/gi
+
+/** What a WHATWG parser would read: tabs and newlines dropped and, for a
+ *  special scheme, '\\' as '/' and the slashes after the colon as '//'. */
+function normalizeUrl(url: string): string {
+  const clean = url.replace(/[\t\n\r]/g, '').trim()
+  const special = SPECIAL_SCHEME.exec(clean)
+  if (!special) return clean
+  return `${special[1]}://${clean.slice(special[0].length).replace(/\\/g, '/')}`
+}
 
 function maskBare(text: string): string {
   return text.replace(BARE_TOKEN, MASK)
@@ -48,7 +66,8 @@ function tokenLikeSegment(segment: string): boolean {
 
 /** Scheme and host stay; userinfo, query and `;k=v` values, the fragment and
  *  any token-like path segment go. Query and parameter keys stay readable. */
-export function maskUrl(url: string): string {
+export function maskUrl(raw: string): string {
+  const url = normalizeUrl(raw)
   const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(url)
   if (!scheme) return maskBare(url)
   let rest = url.slice(scheme[0].length)
@@ -85,11 +104,14 @@ export function maskUrl(url: string): string {
   const slash = rest.indexOf('/')
   const host = slash >= 0 ? rest.slice(0, slash) : rest
   const path = slash >= 0 ? rest.slice(slash) : ''
+  // A segment right after a secret-named one (/key/<value>) is its value.
+  let afterSecret = false
   const maskedPath = path
     .split('/')
     .map((segment) => {
       const [name, ...params] = segment.split(';')
-      const shownName = tokenLikeSegment(name) ? MASK : name
+      const shownName = afterSecret || tokenLikeSegment(name) ? MASK : name
+      afterSecret = secretName(name)
       const shownParams = params.map((p) => {
         const eq = p.indexOf('=')
         return eq >= 0 ? `${p.slice(0, eq + 1)}${MASK}` : MASK
@@ -100,21 +122,54 @@ export function maskUrl(url: string): string {
   return out + host + maskedPath + query + fragment
 }
 
+/** A JSON value with every secret-named key's value masked and every other
+ *  string run through maskValue. */
+function maskJson(value: unknown, secret = false): unknown {
+  if (typeof value === 'string') return secret ? MASK : maskValue(value)
+  if (Array.isArray(value)) return value.map((v) => maskJson(v, secret))
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, maskJson(v, secret || secretName(k))]),
+    )
+  }
+  return secret && value !== null ? MASK : value
+}
+
+/** JSON inside an argument. Text that does not parse still loses the value
+ *  of every `"secret-name": value` pair it can find. */
+function maskJsonText(text: string): string {
+  try {
+    return JSON.stringify(maskJson(JSON.parse(text)))
+  } catch {
+    return maskBare(
+      text.replace(/("([^"\\]|\\.)*"\s*:\s*)("([^"\\]|\\.)*"?|[^,}\]\s]+)/g, (match, key: string) =>
+        secretName(key) ? `${key}"${MASK}"` : match,
+      ),
+    )
+  }
+}
+
 /** One argument that is not a flag: URLs, `Name: value` headers, `KEY=value`
  *  pairs, Bearer/Basic credentials and bare token shapes. */
 function maskValue(value: string): string {
-  if (value.includes('://')) {
+  const trimmed = value.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return maskJsonText(value)
+  if (URL_IN_TEXT.test(value)) {
+    URL_IN_TEXT.lastIndex = 0
     return maskBare(value.replace(URL_IN_TEXT, (url) => maskUrl(url)))
   }
   // A header (`X-API-Key: v`, `Cookie: session=v`): the whole value goes. A
   // colon followed by '//' is a URL, handled above.
   const header = /^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:(?!\/\/)\s*(\S[\s\S]*)$/.exec(value)
   if (header) return `${header[1]}: ${MASK}`
+  // A header written with a space (`apikey v`, `Bearer v`, `token v`).
+  const spaced = /^\s*([A-Za-z][A-Za-z0-9_-]*)\s+\S/.exec(value)
+  if (spaced && (secretName(spaced[1]) || /^basic$/i.test(spaced[1]))) return `${spaced[1]} ${MASK}`
   // Before KEY=value: base64 padding would otherwise read as an empty pair.
   const bare = maskBare(value)
   if (bare !== value) return bare
   const pair = /^([A-Za-z_][A-Za-z0-9_.-]*)=([\s\S]*)$/.exec(value)
-  if (pair) return `${pair[1]}=${SECRET_NAME.test(pair[1]) ? MASK : maskValue(pair[2])}`
+  if (pair) return `${pair[1]}=${secretName(pair[1]) ? MASK : maskValue(pair[2])}`
   return maskBare(value.replace(/\b(bearer|basic|token)\s+\S+/gi, `$1 ${MASK}`))
 }
 
@@ -139,19 +194,26 @@ export function maskArgs(args: unknown[]): unknown[] {
       maskNext = true
       return raw
     }
+    // A short flag with its value glued on: -pS, -uadmin:S, -HX-Api-Key:S.
+    const glued = /^-([A-Za-z])(.+)$/.exec(raw)
+    if (glued) {
+      const flag = `-${glued[1]}`
+      if (SECRET_SHORT_FLAGS.has(flag) || ENV_FLAGS.has(flag)) return `${flag}${MASK}`
+      return `${flag}${maskValue(glued[2])}`
+    }
     if (raw.startsWith('-')) {
       const eq = raw.indexOf('=')
       if (eq > 0) {
         const flag = raw.slice(0, eq)
-        return `${flag}=${SECRET_NAME.test(flag) ? MASK : maskValue(raw.slice(eq + 1))}`
+        return `${flag}=${secretName(flag) ? MASK : maskValue(raw.slice(eq + 1))}`
       }
       if (ENV_FLAGS.has(raw)) envName = true
-      else if (SECRET_SHORT_FLAGS.has(raw) || SECRET_NAME.test(raw)) maskNext = true
+      else if (SECRET_SHORT_FLAGS.has(raw) || secretName(raw)) maskNext = true
       return raw
     }
     // A header name on its own (`Authorization`, `X-Api-Key`) carries its
     // value in the next argument.
-    if (/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw) && SECRET_NAME.test(raw) && maskBare(raw) === raw) {
+    if (/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw) && secretName(raw) && maskBare(raw) === raw) {
       maskNext = true
       return raw
     }
@@ -159,19 +221,30 @@ export function maskArgs(args: unknown[]): unknown[] {
   })
 }
 
-/** An MCP server record as a sync conflict may show it: the names in env and
- *  headers stay, so a person can tell the two sides apart, but not the values;
- *  url and args lose their secret parts the same way. */
+/** Every leaf under a secret container or name: keys stay, values go. */
+function maskLeaves(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(maskLeaves)
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, maskLeaves(v)]))
+  return value === null || value === undefined ? value : MASK
+}
+
+/** One field of a record, by its key: url and args by their own rules, env
+ *  and header containers and secret-named keys masked leaf by leaf, nested
+ *  objects walked, and any other string through maskValue. */
+function maskField(key: string, value: unknown): unknown {
+  if (key === 'url' && typeof value === 'string') return maskUrl(value)
+  if (key === 'args' && Array.isArray(value)) return maskArgs(value)
+  if (SECRET_CONTAINER.test(key) || secretName(key)) return maskLeaves(value)
+  if (typeof value === 'string') return maskValue(value)
+  if (Array.isArray(value)) return value.map((v) => maskField('', v))
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, maskField(k, v)]))
+  return value
+}
+
+/** An MCP server record as a sync conflict may show it. Every field is
+ *  walked, nested ones included: the names in env and headers stay, so a
+ *  person can tell the two sides apart, but no secret value does. */
 export function maskMcpRecord(value: unknown): unknown {
   if (!isRecord(value)) return value
-  const out: Record<string, unknown> = { ...value }
-  if (typeof out.url === 'string') out.url = maskUrl(out.url)
-  if (Array.isArray(out.args)) out.args = maskArgs(out.args)
-  for (const field of MCP_SECRET_FIELDS) {
-    const entries = out[field]
-    if (isRecord(entries)) {
-      out[field] = Object.fromEntries(Object.keys(entries).map((k) => [k, MASK]))
-    }
-  }
-  return out
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, maskField(k, v)]))
 }

@@ -628,6 +628,84 @@ describe('SyncSettings', () => {
     expect(stuck).toContain('retrying')
   })
 
+  // resetThrottled: the server asked this scope to start over a second time
+  // within an hour; the backend refused, so nothing moved. "Pulled 0, pushed 0"
+  // would read as an ordinary quiet round.
+  it('says a throttled reset paused the scope instead of reporting a quiet round', async () => {
+    const { backend, emit } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    emit('sync.result', {
+      scope: 'prompts',
+      ok: true,
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      held: [],
+      gaveUp: [],
+      refused: [],
+      tooLarge: [],
+      resetThrottled: true,
+      at: '2026-10-09T06:30:00Z',
+    })
+    await flushPromises()
+
+    const row = wrapper.get('.sync-result')
+    expect(row.text()).toContain('paused')
+    expect(row.text()).toContain('an hour')
+    expect(row.text()).not.toContain('Pulled 0')
+    expect(row.find('.sync-result-error').exists()).toBe(true)
+  })
+
+  // R-C4: env and header values are masked on both sides, so the backend
+  // compares them and says per name whether picking a side changes a secret.
+  it('says which masked MCP secrets differ between the sides, never their values', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'github',
+              local: { name: 'github', env: { API_KEY: '••••••', REGION: '••••••' } },
+              remote: { name: 'github', env: { API_KEY: '••••••', REGION: '••••••', NEW: '••••••' } },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+              masked: {
+                env: { API_KEY: 'differs', REGION: 'same', NEW: 'remote-only' },
+                headers: { Authorization: 'local-only' },
+              },
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const items = wrapper.findAll('.sync-secret-state').map((i) => i.text())
+    expect(items).toEqual([
+      'API_KEY: differs',
+      'REGION: same',
+      'NEW: only on the other device',
+      'Authorization: only on this device',
+    ])
+    expect(wrapper.findAll('.sync-secret-state.is-differs')).toHaveLength(3)
+  })
+
+  it('shows no secret comparison when the row has none', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': { ok: true, payload: { conflicts: [{ ...conflict, scope: 'mcp', masked: {} }] } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.find('.sync-secrets').exists()).toBe(false)
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

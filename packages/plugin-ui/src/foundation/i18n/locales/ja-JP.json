@@ -6233,7 +6233,13 @@
       "result-too-large": "大きすぎて同期できません：{items}",
       "account": "同期アカウント：{email}",
       "scope-skill-files": "スキルファイル",
-      "result-gave-up": "停滞中、再試行を続けます：{items}"
+      "result-gave-up": "停滞中、再試行を続けます：{items}",
+      "result-reset-throttled": "サーバーの状態に異常があるため、このセクションの再同期を一時停止しました。1 時間後に再試行します。",
+      "secrets-title": "非表示の値 — どちらを残すかで、異なる値が変わります：",
+      "secret-same": "同じ",
+      "secret-differs": "異なる",
+      "secret-local-only": "このデバイスのみ",
+      "secret-remote-only": "もう一方のデバイスのみ"
     },
     "sharing": {
       "intro": "この 4 つの項目をマシン間で移す方法は、ファイルを受け渡す方法と、共通のアカウントを使う方法の 2 つです。",

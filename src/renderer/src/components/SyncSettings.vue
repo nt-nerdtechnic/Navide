@@ -37,6 +37,10 @@ interface Conflict {
   /** The cloud never held this item (a rev-0 synthetic tombstone): keeping
    *  "theirs" would only delete the local copy, and the backend refuses it. */
   remoteAbsent?: boolean
+  /** MCP only: per env/header name, how the two hidden values compare
+   *  ('same' | 'differs' | 'local-only' | 'remote-only'), as the backend saw
+   *  them. The values themselves never reach the renderer. */
+  masked?: Record<string, Record<string, string>>
 }
 
 /** One scope's outcome of a sync round, as sync.now returns it. */
@@ -54,6 +58,9 @@ interface ScopeResult {
   gaveUp?: string[]
   refused?: string[]
   tooLarge?: string[]
+  /** The server asked for a second start-over within an hour and the backend
+   *  refused it: nothing was pulled, pushed or cleared this round. */
+  resetThrottled?: boolean
   /** ISO-8601 UTC. */
   at?: string
 }
@@ -119,6 +126,7 @@ function toResult(value: unknown): ScopeResult | null {
     gaveUp: itemIds(value.gaveUp),
     refused: itemIds(value.refused),
     tooLarge: itemIds(value.tooLarge),
+    resetThrottled: value.resetThrottled === true,
     at: typeof value.at === 'string' ? value.at : undefined,
   }
 }
@@ -145,6 +153,7 @@ function resultLines(r: ScopeResult): ResultLine[] {
       },
     ]
   }
+  if (r.resetThrottled) return [{ text: t('settings.sync.result-reset-throttled'), error: true }]
   const lines: ResultLine[] = [
     { text: t('settings.sync.result-ok', { pulled: r.pulled ?? 0, pushed: r.pushed ?? 0 }) },
   ]
@@ -329,6 +338,30 @@ async function resolve(conflict: Conflict, keep: 'local' | 'remote'): Promise<vo
   }
 }
 
+const SECRET_STATES: ReadonlySet<string> = new Set(['same', 'differs', 'local-only', 'remote-only'])
+
+interface SecretState {
+  key: string
+  name: string
+  state: string
+}
+
+/** The hidden-value comparison of an MCP conflict, env before headers. An
+ *  unknown state reads as "differs": the safe assumption about a secret. */
+function secretStates(c: Conflict): SecretState[] {
+  if (!isRecord(c.masked)) return []
+  const out: SecretState[] = []
+  for (const field of ['env', 'headers']) {
+    const entries = c.masked[field]
+    if (!isRecord(entries)) continue
+    for (const [name, raw] of Object.entries(entries)) {
+      const state = typeof raw === 'string' && SECRET_STATES.has(raw) ? raw : 'differs'
+      out.push({ key: `${field}/${name}`, name, state })
+    }
+  }
+  return out
+}
+
 /** One side of a conflict as it may be shown: an MCP record loses its
  *  secrets (see maskMcpRecord); every other scope is shown as it is. */
 function shown(scope: string, value: unknown): unknown {
@@ -453,6 +486,15 @@ onBeforeUnmount(() => offResult?.())
           <strong>{{ t('settings.sync.scope-' + c.scope) }}</strong>
           <code>{{ c.itemId }}</code>
         </div>
+        <div v-if="secretStates(c).length" class="sync-secrets">
+          <span class="sync-hint">{{ t('settings.sync.secrets-title') }}</span>
+          <span
+            v-for="s in secretStates(c)"
+            :key="s.key"
+            :class="['sync-secret-state', { 'is-differs': s.state !== 'same' }]"
+            >{{ s.name }}: {{ t('settings.sync.secret-' + s.state) }}</span
+          >
+        </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ t('settings.sync.this-device') }}</span>
           <code class="sync-side-body" v-truncate="previewFull(shown(c.scope, c.local), c.sealed)">{{ preview(shown(c.scope, c.local), c.sealed) }}</code>
@@ -557,6 +599,24 @@ onBeforeUnmount(() => offResult?.())
   gap: 8px;
   align-items: baseline;
   margin-bottom: 6px;
+}
+.sync-secrets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  font-size: var(--font-row-desc);
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.sync-secrets .sync-hint {
+  margin: 0;
+}
+.sync-secret-state {
+  overflow-wrap: anywhere;
+}
+.sync-secret-state.is-differs {
+  color: var(--text-danger, #e07060);
 }
 .sync-conflict-side {
   display: flex;
