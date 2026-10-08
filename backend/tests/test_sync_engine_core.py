@@ -23,3 +23,26 @@ async def test_a_pull_reads_every_page_not_just_the_first(tmp_path, account_key,
     b = Device(tmp_path, server, "dev-b")
     await b.sync()
     assert b.adapter.items == a.adapter.items
+
+
+# ── X-1: a push reply must not move the cursor past someone else's write ─────
+async def test_a_write_landing_between_pull_and_push_is_not_skipped(tmp_path, account_key):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a")
+    b = Device(tmp_path, server, "dev-b", {"mine": {"v": "b"}})
+    forward = b.engine._request
+    interleaved = False
+
+    async def request(msg_type, payload):
+        nonlocal interleaved
+        if msg_type == "sync.push" and not interleaved:
+            # Another device writes after B pulled and before B pushes.
+            interleaved = True
+            a.adapter.items["theirs"] = {"v": "a"}
+            await a.sync()
+        return await forward(msg_type, payload)
+
+    b.engine._request = request
+    await b.sync()
+    await b.sync()
+    assert b.adapter.items.get("theirs") == {"v": "a"}

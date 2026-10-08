@@ -946,7 +946,7 @@ class SyncEngine:
         adapter = self._adapters.get(scope)
         for entry in conflicts if isinstance(conflicts, list) else []:
             self._record_push_conflict(scope, entry, by_id, sealed=_sensitive(adapter))
-        cursor = int(reply.get("cursor") or 0)
+        cursor = _contiguous_cursor(self._store.cursor(scope), accepted)
         barrier = self._cursor_barrier.get(scope)
         if barrier is not None:
             # A row below is still waiting for its key. Re-reading our own
@@ -954,7 +954,8 @@ class SyncEngine:
             cursor = min(cursor, barrier)
         if cursor > self._store.cursor(scope):
             # Our own accepted writes moved the cursor; recording it here keeps
-            # the next pull from re-reading them.
+            # the next pull from re-reading them. Only when they sit directly on
+            # top of what was read — see ``_contiguous_cursor``.
             self._store.set_cursor(scope, cursor)
         return len(accepted) if isinstance(accepted, list) else 0
 
@@ -1385,6 +1386,28 @@ class _HoldPull(Exception):
 
 def _rev_of(raw: Any) -> int:
     return int(raw.get("rev") or 0) if isinstance(raw, dict) else 0
+
+
+def _contiguous_cursor(cursor: int, accepted: Any) -> int:
+    """How far a push's own accepted revs may move the read cursor.
+
+    The reply's ``cursor`` is the scope's maximum rev, which includes whatever
+    another device wrote between this round's pull and its push. Recording it
+    would mark that write as read without ever applying it. So the cursor moves
+    only across our own revs that follow on from it without a gap; a gap means
+    someone else's row is in there, and the next pull reads it (re-reading our
+    own writes on the way is cheap).
+    """
+    revs = sorted(
+        int(entry.get("rev") or 0)
+        for entry in (accepted if isinstance(accepted, list) else [])
+        if isinstance(entry, dict)
+    )
+    for rev in revs:
+        if rev != cursor + 1:
+            break
+        cursor = rev
+    return cursor
 
 
 def _kid_of(body: str) -> str:
