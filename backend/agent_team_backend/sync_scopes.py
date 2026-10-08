@@ -101,6 +101,74 @@ def credentials_enable_blocker() -> str:
     )
 
 
+#: Items whose delete arrived from another device while this one kept its
+#: copy, as ``{scope: {item_id: digest of the kept copy}}``.
+DETACHED_KEY = "sync-detached"
+
+
+def _detached(scope: str) -> dict[str, str]:
+    raw = _settings().get().get(DETACHED_KEY)
+    entries = raw.get(scope) if isinstance(raw, dict) else None
+    return {str(k): str(v) for k, v in entries.items()} if isinstance(entries, dict) else {}
+
+
+def _set_detached(scope: str, entries: dict[str, str]) -> None:
+    raw = _settings().get().get(DETACHED_KEY)
+    doc = dict(raw) if isinstance(raw, dict) else {}
+    if entries:
+        doc[scope] = entries
+    else:
+        doc.pop(scope, None)
+    _settings().set({DETACHED_KEY: doc})
+
+
+def detach(scope: str, item_id: str, kept: Any | None) -> None:
+    """A delete arrived for an item this machine keeps a copy of.
+
+    The rule memory and skills share: a delete made on another device never
+    removes the user's file here — it is theirs, not ours — and the copy kept
+    here is not pushed back up either, which would undo the delete on the
+    device that made it. The item leaves the snapshot until the user changes
+    the kept copy, which is a new decision and goes up as one.
+    """
+    entries = _detached(scope)
+    if kept is None:
+        entries.pop(item_id, None)
+    else:
+        entries[item_id] = sync_engine.digest(kept)
+    _set_detached(scope, entries)
+
+
+def attach(scope: str, item_id: str) -> None:
+    """A live record arrived for an item: it is in sync again."""
+    entries = _detached(scope)
+    if entries.pop(item_id, None) is not None:
+        _set_detached(scope, entries)
+
+
+def without_detached(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """*snapshot* minus the detached items still exactly as they were kept.
+
+    A marker whose copy has since changed or gone is dropped: the change is
+    the user's, and from then on the item syncs like any other.
+    """
+    entries = _detached(scope)
+    if not entries:
+        return snapshot
+    out = dict(snapshot)
+    stale = []
+    for item_id, kept in entries.items():
+        if item_id in out and sync_engine.digest(out[item_id]) == kept:
+            del out[item_id]
+        else:
+            stale.append(item_id)
+    if stale:
+        for item_id in stale:
+            entries.pop(item_id, None)
+        _set_detached(scope, entries)
+    return out
+
+
 class PromptsScope:
     """Prompt skills — the Settings → Prompts list.
 
@@ -334,14 +402,17 @@ class SkillsStateScope:
     def snapshot(self) -> dict[str, Any]:
         # What is here wins over what was remembered for it; the remembered
         # entries survive for the skills this machine does not hold.
-        return {**self._intent(), **self._present()}
+        return without_detached(self.scope, {**self._intent(), **self._present()})
 
     def apply(self, item_id: str, payload: Any | None) -> None:
         intent = self._intent()
         if payload is None:
             intent.pop(item_id, None)
             self._set_intent(intent)
+            # The files stay (see ``detach``); they just stop syncing.
+            detach(self.scope, item_id, self._present().get(item_id))
             return
+        attach(self.scope, item_id)
         if not isinstance(payload, dict):
             log.warning("skill decision %s arrived as %s", item_id, type(payload).__name__)
             return
@@ -504,6 +575,9 @@ class SkillFilesScope:
     def snapshot(self) -> dict[str, Any]:
         if self._layout is None:
             return {}
+        return without_detached(self.scope, self._manifests())
+
+    def _manifests(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for name, files in self._large_skills().items():
             try:
@@ -612,7 +686,11 @@ class SkillFilesScope:
         from . import skill_blobs
 
         if payload is None:
-            return None  # a removal elsewhere never deletes files here
+            # A removal elsewhere never deletes files here (see ``detach``).
+            if self._layout is not None:
+                detach(self.scope, item_id, self._manifests().get(item_id))
+            return None
+        attach(self.scope, item_id)
         try:
             refs = self._refs_of(payload)
         except skill_blobs.BlobError as err:
@@ -758,7 +836,8 @@ class MemoryScope:
         }
 
     def snapshot(self) -> dict[str, Any]:
-        return {memory_item_id(rel): payload for rel, payload in self.snapshot_by_path().items()}
+        present = {memory_item_id(rel): payload for rel, payload in self.snapshot_by_path().items()}
+        return without_detached(self.scope, present)
 
     def snapshot_by_path(self) -> dict[str, Any]:
         """``snapshot``, keyed by the path relative to the home."""
@@ -786,7 +865,9 @@ class MemoryScope:
         # instruction file is not the kind of thing one machine should do to
         # another unprompted, and the file is the user's, not ours.
         if payload is None:
-            log.info("ignoring a delete for instruction file %s", item_id)
+            log.info("keeping instruction file %s here; it was deleted on another device", item_id)
+            present = {memory_item_id(rel): p for rel, p in self.snapshot_by_path().items()}
+            detach(self.scope, item_id, present.get(item_id))
             return True
         if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
             log.warning("instruction file %s arrived without text", item_id)
@@ -800,6 +881,7 @@ class MemoryScope:
         except Exception as err:  # noqa: BLE001 - a refused write is not fatal
             log.warning("the synced instruction file %s was not written: %s", item_id, err)
             return False
+        attach(self.scope, item_id)
         return True
 
     @staticmethod
