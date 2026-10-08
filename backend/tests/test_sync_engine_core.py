@@ -775,3 +775,47 @@ async def test_rounds_started_by_a_kick_can_be_cancelled(tmp_path, account_key):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert all(t.done() for t in list(b.engine._kicked)) or not b.engine._kicked
+
+
+# ── X-4: after a rotation, nothing stays under a key that is not the active one
+
+
+async def test_a_v1_record_is_resealed_after_a_rotation(tmp_path, account_key):
+    from agent_team_backend import sync_keyring
+
+    from .test_sync_keyring import _v1_body
+
+    server = FakeServer()
+    payload = {"id": "p1", "prompt": "hello"}
+    server.rows[("prompts", "p1")] = {
+        "itemId": "p1", "rev": 1, "updatedAt": "t", "deviceId": "old-dev", "deleted": 0,
+        "body": _v1_body(sync_keyring.account_key(), sync_engine.canonical(payload),
+                         scope="prompts", item_id="p1"),
+        "sig": "",
+    }
+    server.cursors["prompts"] = 1
+    a = Device(tmp_path, server, "dev-a")
+    await a.sync()
+    assert a.adapter.items == {"p1": payload}
+    # Before any rotation a v1 body is left alone: older devices read only v1.
+    await a.sync()
+    assert server.rows[("prompts", "p1")]["rev"] == 1
+    sync_keyring.rotate_account_key()
+    await a.sync()
+    body = server.rows[("prompts", "p1")]["body"]
+    assert not sync_keyring.needs_reseal(body)
+    assert server.rows[("prompts", "p1")]["rev"] > 1
+
+
+async def test_a_record_pulled_under_a_retired_key_is_resealed(tmp_path, account_key):
+    # A device that had not yet received the new ring wrote under the old key.
+    from agent_team_backend import sync_keyring
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"x": {"v": 1}})
+    await a.sync()  # sealed under the key that is about to be retired
+    b = Device(tmp_path, server, "dev-b")
+    sync_keyring.rotate_account_key()
+    await b.sync()
+    await b.sync()
+    assert not sync_keyring.needs_reseal(server.rows[("prompts", "x")]["body"])

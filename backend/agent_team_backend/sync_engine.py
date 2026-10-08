@@ -1176,6 +1176,13 @@ class SyncEngine:
         pending: list[tuple[str, Any, str]] = []  # (item_id, payload|None, hash)
 
         active_kid = sync_keyring.active_key_id() or ""
+        held_ring = sync_keyring.ring()
+        # Whether this account's key was ever rotated. Until it was, an empty
+        # sealed_kid is a v1 body some older device may still need to read
+        # (see below); after it, it is a body under something other than the
+        # active key — v1, or a retired key a lagging device wrote under — and
+        # the whole point of the rotation is that it goes up again.
+        rotated = held_ring is not None and len(held_ring.get("keys") or {}) > 1
         for item_id, payload in snapshot.items():
             if item_id in blocked:
                 continue
@@ -1202,7 +1209,7 @@ class SyncEngine:
                 # this release reads them (sync_keyring falls back on the v1
                 # format), and a real rotation names a concrete key that
                 # differs from the active one.
-                if state.sealed_kid in (active_kid, ""):
+                if state.sealed_kid == active_kid or (state.sealed_kid == "" and not rotated):
                     continue
             pending.append((item_id, payload, item_hash))
 
