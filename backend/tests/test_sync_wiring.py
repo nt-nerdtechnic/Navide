@@ -413,3 +413,24 @@ def test_the_links_engine_forgets_detached_marks_when_a_reset_forgets_a_scope(mo
     link = server_link.ServerLink()
     link.sync_engine()._on_forget("memory")
     assert calls == ["memory"]
+
+
+async def test_switching_back_after_a_failed_switch_reopens_sync(tmp_path, monkeypatch):
+    # R-B4: A -> B fails; signing in as A again must not leave sync shut.
+    from agent_team_backend import sync_scopes
+
+    settings = _Settings({server_link.SYNC_ACCOUNT_SETTING: "ns-a"})
+    _seeded(tmp_path, monkeypatch, settings)
+
+    class Creds:
+        scope = "credentials"
+
+        def clear_imported(self):
+            raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(sync_scopes, "credentials_scope", lambda: Creds())
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    await server_link._note_account("ns-b")
+    assert server_link._switch_pending is True
+    await server_link._note_account("ns-a")
+    assert server_link._switch_pending is False
