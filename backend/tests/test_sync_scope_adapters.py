@@ -198,3 +198,41 @@ async def test_skill_delete_elsewhere_keeps_the_files_and_does_not_resurrect(tmp
     pushes = server.pushes
     await a.sync(); await b.sync()
     assert server.pushes == pushes
+
+
+# ── prompts: the default ─────────────────────────────────────────────────────
+def _prompts_dev(tmp_path, server, name, monkeypatch, skills=None):
+    settings = FakeSettingsStore({sync_scopes.PROMPT_SKILLS_KEY: skills} if skills else None)
+    return Dev(tmp_path, server, name, monkeypatch, sync_scopes.PromptsScope(), ui_settings_store=settings), settings
+
+
+def _defaults(settings):
+    return [s["id"] for s in settings.doc[sync_scopes.PROMPT_SKILLS_KEY] if s.get("isDefault")]
+
+
+async def test_a_new_default_survives_the_round_trip(tmp_path, account_key, monkeypatch):
+    server = StrictServer()
+    start = [{"id": "y", "prompt": "Y", "isDefault": True}, {"id": "x", "prompt": "X", "isDefault": False}]
+    a, sa = _prompts_dev(tmp_path, server, "A", monkeypatch, [dict(s) for s in start])
+    b, sb = _prompts_dev(tmp_path, server, "B", monkeypatch)
+    await a.sync(); await b.sync()
+    assert _defaults(sb) == ["y"]
+    # The renderer saves the whole list with the new default.
+    sa.doc[sync_scopes.PROMPT_SKILLS_KEY] = [
+        {"id": "y", "prompt": "Y", "isDefault": False}, {"id": "x", "prompt": "X", "isDefault": True}]
+    for _ in range(2):
+        await a.sync(); await b.sync()
+    assert _defaults(sb) == ["x"]
+    assert _defaults(sa) == ["x"]
+    assert sb.doc[sync_scopes.LOOP_PROMPT_KEY] == "X"
+
+
+def test_the_loop_prompt_follows_the_renderers_default_rule(monkeypatch):
+    """The renderer casts the first skill flagged *and enabled*, else the first
+    enabled one; the loop-prompt mirror must name the same skill."""
+    settings = FakeSettingsStore({sync_scopes.PROMPT_SKILLS_KEY: [
+        {"id": "a", "prompt": "A", "isDefault": True, "enabled": False},
+        {"id": "b", "prompt": "B", "isDefault": False}]})
+    monkeypatch.setattr(app, "ui_settings_store", settings)
+    sync_scopes.PromptsScope().apply("c", {"id": "c", "prompt": "C", "isDefault": False})
+    assert settings.doc[sync_scopes.LOOP_PROMPT_KEY] == "B"

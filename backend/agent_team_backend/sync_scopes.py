@@ -209,15 +209,26 @@ class PromptsScope:
                 return
             incoming = dict(payload)
             incoming["id"] = item_id
+            # A bundle strips the flag; a synced record always carries it.
+            incoming["isDefault"] = incoming.get("isDefault") is True
             if index < 0:
                 skills.append(incoming)
             else:
                 skills[index] = incoming
-        self._write(_single_default(skills))
+            if incoming.get("isDefault"):
+                # A promotion elsewhere: the incoming default wins. The others
+                # are not re-cast record by record — the record demoting the
+                # old default can arrive before the one promoting the new one,
+                # and picking a stand-in in between is what reverted it.
+                skills = [{**s, "isDefault": s.get("id") == item_id} for s in skills]
+        self._write(skills)
 
     def _write(self, skills: list[dict[str, Any]]) -> None:
         updates: dict[str, Any] = {PROMPT_SKILLS_KEY: skills}
-        default = next((s for s in skills if s.get("isDefault")), None)
+        # The list may hold no flag for a moment (a default deleted elsewhere,
+        # a demotion ahead of its promotion); the renderer settles that on read
+        # by the same rule ``_single_default`` states.
+        default = next((s for s in _single_default(skills) if s.get("isDefault")), None)
         if default is not None and isinstance(default.get("prompt"), str):
             # The renderer mirrors this on every save; a write that skipped it
             # would leave the loop running yesterday's prompt.
@@ -237,8 +248,11 @@ def _single_default(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     if not skills:
         return skills
-    claimed = [i for i, s in enumerate(skills) if s.get("isDefault")]
-    winner = claimed[0] if claimed else 0
+    # normalizePromptSkills (promptSkills.ts): the first skill flagged and
+    # enabled, else the first enabled one — a disabled default casts nothing.
+    enabled = [i for i, s in enumerate(skills) if s.get("enabled") is not False]
+    claimed = [i for i in enabled if skills[i].get("isDefault")]
+    winner = claimed[0] if claimed else (enabled[0] if enabled else 0)
     return [{**s, "isDefault": i == winner} for i, s in enumerate(skills)]
 
 
