@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import time
 import unicodedata
 from collections import OrderedDict, deque
@@ -36,7 +37,9 @@ from urllib.parse import quote
 
 from . import media, pdf, quick_menu, redact, relay, report
 from .. import prompt_skills
-from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summarize
+from .mirror import (
+    CHILD_SUMMARY_CHARS, MSG_SUMMARY_TAIL, Mirror, normalize_verbosity, result_text, source_chat, summarize,
+)
 from .base import ChannelAdapter, InboundMessage, Location, MediaTooLarge
 from .pairing import LinkInvites, SenderGate, parse_link_code
 from .registry import PLATFORMS, load_module
@@ -64,6 +67,7 @@ VERDICT_WATCH_MAX_S = 3600.0
 STATUS_POLL_S = 1.0
 DEBOUNCE_S = 0.5  # lines from one sender to one location within this window become one message
 DEBOUNCE_MAX_S = 3.0
+LONG_REPLY_MAX_CHUNKS = 3  # past this, a reply is a preview plus the whole text as a file
 REPLY_QUOTE_MAX_CHARS = 500  # a native reply's quoted message, cut before it reaches the pane
 REPLY_QUOTE_NAME_MAX_CHARS = 64
 # Fixed wording: an untrusted author's display name is attacker-controlled text too.
@@ -1214,15 +1218,41 @@ class ChannelManager:
             return
         # Only an MSG block to the chat sends files; elsewhere the lines are dropped, not posted.
         body = media.split_attachments(strip_msg_markers(text))[0]
-        await self._post_reply(pending, summarize(body) if pending.summary and not bodies else body)
+        if pending.summary and not bodies:
+            await self._post_reply(pending, summarize(body), full=body)
+        else:
+            await self._post_reply(pending, body)
         if bodies and paths:
             # The text went as the turn text instead; the files the reply named still go.
             await self._send_attachments(pending, paths)
 
-    async def _post_reply(self, pending: _Pending, body: str) -> bool:
-        """Chunk and send one reply; False when a chunk could not be sent."""
+    async def _post_reply(self, pending: _Pending, body: str, full: str = "") -> bool:
+        """Chunk and send one reply; False when a chunk could not be sent. ``full`` is the
+        whole text when ``body`` is its summary. A reply past ``LONG_REPLY_MAX_CHUNKS``
+        chunks, or a summary that left text out, goes as a preview with the whole text
+        attached as a file, where the platform takes files."""
+        raw = body
         body = result_text(pending.source, body or MSG_EMPTY_REPLY, pending.child) if pending.source else body
         chunks = chunk_for(pending.loc.platform, redact.redact_text(body)) or [MSG_EMPTY_REPLY]
+        whole = full.strip() if len(full.strip()) > CHILD_SUMMARY_CHARS else ""
+        if not full and len(chunks) > LONG_REPLY_MAX_CHUNKS:
+            whole = raw.strip()
+        adapter = self._adapters.get((pending.loc.platform, pending.loc.account))
+        rest: list[str] = []
+        lang = ""
+        if whole and callable(getattr(adapter, "send_file", None)):
+            lang = prompt_skills.language(await self._ui_settings())
+            notice = media.text(lang, "long.attached")
+            if full:
+                preview = body.removesuffix(MSG_SUMMARY_TAIL) + "\n" + notice
+                chunks = chunk_for(pending.loc.platform, redact.redact_text(preview))
+            else:
+                # The first chunk, cut until it and the notice fit in one message.
+                lines, cut = chunks[0].rstrip().split("\n"), []
+                while len(lines) > 1 and len(chunk_for(pending.loc.platform, "\n".join(lines + ["…", notice]))) > 1:
+                    cut.insert(0, lines.pop())
+                rest = chunk_for(pending.loc.platform, "\n".join(cut)) + chunks[1:]
+                chunks = chunk_for(pending.loc.platform, "\n".join(lines + ["…", notice]))
         for chunk in chunks:
             try:
                 ids = await self.mirror.send(pending.loc, chunk)
@@ -1231,6 +1261,31 @@ class ChannelManager:
                 return False
             if pending.owner:
                 self.mirror.owners.remember(pending.loc.key(), ids, pending.owner)
+        if lang and not await self._send_whole_text(adapter, pending, redact.redact_text(whole), lang):
+            for chunk in rest:  # the file did not go: the chunks the preview stood for still do
+                with contextlib.suppress(Exception):
+                    ids = await self.mirror.send(pending.loc, chunk)
+                    if pending.owner:
+                        self.mirror.owners.remember(pending.loc.key(), ids, pending.owner)
+        return True
+
+    async def _send_whole_text(self, adapter: Any, pending: _Pending, text: str, lang: str) -> bool:
+        """A long reply's whole text as a Markdown file with its card; False if it did not go."""
+        data = text.encode("utf-8")
+        first = next((line for line in text.splitlines() if line.strip()), "")
+        card = report.Caption(media.text(lang, "long.title"), report.clean(first, report.SUMMARY_MAX),
+                              f"MD · {media.human_size(len(data))}")
+        try:
+            with tempfile.TemporaryFile() as fh:
+                fh.write(data)
+                fh.seek(0)
+                ids = await adapter.send_file(pending.loc, fh, f"reply-{time.strftime('%Y%m%d-%H%M%S')}.md",
+                                              caption=card)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("channels: the whole reply to %s did not go as a file: %s", pending.loc.key(), exc)
+            return False
+        if pending.owner:
+            self.mirror.owners.remember(pending.loc.key(), ids, pending.owner)
         return True
 
     # --- inbound ------------------------------------------------------------------

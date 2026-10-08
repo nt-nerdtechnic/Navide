@@ -328,6 +328,8 @@ def open_outbound(raw: str, roots: list[str | Path],
 # Chat-side notices, in the languages quick_menu.STRINGS covers.
 STRINGS: dict[str, dict[str, str]] = {
     "zh-TW": {
+        "long.title": "完整回覆",
+        "long.attached": "📎 內容較長，完整內容見附件",
         "card.todos": "待辦 {done}/{total}",
         "card.pages": "{n} 頁",
         "card.pdf_failed": "⚠️ PDF 轉換失敗：{reason}，附上原始檔",
@@ -358,6 +360,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.changed": "檢查後檔案被更動或換成連結",
     },
     "en-US": {
+        "long.title": "Full reply",
+        "long.attached": "📎 This reply is long; the full text is attached",
         "card.todos": "todos {done}/{total}",
         "card.pages": "{n} pages",
         "card.pdf_failed": "⚠️ PDF conversion failed: {reason}; the original file is attached",
@@ -388,6 +392,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "reason.changed": "the file changed or became a link after it was checked",
     },
     "ja-JP": {
+        "long.title": "返信の全文",
+        "long.attached": "📎 長い返信のため、全文を添付しました",
         "card.todos": "ToDo {done}/{total}",
         "card.pages": "{n} ページ",
         "card.pdf_failed": "⚠️ PDF 変換に失敗しました：{reason}。元のファイルを添付します",
