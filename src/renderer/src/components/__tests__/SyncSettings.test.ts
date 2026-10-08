@@ -36,7 +36,14 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
   const send = vi.fn(async (type: string, _payload?: unknown) => responses[type])
-  return { backend: { send } as never, send }
+  const handlers = new Map<string, Set<(payload: unknown) => void>>()
+  const on = vi.fn((type: string, fn: (payload: unknown) => void) => {
+    if (!handlers.has(type)) handlers.set(type, new Set())
+    handlers.get(type)!.add(fn)
+    return () => handlers.get(type)?.delete(fn)
+  })
+  const emit = (type: string, payload: unknown) => handlers.get(type)?.forEach((fn) => fn(payload))
+  return { backend: { send, on } as never, send, on, emit, handlers }
 }
 
 describe('SyncSettings', () => {
@@ -184,6 +191,44 @@ describe('SyncSettings', () => {
     })
   })
 
+  // K-2: a credentials switch left on by an older build used to show ON and
+  // disabled, so it could never be switched off. Off must stay reachable;
+  // on must stay unreachable.
+  it('lets a credentials switch left on be turned off, and never back on', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'credentials'],
+          scopes: { prompts: false, credentials: true },
+          hasKey: true,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+      'sync.set_scope': { ok: true, payload: { scopes: { prompts: false, credentials: false } } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    let creds = wrapper.findAll('button[role="switch"]')[1]
+    expect(creds.attributes('aria-checked')).toBe('true')
+    expect(creds.attributes('disabled')).toBeUndefined()
+    await creds.trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('sync.set_scope', { scope: 'credentials', enabled: false })
+
+    creds = wrapper.findAll('button[role="switch"]')[1]
+    expect(creds.attributes('aria-checked')).toBe('false')
+    expect(creds.attributes('disabled')).toBeDefined()
+    await creds.trigger('click')
+    await flushPromises()
+    expect(send).not.toHaveBeenCalledWith('sync.set_scope', {
+      scope: 'credentials',
+      enabled: true,
+    })
+  })
+
   it('still lets the four reviewed scopes be turned on', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {
@@ -236,6 +281,350 @@ describe('SyncSettings', () => {
     expect(bodies).toEqual(['claude / __default__', '(credential — not shown)'])
     expect(wrapper.text()).not.toContain('agentKey')
     expect(wrapper.findAll('.sync-conflict-side button')).toHaveLength(2)
+  })
+
+  // C-3: an MCP record carries its secrets in env and headers; a conflict
+  // preview names them but never shows their values, in the text or the hover.
+  it('masks MCP env and header values in a conflict preview', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'github',
+              local: { name: 'github', command: 'npx', env: { GITHUB_TOKEN: 'ghp_localsecret' } },
+              remote: {
+                name: 'github',
+                url: 'https://x.example',
+                headers: { Authorization: 'Bearer remotesecret' },
+              },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const html = wrapper.html()
+    expect(html).not.toContain('ghp_localsecret')
+    expect(html).not.toContain('remotesecret')
+    expect(wrapper.text()).toContain('GITHUB_TOKEN')
+    expect(wrapper.text()).toContain('Authorization')
+    expect(wrapper.text()).toContain('npx')
+  })
+
+  // X-5: "Sync now" used to look only at resp.ok, so a scope that failed,
+  // was skipped or left items behind looked exactly like one that synced.
+  it('shows what each scope did after "Sync now", not only that the call returned', async () => {
+    const { backend } = mockBackend({
+      'sync.now': {
+        ok: true,
+        payload: {
+          results: [
+            { scope: 'prompts', error: 'server said no' },
+            { scope: 'mcp', skipped: 'no-key' },
+            {
+              scope: 'skills',
+              pulled: 1,
+              pushed: 2,
+              conflicts: 0,
+              held: ['waiting-skill'],
+              refused: ['refused-skill'],
+              tooLarge: ['huge-skill'],
+            },
+            { scope: 'memory', skipped: 'disabled' },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.get('.sync-actions button').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    // A switched-off scope says nothing: off is the default, not news.
+    expect(rows).toHaveLength(3)
+    expect(rows[0].text()).toContain('Prompts')
+    expect(rows[0].text()).toContain('server said no')
+    expect(rows[0].find('.sync-result-error').exists()).toBe(true)
+    expect(rows[1].text()).toContain('no sync key')
+    expect(rows[2].text()).toContain('Pulled 1, pushed 2')
+    expect(rows[2].text()).toContain('waiting-skill')
+    expect(rows[2].text()).toContain('refused-skill')
+    expect(rows[2].text()).toContain('huge-skill')
+  })
+
+  it('says "not connected" when Sync now could not reach the server', async () => {
+    const { backend } = mockBackend({
+      'sync.now': { ok: true, payload: { results: [{ scope: 'all', skipped: 'not-connected' }] } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.get('.sync-actions button').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('All sections')
+    expect(rows[0].text()).toContain('not connected')
+  })
+
+  it('shows each scope\'s last result from sync.status on open', async () => {
+    const { backend } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'memory'],
+          scopes: { prompts: true, memory: true },
+          hasKey: true,
+          link: { state: 'connected' },
+          last: {
+            prompts: { scope: 'prompts', ok: true, pulled: 3, pushed: 0, conflicts: 0, at: 1 },
+            memory: { scope: 'memory', ok: true, pulled: 0, pushed: 0, tooLarge: ['CLAUDE.md'] },
+          },
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Pulled 3, pushed 0')
+    expect(rows[1].text()).toContain('CLAUDE.md')
+  })
+
+  // A round the backend runs on its own (after a local save, on reconnect)
+  // must show up without reopening Settings.
+  it('updates live on sync.result and reloads the conflicts', async () => {
+    const { backend, send, emit, handlers } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    const conflictLoads = () => send.mock.calls.filter(([type]) => type === 'sync.conflicts').length
+    const before = conflictLoads()
+
+    emit('sync.result', {
+      scope: 'mcp',
+      ok: false,
+      error: 'page too large',
+      pulled: 0,
+      pushed: 0,
+      conflicts: 1,
+      held: [],
+      refused: [],
+      tooLarge: [],
+      at: 2,
+    })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('MCP')
+    expect(rows[0].text()).toContain('page too large')
+    expect(conflictLoads()).toBe(before + 1)
+
+    wrapper.unmount()
+    wrapper = undefined
+    expect(handlers.get('sync.result')?.size ?? 0).toBe(0)
+  })
+
+  // ACC-12: with more than one account on a machine, "Sync" alone does not
+  // say whose cloud these sections go to.
+  it('names the account that is syncing', async () => {
+    const { backend } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts'],
+          scopes: { prompts: true },
+          hasKey: true,
+          link: { state: 'connected' },
+          account: { email: 'me@example.com', memberId: 'm-123' },
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.get('.sync-account').text()).toContain('me@example.com')
+  })
+
+  it('says nothing about an account when sync.status names none', async () => {
+    const { backend } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.find('.sync-account').exists()).toBe(false)
+  })
+
+  // The backend also reports its internal skill-files scope; it must read as
+  // a named section, not as a missing translation key.
+  it('names the skill-files scope in a live result', async () => {
+    const { backend, emit } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    emit('sync.result', {
+      scope: 'skill-files',
+      ok: true,
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      held: [],
+      refused: [],
+      tooLarge: ['big-skill'],
+      at: '2026-10-09T05:00:00Z',
+    })
+    await flushPromises()
+
+    const row = wrapper.get('.sync-result')
+    expect(row.text()).toContain('Skill files')
+    expect(row.text()).not.toContain('settings.sync')
+    expect(row.text()).toContain('big-skill')
+  })
+
+  // remoteAbsent: the cloud never had this item (a rev-0 synthetic tombstone);
+  // "keep theirs" would delete the local copy and the backend refuses it.
+  it('offers only "keep this one" when the cloud side never existed', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: { conflicts: [{ ...conflict, remote: null, remoteRev: 0, remoteAbsent: true }] },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const buttons = wrapper.findAll('.sync-conflict-side button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].text()).toBe('Keep this one')
+  })
+
+  // C-3 follow-up: secrets also ride in an MCP record's url (userinfo, query)
+  // and args (secret flags, KEY=value, Bearer tokens).
+  it('masks secrets in MCP url and args in a conflict preview', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'svc',
+              local: {
+                name: 'svc',
+                command: 'npx',
+                args: [
+                  '--api-key',
+                  'flagsecret1',
+                  '--Token=flagsecret2',
+                  'GITHUB_PAT_KEY=kvsecret3',
+                  'Bearer bearersecret4',
+                  '--verbose',
+                  'plain-arg',
+                ],
+              },
+              remote: {
+                name: 'svc',
+                url: 'https://alice:pwsecret5@host.example/mcp?access=qsecret6&mode=qsecret7#top',
+              },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const html = wrapper.html()
+    for (let i = 1; i <= 7; i += 1) expect(html).not.toMatch(new RegExp(`secret${i}`))
+    expect(html).not.toContain('alice')
+    const text = wrapper.text()
+    for (const kept of ['--api-key', '--Token=', 'GITHUB_PAT_KEY=', 'Bearer', '--verbose', 'plain-arg']) {
+      expect(text).toContain(kept)
+    }
+    expect(text).toContain('host.example/mcp?access=')
+    expect(text).toContain('mode=')
+  })
+
+  it('masks an Authorization header and a Bearer token anywhere in an MCP arg', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'svc',
+              local: {
+                name: 'svc',
+                args: ['-H', 'Authorization: Basic hdrsecret8==', '--header=authorization: Basic inlinesecret10'],
+              },
+              remote: {
+                name: 'svc',
+                args: ['-H', 'X-Upstream: Bearer midsecret9= tail'],
+              },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const html = wrapper.html()
+    expect(html).not.toContain('hdrsecret8')
+    expect(html).not.toContain('Basic')
+    expect(html).not.toContain('midsecret9')
+    expect(html).not.toContain('inlinesecret10')
+    const text = wrapper.text()
+    expect(text).toContain('Authorization: ••••')
+    expect(text).toContain('X-Upstream: Bearer ••••')
+  })
+
+  // gaveUp is the part of held that has been deferred for long (5+ rounds or
+  // 30+ minutes): stuck, still retrying, and not the same as "waiting".
+  it('shows stuck items apart from the ones that are only waiting', async () => {
+    const { backend, emit } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    emit('sync.result', {
+      scope: 'skills',
+      ok: true,
+      pulled: 0,
+      pushed: 0,
+      conflicts: 0,
+      held: ['fresh-skill', 'stuck-skill'],
+      gaveUp: ['stuck-skill'],
+      refused: [],
+      tooLarge: [],
+      at: '2026-10-09T05:00:00Z',
+    })
+    await flushPromises()
+
+    const lines = wrapper.findAll('.sync-result-line').map((l) => l.text())
+    const waiting = lines.find((l) => l.startsWith('Waiting'))
+    const stuck = lines.find((l) => l.startsWith('Stuck'))
+    expect(waiting).toContain('fresh-skill')
+    expect(waiting).not.toContain('stuck-skill')
+    expect(stuck).toContain('stuck-skill')
+    expect(stuck).toContain('retrying')
   })
 
   it('shows the active key by id and rotates only on the second click', async () => {
