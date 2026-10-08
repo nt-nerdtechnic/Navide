@@ -490,3 +490,43 @@ def test_a_file_whose_stat_fails_after_resolving_is_refused_not_raised(ws: Path,
     assert media.resolve_outbound(str(target)) == (None, "changed")
     seen["n"] = 0
     assert media.open_outbound(str(target)) == (None, "changed")
+
+
+# --- Credential dot folders and Navide's own data, now that hidden paths may be sent ---
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Path.home() follows USERPROFILE, not HOME, on Windows")
+@pytest.mark.parametrize("rel", [
+    ".ssh/config", ".ssh/known_hosts", ".aws/config", ".config/gh/hosts.yml", ".codex/auth.json",
+    ".claude/.credentials.json", ".kube/config", ".docker/config.json", ".gnupg/pubring.kbx",
+    ".config/google-chrome/Default/Preferences", ".config/chromium/Local State",
+    ".mozilla/firefox/profiles.ini", ".config/BraveSoftware/Brave-Browser/Default/History",
+    ".config/microsoft-edge/Default/Bookmarks", ".local/share/keyrings/login.keyring",
+    ".password-store/mail.txt", ".git-credentials", ".config/git/credentials",
+    ".navide/cli-profiles/claude/slot-1/settings.json", ".codex-panes/p1/config.toml",
+])
+def test_credential_dot_folders_in_home_are_refused(tmp_path: Path, monkeypatch, rel: str) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    f = _file(home / rel)
+    assert media.resolve_outbound(str(f))[1] in ("system", "denied_name")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Path.home() follows USERPROFILE, not HOME, on Windows")
+def test_ordinary_dot_files_in_home_may_still_be_sent(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    for rel in (".claude/CLAUDE.md", ".codex/config.toml", ".config/app/notes.md", ".zshrc"):
+        f = _file(home / rel)
+        assert media.resolve_outbound(str(f)) == (f.resolve(), ""), rel
+
+
+def test_navides_own_data_is_refused_but_its_outbound_folders_are_not(tmp_path: Path, monkeypatch) -> None:
+    from agent_team_backend.channels import pdf
+
+    data = tmp_path / "Agent-Team"
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(data))
+    for rel in ("device-keys.json", "hook-auth/x", "plan_mcp_auth.json", "git-accounts.json", "Local State"):
+        assert media.resolve_outbound(str(_file(data / rel))) == (None, "system"), rel
+    for f in (_file(media.media_root(data) / "pane-1" / "ab-x.png"), _file(pdf.pdf_root(data) / "p" / "a.pdf")):
+        assert media.resolve_outbound(str(f)) == (f.resolve(), "")

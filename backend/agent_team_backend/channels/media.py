@@ -46,6 +46,9 @@ DENIED_NAMES = (
     "keychains", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
     # credentials, tokens and environment files (prod.env, env.local ...)
     "credentials*", "*secret*", "*token*", "*password*", "*passwd*", "*.env", "env.*",
+    # dotted credential files (Claude Code's, git's store) and the CLIs' login files
+    # (codex, opencode, kilo keep their tokens in an auth.json)
+    ".credentials*", ".git-credentials", "auth.json",
     "*.tfstate", "*.tfstate.*", "*.netrc", "*.npmrc", "*.pypirc",
     # browser and app databases (cookies, saved logins)
     "cookies", "cookies-journal", "login data", "login data-journal", "web data",
@@ -154,6 +157,18 @@ def _system_dirs() -> list[Path]:
     return osplat.paths.system_dirs()
 
 
+def _app_dirs() -> tuple[list[Path], list[Path]]:
+    """Navide's own data folders (credential vault state, device keys, hook auth, the
+    renderer's storage), never sent from, and the folders inside them that hold what a
+    pane is meant to send: received attachments and converted PDFs."""
+    from .. import osplat
+    from ..applog import app_data_dir
+    from .pdf import pdf_root
+
+    data = app_data_dir()
+    return [data, osplat.paths.app_support_dir("Agent-Team")], [media_root(data), pdf_root(data)]
+
+
 def _scope(real: Path) -> tuple[str, ...]:
     """The segments of ``real`` the name rules judge: everything below home (or below the
     anchor, outside home), so a workspace that itself sits in a secrets/ folder is
@@ -212,6 +227,9 @@ def _check(raw: str) -> tuple[Path | None, os.stat_result | None, str]:
             fnmatch.fnmatch(part.lower(), pat) for part in scope for pat in DENIED_NAMES):
         return None, None, "denied_name"
     if any(_within(real, s) for s in _system_dirs()):
+        return None, None, "system"
+    private, outbound = _app_dirs()
+    if any(_within(real, d) for d in private) and not any(_within(real, d) for d in outbound):
         return None, None, "system"
     try:
         st = real.stat()

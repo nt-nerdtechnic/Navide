@@ -33,9 +33,18 @@ _POSIX_SYSTEM_DIRS = (
     "/proc", "/sys", "/dev", "/run", "/var/run", "/var/spool", "/root", "/var/root",
     "/private/var/root", "/System", "/Library/Keychains", "/private/var/db", "/var/db", "/var/lib",
 )
+# Home-relative credential dot folders, shared with the Windows list (osplat/_windows.py).
+_DOT_SECRET_DIRS = (
+    ".ssh", ".aws", ".azure", ".config/gcloud", ".gnupg", ".kube", ".docker", ".config/gh",
+    ".git-credentials", ".config/git/credentials", ".password-store", ".local/share/keyrings",
+    ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".config/microsoft-edge",
+    ".mozilla",
+    # Navide's own CLI account slots and per-pane CLI homes.
+    ".navide", ".codex-panes",
+)
 # Per-user folders holding credentials, browser profiles (cookies, saved logins) and
-# private messages; macOS keeps them under ~/Library (Linux's are dot folders, refused
-# anyway). Absent folders simply never match.
+# private messages: macOS keeps them under ~/Library, Linux and the CLIs in dot folders
+# (a pane may send hidden files, so these must be listed). Absent folders never match.
 _POSIX_USER_SECRET_DIRS = (
     "Library/Keychains", "Library/Cookies", "Library/Safari", "Library/Messages", "Library/Mail",
     "Library/Accounts", "Library/Group Containers", "Library/Containers",
@@ -49,6 +58,8 @@ _POSIX_USER_SECRET_DIRS = (
     "Library/Application Support/Code/User/globalStorage", "Library/Preferences",
     # Snap-packaged apps (Chromium, Firefox ...) keep their profiles under ~/snap on Linux.
     "snap",
+    # Dot folders holding keys, cloud and CLI logins, keyrings and browser profiles.
+    *_DOT_SECRET_DIRS,
 )
 
 

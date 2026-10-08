@@ -1041,13 +1041,17 @@ class WindowsLayout(WindowsPaths):
         for var, default, rels in (
             ("APPDATA", home / "AppData" / "Roaming",
              ("Microsoft/Credentials", "Microsoft/Protect", "Microsoft/Crypto",
-              "Microsoft/SystemCertificates", "Mozilla/Firefox")),
+              "Microsoft/SystemCertificates", "Mozilla/Firefox", "GitHub CLI", "gnupg")),
             ("LOCALAPPDATA", home / "AppData" / "Local",
              ("Microsoft/Credentials", "Microsoft/Vault", "Google/Chrome/User Data",
-              "Microsoft/Edge/User Data", "BraveSoftware")),
+              "Microsoft/Edge/User Data", "BraveSoftware", "Chromium/User Data")),
         ):
             bases = [default] + ([Path(env[var])] if env.get(var) else [])
             found += [base.joinpath(*rel.split("/")) for base in bases for rel in rels]
+        # The CLIs' dot folders in %USERPROFILE% (.ssh, .aws, .config\gh ...), as on POSIX.
+        from ._posix_paths import _DOT_SECRET_DIRS
+
+        found += [home.joinpath(*rel.split("/")) for rel in _DOT_SECRET_DIRS]
         return found
 
     def home_env_var(self) -> str:

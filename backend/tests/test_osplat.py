@@ -250,6 +250,11 @@ class TestPaths:
                     "Library/Application Support/Code/User/globalStorage", "Library/Preferences", "snap"):
             assert home / rel in _linux.paths.system_dirs(), rel
         assert Path("/run") in _linux.paths.system_dirs()
+        # Credential and browser-profile dot folders: hidden paths are sendable now.
+        for rel in (".ssh", ".aws", ".config/gh", ".gnupg", ".kube", ".docker", ".mozilla",
+                    ".config/google-chrome", ".local/share/keyrings", ".password-store", ".navide"):
+            assert home / rel in _linux.paths.system_dirs(), rel
+            assert home / rel in _darwin.paths.system_dirs(), rel
         monkeypatch.setenv("SystemRoot", r"D:\Win")
         monkeypatch.setenv("ProgramData", r"D:\PD")
         monkeypatch.delenv("ProgramFiles", raising=False)
@@ -263,6 +268,10 @@ class TestPaths:
         # An overridden variable adds its folder; it never removes the documented default.
         assert Path(r"C:\Windows") in found and Path(r"C:\ProgramData") in found
         assert Path.home() / "AppData" / "Roaming" / "Microsoft" / "Credentials" in found
+        for rel in (".ssh", ".aws", ".config/gh", ".docker", ".kube", ".navide", ".codex-panes"):
+            assert home.joinpath(*rel.split("/")) in found, rel
+        assert Path(r"D:\Users\me\AppData\Roaming") / "GitHub CLI" in found
+        assert Path(r"D:\Users\me\AppData\Local") / "Chromium" / "User Data" in found
 
     # A quoted path reaches a program through the platform's own shell
     # convention: POSIX apostrophes are literal characters to cmd.exe.
