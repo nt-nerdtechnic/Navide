@@ -3556,6 +3556,7 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
     # Reading the key touches the Keychain, which can block on a dialog.
     has_key, key_id, legacy_pending = await asyncio.to_thread(_sync_key_facts)
     conflicts = await asyncio.to_thread(app.sync_store.conflicts, None)
+    link = await server_link.status()
     await session.send_json(
         make_response(
             msg_id,
@@ -3570,7 +3571,16 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
                 "keyId": key_id,
                 "legacyRingPending": legacy_pending,
                 "conflicts": len(conflicts),
-                "link": await server_link.status(),
+                "link": link,
+                # Each scope's last round, the same payload ``sync.result``
+                # carries, so a pane opened after the round still sees it.
+                "last": server_link.sync_last_results(),
+                # Which account these scopes sync with — said beside them,
+                # because switching accounts switches them all off.
+                "account": {
+                    "email": str(link.get("accountEmail") or ""),
+                    "memberId": str(link.get("memberId") or ""),
+                },
             },
         )
     )

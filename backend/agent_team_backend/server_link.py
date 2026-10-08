@@ -1047,11 +1047,18 @@ class ServerLink:
                     app.broadcast(make_event("ui.settings_changed", {"settings": delta}))
                 )
 
+            def _result(result: dict[str, Any]) -> None:
+                # Every round's outcome, per scope, to every window: a Settings
+                # pane that only learns what happened when it asks shows a
+                # sync that failed an hour ago as fine.
+                self._spawn(app.broadcast(make_event("sync.result", result)))
+
             engine = engine_mod.SyncEngine(
                 app.sync_store,
                 self._request,
                 device_id=lambda: self._device_id,
                 enabled=sync_scopes.scope_enabled,
+                on_result=_result,
             )
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
             engine.register(sync_scopes.McpScope())
@@ -3768,6 +3775,18 @@ async def sync_now(scope: str = "") -> list[dict[str, Any]]:
     if scope:
         return [await engine.sync(scope)]
     return await engine.sync_all()
+
+
+def sync_last_results() -> dict[str, dict[str, Any]]:
+    """The last round's result of each scope, as ``sync.result`` sent it.
+
+    Empty when there is no link, or its engine has not been built yet: the
+    results live on the engine, and a new link (a reconfigure) starts over.
+    """
+    link = _link
+    if link is None or link._sync_engine is None:  # noqa: SLF001 - same module
+        return {}
+    return link._sync_engine.last_results()  # noqa: SLF001 - same module
 
 
 async def sync_inventory(scope: str = "") -> dict[str, Any]:
