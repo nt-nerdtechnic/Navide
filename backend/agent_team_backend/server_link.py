@@ -1047,11 +1047,18 @@ class ServerLink:
                     app.broadcast(make_event("ui.settings_changed", {"settings": delta}))
                 )
 
+            def _result(result: dict[str, Any]) -> None:
+                # Every round's outcome, per scope, to every window: a Settings
+                # pane that only learns what happened when it asks shows a
+                # sync that failed an hour ago as fine.
+                self._spawn(app.broadcast(make_event("sync.result", result)))
+
             engine = engine_mod.SyncEngine(
                 app.sync_store,
                 self._request,
                 device_id=lambda: self._device_id,
                 enabled=sync_scopes.scope_enabled,
+                on_result=_result,
             )
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
             engine.register(sync_scopes.McpScope())
@@ -3694,23 +3701,65 @@ _link: ServerLink | None = None
 #: account signed in" or "signed out", both of which let go of everything the
 #: previous account imported. Kept at module level because the ServerLink
 #: instance is replaced on every reconfigure.
-_settled_account: str | None = None
+#: ``_UNREAD`` until the first call in this process, which reads the
+#: namespace the previous process settled on (``SYNC_ACCOUNT_SETTING``):
+#: an account switched while the app was closed is still a switch.
+_UNREAD: Any = object()
+_settled_account: str | None = _UNREAD
+
+#: ui_settings key holding the namespace (a hash, see
+#: ``sync_keyring.namespace_for``) of the last account sync settled on; ""
+#: after a sign-out.
+SYNC_ACCOUNT_SETTING = "sync-account-namespace"
+
+
+def _settings_store() -> Any:
+    from . import app
+
+    return app.ui_settings_store
+
+
+def _persisted_account() -> str | None:
+    value = _settings_store().get().get(SYNC_ACCOUNT_SETTING)
+    return value if isinstance(value, str) and value else None
+
+
+def _persist_account(namespace: str | None) -> None:
+    if _persisted_account() != (namespace or None):
+        _settings_store().set({SYNC_ACCOUNT_SETTING: namespace or ""})
 
 
 async def _note_account(namespace: str | None) -> None:
     """Record which account is settled now; on a real change, tell the sync
-    scopes so imported credentials and the credentials scope's engine state
-    go with the account that owned them. The ring is not touched — it stays
-    under its own namespace for that account's next sign-in."""
+    scopes so imported credentials and every scope's engine state go with the
+    account that owned them, and every scope is switched off. The ring is not
+    touched — it stays under its own namespace for that account's next
+    sign-in."""
     global _settled_account
     previous = _settled_account
     _settled_account = namespace
+    try:
+        if previous is _UNREAD:
+            previous = await asyncio.to_thread(_persisted_account)
+        await asyncio.to_thread(_persist_account, namespace)
+    except Exception as err:  # noqa: BLE001 - the link is not what this protects
+        log.warning("could not read or record the settled sync account: %s", err)
+        if previous is _UNREAD:
+            previous = None
     if previous is None or previous == namespace:
         return
     try:
-        from . import sync_scopes
+        from . import app, sync_scopes
+        from .ipc import make_event
 
         await asyncio.to_thread(sync_scopes.on_account_changed)
+        link = _link
+        if link is not None and link._sync_engine is not None:  # noqa: SLF001 - same module
+            link._sync_engine.forget_results()  # noqa: SLF001 - same module
+        scopes = await asyncio.to_thread(sync_scopes.enabled_scopes)
+        await app.broadcast(
+            make_event("ui.settings_changed", {"settings": {sync_scopes.SCOPES_SETTING: scopes}})
+        )
     except Exception as err:  # noqa: BLE001 - the link is not what this protects
         log.warning("could not clear the previous account's imported state: %s", err)
 
@@ -3768,6 +3817,59 @@ async def sync_now(scope: str = "") -> list[dict[str, Any]]:
     if scope:
         return [await engine.sync(scope)]
     return await engine.sync_all()
+
+
+#: How long a local save waits for the next one before its round starts.
+SYNC_SOON_DELAY_S = 2.0
+#: The pending round of each scope, replaced by every save inside the delay.
+_sync_soon_tasks: dict[str, "asyncio.Task[None]"] = {}
+
+
+def sync_soon(scope: str) -> None:
+    """A local save of *scope* happened: carry it up shortly.
+
+    Debounced per scope, so a burst of saves (typing in a prompt, toggling
+    several skills) becomes one round. Whether the scope is on and the link
+    is up is decided when the round would start, not when it was asked for —
+    by then either may have changed. Must be called on the event loop.
+    """
+    pending = _sync_soon_tasks.pop(scope, None)
+    if pending is not None and not pending.done():
+        pending.cancel()
+    task = asyncio.get_running_loop().create_task(_sync_soon(scope))
+    _sync_soon_tasks[scope] = task
+    task.add_done_callback(
+        lambda done: _sync_soon_tasks.pop(scope, None) if _sync_soon_tasks.get(scope) is done else None
+    )
+
+
+async def _sync_soon(scope: str) -> None:
+    try:
+        await asyncio.sleep(SYNC_SOON_DELAY_S)
+        from . import sync_scopes
+
+        link = _link
+        if link is None or not link._authenticated:  # noqa: SLF001 - same module
+            return
+        if not await asyncio.to_thread(sync_scopes.scope_enabled, scope):
+            return
+        await sync_now(scope)
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:  # noqa: BLE001 - the save itself already succeeded
+        log.warning("the sync round after a local %s save failed: %s", scope, err)
+
+
+def sync_last_results() -> dict[str, dict[str, Any]]:
+    """The last round's result of each scope, as ``sync.result`` sent it.
+
+    Empty when there is no link, or its engine has not been built yet: the
+    results live on the engine, and a new link (a reconfigure) starts over.
+    """
+    link = _link
+    if link is None or link._sync_engine is None:  # noqa: SLF001 - same module
+        return {}
+    return link._sync_engine.last_results()  # noqa: SLF001 - same module
 
 
 async def sync_inventory(scope: str = "") -> dict[str, Any]:

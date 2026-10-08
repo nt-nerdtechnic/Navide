@@ -139,7 +139,8 @@ def test_a_server_without_blob_storage_skips_the_round(tmp_path, account_key) ->
     adapter = HookScope({"big": {"blobs": ["a" * 64]}})
     adapter.supported = False
     engine, _ = _engine(tmp_path, "d1", server, adapter)
-    assert _run(engine.sync("skill-files")) == {"scope": "skill-files", "skipped": "unsupported"}
+    result = _run(engine.sync("skill-files"))
+    assert (result["scope"], result["skipped"]) == ("skill-files", "unsupported")
     assert server.wire == []
 
 

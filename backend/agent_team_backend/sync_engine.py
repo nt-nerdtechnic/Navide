@@ -68,6 +68,32 @@ PULL_PAGE = 200
 #: because the server is forbidden to decode it to find out how big it is.
 MAX_BODY_BYTES = 512 * 1024
 MAX_PUSH_BYTES = 768 * 1024
+#: A pull reply is one frame too, and this client's websocket refuses a frame
+#: over 1 MiB by closing the whole link (1009) — messaging included — after
+#: which the next round asks for the same page again. Navide-Server caps a page
+#: by bytes from fix/sync-page-bytes on; an older server only by row count, so
+#: the client asks for no more rows than this budget holds at the largest row
+#: size it expects. A guess first, then the largest row actually seen.
+PULL_FRAME_BUDGET = 768 * 1024
+#: An adapter's ``DeferItem`` (files still downloading) is retried at once the
+#: first time, then with an exponential backoff from the base to the cap, and
+#: reported as given up —
+#: still retried — after this many attempts or this long.
+DEFER_BACKOFF_BASE_S = 30.0
+DEFER_BACKOFF_MAX_S = 15 * 60.0
+DEFER_GIVE_UP_ATTEMPTS = 5
+DEFER_GIVE_UP_AFTER_S = 30 * 60.0
+#: The row size a scope's first page is sized for. Instruction files and
+#: inline skills run up to the record limit, so those scopes page one row at a
+#: time until their rows are seen; prompt and MCP records are small.
+PULL_ROW_GUESS: dict[str, int] = {
+    "memory": MAX_BODY_BYTES,
+    "skills": MAX_BODY_BYTES,
+    "credentials": 16 * 1024,
+    "prompts": 32 * 1024,
+    "mcp": 16 * 1024,
+    "skill-files": 64 * 1024,
+}
 
 KEEP_LOCAL = "local"
 KEEP_REMOTE = "remote"
@@ -413,6 +439,11 @@ class SyncStore:
                     "remoteDevice": str(r[5]),
                     "seenAt": int(r[6]),
                     "sealed": sealed,
+                    # The server answered rev 0: it holds no row for this item
+                    # at all (it never had one, or it is another account's
+                    # server). "Keep the cloud copy" would mean deleting the
+                    # local one for nothing, so resolve refuses it.
+                    "remoteAbsent": int(r[4]) == 0,
                 }
             )
         return out
@@ -504,12 +535,26 @@ class SyncEngine:
         device_id: Callable[[], str],
         enabled: Callable[[str], bool],
         signing_key_for: Callable[[str], str] | None = None,
+        on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._store = store
         self._request = request
         self._device_id = device_id
         self._enabled = enabled
         self._signing_key_for = signing_key_for or _pinned_signing_key
+        #: Told every round's result (see ``sync``) — the link broadcasts it
+        #: to the renderer as ``sync.result``. Must not raise; it is guarded.
+        self._on_result = on_result
+        #: The last result of each scope, for ``sync.status``.
+        self._last: dict[str, dict[str, Any]] = {}
+        #: Per scope, the largest pulled row seen in this process, in bytes.
+        self._row_bytes: dict[str, int] = {}
+        #: Items whose ``apply`` deferred, by (scope, item id): attempts, first
+        #: and next-allowed time. In memory on purpose: the stored cursor
+        #: already keeps a held row coming back across restarts, so all that
+        #: is lost on a restart is the backoff, which then starts over.
+        self._defers: dict[tuple[str, str], dict[str, float]] = {}
+        self._clock: Callable[[], float] = time.monotonic
         self._adapters: dict[str, ScopeAdapter] = {}
         #: Per scope, the highest cursor a push reply may move to while a
         #: pulled row is waiting for its key. Set by ``_pull``, honoured by
@@ -524,6 +569,10 @@ class SyncEngine:
         self._locks: dict[str, asyncio.Lock] = {}
         #: Rounds started by ``_kick``, held so they are not collected mid-run.
         self._kicked: set[asyncio.Task[Any]] = set()
+        #: Per scope, the items the running round could not take or send, by
+        #: reason ("refused", "held", "tooLarge"). Filled from worker threads,
+        #: read once the round ends; one round per scope runs at a time.
+        self._notes: dict[str, dict[str, list[str]]] = {}
 
     def register(self, adapter: ScopeAdapter) -> None:
         if adapter.scope not in SCOPES + INTERNAL_SCOPES:
@@ -540,32 +589,86 @@ class SyncEngine:
 
     # ── one round ───────────────────────────────────────────────────────
     async def sync(self, scope: str) -> dict[str, Any]:
+        """One round of *scope*, and what came of it.
+
+        The answer always has the same shape — ``scope``, ``ok``, ``pulled``,
+        ``pushed``, ``conflicts``, ``held``, ``refused``, ``tooLarge``, ``at``,
+        plus ``skipped`` or ``error`` when they apply — and is remembered as the
+        scope's last result and handed to ``on_result``. A failed round is
+        recorded the same way and then re-raised, so a caller that asked for
+        this scope by name still hears the failure.
+        """
+        try:
+            result = await self._round(scope)
+        except Exception as err:
+            self._finish(scope, {"ok": False, "error": str(err)})
+            raise
+        return self._finish(scope, result)
+
+    async def _round(self, scope: str) -> dict[str, Any]:
         adapter = self._adapters.get(scope)
         if adapter is None:
             raise SyncError(f"no adapter registered for {scope!r}")
         if not self._enabled(scope):
-            return {"scope": scope, "skipped": "disabled"}
+            return {"skipped": "disabled"}
         if not await asyncio.to_thread(sync_keyring.has_account_key):
-            return {"scope": scope, "skipped": "no-key"}
+            return {"skipped": "no-key"}
         async with self._locks.setdefault(scope, asyncio.Lock()):
+            self._notes[scope] = {}
             # An adapter that needs the server for more than records (blob
             # transfers) is handed the connection here, and may decline the
             # round when the server cannot serve it.
             prepare = getattr(adapter, "prepare", None)
             if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
-                return {"scope": scope, "skipped": "unsupported"}
+                return {"skipped": "unsupported"}
             pulled = await self._pull(adapter)
             pushed = await self._push(adapter)
-        return {
+        return {"pulled": pulled, "pushed": pushed}
+
+    def _finish(self, scope: str, outcome: dict[str, Any]) -> dict[str, Any]:
+        notes = self._notes.pop(scope, {})
+        try:
+            conflicts = len(self._store.conflict_ids(scope))
+        except Exception:  # noqa: BLE001 - a result is still worth reporting
+            conflicts = 0
+        result: dict[str, Any] = {
             "scope": scope,
-            "pulled": pulled,
-            "pushed": pushed,
-            "conflicts": len(self._store.conflict_ids(scope)),
+            "ok": True,
+            "pulled": 0,
+            "pushed": 0,
+            "conflicts": conflicts,
+            "held": list(notes.get("held", [])),
+            "refused": list(notes.get("refused", [])),
+            "tooLarge": list(notes.get("tooLarge", [])),
+            # Held items that have deferred too often or too long; a subset
+            # of ``held``, still retried.
+            "gaveUp": list(notes.get("gaveUp", [])),
+            **outcome,
+            "at": now_iso(),
         }
+        self._last[scope] = result
+        if self._on_result is not None:
+            try:
+                self._on_result(dict(result))
+            except Exception as err:  # noqa: BLE001 - a listener cannot fail a round
+                log.warning("the sync result listener failed: %s", err)
+        return result
+
+    def last_results(self) -> dict[str, dict[str, Any]]:
+        """The last result of each scope that has run since this process began."""
+        return {scope: dict(result) for scope, result in self._last.items()}
+
+    def forget_results(self) -> None:
+        """Drop the remembered results — they belonged to another account."""
+        self._last.clear()
 
     def _kick(self, scope: str) -> None:
         """Run one more round of *scope* soon. For an adapter whose background
         work (a finished download) has made a held record appliable."""
+        # The adapter says its files are here: retry now, not at the end of
+        # the backoff a deferral earned while they were on their way.
+        for key in [k for k in self._defers if k[0] == scope]:
+            self._defers[key]["next"] = 0.0
         task = asyncio.get_running_loop().create_task(self.sync(scope))
         self._kicked.add(task)
         task.add_done_callback(self._kicked.discard)
@@ -577,7 +680,7 @@ class SyncEngine:
                 results.append(await self.sync(scope))
             except Exception as err:  # noqa: BLE001 - one bad scope must not stop the rest
                 log.warning("sync of %s failed: %s", scope, err)
-                results.append({"scope": scope, "error": str(err)})
+                results.append(self._last.get(scope) or {"scope": scope, "ok": False, "error": str(err)})
         return results
 
     # ── pull ────────────────────────────────────────────────────────────
@@ -585,30 +688,56 @@ class SyncEngine:
         scope = adapter.scope
         applied = 0
         self._cursor_barrier.pop(scope, None)
+        reset = False
+        #: Paging position, kept apart from the stored cursor: a held row stops
+        #: the stored cursor just short of it, but not the reading of the rows
+        #: behind it — one item that cannot land must not hold the whole scope.
+        since = self._store.cursor(scope)
+        barrier: int | None = None
         while True:
-            since = self._store.cursor(scope)
             reply = _payload(
-                await self._request("sync.pull", {"scope": scope, "since": since, "limit": PULL_PAGE})
+                await self._request(
+                    "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
+                )
             )
+            if not reset and since > 0 and int(reply.get("cursor") or 0) < since:
+                # The server has never issued the revs this machine has read up
+                # to: another account behind the same link, or a server that
+                # started over. Everything recorded against the old revs is
+                # about rows that are not there, so the scope is read again from
+                # the start and its items go up as new ones. Once per round.
+                log.warning(
+                    "sync.pull on %s: the server's cursor is behind ours; starting %s over",
+                    scope, scope,
+                )
+                self._store.forget(scope)
+                reset = True
+                since = 0
+                continue
             items = reply.get("items")
             items = items if isinstance(items, list) else []
+            self._learn_rows(scope, items)
             count, held_rev = await asyncio.to_thread(self._apply_page, adapter, items)
             applied += count
-            cursor = int(reply.get("cursor") or since)
-            if held_rev is not None:
+            # The reply's ``cursor`` is the scope's current maximum rev, not the
+            # last rev of this page. Stepping on it while ``more`` is set would
+            # skip every row between this page and the maximum — for good. So a
+            # page that is not the last one advances to its own highest row, and
+            # only the last page may take the server's maximum.
+            highest = max((_rev_of(raw) for raw in items), default=since)
+            cursor = highest if reply.get("more") else max(highest, int(reply.get("cursor") or since))
+            if held_rev is not None and barrier is None:
                 # A record sealed under a key this machine has not been handed
-                # yet. The cursor stops just short of it, so the next round —
-                # after a paired device sends the ring — reads it again; the
-                # rows behind it in this page were not applied either, so
-                # nothing is skipped past. Once per round, not a retry loop.
-                cursor = max(since, held_rev - 1)
-                if cursor > since:
-                    self._store.set_cursor(scope, cursor)
-                self._cursor_barrier[scope] = cursor
+                # yet, or whose files are still on their way. The stored cursor
+                # stops just short of it for good — across restarts too — so a
+                # later round reads it again; the rows behind it are applied
+                # now and simply re-read (as no-ops) until it lands.
+                barrier = max(0, held_rev - 1)
                 log.info("sync.pull on %s is holding at rev %d (a newer key, or files in transit)", scope, held_rev)
-                break
-            if cursor > since:
-                self._store.set_cursor(scope, cursor)
+            stored = self._store.cursor(scope)
+            durable = cursor if barrier is None else min(cursor, barrier)
+            if durable > stored:
+                self._store.set_cursor(scope, durable)
             if not reply.get("more"):
                 break
             if cursor <= since:
@@ -616,6 +745,9 @@ class SyncEngine:
                 # than loop forever on a server that disagrees with itself.
                 log.warning("sync.pull on %s made no progress; stopping this round", scope)
                 break
+            since = cursor
+        if barrier is not None:
+            self._cursor_barrier[scope] = max(barrier, self._store.cursor(scope))
         return applied
 
     def _apply_page(
@@ -623,19 +755,28 @@ class SyncEngine:
     ) -> tuple[int, int | None]:
         """Apply one pull page. Runs in a worker thread; touches disk freely.
 
-        Returns how many rows were applied and, when a row named a key this
-        machine does not hold, that row's rev — the page stops there.
+        Returns how many rows were applied and the lowest rev of a row that
+        is held — a key this machine lacks, or files still on their way — or
+        None. A held row does not stop the rows behind it.
         """
         snapshot = adapter.snapshot()
         blocked = self._store.conflict_ids(adapter.scope)
         applied = 0
+        held: int | None = None
         for raw in sorted(items, key=_rev_of):
             try:
                 if self._apply_one(adapter, raw, snapshot, blocked):
                     applied += 1
             except _HoldPull as hold:
-                return applied, hold.rev
-        return applied, None
+                self._note(adapter.scope, "held", hold.item_id)
+                if self._gave_up(adapter.scope, hold.item_id):
+                    self._note(adapter.scope, "gaveUp", hold.item_id)
+                held = hold.rev if held is None else min(held, hold.rev)
+                if _sensitive(adapter):
+                    # A secret scope keeps the stricter rule: nothing behind a
+                    # held row is applied until it lands.
+                    break
+        return applied, held
 
     def _apply_one(
         self,
@@ -660,6 +801,10 @@ class SyncEngine:
         updated_at = str(raw.get("updatedAt") or "")
         deleted = bool(raw.get("deleted"))
         body = str(raw.get("body") or "")
+        origin = self._origin(raw, scope=scope, item_id=item_id)
+        if origin == _ORIGIN_FORGED:
+            log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
+            return False
         if device == self._device_id() and not explicit:
             # Our own write coming back. Record the rev so the next push edits
             # from the right base, but there is nothing to apply. The key it
@@ -676,15 +821,12 @@ class SyncEngine:
                     sealed_kid="" if deleted else (_kid_of(body) or state.sealed_kid),
                 )
             return False
-        if not self._origin_ok(raw, scope=scope, item_id=item_id):
-            log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
-            return False
         try:
             remote = None if deleted else json.loads(
                 sync_keyring.decrypt(body, scope=scope, item_id=item_id)
             )
         except sync_keyring.UnknownKeyId:
-            raise _HoldPull(rev)
+            raise _HoldPull(rev, item_id)
         except Exception as err:  # noqa: BLE001 - an unreadable record is not fatal
             if _sensitive(adapter):
                 # A credential that will not open is not a row to step over:
@@ -711,7 +853,19 @@ class SyncEngine:
         # sends no tombstone, so an incoming record is offered to the adapter
         # rather than parked as a clash.
         absent_ok = _sensitive(adapter) and item_id not in snapshot
-        if local_hash != agreed_hash and local_hash != remote_hash and not absent_ok:
+        # A tombstone carries no ciphertext, so nothing but the signature says
+        # who wrote it — and a device this machine never pinned has nothing to
+        # check that against. A server could mint one for any item. Such a
+        # delete is not applied over something this machine holds; it is asked
+        # about, the same way a clash is. A live record needs no such care: its
+        # body opened under the account key, which is the proof of origin.
+        unproven_delete = (
+            remote is None and origin == _ORIGIN_UNKNOWN and item_id in snapshot
+            and not _sensitive(adapter)
+        )
+        if unproven_delete or (
+            local_hash != agreed_hash and local_hash != remote_hash and not absent_ok
+        ):
             self._store.record_conflict(
                 scope,
                 item_id,
@@ -729,10 +883,29 @@ class SyncEngine:
             # does not hold it — a credential switched off on this device.
             # The rev is still recorded so the row is not re-read, but the
             # agreed hash stays empty: this machine holds nothing for it.
+            if self._backing_off(scope, item_id):
+                raise _HoldPull(rev, item_id)
             try:
                 held = adapter.apply(item_id, remote) is not False
+                self._defers.pop((scope, item_id), None)
             except DeferItem:
-                raise _HoldPull(rev) from None
+                self._deferred(scope, item_id)
+                raise _HoldPull(rev, item_id) from None
+            except Exception as err:  # noqa: BLE001 - a refusal, see below
+                if _sensitive(adapter):
+                    raise
+                log.warning("%s refused %s: %s", scope, item_id, err)
+                held = False
+            if not held and not _sensitive(adapter):
+                # A refusal of an ordinary scope records nothing. Writing the
+                # rev down with an empty hash read, on the next push, as "this
+                # machine deleted it" (absent from the snapshot) or "this
+                # machine edited it" (an older copy still there) — and either
+                # one went up and erased the record on the device that wrote
+                # it. Leaving the agreed state as it was means neither: the
+                # item is listed as refused and waits for its next change.
+                self._note(scope, "refused", item_id)
+                return False
         self._store.set_state(
             scope,
             item_id,
@@ -743,7 +916,71 @@ class SyncEngine:
         )
         return held
 
-    def _origin_ok(self, raw: dict[str, Any], *, scope: str, item_id: str) -> bool:
+    def _backing_off(self, scope: str, item_id: str) -> bool:
+        entry = self._defers.get((scope, item_id))
+        return entry is not None and self._clock() < entry["next"]
+
+    def _deferred(self, scope: str, item_id: str) -> None:
+        now = self._clock()
+        entry = self._defers.setdefault((scope, item_id), {"attempts": 0, "first": now, "next": now})
+        entry["attempts"] += 1
+        # The first deferral is free: it is usually "the download just
+        # started", and the next round should simply look again.
+        attempts = int(entry["attempts"])
+        delay = 0.0 if attempts < 2 else min(DEFER_BACKOFF_BASE_S * 2 ** (attempts - 2), DEFER_BACKOFF_MAX_S)
+        entry["next"] = now + delay
+
+    def _gave_up(self, scope: str, item_id: str) -> bool:
+        """Whether an item has deferred long or often enough to say so: it is
+        still retried (on the longest backoff), only reported as stuck."""
+        entry = self._defers.get((scope, item_id))
+        if entry is None:
+            return False
+        return (
+            entry["attempts"] >= DEFER_GIVE_UP_ATTEMPTS
+            or self._clock() - entry["first"] >= DEFER_GIVE_UP_AFTER_S
+        )
+
+    def _pull_limit(self, scope: str) -> int:
+        """How many rows to ask one pull page for; see ``PULL_FRAME_BUDGET``."""
+        row = max(self._row_bytes.get(scope, 0), PULL_ROW_GUESS.get(scope, MAX_BODY_BYTES))
+        return max(1, min(PULL_PAGE, PULL_FRAME_BUDGET // max(row, 1)))
+
+    def _learn_rows(self, scope: str, rows: list[Any]) -> None:
+        sizes = [len(canonical(r).encode("utf-8")) for r in rows if isinstance(r, dict)]
+        if sizes and max(sizes) > self._row_bytes.get(scope, 0):
+            self._row_bytes[scope] = max(sizes)
+
+    def _note(self, scope: str, reason: str, item_id: str) -> None:
+        ids = self._notes.setdefault(scope, {}).setdefault(reason, [])
+        if item_id not in ids:
+            ids.append(item_id)
+
+    def _origin(self, raw: dict[str, Any], *, scope: str, item_id: str) -> str:
+        """Whether the record provably came from the device it names.
+
+        ``_ORIGIN_VERIFIED`` when it carries that device's signature under the
+        key pinned for it — or under this machine's own key, for a record that
+        names this machine: the server stamps ``deviceId``, so "it says it is
+        ours" is the server's word, not proof. ``_ORIGIN_FORGED`` when a key is
+        known and the signature does not match. ``_ORIGIN_UNKNOWN`` when no key
+        is known to check against.
+        """
+        device = str(raw.get("deviceId") or "")
+        if device and device == self._device_id():
+            try:
+                key = device_signing.public_key()
+            except Exception:  # noqa: BLE001 - no own key to check with
+                key = ""
+        else:
+            key = self._signing_key_for(device)
+        if not key:
+            return _ORIGIN_UNKNOWN
+        return _ORIGIN_VERIFIED if self._origin_ok(raw, scope=scope, item_id=item_id, key=key) else _ORIGIN_FORGED
+
+    def _origin_ok(
+        self, raw: dict[str, Any], *, scope: str, item_id: str, key: str | None = None
+    ) -> bool:
         """Whether the record really came from the device it names.
 
         Trust on first use, the same rule the message path already follows: a
@@ -751,7 +988,8 @@ class SyncEngine:
         key no longer matches what was pinned is refused rather than re-pinned.
         """
         device = str(raw.get("deviceId") or "")
-        key = self._signing_key_for(device)
+        if key is None:
+            key = self._signing_key_for(device)
         if not key:
             return True
         return device_signing.verify_sync(
@@ -876,12 +1114,21 @@ class SyncEngine:
         deleted = payload is None
         body = ""
         if not deleted:
+            # An adapter may know an item cannot travel for a reason the body
+            # size does not show (a skill naming more blobs than the server
+            # takes). It stays in the snapshot — so it is never mistaken for a
+            # delete — and is reported rather than sent.
+            oversized = getattr(self._adapters.get(scope), "oversized", None)
+            if oversized is not None and oversized(item_id, payload):
+                self._note(scope, "tooLarge", item_id)
+                return None
             body = sync_keyring.encrypt(canonical(payload), scope=scope, item_id=item_id)
             if len(body.encode("utf-8")) > MAX_BODY_BYTES:
                 log.warning(
                     "skipping %s/%s: %d bytes is over the %d byte record limit",
                     scope, item_id, len(body.encode("utf-8")), MAX_BODY_BYTES,
                 )
+                self._note(scope, "tooLarge", item_id)
                 return None
         state = states.get(item_id)
         item = {
@@ -940,7 +1187,7 @@ class SyncEngine:
         adapter = self._adapters.get(scope)
         for entry in conflicts if isinstance(conflicts, list) else []:
             self._record_push_conflict(scope, entry, by_id, sealed=_sensitive(adapter))
-        cursor = int(reply.get("cursor") or 0)
+        cursor = _contiguous_cursor(self._store.cursor(scope), accepted)
         barrier = self._cursor_barrier.get(scope)
         if barrier is not None:
             # A row below is still waiting for its key. Re-reading our own
@@ -948,7 +1195,8 @@ class SyncEngine:
             cursor = min(cursor, barrier)
         if cursor > self._store.cursor(scope):
             # Our own accepted writes moved the cursor; recording it here keeps
-            # the next pull from re-reading them.
+            # the next pull from re-reading them. Only when they sit directly on
+            # top of what was read — see ``_contiguous_cursor``.
             self._store.set_cursor(scope, cursor)
         return len(accepted) if isinstance(accepted, list) else 0
 
@@ -1031,13 +1279,22 @@ class SyncEngine:
             raise SyncError(f"no unresolved conflict for {scope}/{item_id}")
         if keep == KEEP_REMOTE:
             remote = row["remote"]
+            if int(row["remoteRev"]) == 0:
+                raise SyncError(
+                    f"the cloud holds nothing for {scope}/{item_id}; keep the local copy "
+                    "to put it back, or remove it here yourself"
+                )
             try:
-                adapter.apply(item_id, remote)
+                refused = adapter.apply(item_id, remote) is False
             except DeferItem as err:
                 # Its files are still downloading. Keeping the conflict is the
                 # safe answer: marking it agreed now would push this machine's
                 # old files over the copy that was just chosen.
                 raise SyncError(f"{scope}/{item_id} is still downloading; try again shortly") from err
+            if refused:
+                # Marking it agreed would push this machine's copy over the one
+                # just chosen, exactly as above. The conflict stays.
+                raise SyncError(f"{scope}/{item_id} could not be written here; the conflict stays open")
             # Recorded under the key the winning body actually came sealed
             # with (empty when unknown), so a copy under a retired key is
             # still re-sealed by the next push rather than taken as current.
@@ -1050,12 +1307,15 @@ class SyncEngine:
                 sealed_kid="" if remote is None else str(row.get("remoteKid") or ""),
             )
         elif keep == KEEP_LOCAL:
-            state = self._store.state(scope, item_id)
+            # The agreed hash is cleared, not kept: the local copy may well be
+            # the one that was agreed before (a delete arrived over an item
+            # nobody here touched), and an unchanged item is never pushed. The
+            # choice is only carried up if the next push sees it as changed.
             self._store.set_state(
                 scope,
                 item_id,
                 rev=int(row["remoteRev"]),
-                synced_hash=state.synced_hash if state else "",
+                synced_hash="",
                 deleted=False,
             )
         else:
@@ -1114,11 +1374,12 @@ class SyncEngine:
         while True:
             reply = _payload(
                 await self._request(
-                    "sync.pull", {"scope": scope, "since": since, "limit": PULL_PAGE}
+                    "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
                 )
             )
             page = reply.get("items")
             page = [r for r in page if isinstance(r, dict)] if isinstance(page, list) else []
+            self._learn_rows(scope, page)
             rows.extend(page)
             if not reply.get("more"):
                 break
@@ -1315,6 +1576,7 @@ class SyncEngine:
         snapshot = adapter.snapshot()
         blocked = self._store.conflict_ids(scope)
         out: list[dict[str, Any]] = []
+        refused = self._notes.setdefault(scope, {}).setdefault("refused", [])
         for item_id in wanted:
             row = by_id.get(item_id)
             if item_id in blocked:
@@ -1327,6 +1589,8 @@ class SyncEngine:
                 )
             elif item_id in self._store.conflict_ids(scope):
                 out.append({"itemId": item_id, "result": "conflict"})
+            elif item_id in refused:
+                out.append({"itemId": item_id, "result": "refused"})
             elif str(row.get("deviceId") or "") == self._device_id():
                 out.append({"itemId": item_id, "result": "own-write"})
             else:
@@ -1369,16 +1633,44 @@ class SyncEngine:
             raise SyncError("this machine does not hold the account sync key")
 
 
+_ORIGIN_VERIFIED = "verified"
+_ORIGIN_UNKNOWN = "unknown"
+_ORIGIN_FORGED = "forged"
+
+
 class _HoldPull(Exception):
     """A pulled record is sealed under a key this machine does not hold yet."""
 
-    def __init__(self, rev: int) -> None:
+    def __init__(self, rev: int, item_id: str = "") -> None:
         super().__init__(f"waiting for the key of rev {rev}")
         self.rev = rev
+        self.item_id = item_id
 
 
 def _rev_of(raw: Any) -> int:
     return int(raw.get("rev") or 0) if isinstance(raw, dict) else 0
+
+
+def _contiguous_cursor(cursor: int, accepted: Any) -> int:
+    """How far a push's own accepted revs may move the read cursor.
+
+    The reply's ``cursor`` is the scope's maximum rev, which includes whatever
+    another device wrote between this round's pull and its push. Recording it
+    would mark that write as read without ever applying it. So the cursor moves
+    only across our own revs that follow on from it without a gap; a gap means
+    someone else's row is in there, and the next pull reads it (re-reading our
+    own writes on the way is cheap).
+    """
+    revs = sorted(
+        int(entry.get("rev") or 0)
+        for entry in (accepted if isinstance(accepted, list) else [])
+        if isinstance(entry, dict)
+    )
+    for rev in revs:
+        if rev != cursor + 1:
+            break
+        cursor = rev
+    return cursor
 
 
 def _kid_of(body: str) -> str:
@@ -1437,7 +1729,9 @@ def _pinned_signing_key(device_id: str) -> str:
         return ""
     if not isinstance(pin, dict):
         return ""
-    key = pin.get("signPublicKey") or pin.get("signingKey") or ""
+    # ``signKey`` is the field trust_store writes; the other two names never
+    # existed there, which left every signature unchecked.
+    key = pin.get("signKey") or pin.get("signPublicKey") or pin.get("signingKey") or ""
     return key if isinstance(key, str) else ""
 
 

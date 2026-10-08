@@ -3160,6 +3160,7 @@ async def mcp_save_servers(session: "Session", msg_id: str, msg_type: str, paylo
             },
         )
     )
+    server_link.sync_soon("mcp")
 
 
 # ── Managed Skills (skills.*) ────────────────────────────────────────────────
@@ -3181,6 +3182,7 @@ async def _run_skill_operation(
             "skills.delete",
         }:
             await notify_skills_changed(name, msg_type.removeprefix("skills."))
+            server_link.sync_soon("skills")
         return result
     except SkillNotFoundError as err:
         await session.send_json(
@@ -3539,6 +3541,7 @@ async def memory_save(session: "Session", msg_id: str, msg_type: str, payload: d
         )
         return
     await session.send_json(make_response(msg_id, msg_type, result))
+    server_link.sync_soon("memory")
 
 
 # ── Cross-device sync (sync.*) ──────────────────────────────────────────────
@@ -3556,6 +3559,7 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
     # Reading the key touches the Keychain, which can block on a dialog.
     has_key, key_id, legacy_pending = await asyncio.to_thread(_sync_key_facts)
     conflicts = await asyncio.to_thread(app.sync_store.conflicts, None)
+    link = await server_link.status()
     await session.send_json(
         make_response(
             msg_id,
@@ -3570,7 +3574,16 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
                 "keyId": key_id,
                 "legacyRingPending": legacy_pending,
                 "conflicts": len(conflicts),
-                "link": await server_link.status(),
+                "link": link,
+                # Each scope's last round, the same payload ``sync.result``
+                # carries, so a pane opened after the round still sees it.
+                "last": server_link.sync_last_results(),
+                # Which account these scopes sync with — said beside them,
+                # because switching accounts switches them all off.
+                "account": {
+                    "email": str(link.get("accountEmail") or ""),
+                    "memberId": str(link.get("memberId") or ""),
+                },
             },
         )
     )
@@ -3959,6 +3972,11 @@ async def ui_settings_set(session: "Session", msg_id: str, msg_type: str, payloa
     )
     delta = app.ui_settings_store.set(updates) if isinstance(updates, dict) else {}
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    from . import sync_scopes
+
+    if sync_scopes.PROMPT_SKILLS_KEY in delta or sync_scopes.LOOP_PROMPT_KEY in delta:
+        # The prompt list is saved as a setting; nothing else tells sync.
+        server_link.sync_soon("prompts")
     if push_delivery.DISABLED_SETTING_KEY in delta:
         # A pane already running keeps its port and its watch file; what changes
         # is whether anything is pushed to it. Both directions are announced —

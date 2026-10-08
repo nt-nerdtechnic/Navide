@@ -12,15 +12,32 @@ FakeServer and one account key, which is exactly the real arrangement.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from agent_team_backend import sync_engine, sync_keyring, sync_scopes
+from agent_team_backend import device_signing, sync_engine, sync_keyring, sync_scopes
 from agent_team_backend.db import Database
 
 
 # ── the far end ──────────────────────────────────────────────────────────────
 class FakeServer:
-    """Accounts-scoped record store with the protocol's conflict rule."""
+    """Accounts-scoped record store with the protocol's conflict rule.
+
+    Mirrors Navide-Server ``server/src/handlers/sync.ts`` where it matters:
+    item ids are checked against the server's pattern, ``cursor`` is the
+    scope's current maximum rev (not the last rev of the page), ``more`` is
+    "the page is full and its last row is still below the cursor", and a
+    conflict on a row the server does not hold comes back as a rev-0
+    tombstone rather than nothing.
+    """
+
+    ITEM_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,200}$")
+    MAX_ITEMS = 64
+    MAX_BODY = 512 * 1024
+    MAX_PUSH_TOTAL = 768 * 1024
+    MAX_PULL_PAGE = 500
+    DEFAULT_PULL_PAGE = 200
 
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str], dict] = {}
@@ -28,49 +45,86 @@ class FakeServer:
         self.pushes = 0
 
     async def request(self, msg_type: str, payload: dict) -> dict:
-        if msg_type == "sync.pull":
-            return {"ok": True, "payload": self._pull(payload)}
-        if msg_type == "sync.push":
-            self.pushes += 1
-            return {"ok": True, "payload": self._push(payload)}
+        try:
+            if msg_type == "sync.pull":
+                return {"ok": True, "payload": self._pull(payload)}
+            if msg_type == "sync.push":
+                self.pushes += 1
+                return {"ok": True, "payload": self._push(payload)}
+        except _BadRequest as err:
+            return {"ok": False, "error": {"code": "BAD_REQUEST", "message": str(err)}}
         return {"ok": False, "error": {"code": "BAD_REQUEST", "message": msg_type}}
 
     def _pull(self, payload: dict) -> dict:
         scope = payload["scope"]
         since = int(payload.get("since") or 0)
+        limit = payload.get("limit")
+        limit = self.DEFAULT_PULL_PAGE if limit is None else int(limit)
+        if limit < 1 or limit > self.MAX_PULL_PAGE:
+            raise _BadRequest(f"limit must be in 1..{self.MAX_PULL_PAGE}")
+        cursor = self.cursors.get(scope, 0)
         items = sorted(
-            (r for (s, _), r in self.rows.items() if s == scope and r["rev"] > since),
+            (dict(r) for (s, _), r in self.rows.items() if s == scope and r["rev"] > since),
             key=lambda r: r["rev"],
         )
-        limit = int(payload.get("limit") or 200)
         page = items[:limit]
         return {
             "scope": scope,
-            "cursor": page[-1]["rev"] if page else self.cursors.get(scope, 0),
+            "cursor": cursor,
             "items": page,
-            "more": len(items) > len(page),
+            "more": len(page) == limit and page[-1]["rev"] < cursor,
         }
+
+    def _parse_push(self, raw: list) -> list[dict]:
+        if len(raw) > self.MAX_ITEMS:
+            raise _BadRequest(f"at most {self.MAX_ITEMS} items")
+        seen: set[str] = set()
+        total = 0
+        for item in raw:
+            item_id = item.get("itemId") if isinstance(item.get("itemId"), str) else ""
+            if not self.ITEM_ID.match(item_id):
+                raise _BadRequest(f"itemId does not match: {item_id[:64]}")
+            if item_id in seen:
+                raise _BadRequest(f"duplicate itemId: {item_id}")
+            seen.add(item_id)
+            if not item.get("updatedAt"):
+                raise _BadRequest("updatedAt is required")
+            deleted = item.get("deleted") in (1, True)
+            body = item.get("body") or ""
+            if deleted and body:
+                raise _BadRequest("a deleted item may not carry a body")
+            if not deleted and not body:
+                raise _BadRequest("a live item must carry a body")
+            size = len(body.encode("utf-8"))
+            if size > self.MAX_BODY:
+                raise _BadRequest("body too large")
+            total += size
+            if total > self.MAX_PUSH_TOTAL:
+                raise _BadRequest("push too large")
+        return raw
 
     def _push(self, payload: dict) -> dict:
         scope = payload["scope"]
+        items = self._parse_push(payload["items"])
         accepted, conflicts = [], []
-        for item in payload["items"]:
+        for item in items:
             item_id = item["itemId"]
             current = self.rows.get((scope, item_id))
             current_rev = int(current["rev"]) if current else 0
             if int(item.get("baseRev") or 0) != current_rev:
-                conflicts.append(current)
+                conflicts.append(dict(current) if current else self.absent(item_id))
                 continue
             rev = self.cursors.get(scope, 0) + 1
             self.cursors[scope] = rev
+            deleted = 1 if item.get("deleted") in (1, True) else 0
             self.rows[(scope, item_id)] = {
                 "itemId": item_id,
                 "rev": rev,
                 "updatedAt": item["updatedAt"],
                 "deviceId": item.get("deviceId") or item.get("_device") or "",
-                "deleted": int(item.get("deleted") or 0),
-                "body": item.get("body") or "",
-                "sig": item.get("sig") or "",
+                "deleted": deleted,
+                "body": (item.get("body") or None) if not deleted else None,
+                "sig": item.get("sig") or None,
             }
             accepted.append({"itemId": item_id, "rev": rev})
         return {
@@ -79,6 +133,18 @@ class FakeServer:
             "accepted": accepted,
             "conflicts": conflicts,
         }
+
+    @staticmethod
+    def absent(item_id: str) -> dict:
+        """The server's answer for a conflict on a row it does not hold."""
+        return {
+            "itemId": item_id, "rev": 0, "updatedAt": None, "deviceId": None,
+            "deleted": 1, "body": None, "sig": None,
+        }
+
+
+class _BadRequest(Exception):
+    pass
 
 
 class DictScope:
@@ -117,9 +183,15 @@ class Device:
             request,
             device_id=lambda: name,
             enabled=lambda _scope: True,
-            signing_key_for=lambda _device: "",
+            # Every simulated device signs with this process's one key, and
+            # each is pinned: the real arrangement for an account's own devices.
+            signing_key_for=lambda _device: self.own_key,
         )
         self.engine.register(self.adapter)
+
+    @property
+    def own_key(self) -> str:
+        return device_signing.public_key()
 
     async def sync(self) -> dict:
         return await self.engine.sync("prompts")
