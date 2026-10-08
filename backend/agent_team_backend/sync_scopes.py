@@ -385,14 +385,42 @@ def _mask_mcp(payload: Any) -> Any:
     return out
 
 
+def _masked_diff(local: Any, remote: Any) -> dict[str, dict[str, str]]:
+    """Per masked field, whether each value is the same on both sides:
+    ``same``, ``differs``, ``local-only`` or ``remote-only``. Said here, from
+    the real values, because two masked halves otherwise look identical."""
+    out: dict[str, dict[str, str]] = {}
+    for field_name in _MCP_SECRET_FIELDS:
+        mine = local.get(field_name) if isinstance(local, dict) else None
+        theirs = remote.get(field_name) if isinstance(remote, dict) else None
+        mine = mine if isinstance(mine, dict) else {}
+        theirs = theirs if isinstance(theirs, dict) else {}
+        if not mine and not theirs:
+            continue
+        out[field_name] = {
+            str(key): (
+                "local-only" if key not in theirs
+                else "remote-only" if key not in mine
+                else "same" if mine[key] == theirs[key]
+                else "differs"
+            )
+            for key in sorted(set(mine) | set(theirs), key=str)
+        }
+    return out
+
+
 def conflict_preview(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Conflict rows as a window may show them: MCP env and header values
-    masked, names kept. The rows themselves (``SyncStore.conflict_payloads``)
-    keep the real values, which ``resolve`` writes back."""
+    masked, names kept, and ``masked`` saying per name whether the two values
+    are the same (``_masked_diff``). The rows themselves
+    (``SyncStore.conflict_payloads``) keep the real values, which ``resolve``
+    writes back."""
     out: list[dict[str, Any]] = []
     for row in rows:
         if row.get("scope") == McpScope.scope and not row.get("sealed"):
-            row = {**row, "local": _mask_mcp(row.get("local")), "remote": _mask_mcp(row.get("remote"))}
+            local, remote = row.get("local"), row.get("remote")
+            row = {**row, "local": _mask_mcp(local), "remote": _mask_mcp(remote),
+                   "masked": _masked_diff(local, remote)}
         out.append(row)
     return out
 
@@ -1033,6 +1061,9 @@ class MemoryScope:
             for f in native_memory.scan()
             if f.scope == native_memory.USER_SCOPE and f.exists and not f.error
             and _declared(f.readers)
+            # A directory, a FIFO or a link to one reads as "" — which would
+            # go up as an edit and empty the file on every other device.
+            and os.path.isfile(f.path)
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -1053,6 +1084,12 @@ class MemoryScope:
                 log.warning("instruction file %s could not be read: %s", relative, err)
                 continue
             text = doc.get("text")
+            if not doc.get("exists") or not _strict_utf8(entry.path):
+                # Not a file after all, or not UTF-8: the editor shows it with
+                # replacement characters, but sending that would replace the
+                # real bytes everywhere else.
+                log.warning("instruction file %s is not a readable UTF-8 file; not syncing it", relative)
+                continue
             if isinstance(text, str):
                 out[relative] = {"text": text}
                 if isinstance(doc.get("modified"), (int, float)):
@@ -1122,6 +1159,15 @@ class MemoryScope:
             if relative in (rel, memory_item_id(rel)):
                 return str(path)
         return None
+
+
+def _strict_utf8(path: Any) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            fh.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return True
 
 
 def _over_record_limit(payload: Any) -> bool:

@@ -775,12 +775,17 @@ class Scripts(Protocol):
 
 
 #: Device names Windows reserves in every directory, with any extension.
-_WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$")
+#: COM/LPT take the superscript digits too (Win32 namespace rules), and
+#: CONIN$/CONOUT$ are the console's own.
+_WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$")
 
 
 def windows_refused_file_name(name: str) -> bool:
     """``Paths.file_name_refused`` as Windows answers it. A pure string rule,
-    kept here so the tests of any platform can exercise it."""
+    kept here so the tests of any platform can exercise it.
+
+    The device check is on the part before the first dot with trailing
+    spaces dropped, which is how Windows reads ``con .txt``."""
     if not name:
         return False
-    return name[-1] in ". " or bool(_WINDOWS_RESERVED.match(name.rstrip(" .")))
+    return name[-1] in ". " or bool(_WINDOWS_RESERVED.match(name.split(".", 1)[0].rstrip(" ")))

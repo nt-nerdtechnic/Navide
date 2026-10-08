@@ -581,8 +581,12 @@ def test_what_is_installed_here_wins_over_what_was_remembered(monkeypatch):
 
 
 # ── the memory adapter ───────────────────────────────────────────────────────
-def test_memory_scope_lists_user_scope_files_only(monkeypatch):
+def test_memory_scope_lists_user_scope_files_only(monkeypatch, tmp_path):
     from agent_team_backend import native_memory, sync_scopes as scopes
+
+    # Real files: the adapter checks each one is a readable UTF-8 file.
+    (tmp_path / "home.md").write_text("home\n")
+    (tmp_path / "repo.md").write_text("repo\n")
 
     class FakeFile:
         def __init__(self, scope, relative, path):
@@ -591,11 +595,11 @@ def test_memory_scope_lists_user_scope_files_only(monkeypatch):
             self.readers = ("claude",)
 
     files = [
-        FakeFile(native_memory.USER_SCOPE, ".claude/CLAUDE.md", "/home/u/.claude/CLAUDE.md"),
-        FakeFile(native_memory.PROJECT_SCOPE, "CLAUDE.md", "/repo/CLAUDE.md"),
+        FakeFile(native_memory.USER_SCOPE, ".claude/CLAUDE.md", str(tmp_path / "home.md")),
+        FakeFile(native_memory.PROJECT_SCOPE, "CLAUDE.md", str(tmp_path / "repo.md")),
     ]
     monkeypatch.setattr(native_memory, "scan", lambda *a, **k: files)
-    monkeypatch.setattr(native_memory, "read", lambda path, *a, **k: {"text": f"text of {path}"})
+    monkeypatch.setattr(native_memory, "read", lambda path, *a, **k: {"text": f"text of {path}", "exists": True})
 
     snap = scopes.MemoryScope().snapshot()
     assert set(snap) == {".claude:CLAUDE.md"}

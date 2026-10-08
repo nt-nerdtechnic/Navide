@@ -541,3 +541,87 @@ def test_memory_item_ids_are_one_to_one():
     for _ in range(20000):
         s = "".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 12)))
         assert seen.setdefault(sync_scopes.memory_item_id(s), s) == s
+
+
+# ── security re-review C ─────────────────────────────────────────────────────
+@pytest.mark.parametrize("name", ["COM¹", "com².txt", "LPT³", "con .txt", "NUL  .md", "CONIN$", "conout$.log"])
+def test_windows_rule_covers_superscript_ports_and_spaced_names(name):
+    from agent_team_backend.osplat.spec import windows_refused_file_name
+
+    assert windows_refused_file_name(name)
+
+
+@pytest.mark.parametrize("name", ["console.md", "com10.txt", "COM0", "connect.py", "a.b"])
+def test_windows_rule_leaves_ordinary_names(name):
+    from agent_team_backend.osplat.spec import windows_refused_file_name
+
+    assert not windows_refused_file_name(name)
+
+
+def _synced_pair(tmp_path, monkeypatch):
+    server = StrictServer()
+    ha, hb = _home(tmp_path, "a"), _home(tmp_path, "b")
+    (ha / ".claude" / "CLAUDE.md").write_text("from A\n")
+    a = Dev(tmp_path, server, "A", monkeypatch, sync_scopes.MemoryScope(), home=ha)
+    b = Dev(tmp_path, server, "B", monkeypatch, sync_scopes.MemoryScope(), home=hb)
+    return server, a, b, ha / ".claude" / "CLAUDE.md", hb / ".claude" / "CLAUDE.md"
+
+
+@pytest.mark.parametrize("replace", ["directory", "link-to-directory", "fifo"])
+async def test_a_memory_path_that_stops_being_a_file_never_pushes_empty_text(tmp_path, account_key, monkeypatch, replace):
+    import os
+
+    if replace == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFOs here")
+    server, a, b, pa, pb = _synced_pair(tmp_path, monkeypatch)
+    await a.sync(); await b.sync()
+    assert pb.read_text() == "from A\n"
+    pb.unlink()
+    if replace == "directory":
+        pb.mkdir()
+    elif replace == "link-to-directory":
+        (tmp_path / "somedir").mkdir()
+        pb.symlink_to(tmp_path / "somedir")
+    else:
+        os.mkfifo(pb)
+    b.use()
+    assert ".claude:CLAUDE.md" not in sync_scopes.MemoryScope().snapshot()
+    await b.sync(); await a.sync()
+    assert pa.read_text() == "from A\n"
+
+
+async def test_memory_that_is_not_utf8_is_not_sent(tmp_path, account_key, monkeypatch):
+    server, a, b, pa, pb = _synced_pair(tmp_path, monkeypatch)
+    pa.write_bytes(b"caf\xe9 latin1\n")
+    a.use()
+    scope = sync_scopes.MemoryScope()
+    assert ".claude:CLAUDE.md" not in scope.snapshot()
+    await a.sync()
+    assert ("memory", ".claude:CLAUDE.md") not in server.rows
+    assert pa.read_bytes() == b"caf\xe9 latin1\n"
+
+
+async def test_an_mcp_conflict_preview_says_which_masked_values_differ(tmp_path, account_key, monkeypatch):
+    from agent_team_backend import server_link
+    from agent_team_backend.mcp_settings import MCPSettingsStore
+
+    server = StrictServer()
+    a_store, b_store = MCPSettingsStore(tmp_path / "a.json"), MCPSettingsStore(tmp_path / "b.json")
+    base = {**_mcp("api"), "env": {"KEY": "k0", "SAME": "s"}}
+    a_store.replace_servers([base])
+    a = Dev(tmp_path, server, "A", monkeypatch, sync_scopes.McpScope(), mcp_settings_store=a_store)
+    b = Dev(tmp_path, server, "B", monkeypatch, sync_scopes.McpScope(), mcp_settings_store=b_store)
+    await a.sync(); await b.sync()
+    a.use(); a_store.replace_servers([{**base, "env": {"KEY": "ka", "SAME": "s", "ONLY_A": "x"}}])
+    b.use(); b_store.replace_servers([{**base, "env": {"KEY": "kb", "SAME": "s"}}])
+    await a.sync(); await b.sync()
+    monkeypatch.setattr(app, "sync_store", b.store)
+    row = server_link.sync_conflicts("mcp")[0]
+    assert row["masked"] == {"env": {"KEY": "differs", "SAME": "same", "ONLY_A": "remote-only"}}
+    assert "ka" not in repr(row) and "kb" not in repr(row)
+
+    remote_row = {"scope": "mcp", "itemId": "web", "sealed": False,
+                  "local": {"name": "web", "url": "https://x", "headers": {"Authorization": "t0", "X-Old": "o"}},
+                  "remote": {"name": "web", "url": "https://x", "headers": {"Authorization": "t0"}}}
+    (preview,) = sync_scopes.conflict_preview([remote_row])
+    assert preview["masked"] == {"headers": {"Authorization": "same", "X-Old": "local-only"}}
