@@ -554,3 +554,24 @@ async def test_a_refusal_is_logged_without_what_the_adapter_said(tmp_path, accou
         await b.sync()
     assert "hunter2" not in caplog.text
     assert "ValueError" in caplog.text
+
+
+async def test_a_pull_round_stops_after_a_bounded_number_of_pages(tmp_path, account_key, monkeypatch):
+    # A4: a server that always says "more" with fresh revs.
+    monkeypatch.setattr(sync_engine, "MAX_PULL_PAGES", 7)
+    b = Device(tmp_path, FakeServer(), "dev-b")
+    calls = 0
+
+    async def request(msg_type, payload):
+        nonlocal calls
+        if msg_type != "sync.pull":
+            return {"ok": True, "payload": {"accepted": [], "conflicts": [], "cursor": 0}}
+        calls += 1
+        since = int(payload.get("since") or 0)
+        row = {"itemId": f"junk{since}", "rev": since + 1, "updatedAt": "x", "deviceId": "dev-z",
+               "deleted": 1, "body": None, "sig": None}
+        return {"ok": True, "payload": {"scope": "prompts", "cursor": since + 1, "items": [row], "more": True}}
+
+    b.engine._request = request
+    await b.sync()
+    assert calls == 7

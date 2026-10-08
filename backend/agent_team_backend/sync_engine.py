@@ -75,6 +75,10 @@ MAX_PUSH_BYTES = 768 * 1024
 #: the client asks for no more rows than this budget holds at the largest row
 #: size it expects. A guess first, then the largest row actually seen.
 PULL_FRAME_BUDGET = 768 * 1024
+#: Pull pages one round reads at most. A server that keeps saying ``more``
+#: with fresh revs would otherwise hold the round (and the scope's lock)
+#: forever; the next round carries on from where this one stopped.
+MAX_PULL_PAGES = 200
 #: An adapter's ``DeferItem`` (files still downloading) is retried at once the
 #: first time, then with an exponential backoff from the base to the cap, and
 #: reported as given up —
@@ -706,7 +710,9 @@ class SyncEngine:
         #: behind it — one item that cannot land must not hold the whole scope.
         since = self._store.cursor(scope)
         barrier: int | None = None
+        pages = 0
         while True:
+            pages += 1
             reply = _payload(
                 await self._request(
                     "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
@@ -756,6 +762,9 @@ class SyncEngine:
                 # No progress and the server still says "more": stop rather
                 # than loop forever on a server that disagrees with itself.
                 log.warning("sync.pull on %s made no progress; stopping this round", scope)
+                break
+            if pages >= MAX_PULL_PAGES:
+                log.warning("sync.pull on %s read %d pages; the next round carries on", scope, pages)
                 break
             since = cursor
         if barrier is not None:
