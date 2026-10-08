@@ -1354,16 +1354,61 @@ def on_account_changed() -> None:
     are not keyed by account, so the previous account's revs would otherwise
     be pushed against the next one's server as edits of rows it never had,
     and every never-synced item here would be uploaded to it unasked.
+
+    Fails closed: the switches go off first, every later step is attempted
+    even when one before it failed, and any failure is raised at the end so
+    the caller records the switch as unfinished and tries again.
     """
     from . import app
 
-    credentials_scope().clear_imported()
+    failures: list[str] = []
+
+    def attempt(what: str, step: Callable[[], Any]) -> None:
+        try:
+            step()
+        except Exception as err:  # noqa: BLE001 - collected, raised below
+            log.warning("account change: could not %s: %s", what, err)
+            failures.append(f"{what}: {err}")
+
+    attempt(
+        "switch the sync scopes off",
+        lambda: _settings().set({SCOPES_SETTING: {scope: False for scope in sync_engine.SCOPES}}),
+    )
+    # Rounds still running for the previous account write nothing from here on.
+    attempt("retire the running rounds", app.sync_store.new_generation)
+    attempt("let go of imported credentials", lambda: credentials_scope().clear_imported())
     for scope in sync_engine.SCOPES + sync_engine.INTERNAL_SCOPES:
-        app.sync_store.forget(scope)
-    try:
-        _settings().set({SCOPES_SETTING: {scope: False for scope in sync_engine.SCOPES}})
-    except Exception as err:  # noqa: BLE001 - settings that will not write do not stop a sign-out
-        log.warning("the sync scopes could not be switched off: %s", err)
+        attempt(f"forget {scope}", lambda scope=scope: app.sync_store.forget(scope))
+    attempt("forget detached marks", forget_detached)
+    reset = getattr(_skill_files, "reset", None)
+    if reset is not None:
+        attempt("reset the skill files transfers", reset)
+    if failures:
+        raise sync_engine.SyncError("; ".join(failures))
+
+
+#: ui_settings key of the "kept here, not pushed back" marks the scope
+#: adapters keep for items deleted on another device (``DETACHED_KEY`` where
+#: they are defined): ``{scope: {item_id: digest}}``.
+_DETACHED_SETTING = "sync-detached"
+
+
+def forget_detached(scope: str | None = None) -> None:
+    """Drop the detached marks of *scope*, or of every scope.
+
+    They describe items of the account they were made under, so they go when
+    that account does and when a scope is read again from the start.
+    """
+    raw = _settings().get().get(_DETACHED_SETTING)
+    if not raw:
+        return
+    if scope is None or not isinstance(raw, dict):
+        _settings().set({_DETACHED_SETTING: None})
+        return
+    if scope not in raw:
+        return
+    rest = {k: v for k, v in raw.items() if k != scope}
+    _settings().set({_DETACHED_SETTING: rest or None})
 
 
 def _reset_credentials_for_test() -> None:

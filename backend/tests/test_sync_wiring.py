@@ -258,3 +258,158 @@ def test_the_links_engine_checks_pins_against_its_member(monkeypatch):
     assert link.sync_engine()._signing_key_for("dev-x") == ""
     link.member_id = "m-other"
     assert link.sync_engine()._signing_key_for("dev-x") == "KEY"
+
+
+# ── security review: switching accounts must fail closed ─────────────────────
+def _seeded(tmp_path, monkeypatch, settings):
+    from agent_team_backend import sync_engine, sync_scopes
+    from agent_team_backend.db import Database
+
+    store = sync_engine.SyncStore(Database(tmp_path / "s.db"))
+    for scope in ("prompts", "memory", "skills"):
+        store.set_state(scope, "i", rev=3, synced_hash="h", deleted=False)
+        store.set_cursor(scope, 3)
+    monkeypatch.setattr(app, "sync_store", store)
+    monkeypatch.setattr(sync_scopes, "_settings", lambda: settings)
+    monkeypatch.setattr(server_link, "_settings_store", lambda: settings)
+    return store
+
+
+async def test_a_keychain_that_will_not_answer_at_boot_is_not_a_sign_out(tmp_path, monkeypatch):
+    # B1: an unreadable token means "cannot tell", never "signed out".
+    from agent_team_backend import sync_engine, sync_scopes
+
+    settings = _Settings({
+        server_link.SYNC_ACCOUNT_SETTING: "ns-a",
+        sync_scopes.SCOPES_SETTING: {s: s != "credentials" for s in sync_engine.SCOPES},
+    })
+    store = _seeded(tmp_path, monkeypatch, settings)
+
+    class LockedVault:
+        def read_app_secret(self, _name):
+            raise RuntimeError("User interaction is not allowed")
+
+    async def broadcast(event, exclude=None):
+        return None
+
+    monkeypatch.setattr(app, "credential_vault", LockedVault())
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    monkeypatch.setattr(server_link, "_link", None)
+    await server_link.start()
+    assert sync_scopes.enabled_scopes()["prompts"] is True
+    assert store.cursor("prompts") == 3
+    assert settings.values[server_link.SYNC_ACCOUNT_SETTING] == "ns-a"
+
+
+async def test_a_real_sign_out_at_boot_still_lets_go(tmp_path, monkeypatch):
+    from agent_team_backend import sync_engine, sync_scopes
+
+    settings = _Settings({
+        server_link.SYNC_ACCOUNT_SETTING: "ns-a",
+        sync_scopes.SCOPES_SETTING: {s: s != "credentials" for s in sync_engine.SCOPES},
+    })
+    store = _seeded(tmp_path, monkeypatch, settings)
+
+    class EmptyVault:
+        def read_app_secret(self, _name):
+            return None
+
+    async def broadcast(event, exclude=None):
+        return None
+
+    monkeypatch.setattr(app, "credential_vault", EmptyVault())
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    monkeypatch.setattr(server_link, "_link", None)
+    monkeypatch.setattr(sync_scopes, "credentials_scope", lambda: type("C", (), {"clear_imported": lambda self: None})())
+    await server_link.start()
+    assert not any(sync_scopes.enabled_scopes().values())
+    assert store.cursor("prompts") == 0
+
+
+async def test_a_switch_that_fails_halfway_stays_closed_and_is_retried(tmp_path, monkeypatch):
+    # B3: switch scopes off first; record the new account only once cleanup worked.
+    from agent_team_backend import sync_scopes
+
+    settings = _Settings({
+        server_link.SYNC_ACCOUNT_SETTING: "ns-a",
+        sync_scopes.SCOPES_SETTING: {"prompts": True, "memory": True},
+    })
+    store = _seeded(tmp_path, monkeypatch, settings)
+    failing = True
+
+    class Creds:
+        scope = "credentials"
+
+        def clear_imported(self):
+            if failing:
+                raise RuntimeError("database is locked")
+
+    async def broadcast(event, exclude=None):
+        return None
+
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    monkeypatch.setattr(sync_scopes, "credentials_scope", lambda: Creds())
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    await server_link._note_account("ns-b")
+    assert sync_scopes.enabled_scopes()["prompts"] is False      # closed
+    assert settings.values[server_link.SYNC_ACCOUNT_SETTING] == "ns-a"
+    assert server_link._switch_pending is True
+    # While the switch is unfinished nothing syncs, whatever the switches say.
+    sync_scopes.set_scope_enabled("prompts", True)
+    link = server_link.ServerLink()
+    assert link.sync_engine()._enabled("prompts") is False
+    failing = False
+    await server_link._note_account("ns-b")                       # a reconnect retries
+    assert settings.values[server_link.SYNC_ACCOUNT_SETTING] == "ns-b"
+    assert server_link._switch_pending is False
+    assert store.cursor("prompts") == 0
+    assert sync_scopes.enabled_scopes()["prompts"] is False
+
+
+def test_an_account_change_lets_go_of_detached_marks(tmp_path, monkeypatch):
+    # B2: "kept here, not pushed back" marks belong to the account they came from.
+    from agent_team_backend import sync_scopes
+
+    settings = _Settings({"sync-detached": {"memory": {"X": "digest"}}})
+    _seeded(tmp_path, monkeypatch, settings)
+    sync_scopes.on_account_changed()
+    assert not settings.values.get("sync-detached")
+
+
+def test_forget_detached_drops_one_scope_or_all(tmp_path, monkeypatch):
+    from agent_team_backend import sync_scopes
+
+    settings = _Settings({"sync-detached": {"memory": {"X": "d"}, "skills": {"Y": "d"}}})
+    monkeypatch.setattr(sync_scopes, "_settings", lambda: settings)
+    sync_scopes.forget_detached("memory")
+    assert settings.values["sync-detached"] == {"skills": {"Y": "d"}}
+    sync_scopes.forget_detached()
+    assert not settings.values.get("sync-detached")
+
+
+def test_an_account_change_resets_the_skill_files_adapter(tmp_path, monkeypatch):
+    # B7: its retry counters and oversized list describe the old account.
+    from agent_team_backend import sync_scopes
+
+    _seeded(tmp_path, monkeypatch, _Settings({}))
+    calls: list[str] = []
+
+    class SkillFiles:
+        def reset(self):
+            calls.append("reset")
+
+    monkeypatch.setattr(sync_scopes, "_skill_files", SkillFiles())
+    sync_scopes.on_account_changed()
+    assert calls == ["reset"]
+
+
+def test_the_links_engine_forgets_detached_marks_when_a_reset_forgets_a_scope(monkeypatch):
+    from agent_team_backend import sync_scopes
+
+    calls: list[str] = []
+    monkeypatch.setattr(sync_scopes, "forget_detached", lambda scope=None: calls.append(scope))
+    link = server_link.ServerLink()
+    link.sync_engine()._on_forget("memory")
+    assert calls == ["memory"]

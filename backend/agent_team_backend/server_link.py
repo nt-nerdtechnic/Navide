@@ -1057,9 +1057,10 @@ class ServerLink:
                 app.sync_store,
                 self._request,
                 device_id=lambda: self._device_id,
-                enabled=sync_scopes.scope_enabled,
+                enabled=lambda scope: not _switch_pending and sync_scopes.scope_enabled(scope),
                 on_result=_result,
                 account_member=lambda: self.member_id,
+                on_forget=sync_scopes.forget_detached,
             )
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
             engine.register(sync_scopes.McpScope())
@@ -3730,39 +3731,86 @@ def _persist_account(namespace: str | None) -> None:
         _settings_store().set({SYNC_ACCOUNT_SETTING: namespace or ""})
 
 
+#: True from the moment an account change is noticed until everything the
+#: previous account left behind has been let go of. Sync runs no round while
+#: it is set, whatever the scope switches say; a failed cleanup leaves it set
+#: and the next ``_note_account`` (a reconnect, the next start) tries again.
+_switch_pending = False
+
+
 async def _note_account(namespace: str | None) -> None:
     """Record which account is settled now; on a real change, tell the sync
     scopes so imported credentials and every scope's engine state go with the
     account that owned them, and every scope is switched off. The ring is not
     touched — it stays under its own namespace for that account's next
-    sign-in."""
-    global _settled_account
+    sign-in.
+
+    The new account is recorded only once that cleanup has succeeded, so a
+    cleanup that fails halfway is retried rather than forgotten, and sync
+    stays shut (``_switch_pending``) in between.
+    """
+    global _settled_account, _switch_pending
     previous = _settled_account
-    _settled_account = namespace
-    try:
-        if previous is _UNREAD:
+    if previous is _UNREAD:
+        try:
             previous = await asyncio.to_thread(_persisted_account)
-        await asyncio.to_thread(_persist_account, namespace)
-    except Exception as err:  # noqa: BLE001 - the link is not what this protects
-        log.warning("could not read or record the settled sync account: %s", err)
-        if previous is _UNREAD:
+        except Exception as err:  # noqa: BLE001 - the link is not what this protects
+            log.warning("could not read the settled sync account: %s", err)
             previous = None
     if previous is None or previous == namespace:
+        _settled_account = namespace
+        await _record_account(namespace)
         return
+    _switch_pending = True
+    link = _link
+    if link is not None and link._sync_engine is not None:  # noqa: SLF001 - same module
+        link._sync_engine.cancel_rounds()  # noqa: SLF001 - same module
+    try:
+        from . import sync_scopes
+
+        await asyncio.to_thread(sync_scopes.on_account_changed)
+    except Exception as err:  # noqa: BLE001 - retried on the next call
+        log.warning("could not let go of the previous account's sync state; will retry: %s", err)
+        _settled_account = previous
+        return
+    _settled_account = namespace
+    await _record_account(namespace)
+    _switch_pending = False
     try:
         from . import app, sync_scopes
         from .ipc import make_event
 
-        await asyncio.to_thread(sync_scopes.on_account_changed)
-        link = _link
         if link is not None and link._sync_engine is not None:  # noqa: SLF001 - same module
             link._sync_engine.forget_results()  # noqa: SLF001 - same module
         scopes = await asyncio.to_thread(sync_scopes.enabled_scopes)
         await app.broadcast(
             make_event("ui.settings_changed", {"settings": {sync_scopes.SCOPES_SETTING: scopes}})
         )
-    except Exception as err:  # noqa: BLE001 - the link is not what this protects
-        log.warning("could not clear the previous account's imported state: %s", err)
+    except Exception as err:  # noqa: BLE001 - the windows catch up on their next read
+        log.warning("could not tell the windows the sync scopes changed: %s", err)
+
+
+async def _record_account(namespace: str | None) -> None:
+    try:
+        await asyncio.to_thread(_persist_account, namespace)
+    except Exception as err:  # noqa: BLE001 - the next start compares again
+        log.warning("could not record the settled sync account: %s", err)
+
+
+def _signed_out() -> bool:
+    """Whether the token store answers, and answers "no token".
+
+    ``access_token`` folds "cannot be read right now" (a locked keychain, a
+    dismissed prompt) into "", which is right for dialling and wrong here: a
+    sign-out lets go of every scope's sync state, and a keychain that was
+    locked at boot is not a reason to do that.
+    """
+    try:
+        token = _vault().read_app_secret(ACCESS_TOKEN_SECRET)
+    except Exception as err:  # noqa: BLE001 - unreadable is "cannot tell"
+        log.info("the navide-server token could not be read; sync state is left as it is (%s)", err)
+        return False
+    return not (token or "").strip()
 
 
 async def start() -> None:
@@ -3771,9 +3819,10 @@ async def start() -> None:
     link = ServerLink()
     if await link.start():
         _link = link
-    else:
+    elif await asyncio.to_thread(_signed_out):
         # Not configured: signed out, or never signed in. Either way whatever
         # the previous account imported must not wait here for the next one.
+        # A token that could not be read is neither, and changes nothing.
         await _note_account(None)
 
 
