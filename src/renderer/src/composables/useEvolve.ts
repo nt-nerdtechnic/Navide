@@ -71,7 +71,7 @@ export interface EvolveBadge {
   last_status: EvolveRunStatus | null
   /** v1.2: panes this workspace's recent runs used, newest first (incl. the
    *  running one). Optional so an older backend's badge still reads. */
-  pane_ids?: string[]
+  pane_ids?: readonly string[]
 }
 
 export interface EvolveState {
@@ -117,7 +117,7 @@ export function closeEvolvePanel(): void {
   panelWorkspace.value = null
 }
 
-function addSystemPanes(ids: (string | null | undefined)[]): void {
+function addSystemPanes(ids: readonly (string | null | undefined)[]): void {
   const fresh = ids.filter((id): id is string => !!id && !systemPaneIds.value.has(id))
   if (fresh.length) systemPaneIds.value = new Set([...systemPaneIds.value, ...fresh])
 }
