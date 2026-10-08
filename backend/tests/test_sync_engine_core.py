@@ -46,3 +46,11 @@ async def test_a_write_landing_between_pull_and_push_is_not_skipped(tmp_path, ac
     await b.sync()
     await b.sync()
     assert b.adapter.items.get("theirs") == {"v": "a"}
+
+
+# ── X-2 / SEC-12 / SEC-1: who wrote a record ─────────────────────────────────
+def test_the_pinned_signing_key_is_read_from_the_field_pins_store(monkeypatch):
+    from agent_team_backend import trust_store
+
+    monkeypatch.setattr(trust_store, "pin_for", lambda _d: {"signKey": "KEY", "memberId": "m"})
+    assert sync_engine._pinned_signing_key("dev-x") == "KEY"

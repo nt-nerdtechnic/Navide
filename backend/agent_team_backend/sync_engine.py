@@ -1466,7 +1466,9 @@ def _pinned_signing_key(device_id: str) -> str:
         return ""
     if not isinstance(pin, dict):
         return ""
-    key = pin.get("signPublicKey") or pin.get("signingKey") or ""
+    # ``signKey`` is the field trust_store writes; the other two names never
+    # existed there, which left every signature unchecked.
+    key = pin.get("signKey") or pin.get("signPublicKey") or pin.get("signingKey") or ""
     return key if isinstance(key, str) else ""
 
 
