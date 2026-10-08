@@ -28,6 +28,7 @@ import {
 import { useNotify } from '@navide/plugin-ui/foundation'
 import { executeCommand } from '@navide/plugin-ui/shared'
 import { i18n } from '@navide/plugin-ui/foundation'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 // Compact remaining-quota badge for a CLI pane header. Renders nothing when
 // the agent has no usage provider or nothing was fetched yet; shows ⚠ when
@@ -644,7 +645,7 @@ function acctTitle(profileId: string | null): string {
       </div>
       <div v-for="w in snap.windows" :key="w.kind + w.label" class="usage-row">
         <div class="usage-row-top">
-          <span class="usage-row-label">{{ w.label }}</span>
+          <span class="usage-row-label" v-truncate>{{ w.label }}</span>
           <span v-if="w.expired" class="usage-row-left crit">
             {{ $t('usage.cached-window-expired') }}
           </span>
@@ -696,8 +697,8 @@ function acctTitle(profileId: string | null): string {
                 avatarInitial(rowLabel(null, $t('usage.switch-default')))
               }}</span>
               <span class="usage-acct-text">
-                <span class="usage-acct-name">{{ rowLabel(null, $t('usage.switch-default')) }}</span>
-                <span v-if="rowEmail(null)" class="usage-acct-email">{{ rowEmail(null) }}</span>
+                <span class="usage-acct-name" v-truncate>{{ rowLabel(null, $t('usage.switch-default')) }}</span>
+                <span v-if="rowEmail(null)" class="usage-acct-email" v-truncate>{{ rowEmail(null) }}</span>
               </span>
               <span v-if="acctSignedOut(null)" class="usage-acct-out">{{
                 $t('settings.accounts.cli.not-signed-in')
@@ -755,8 +756,8 @@ function acctTitle(profileId: string | null): string {
                 avatarInitial(rowLabel(p.id))
               }}</span>
               <span class="usage-acct-text">
-                <span class="usage-acct-name">{{ rowLabel(p.id) }}</span>
-                <span v-if="rowEmail(p.id)" class="usage-acct-email">{{ rowEmail(p.id) }}</span>
+                <span class="usage-acct-name" v-truncate>{{ rowLabel(p.id) }}</span>
+                <span v-if="rowEmail(p.id)" class="usage-acct-email" v-truncate>{{ rowEmail(p.id) }}</span>
               </span>
               <span v-if="acctSignedOut(p.id)" class="usage-acct-out">{{
                 $t('settings.accounts.cli.not-signed-in')

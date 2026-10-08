@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { vTruncate } from '@navide/plugin-ui/foundation'
+
 const props = defineProps<{
   paneId: string
   title: string
@@ -44,7 +46,7 @@ function activate(): void {
     <header class="pane-header">
       <div class="header-main">
         <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
-        <span class="title">{{ title }}</span>
+        <span class="title" v-truncate>{{ title }}</span>
         <span
           v-if="autoNamed"
           class="auto-name-mark"
@@ -56,7 +58,7 @@ function activate(): void {
           :title="$t('pane.terminal.interrupted-at-launch-tooltip')"
         >{{ $t('pane.terminal.interrupted-at-launch') }}</span>
       </div>
-      <span v-if="subtitle" class="header-sub">{{ subtitle }}</span>
+      <span v-if="subtitle" class="header-sub" v-truncate>{{ subtitle }}</span>
     </header>
     <button
       class="resume-prompt"

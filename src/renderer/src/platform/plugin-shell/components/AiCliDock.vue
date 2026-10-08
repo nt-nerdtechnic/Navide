@@ -26,6 +26,7 @@
 //   yet, kill() would be a no-op and a hung create uncancellable).
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { CLI_AGENT_SPECS } from '../agents'
 import {
@@ -631,9 +632,10 @@ defineExpose({ start, stop, interrupt, pasteText, injectNow, toggle, terminal: t
       <span
         v-if="rosterAddress"
         class="ai-cli-address"
+        v-truncate
         :title="t('dockWindow.address-title', { address: rosterAddress })"
       >@{{ rosterAddress }}</span>
-      <span v-if="workspacePath" class="ai-cli-ws" :title="workspacePath">{{ workspaceName }}</span>
+      <span v-if="workspacePath" class="ai-cli-ws" v-truncate :title="workspacePath">{{ workspaceName }}</span>
     </div>
     <p v-if="rosterError" class="ai-cli-roster-error">{{ t('dockWindow.roster-error', { reason: rosterError }) }}</p>
     <div v-if="!active" class="ai-cli-controls">
@@ -648,7 +650,7 @@ defineExpose({ start, stop, interrupt, pasteText, injectNow, toggle, terminal: t
       >{{ starting ? 'Starting…' : reattaching ? 'Reattaching…' : 'Start' }}</button>
     </div>
     <div v-else class="ai-cli-controls">
-      <span class="ai-cli-running-label">{{ agentLabel }}</span>
+      <span class="ai-cli-running-label" v-truncate>{{ agentLabel }}</span>
       <button class="ai-cli-btn ghost" title="Send Ctrl+C to the CLI" @click="interrupt">Interrupt</button>
       <button class="ai-cli-btn danger" title="Kill the CLI process" @click="stop">Stop</button>
     </div>

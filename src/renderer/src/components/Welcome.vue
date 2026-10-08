@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { NEW_WORKSPACE_ERROR_KEYS } from '../../../shared/workspaceCreate'
 import type { useBackend } from '../composables/useBackend'
 import { useEditorTargets } from '../composables/useEditorTargets'
@@ -293,7 +294,7 @@ function ctxCopyPath(): void {
                 <span v-if="!item.exists" class="r-missing" title="Folder not found">{{ $t('label.missing') }}</span>
                 <span class="r-time">{{ timeAgo(item.last_opened_at) }}</span>
               </div>
-              <div class="r-path">{{ item.path }}</div>
+              <div class="r-path" v-truncate>{{ item.path }}</div>
               <div v-if="item.last_known_task" class="r-task">"{{ item.last_known_task }}"</div>
             </div>
             <button

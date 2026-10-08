@@ -53,6 +53,7 @@ import { onSettingsChanged, registerCommand, settingsGet, settingsSet } from '@n
 import { useUpdater } from '../composables/useUpdater'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { useNotify } from '@navide/plugin-ui/foundation'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 
 // The legacy pane is a recovery adapter only. Normal Plans composition is the
 // Manifest v2 contribution below, so one active package version owns both
@@ -3381,7 +3382,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           :class="{ 'pipeline-active': p.id === activePipelineId }"
           @click="openPipelineDetail(p.id)"
         >
-          <span class="pipeline-item-name">{{ p.name }}</span>
+          <span class="pipeline-item-name" v-truncate>{{ p.name }}</span>
           <span class="pipeline-item-meta">{{ p.stage_count }} stages</span>
           <span
             class="pipeline-item-badge"
@@ -3430,10 +3431,8 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <span class="dot">·</span>
             <span>updated {{ existingProject.updatedAt }}</span>
           </div>
-          <div v-if="existingProject.taskDescription" class="resume-task">
-            {{ existingProject.taskDescription.length > 200
-              ? existingProject.taskDescription.slice(0, 200) + '…'
-              : existingProject.taskDescription }}
+          <div v-if="existingProject.taskDescription" class="resume-task" v-truncate>
+            {{ existingProject.taskDescription }}
           </div>
           <div class="row">
             <button class="primary wide" @click="emit('pipeline-resume')">
@@ -3457,7 +3456,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           <div class="prn-title">
             ▶ {{ pipelines?.find(p => p.id === activePipelineId)?.name ?? $t('label.pipelines') }}
           </div>
-          <div v-if="pipeline.task" class="prn-task">{{ pipeline.task }}</div>
+          <div v-if="pipeline.task" class="prn-task" v-truncate>{{ pipeline.task }}</div>
           <div class="prn-meta">
             <span v-if="autoAnswerEnabled" class="prn-auto">{{ $t('label.full-auto') }} · {{ analyzerModelLocal }}</span>
             <span v-else class="prn-manual">{{ $t('label.manual-confirm') }}</span>
@@ -3679,7 +3678,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                   :class="{ tint: !!cell.color }"
                   :style="cell.color ? { '--tint': cell.color } : undefined"
                 ><span class="ws-rglyph">{{ cell.glyph }}</span></span>
-                <span class="ws-rname-t">{{ cell.name }}</span>
+                <span class="ws-rname-t" v-truncate>{{ cell.name }}</span>
                 <!-- You are still working in this group even while looking at
                      another one. Nothing else on screen would say so. -->
                 <span v-if="cell.hasCurrent" class="ws-rdot"></span>
@@ -3687,7 +3686,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               </button>
               <button class="ws-rcell ws-radd" @click.stop="startCreateRail($event)">
                 <span class="ws-rswatch ws-rswatch--add">＋</span>
-                <span class="ws-rname-t">{{ $t('action.new-workspace-group') }}</span>
+                <span class="ws-rname-t" v-truncate>{{ $t('action.new-workspace-group') }}</span>
               </button>
             </div>
           </div>
@@ -3750,6 +3749,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               <span
                 v-else
                 class="ws-name"
+                v-truncate
                 :title="wsNameTitle(ws.path)"
                 @dblclick.stop="startWorkspaceRename(ws.path)"
               >{{ ws.label }}</span>
@@ -3764,7 +3764,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 @dblclick.stop
               ><span aria-hidden="true">✦</span></button>
             </span>
-            <span class="ws-path">{{ ws.displayPath }}</span>
+            <span class="ws-path" v-truncate>{{ ws.displayPath }}</span>
           </span>
           <!-- Folds what hangs BELOW this heading, leaving the project itself
                on screen — the caret beside the name is what hides the project.
@@ -3851,7 +3851,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             :style="groupKeyStyle(g.state)"
             :title="$t(runGroupStateLabelKey(g.state))"
           ></span>
-          <span class="ws-grp-name" :title="g.name || $t('label.manual-spawn')">{{ g.name || $t('label.manual-spawn') }}</span>
+          <span class="ws-grp-name" v-truncate>{{ g.name || $t('label.manual-spawn') }}</span>
           <!-- Neutral, unlike the workspace heading's: this row already carries
                its run state in the key beside the name, and a second colour
                here — on a different scale, since the key has four states and a
@@ -3940,6 +3940,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <span
               v-else
               class="badge"
+              v-truncate
               :title="`${p.agentLabel}\n${$t('action.rename')}`"
               @dblclick.stop="startRename(p)"
             >{{ p.agentLabel }}</span>
@@ -3950,7 +3951,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             >◦</span>
             <span v-if="p.isCommander" class="manager-inline" :title="$t('label.stage-manager-tooltip')">🎯 Mgr</span>
             <span v-if="isEvolveSystemPane(p.id)" class="evolve-pane-tag" data-test="evolve-pane-tag" :title="$t('evolve.panel.system-pane-title')">{{ $t('evolve.panel.system-pane') }}</span>
-            <span v-if="!isRowExpanded(p.id)" class="agent-line-sub">{{ agentTypeLabel(p.agentKey) }} · {{ p.roleLabel || 'No role' }}</span>
+            <span v-if="!isRowExpanded(p.id)" class="agent-line-sub" v-truncate>{{ agentTypeLabel(p.agentKey) }} · {{ p.roleLabel || 'No role' }}</span>
             <span
               v-if="p.loopActive"
               class="loop-tag"
@@ -3989,12 +3990,13 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           <div
             v-if="workspaceTag(p)"
             class="pane-ws-line"
+            v-truncate
             :class="{ 'pane-ws-line--rail': hasChildren || depth || g.rail }"
             :title="p.workspacePath"
           >{{ workspaceTag(p) }}</div>
           <template v-if="isRowExpanded(p.id)">
             <div class="agent-role-line">
-              <span class="agent-role-main">{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></span>
+              <span class="agent-role-main" v-truncate>{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></span>
               <span class="state" :data-state="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
             </div>
             <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
@@ -4003,9 +4005,9 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <div v-else-if="!p.isMinimized" class="stage-line">
               manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
             </div>
-            <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
+            <div v-if="!p.isMinimized" class="agent-cmd"><code v-truncate>{{ p.command }}</code></div>
             <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
-              <span class="agent-session-k">session</span><code>{{ p.sessionId }}</code>
+              <span class="agent-session-k">session</span><code v-truncate>{{ p.sessionId }}</code>
             </div>
             <div v-if="p.error" class="err">{{ p.error }}</div>
             <div class="row tight">
@@ -4276,7 +4278,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             @click="spawnAs(spec.agentKey)"
           >
             <span class="ws-add-ck">{{ spec.agentKey === pickedAgent ? '✓' : '' }}</span>
-            <span class="ws-add-lb">
+            <span class="ws-add-lb" v-truncate>
               {{ missingClis.has(spec.agentKey) ? $t('label.agent-not-installed', { label: spec.label }) : spec.label }}
             </span>
           </button>
@@ -4379,7 +4381,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 ⚙ {{ $t('action.settings') }}
               </button>
             </div>
-            <p class="role-line">{{ currentRole.one_line }}</p>
+            <p class="role-line" v-truncate>{{ currentRole.one_line }}</p>
             <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
           </div>
           <div v-else class="prompt-block warn-block">
@@ -4404,7 +4406,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
       <section class="block pipeline-detail-header">
         <div class="pipeline-detail-nav">
           <button class="ghost back-btn" @click="backToList">← Back</button>
-          <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
+          <span class="pipeline-detail-name" v-truncate>{{ openedPipeline?.name ?? openedPipelineId }}</span>
           <span v-if="openedPipelineId === activePipelineId" class="active-tag">{{ $t('label.default') }}</span>
           <button class="ghost manage-btn" :title="$t('action.manage-pipelines')" @click="openPipelineManager(openedPipelineId || undefined)">⚙</button>
         </div>
@@ -4450,10 +4452,8 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <span class="dot">·</span>
             <span>updated {{ existingProject.updatedAt }}</span>
           </div>
-          <div v-if="existingProject.taskDescription" class="resume-task">
-            {{ existingProject.taskDescription.length > 200
-              ? existingProject.taskDescription.slice(0, 200) + '…'
-              : existingProject.taskDescription }}
+          <div v-if="existingProject.taskDescription" class="resume-task" v-truncate>
+            {{ existingProject.taskDescription }}
           </div>
           <div class="row">
             <button class="primary wide" @click="emit('pipeline-resume')">
@@ -4574,10 +4574,8 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         <div class="restart-card">
           <h3>{{ $t('label.restart-title') }}</h3>
           <p v-if="existingProject" v-html="$t('hint.restart-confirm', { completed: existingProject.stagesCompleted, total: existingProject.totalStages })"></p>
-          <div v-if="existingProject?.taskDescription" class="restart-task">
-            {{ existingProject.taskDescription.length > 240
-              ? existingProject.taskDescription.slice(0, 240) + '…'
-              : existingProject.taskDescription }}
+          <div v-if="existingProject?.taskDescription" class="restart-task" v-truncate>
+            {{ existingProject.taskDescription }}
           </div>
           <p class="restart-warn">
             {{ $t('label.restart-preserved') }}
@@ -5466,8 +5464,10 @@ button.icon-btn.muted:hover {
   padding: 6px 8px;
   border-radius: var(--radius-xs);
   white-space: pre-wrap;
-  max-height: 80px;
-  overflow-y: auto;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .restart-modal {
   position: fixed;
@@ -5511,8 +5511,10 @@ button.icon-btn.muted:hover {
   font-family: var(--font-mono);
   font-size: var(--font-2xs);
   margin: 8px 0;
-  max-height: 120px;
-  overflow-y: auto;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   white-space: pre-wrap;
 }
 .restart-actions {

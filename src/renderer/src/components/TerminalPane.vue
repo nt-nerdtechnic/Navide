@@ -17,6 +17,7 @@ import { paneStatusLabelText } from '../lib/paneStatusLabel'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { i18n } from '@navide/plugin-ui/foundation'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { invokeCommand, isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
@@ -716,7 +717,7 @@ onMounted(() => {
         />
         <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
-      <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
+      <div v-if="subtitle" class="header-sub" v-truncate>{{ subtitle }}</div>
     </header>
     <div
       ref="containerRef"
@@ -736,7 +737,7 @@ onMounted(() => {
          selectable, since nothing about it stopped being true. -->
     <div v-if="disconnectedNotice" class="disconnected-banner" role="status" aria-live="polite">
       <span class="disconnected-dot" />
-      <span class="disconnected-text">{{ disconnectedNotice }}</span>
+      <span class="disconnected-text" v-truncate>{{ disconnectedNotice }}</span>
     </div>
     <!-- Optional-chained: the pane's tests stub useTerminal with partial objects. -->
     <div
@@ -761,7 +762,7 @@ onMounted(() => {
     <div v-if="isPreparing" class="prep-overlay" aria-live="polite">
       <div class="prep-panel">
         <div class="prep-spinner" />
-        <div class="prep-text">{{ preparingLabel || 'Preparing CLI' }}</div>
+        <div class="prep-text" v-truncate>{{ preparingLabel || 'Preparing CLI' }}</div>
       </div>
     </div>
     <RestoredPanePlaceholder

@@ -126,6 +126,7 @@ import { closeDialogBodyKey, closeEndsTheRun, restoreBlockedByRun } from './lib/
 import { dockWindowLabelKey, historyEntryIsLive, workspaceHasPmPanel } from './lib/dockWindow'
 import { droppedPrefix, remapCursor, type BufferObservation } from './lib/bufferCursor'
 import { i18n } from '@navide/plugin-ui/foundation'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
@@ -20267,8 +20268,8 @@ function paneIsCommander(p: ActivePane): boolean {
             @click="onSwitchWorkspace"
             :title="$t('action.switch-workspace')"
           >↺</button>
-          <span class="titlebar-name titlebar-name--ws">{{ workspaceBaseName }}</span>
-          <span v-if="workspaceDisplayPath" class="titlebar-path">{{ workspaceDisplayPath }}</span>
+          <span class="titlebar-name titlebar-name--ws" v-truncate>{{ workspaceBaseName }}</span>
+          <span v-if="workspaceDisplayPath" class="titlebar-path" v-truncate>{{ workspaceDisplayPath }}</span>
           <!-- Rides with the path rather than the name: it acts on the folder,
                and the folder is what is on screen while hovering. -->
           <button
@@ -20297,7 +20298,7 @@ function paneIsCommander(p: ActivePane): boolean {
         </span>
         <span class="titlebar-spacer"></span>
       </template>
-      <span v-else class="titlebar-name">{{ workspaceBaseName }}</span>
+      <span v-else class="titlebar-name" v-truncate>{{ workspaceBaseName }}</span>
       <!-- Plugin buttons lead the cluster, so they grow LEFTWARD.
            .titlebar-spacer is flex:1, which pins this cluster to the right
            edge: anything appended after the gear widens the cluster and shoves
@@ -20982,6 +20983,7 @@ function paneIsCommander(p: ActivePane): boolean {
                 <span
                   v-else
                   class="meeting-name"
+                  v-truncate
                   :title="$t('action.rename')"
                   @dblclick.stop="startInlineRename(p)"
                 >{{ p.agentLabel }}</span>
@@ -20991,7 +20993,7 @@ function paneIsCommander(p: ActivePane): boolean {
                   :title="$t('pane.terminal.auto-named-tooltip')"
                 >◦</span>
               </div>
-              <span class="meeting-sub">
+              <span class="meeting-sub" v-truncate>
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
               <!-- Where a carried descendant lives, so a click that switches
@@ -20999,7 +21001,7 @@ function paneIsCommander(p: ActivePane): boolean {
               <span
                 v-if="paneListLocation.has(p.id)"
                 class="pane-list-location"
-                :title="paneListLocation.get(p.id)?.join(' · ')"
+                v-truncate
               >{{ paneListLocation.get(p.id)?.join(' · ') }}</span>
             </div>
             <span
@@ -21067,6 +21069,7 @@ function paneIsCommander(p: ActivePane): boolean {
               <span
                 v-else
                 class="spotlight-thumb-name"
+                v-truncate
                 :title="$t('action.rename')"
                 @dblclick.stop="startInlineRename(p)"
               >{{ p.agentLabel }}</span>
@@ -21076,13 +21079,13 @@ function paneIsCommander(p: ActivePane): boolean {
                 :title="$t('pane.terminal.auto-named-tooltip')"
               >◦</span>
             </div>
-            <span class="spotlight-thumb-role">
+            <span class="spotlight-thumb-role" v-truncate>
               {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
             </span>
             <span
               v-if="paneListLocation.has(p.id)"
               class="pane-list-location"
-              :title="paneListLocation.get(p.id)?.join(' · ')"
+              v-truncate
             >{{ paneListLocation.get(p.id)?.join(' · ') }}</span>
           </div>
           <div class="spotlight-thumb-badges">
@@ -21201,6 +21204,7 @@ function paneIsCommander(p: ActivePane): boolean {
                 <span
                   v-else
                   class="meeting-name"
+                  v-truncate
                   :title="$t('action.rename')"
                   @dblclick.stop="startInlineRename(p)"
                 >{{ p.agentLabel }}</span>
@@ -21210,7 +21214,7 @@ function paneIsCommander(p: ActivePane): boolean {
                   :title="$t('pane.terminal.auto-named-tooltip')"
                 >◦</span>
               </div>
-              <span class="meeting-sub">
+              <span class="meeting-sub" v-truncate>
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
               <!-- Where a carried descendant lives, so a click that switches
@@ -21218,7 +21222,7 @@ function paneIsCommander(p: ActivePane): boolean {
               <span
                 v-if="paneListLocation.has(p.id)"
                 class="pane-list-location"
-                :title="paneListLocation.get(p.id)?.join(' · ')"
+                v-truncate
               >{{ paneListLocation.get(p.id)?.join(' · ') }}</span>
             </div>
             <span

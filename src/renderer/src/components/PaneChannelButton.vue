@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { executeCommand } from '@navide/plugin-ui/shared'
 import {
   DEFAULT_ACCOUNT,
@@ -431,7 +432,7 @@ function openSettings(): void {
         <p class="pch-sub pch-note" data-testid="channel-redact-note">{{ t('channels.pane.redact-note') }}</p>
         <template v-if="children.length">
           <div class="pch-pop-head pch-children-head">{{ t('channels.pane.children') }}</div>
-          <div v-for="c in children" :key="c.pane_id" class="pch-sub pch-ellipsis" data-testid="channel-child">↳ {{ c.title || c.pane_id }}</div>
+          <div v-for="c in children" :key="c.pane_id" class="pch-sub pch-ellipsis" v-truncate data-testid="channel-child">↳ {{ c.title || c.pane_id }}</div>
         </template>
         <p v-if="error" class="pch-error" role="alert">{{ error }}</p>
       </div>
@@ -453,8 +454,8 @@ function openSettings(): void {
             <div class="pch-group-head">
               <span class="pch-mark" aria-hidden="true">{{ platformName(g.platform).charAt(0) }}</span>
               <span class="pch-group-name">{{ platformName(g.platform) }}</span>
-              <span v-if="g.bot" class="pch-group-bot pch-ellipsis" data-testid="channel-group-bot">{{ g.bot }}</span>
-              <span v-if="g.identity" class="pch-sub pch-ellipsis">{{ g.identity }}</span>
+              <span v-if="g.bot" class="pch-group-bot pch-ellipsis" v-truncate data-testid="channel-group-bot">{{ g.bot }}</span>
+              <span v-if="g.identity" class="pch-sub pch-ellipsis" v-truncate>{{ g.identity }}</span>
             </div>
             <div v-if="g.unavailable" class="pch-row pch-row-off" data-testid="channel-platform-off" aria-disabled="true">{{ g.unavailable }}</div>
             <div v-else-if="g.loading" class="pch-sub">{{ t('channels.pane.loading') }}</div>
@@ -474,8 +475,8 @@ function openSettings(): void {
                 :title="holderOf(g.platform, g.account, loc.chat_id) ? t('channels.pane.taken-hint') : t('channels.pane.use-existing')"
                 @click="choose(g.platform, g.account, loc, 'existing')"
               >
-                <span class="pch-loc-title pch-ellipsis">{{ loc.title || loc.chat_id }}</span>
-                <span v-if="holderOf(g.platform, g.account, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, g.account, loc.chat_id) }) }}</span>
+                <span class="pch-loc-title pch-ellipsis" v-truncate>{{ loc.title || loc.chat_id }}</span>
+                <span v-if="holderOf(g.platform, g.account, loc.chat_id)" class="pch-kind pch-taken pch-ellipsis" v-truncate data-testid="channel-taken">{{ t('channels.pane.taken-by', { pane: holderOf(g.platform, g.account, loc.chat_id) }) }}</span>
                 <span v-else class="pch-kind">{{ kindLabel(loc) }}</span>
               </button>
               <button
@@ -497,8 +498,8 @@ function openSettings(): void {
           <div class="pch-chosen" data-testid="channel-bind-chosen">
             <span class="pch-mark" aria-hidden="true">{{ platformName(pending.platform).charAt(0) }}</span>
             <span class="pch-chosen-text">
-              <span class="pch-loc-title pch-ellipsis">{{ pending.loc.title || pending.loc.chat_id }}</span>
-              <span class="pch-sub pch-ellipsis">{{ platformName(pending.platform) }}<template v-if="botLabel(pending.platform, pending.account)"> · {{ botLabel(pending.platform, pending.account) }}</template> · {{ pending.mode === 'new' ? t('channels.pane.new-topic', { name: paneName }) : kindLabel(pending.loc) }}</span>
+              <span class="pch-loc-title pch-ellipsis" v-truncate>{{ pending.loc.title || pending.loc.chat_id }}</span>
+              <span class="pch-sub pch-ellipsis" v-truncate>{{ platformName(pending.platform) }}<template v-if="botLabel(pending.platform, pending.account)"> · {{ botLabel(pending.platform, pending.account) }}</template> · {{ pending.mode === 'new' ? t('channels.pane.new-topic', { name: paneName }) : kindLabel(pending.loc) }}</span>
             </span>
           </div>
           <div class="pch-levels-head">{{ t('channels.pane.bind-level-label') }}</div>
