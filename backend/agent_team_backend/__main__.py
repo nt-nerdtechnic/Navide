@@ -229,6 +229,13 @@ def main() -> int:
         # tight server-side timeout closes connections that are busy, not dead.
         ws_ping_interval=20.0,
         ws_ping_timeout=60.0,
+        # Every idle Claude pane parks a rewake long-poll here (curl -m 1860).
+        # Unbounded, shutdown closes the listener and then waits on all of them,
+        # leaving a process with no port that the app never sees exit — so it
+        # never respawns it. Bounded, the parked requests are cancelled (the
+        # hook reads a dropped connection as "nothing to report") and the
+        # lifespan teardown runs.
+        timeout_graceful_shutdown=3,
     )
     server = uvicorn.Server(config)
     threading.Thread(
