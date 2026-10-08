@@ -4,6 +4,38 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.16] — 2026-10-08 — signed release
+
+### Added
+
+- **Pipeline graph editor**: the Pipeline Manager is a full-window workspace, and a pipeline's detail view edits it as swimlanes (layers as columns) or on a free canvas, sharing one undo history. Steps can run side by side and join, approval gates hold the hand-off until passed or rejected, a reject loop goes back at most its retry limit (editable on the canvas, 1–10), a pinned step reuses its frozen output, and a run can restart from any node. The palette, inspector (step settings, upstream outputs, `{{prev.summary}}`, live view, pin and rerun), executions view, zoom controls and a run-coloured minimap come with it, and every view shows the live run with a direct Review for a waiting gate. MCP gains `pipeline_graph`, `pipeline_gate` and `pipeline_restart_from`.
+- **Role step fields**: the Roles tab edits the settings fields a role shows in a pipeline step (names, types, defaults, choices and show/hide rules), with problems shown beside the field before Save.
+- **Files in chats**: Telegram, Discord and Slack attachments sent to a pane are downloaded into the workspace's media folder and announced to the pane with their path; a pane can send files back with `---ATTACH--- <path>` lines in its MSG block, limited to its workspace or the attachments it received, never hidden files or keys. Files over 20 MB are refused, a failed download is reported and the text is still delivered. Matrix, Mattermost, Feishu, DingTalk and iMessage reply that media is not supported yet.
+- **Reply quotes**: replying to a message in Telegram or Discord shows the pane the quoted message and its sender above your text, only for trusted authors, cut at 500 characters.
+- **Resume interrupted panes on relaunch**: panes that were running a turn or waiting on a prompt, and the parents waiting on them, come back by themselves after a restart (up to 6, two at a time) without continuing on their own, and each parent is told which children came back. The rest are marked "Working at restart". Settings → General can turn it off.
+- **Claude accounts on their own config dir**: a Claude account can sign in once inside its own config folder, so panes can run on different accounts at once. The quota badge picks the account new panes start on, Continue moves one pane onto another account with `--resume`, and these accounts are measured individually. Navide never reads or copies the token.
+- **Workspace self-evolution** (off by default): a per-workspace panel, opened from a badge on the sidebar's workspace heading, runs a daily job that opens a pane to review the repository, fix small bugs in a worktree and commit them to the local main branch without pushing, and write everything else as proposals. Runs per day, time and token budget are capped, and every step is announced. System-owned jobs show read-only in the Schedule panel.
+- **`cli_answer_prompt`**: an agent can answer another pane's permission prompt or menu, bound to the exact prompt `cli_get_status` reported. Navide Guard vetoes approving high/critical prompts, and every answer is disclosed and audited.
+- **`ui.pane.reclaim`**: an agent can release finished panes through `ui_invoke`, with the status bar's guards, and is told why any pane was refused.
+- Stage tabs show their pane count as live / total.
+- Skills can be dragged into order in Settings → Prompts.
+
+### Changed
+
+- `workspace_open` and other global UI requests go to the most recently focused main window that can answer them, and report at once when there is none, instead of timing out after 15 s.
+- A main, detached-group, Plans or Token Monitor window whose page process dies is logged and reloaded (at most 3 times a minute), reconnecting its panes instead of staying blank.
+
+### Fixed
+
+- A relaunch no longer files other workspaces' tab groups into the workspace on screen as empty `Run N` tabs.
+- A Claude account-dir login that a pane found expired stops counting as signed in, so new panes fall back to the current account; deleting an account removes its config-dir login and is refused while panes still use it.
+- A message relayed to another device is always answered and settled on the sending side, instead of sitting on queued or failing after 30 minutes.
+- Pipelines: a run aborted at a gate resumes by waiting on that gate, a run that loses every slot closes its nodes, a gate before the first stage is waited on, failed node output reports are resent, and a refused graph edit rolls back to the saved graph.
+- Chat attachments: path rules hold on Windows and case-insensitively, a file is rechecked while open, and a download's error body and total time are capped.
+- A new pane's first instruction is not sent before the CLI has drawn its screen, and a kickoff left unsent in the composer is submitted.
+- Windows: already-correct shared and skills links are recognized instead of rebuilt, and window focus order no longer ties on the coarse clock.
+- The mini-IDE ships each Monaco language worker once, and public `glab` runs no longer check for updates.
+
 ## [0.2.15] — 2026-10-06 — signed release
 
 ### Added

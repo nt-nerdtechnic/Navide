@@ -111,6 +111,51 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.16',
+    title: {
+      'zh-TW': 'Pipeline 畫布編輯器、在聊天室收發檔案、重開後自動接回工作中的 pane',
+      'en-US': 'A Pipeline Canvas Editor, Files in Chats, and Panes That Pick Up Where They Left Off',
+      'ja-JP': 'Pipeline キャンバスエディター、チャットでのファイル送受信、再起動後に作業中のペインを自動で再開',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Pipeline Manager 改成整個視窗的工作區，每條 pipeline 都能用泳道或自由畫布編輯：把角色拖進同一欄並行、拖到新欄接續，加入核准關卡、設定退回重做的迴圈與次數上限，釘住某一步沿用上次的產出，或從任一步重跑。執行中每個檢視都會顯示進度，有關卡在等你核准時會提示，按「前往核准」直接過去。角色分頁也能編輯這個角色在步驟裡顯示的設定欄位。',
+        'en-US': 'The Pipeline Manager is now a full-window workspace where every pipeline can be edited as swimlanes or on a free canvas: drag roles into a column to run them side by side or into a new one to follow on, add approval gates, set a reject loop and how many times it may retry, pin a step to reuse its last output, or rerun from any step. A running pipeline shows its progress in every view, and a gate waiting on you is flagged with a direct Review. The Roles tab can now edit the settings fields a role shows in a step.',
+        'ja-JP': 'Pipeline Manager がウィンドウ全体のワークスペースになり、各パイプラインをスイムレーンまたは自由なキャンバスで編集できます。ロールを同じ列にドラッグすると並列に、新しい列にドラッグすると順番に実行され、承認ゲートの追加、差し戻しループと再試行回数の設定、ステップを固定して前回の出力を再利用、任意のステップからの再実行ができます。実行中はどの表示でも進捗が見え、承認待ちのゲートがあると知らせて「確認する」で直接移動できます。ロールタブでは、ステップに表示される設定項目も編集できます。',
+      },
+      {
+        'zh-TW': '聊天室可以傳檔案了：在 Telegram、Discord、Slack 傳給 pane 的檔案與圖片會先下載，pane 會知道檔案放在哪裡；pane 回覆時也能把檔案傳回聊天室，但只限工作區內或剛收到的檔案，不會送出隱藏檔與金鑰。單檔上限 20 MB；其他平台會回覆「此平台尚不支援媒體」，文字照常送達。在 Telegram、Discord 用「回覆」某則訊息時，pane 也會看到被回覆的原文（只引用你信任的發言者）。',
+        'en-US': 'Chats can carry files: files and pictures sent to a pane from Telegram, Discord or Slack are downloaded first and the pane is told where they are, and a pane can send files back in its reply, limited to its workspace or the files it just received, never hidden files or keys. Each file can be up to 20 MB; other platforms reply that media is not supported yet and still deliver the text. Replying to a message in Telegram or Discord now shows the pane the message you replied to, quoted only from senders you trust.',
+        'ja-JP': 'チャットでファイルを送受信できるようになりました。Telegram・Discord・Slack からペインに送ったファイルや画像は先にダウンロードされ、保存場所がペインに伝わります。ペインも返信でファイルを送り返せますが、ワークスペース内のファイルか受け取ったファイルに限られ、隠しファイルや鍵は送りません。1 ファイル 20 MB まで。その他のプラットフォームでは「このプラットフォームはまだメディアに対応していません」と返し、テキストは通常どおり届きます。Telegram と Discord で特定のメッセージに「返信」すると、返信元の原文もペインに届きます（信頼する送信者のみ引用）。',
+      },
+      {
+        'zh-TW': '重開 Navide 後，原本正在跑回合、或停在權限詢問與提問上的 pane，以及等它們回報的母 pane，會自動接回（最多 6 個）。接回後不會自己繼續，要按「繼續」或由母 pane 下令；母 pane 會收到哪些子 pane 被中斷的通知。沒接回的會標示「重開時工作中」，點一下就能接回。不想要可以在「設定 → 一般」關閉。',
+        'en-US': 'After Navide restarts, panes that were running a turn or waiting on a permission prompt or a question, plus the parent panes waiting on their reports, come back by themselves (up to 6). None of them continues on its own: press Continue or let the parent say so, and each parent is told which of its panes were interrupted. Panes left closed are marked "Working at restart" and resume with a click. Turn this off in Settings → General.',
+        'ja-JP': 'Navide を再起動すると、ターンの実行中や権限の確認・質問で待っていたペインと、その報告を待つ親ペインが自動で戻ります（最大 6 個）。戻ったペインが勝手に続きを始めることはなく、「続行」を押すか親ペインの指示で再開します。親ペインには、どの子ペインが中断されたかが通知されます。戻らなかったペインには「再起動時に作業中」と表示され、クリックで再開できます。「設定 → 一般」でオフにできます。',
+      },
+      {
+        'zh-TW': 'Claude 帳號可以各自在自己的設定資料夾登入一次，不同 pane 就能同時用不同帳號：從額度徽章選新 pane 要用的帳號，或按「繼續」把單一個 pane 換到另一個帳號接著對話，其他 pane 不受影響；這些帳號的額度也能各自讀取。登入過期時新 pane 會改用目前的帳號並提示重新登入；刪除帳號會一併清掉它的登入，還有 pane 在用時會先擋下並告訴你幾個。',
+        'en-US': 'Each Claude account can sign in once inside its own settings folder, so different panes can run on different accounts at the same time: pick the account new panes start on from the quota badge, or press Continue to move one pane onto another account and carry on its conversation, leaving the rest alone. These accounts each get their own quota reading. When such a login expires, new panes fall back to the current account and you are offered to sign in again; deleting an account removes its login too, and is held back, with a count, while panes still use it.',
+        'ja-JP': 'Claude アカウントごとに専用の設定フォルダーで一度ログインしておくと、ペインごとに別のアカウントを同時に使えます。クォータバッジで新しいペインが使うアカウントを選ぶか、「続行」で 1 つのペインだけを別のアカウントに移して会話を続けられ、ほかのペインには影響しません。これらのアカウントはそれぞれのクォータも読み取れます。ログインが期限切れになると新しいペインは現在のアカウントに戻り、再ログインを案内します。アカウントを削除するとそのログインも消え、まだ使っているペインがある間は件数を示して削除を止めます。',
+      },
+      {
+        'zh-TW': '新增工作區「自我優化」（預設關閉）：從側欄工作區標題的徽章開啟面板並啟用後，Navide 每天依你設定的時間開一個 pane 檢查這個 repo，在獨立的 worktree 修正小錯誤、逐一 commit 回本機主分支（不會 push），新功能與取捨則寫成提案；每天次數、時間與 token 預算都有上限，每一步都會通知你。',
+        'en-US': 'New per-workspace Self-evolution, off by default: open its panel from the badge on the workspace heading in the sidebar and turn it on, and at the time you choose each day Navide opens a pane that checks the repository, fixes small bugs in a separate worktree and commits each fix to the local main branch (never pushing), and writes new features and trade-offs up as proposals instead. Runs per day, time and token budget are all capped, and you are told about every step.',
+        'ja-JP': 'ワークスペースごとの「自己改善」を追加しました（既定はオフ）。サイドバーのワークスペース見出しのバッジからパネルを開いて有効にすると、毎日指定した時刻に Navide がペインを開いてリポジトリを確認し、小さなバグを別の worktree で修正して 1 件ずつローカルのメインブランチにコミットします（push はしません）。新機能や判断が必要なものは提案として残します。1 日の回数・時間・トークン予算には上限があり、各ステップは通知されます。',
+      },
+      {
+        'zh-TW': '給 agent 的新能力：agent 可以替其他 pane 回答權限詢問與選單（高風險的仍由 Navide Guard 擋下，每次回答都會記錄）、在工作完成後收掉子 pane，從 agent 開啟工作區也不再逾時。',
+        'en-US': 'For agents: an agent can now answer another pane’s permission prompt or menu (Navide Guard still blocks high-risk ones, and every answer is recorded), release its finished child panes, and opening a workspace from an agent no longer times out.',
+        'ja-JP': 'エージェント向け：エージェントがほかのペインの権限確認やメニューに回答できるようになりました（高リスクのものは引き続き Navide Guard がブロックし、回答はすべて記録されます）。作業が終わった子ペインの片付けもでき、エージェントからワークスペースを開いてもタイムアウトしなくなりました。',
+      },
+      {
+        'zh-TW': '其他：主視窗畫面意外掛掉時會自動重新載入並接回 pane，不再留下一片空白、pane 最後被清掉；分頁標籤顯示「執行中／總數」；重開不再把其他工作區的分頁群組塞進目前的工作區；「設定 → Prompt 技能」可以拖曳排序 skill；送到另一台裝置的訊息一定會回報結果，不再一直停在排隊中；Windows 上不再重建已經正確的共用連結。',
+        'en-US': 'Also: a main window whose page crashes reloads itself and reconnects its panes, instead of staying blank until the panes are cleared; stage tabs show running / total panes; a restart no longer files other workspaces’ tab groups into the one on screen; skills can be dragged into order in Settings → Prompts; a message sent to another device always reports how it ended instead of sitting on queued; and Windows no longer rebuilds shared links that are already correct.',
+        'ja-JP': 'そのほか：メインウィンドウの画面が予期せず落ちても自動で再読み込みしてペインに再接続し、真っ白なままペインが消えることはなくなりました。タブに「実行中 / 合計」のペイン数を表示します。再起動時にほかのワークスペースのタブグループが表示中のワークスペースに入り込まなくなりました。「設定 → プロンプト」でスキルをドラッグして並べ替えられます。別のデバイスに送ったメッセージは必ず結果が返り、「待機中」のまま止まらなくなりました。Windows で正しく張られている共有リンクを作り直さなくなりました。',
+      },
+    ],
+  },
+  {
     version: '0.2.15',
     title: {
       'zh-TW': '首次使用導覽、一鍵建立 Telegram bot、內嵌 AI 面板成為正式 pane',
