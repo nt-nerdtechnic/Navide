@@ -13,6 +13,7 @@ import { subtreeSignals } from '../lib/paneSubtreeStatus'
 import { workspaceAliasKey, workspaceAliasOf, workspaceBasename, workspaceDisplayName } from '../lib/workspaceAlias'
 import type { SidebarMode } from '../lib/sidebarMode'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
+import { evolveBadgeLabel, evolveBadgeState, useEvolveBadges } from '../composables/useEvolve'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
 import {
   ALL_RAIL_ID,
@@ -2375,6 +2376,34 @@ function closeWsMoreMenu(): void {
   wsMoreMenuPath.value = ''
 }
 
+// ── Workspace self-evolution (自我優化) ──
+// One badge per heading, read from the shared evolve badge map; the badge and
+// the "自我優化…" rows of both menus open that workspace's panel (App.vue
+// mounts it). The minute tick keeps "running 12m" moving. A reconnect
+// re-reads every path asked for here (useEvolve remembers them).
+const evolve = useEvolveBadges()
+const evolveNow = ref(Date.now())
+const evolveTick = setInterval(() => (evolveNow.value = Date.now()), 60_000)
+onUnmounted(() => clearInterval(evolveTick))
+watch(
+  () => visibleWorkspaceRows.value.map((ws) => ws?.path ?? '').filter(Boolean).join('\n'),
+  (joined) => {
+    if (joined) void evolve.refreshBadges(joined.split('\n'))
+  },
+  { immediate: true }
+)
+function evolveStateOf(path: string) {
+  return evolveBadgeState(evolve.badges.value[path])
+}
+function evolveLabelOf(path: string): string {
+  return evolveBadgeLabel(evolve.badges.value[path], evolveNow.value)
+}
+function openEvolveFor(path: string): void {
+  closeWsMoreMenu()
+  closeWsMenu()
+  evolve.openPanel(path)
+}
+
 /** Same floor as the right-click menu's: a window must keep one workspace, so
  *  the close rows only appear for a project that has somewhere to land. */
 const wsMoreCanClose = computed(
@@ -3725,6 +3754,14 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 @dblclick.stop="startWorkspaceRename(ws.path)"
               >{{ ws.label }}</span>
               <span class="ws-count" v-bind="countBadgeAttrs(wsCountStates.get(ws.path))">{{ wsLiveCounts.get(ws.path) ?? 0 }} / {{ ws.count }}</span>
+              <button
+                class="ws-evolve"
+                data-test="evolve-badge"
+                :data-state="evolveStateOf(ws.path)"
+                :title="$t('evolve.badge.title', { state: evolveLabelOf(ws.path) })"
+                @click.stop="openEvolveFor(ws.path)"
+                @dblclick.stop
+              >✦ {{ evolveLabelOf(ws.path) }}</button>
             </span>
             <span class="ws-path">{{ ws.displayPath }}</span>
           </span>
@@ -4069,6 +4106,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         <button class="ws-ctx-opt" @click="startWorkspaceRenameFromMenu()">{{ $t('action.rename-workspace') }}</button>
         <button class="ws-ctx-opt" @click="wsMenuAction('reveal')">{{ $t('action.open-in-finder') }}</button>
         <button class="ws-ctx-opt" @click="wsMenuAction('copy')">{{ $t('action.copy-path') }}</button>
+        <button class="ws-ctx-opt" data-test="evolve-ctx" @click="openEvolveFor(wsMenu.path)">✦ {{ $t('evolve.menu.open') }}</button>
         <!-- Membership is exclusive, so this reads as a radio group: one tick,
              and "None" is a real choice rather than the absence of one. -->
         <template v-if="workspaceRails.length">
@@ -4136,6 +4174,11 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         <button class="ws-more-opt" @click="emit('open-history', wsMoreMenuPath); closeWsMoreMenu()">
           <span class="ws-more-ico"><HistoryIcon /></span>
           <span>{{ $t('label.history') }}</span>
+        </button>
+        <button class="ws-more-opt" data-test="evolve-menu" @click="openEvolveFor(wsMoreMenuPath)">
+          <span class="ws-more-ico">✦</span>
+          <span>{{ $t('evolve.menu.open') }}</span>
+          <span v-if="evolve.badges.value[wsMoreMenuPath]?.enabled" class="ws-evolve-on">● {{ $t('evolve.menu.enabled') }}</span>
         </button>
 
         <!-- Everything below already existed, reachable only by right-clicking
@@ -6036,6 +6079,43 @@ button.icon-btn.muted:hover {
    Same defaults and the same --status-badge-* override hooks as the pane row's
    .state pill: one status vocabulary, painted once per surface, so recolouring
    a status in Settings moves the tally with everything else. */
+.ws-evolve {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  appearance: none;
+  height: 15px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 400;
+  font-size: var(--font-3xs);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ws-evolve[data-state='on'] {
+  background: var(--success-muted);
+  color: var(--success-fg);
+}
+.ws-evolve[data-state='running'] {
+  background: var(--accent-muted);
+  color: var(--accent-fg);
+}
+.ws-evolve[data-state='failed'] {
+  background: var(--danger-muted);
+  color: var(--danger-fg);
+}
+.ws-evolve-on {
+  margin-left: auto;
+  font-size: var(--font-3xs);
+  color: var(--success-fg);
+}
 .ws-count[data-state='running'] {
   background: var(--status-badge-bg, var(--success-muted));
   color: var(--status-badge-fg, var(--success-fg));
