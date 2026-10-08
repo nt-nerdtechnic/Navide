@@ -1061,7 +1061,15 @@ class ServerLink:
                 on_result=_result,
             )
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
-            engine.register(sync_scopes.McpScope())
+            async def _mcp_changed() -> None:
+                # What a save in Settings does (mcp.save_servers), plus telling
+                # the windows, which re-read the list unless mid-edit.
+                await app.mcp_manager.reload(app.mcp_settings_store.path)
+                await app.broadcast(
+                    make_event("mcp.servers_changed", {"revision": str(app.mcp_settings_store.revision)})
+                )
+
+            engine.register(sync_scopes.McpScope(on_change=_mcp_changed))
             engine.register(sync_scopes.SkillsStateScope())
             # Files of skills too large for one record, as blobs; rides with
             # the Skills switch. Its transfers report progress to every window.
@@ -4006,10 +4014,11 @@ async def sync_pull_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
 
 
 def sync_conflicts(scope: str = "") -> list[dict[str, Any]]:
-    """Unresolved conflicts, readable whether or not the link is up."""
-    from . import app
+    """Unresolved conflicts, readable whether or not the link is up. MCP
+    secrets are masked (``sync_scopes.conflict_preview``)."""
+    from . import app, sync_scopes
 
-    return app.sync_store.conflicts(scope or None)
+    return sync_scopes.conflict_preview(app.sync_store.conflicts(scope or None))
 
 
 def resolve_sync_conflict(scope: str, item_id: str, keep: str) -> None:

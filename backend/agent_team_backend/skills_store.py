@@ -689,6 +689,11 @@ class SkillsStore:
                 continue  # recreated on the far side; never carried
             if _is_generated(relative):
                 continue
+            if _safe_relative(relative) is None:
+                # import_content refuses the whole skill over one such path
+                # (a dotfile, say); list_files leaves it out the same way.
+                log.info("skill %s: %s is not carried to other devices", name, relative)
+                continue
             size = path.stat().st_size
             if size > self.CONTENT_FILE_LIMIT:
                 # Sending the rest would land a skill with a file missing.
@@ -703,6 +708,10 @@ class SkillsStore:
                 files[relative] = {"t": "text", "v": raw.decode("utf-8")}
             except UnicodeDecodeError:
                 files[relative] = {"t": "b64", "v": base64.b64encode(raw).decode("ascii")}
+            if _carries_exec_bit(path, raw):
+                # Only when set, so a skill without scripts keeps the record
+                # it always had; a build that predates the flag ignores it.
+                files[relative]["x"] = True
         return files if SKILL_FILE in files else None
 
     def install_bundle(
@@ -895,6 +904,7 @@ class SkillsStore:
             return False
 
         decoded: dict[str, bytes] = {}
+        executable: set[str] = set()
         for relative, entry in files.items():
             safe = _safe_relative(relative)
             if safe is None or not isinstance(entry, dict):
@@ -911,6 +921,8 @@ class SkillsStore:
             if len(raw) > self.CONTENT_FILE_LIMIT:
                 return False
             decoded[safe] = raw
+            if entry.get("x") is True:
+                executable.add(safe)
 
         self._root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=self._root))
@@ -920,6 +932,8 @@ class SkillsStore:
                 target = staging / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(raw)
+                if relative in executable:
+                    target.chmod(0o755)
             backup = self._root / f".{name}.old"
             self._remove_tree(backup)
             if skill_dir.exists() or skill_dir.is_symlink():
@@ -1353,6 +1367,14 @@ class SkillsStore:
             path.unlink(missing_ok=True)
         elif path.exists():
             shutil.rmtree(path)
+
+
+def _carries_exec_bit(path: Path, raw: bytes) -> bool:
+    """Whether a synced copy of *path* should be executable. Windows keeps no
+    such bit, so there a script is taken by its shebang."""
+    if os.name != "nt":
+        return bool(path.stat().st_mode & 0o111)
+    return raw[:2] == b"#!"
 
 
 def _is_generated(relative: str) -> bool:

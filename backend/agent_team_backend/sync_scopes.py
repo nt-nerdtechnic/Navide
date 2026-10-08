@@ -101,6 +101,95 @@ def credentials_enable_blocker() -> str:
     )
 
 
+#: Items whose delete arrived from another device while this one kept its
+#: copy, as ``{scope: {item_id: digest of the kept copy}}``.
+DETACHED_KEY = "sync-detached"
+
+
+def _detached(scope: str) -> dict[str, str]:
+    raw = _settings().get().get(DETACHED_KEY)
+    entries = raw.get(scope) if isinstance(raw, dict) else None
+    return {str(k): str(v) for k, v in entries.items()} if isinstance(entries, dict) else {}
+
+
+def _set_detached(scope: str, entries: dict[str, str]) -> None:
+    raw = _settings().get().get(DETACHED_KEY)
+    doc = dict(raw) if isinstance(raw, dict) else {}
+    if entries:
+        doc[scope] = entries
+    else:
+        doc.pop(scope, None)
+    _settings().set({DETACHED_KEY: doc})
+
+
+def detach(scope: str, item_id: str, kept: Any | None) -> None:
+    """A delete arrived for an item this machine keeps a copy of.
+
+    The rule memory and skills share: a delete made on another device never
+    removes the user's file here — it is theirs, not ours — and the copy kept
+    here is not pushed back up either, which would undo the delete on the
+    device that made it. The item leaves the snapshot until the user changes
+    the kept copy, which is a new decision and goes up as one.
+    """
+    entries = _detached(scope)
+    if kept is None:
+        entries.pop(item_id, None)
+    else:
+        entries[item_id] = sync_engine.digest(kept)
+    _set_detached(scope, entries)
+
+
+def attach(scope: str, item_id: str) -> None:
+    """A live record arrived for an item: it is in sync again."""
+    entries = _detached(scope)
+    if entries.pop(item_id, None) is not None:
+        _set_detached(scope, entries)
+
+
+def without_detached(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """*snapshot* minus the detached items still exactly as they were kept.
+
+    A marker whose copy has since changed or gone is dropped: the change is
+    the user's, and from then on the item syncs like any other.
+    """
+    entries = _detached(scope)
+    if not entries:
+        return snapshot
+    out = dict(snapshot)
+    stale = []
+    for item_id, kept in entries.items():
+        if item_id in out and sync_engine.digest(out[item_id]) == kept:
+            del out[item_id]
+        else:
+            stale.append(item_id)
+    if stale:
+        for item_id in stale:
+            entries.pop(item_id, None)
+        _set_detached(scope, entries)
+    return out
+
+
+def _call_on_loop(loop: asyncio.AbstractEventLoop | None, fn: Callable[..., Any], *args: Any) -> None:
+    """Run *fn* on *loop*, from whichever thread this is.
+
+    The engine applies a pull page in a worker thread, and what an adapter
+    tells the rest of the app (a broadcast, a reload) schedules tasks, which
+    only the loop can do. Without a loop (no round has run, or a caller that
+    is not the engine) *fn* runs here.
+    """
+    if loop is None or loop.is_closed():
+        fn(*args)
+        return
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        fn(*args)
+    else:
+        loop.call_soon_threadsafe(fn, *args)
+
+
 class PromptsScope:
     """Prompt skills — the Settings → Prompts list.
 
@@ -116,6 +205,12 @@ class PromptsScope:
         #: Called with the settings delta after a write, so other windows
         #: converge instead of waiting for a reload.
         self._broadcast = broadcast
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def prepare(self, _request: Any, _kick: Callable[[], None]) -> bool:
+        """Called by the engine at the start of each round, on the loop."""
+        self._loop = asyncio.get_running_loop()
+        return True
 
     # ── reading ─────────────────────────────────────────────────────────
     def _list(self) -> list[dict[str, Any]]:
@@ -141,22 +236,33 @@ class PromptsScope:
                 return
             incoming = dict(payload)
             incoming["id"] = item_id
+            # A bundle strips the flag; a synced record always carries it.
+            incoming["isDefault"] = incoming.get("isDefault") is True
             if index < 0:
                 skills.append(incoming)
             else:
                 skills[index] = incoming
-        self._write(_single_default(skills))
+            if incoming.get("isDefault"):
+                # A promotion elsewhere: the incoming default wins. The others
+                # are not re-cast record by record — the record demoting the
+                # old default can arrive before the one promoting the new one,
+                # and picking a stand-in in between is what reverted it.
+                skills = [{**s, "isDefault": s.get("id") == item_id} for s in skills]
+        self._write(skills)
 
     def _write(self, skills: list[dict[str, Any]]) -> None:
         updates: dict[str, Any] = {PROMPT_SKILLS_KEY: skills}
-        default = next((s for s in skills if s.get("isDefault")), None)
+        # The list may hold no flag for a moment (a default deleted elsewhere,
+        # a demotion ahead of its promotion); the renderer settles that on read
+        # by the same rule ``_single_default`` states.
+        default = next((s for s in _single_default(skills) if s.get("isDefault")), None)
         if default is not None and isinstance(default.get("prompt"), str):
             # The renderer mirrors this on every save; a write that skipped it
             # would leave the loop running yesterday's prompt.
             updates[LOOP_PROMPT_KEY] = default["prompt"]
         delta = _settings().set(updates)
         if delta and self._broadcast is not None:
-            self._broadcast(delta)
+            _call_on_loop(self._loop, self._broadcast, delta)
 
 
 def _single_default(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -169,8 +275,11 @@ def _single_default(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     if not skills:
         return skills
-    claimed = [i for i, s in enumerate(skills) if s.get("isDefault")]
-    winner = claimed[0] if claimed else 0
+    # normalizePromptSkills (promptSkills.ts): the first skill flagged and
+    # enabled, else the first enabled one — a disabled default casts nothing.
+    enabled = [i for i, s in enumerate(skills) if s.get("enabled") is not False]
+    claimed = [i for i in enabled if skills[i].get("isDefault")]
+    winner = claimed[0] if claimed else (enabled[0] if enabled else 0)
     return [{**s, "isDefault": i == winner} for i, s in enumerate(skills)]
 
 
@@ -188,27 +297,61 @@ class McpScope:
 
     scope = "mcp"
 
+    def __init__(self, on_change: Callable[[], Any] | None = None) -> None:
+        #: Coroutine function run on the loop after a synced write, so the
+        #: running servers and the open windows follow it the way they follow
+        #: a save in Settings. One run covers every write before it starts.
+        self._on_change = on_change
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._change_pending = False
+        self._change_tasks: set[asyncio.Task[Any]] = set()
+
+    async def prepare(self, _request: Any, _kick: Callable[[], None]) -> bool:
+        """Called by the engine at the start of each round, on the loop."""
+        self._loop = asyncio.get_running_loop()
+        return True
+
     def _store(self):
         from . import app
 
         return app.mcp_settings_store
 
+    def _changed(self) -> None:
+        if self._on_change is None or self._change_pending or self._loop is None:
+            return
+        self._change_pending = True
+        _call_on_loop(self._loop, self._run_change)
+
+    def _run_change(self) -> None:
+        async def run() -> None:
+            self._change_pending = False
+            try:
+                await self._on_change()
+            except Exception as err:  # noqa: BLE001 - the write itself stands
+                log.warning("the MCP servers could not be reloaded after a sync: %s", err)
+
+        task = asyncio.get_running_loop().create_task(run())
+        self._change_tasks.add(task)
+        task.add_done_callback(self._change_tasks.discard)
+
     def snapshot(self) -> dict[str, Any]:
         servers = self._store().list_servers()
         return {str(s["name"]): s for s in servers if isinstance(s.get("name"), str) and s["name"]}
 
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Write one record in. False means the store refused it (malformed,
+        over the document's limits) and this machine does not hold it."""
         store = self._store()
         servers = [s for s in store.list_servers() if isinstance(s, dict)]
         index = next((i for i, s in enumerate(servers) if s.get("name") == item_id), -1)
         if payload is None:
             if index < 0:
-                return
+                return True
             servers.pop(index)
         else:
             if not isinstance(payload, dict):
                 log.warning("MCP record %s arrived as %s", item_id, type(payload).__name__)
-                return
+                return False
             incoming = dict(payload)
             incoming["name"] = item_id
             if index < 0:
@@ -219,6 +362,39 @@ class McpScope:
             store.replace_servers(servers)
         except Exception as err:  # noqa: BLE001 - a rejected document is not fatal
             log.warning("the synced MCP document was refused: %s", err)
+            return False
+        self._changed()
+        return True
+
+
+#: What a conflict preview shows in place of an MCP env or header value.
+MASKED_VALUE = "••••••"
+#: The MCP record fields whose values are secrets (settings_bundle blanks the
+#: same two on export).
+_MCP_SECRET_FIELDS = ("env", "headers")
+
+
+def _mask_mcp(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    for field_name in _MCP_SECRET_FIELDS:
+        values = out.get(field_name)
+        if isinstance(values, dict):
+            out[field_name] = {str(k): MASKED_VALUE for k in values}
+    return out
+
+
+def conflict_preview(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Conflict rows as a window may show them: MCP env and header values
+    masked, names kept. The rows themselves (``SyncStore.conflict_payloads``)
+    keep the real values, which ``resolve`` writes back."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("scope") == McpScope.scope and not row.get("sealed"):
+            row = {**row, "local": _mask_mcp(row.get("local")), "remote": _mask_mcp(row.get("remote"))}
+        out.append(row)
+    return out
 
 
 #: Where a synced skill decision waits when the skill itself is not here yet.
@@ -267,8 +443,8 @@ def annotate_content_sync(listing: dict[str, Any], store: Any) -> dict[str, Any]
         name = skill.get("name")
         if skill.get("managed") and isinstance(name, str) and name:
             too_large = skill_entry(store, skill)[1]
-            skill["sync_too_large"] = too_large and not via_blobs
-            if too_large and via_blobs:
+            skill["sync_too_large"] = too_large and (not via_blobs or name in blobs.oversized())
+            if too_large and via_blobs and not skill["sync_too_large"]:
                 skill["sync_via_blobs"] = True
                 transfer = blobs.transfer(name)
                 if transfer is not None:
@@ -334,43 +510,61 @@ class SkillsStateScope:
     def snapshot(self) -> dict[str, Any]:
         # What is here wins over what was remembered for it; the remembered
         # entries survive for the skills this machine does not hold.
-        return {**self._intent(), **self._present()}
+        return without_detached(self.scope, {**self._intent(), **self._present()})
 
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Take one record in. False means this machine refused it and holds
+        nothing for it: a record that is not an object, or files that would
+        not land (the name is the user's own skill here, or a path is unsafe)."""
         intent = self._intent()
         if payload is None:
             intent.pop(item_id, None)
             self._set_intent(intent)
-            return
+            # The files stay (see ``detach``); they just stop syncing.
+            detach(self.scope, item_id, self._present().get(item_id))
+            return True
         if not isinstance(payload, dict):
             log.warning("skill decision %s arrived as %s", item_id, type(payload).__name__)
-            return
+            return False
         decision = {
             "enabled": bool(payload.get("enabled", True)),
             "targets": payload.get("targets"),
         }
-        intent[item_id] = decision
-        self._set_intent(intent)
         store = self._store()
         content = payload.get("content")
         if isinstance(content, dict):
+            # Files first: a decision recorded for files that did not land
+            # would snapshot as an entry without them, and pushing that up
+            # erases them from the cloud.
             try:
-                store.import_content(item_id, content)
+                landed = bool(store.import_content(item_id, content))
             except Exception as err:  # noqa: BLE001 - a refused write is not fatal
                 log.warning("the files of %s were not written: %s", item_id, err)
+                landed = False
+            if not landed:
+                log.warning("skill %s was not taken in: its files were refused here", item_id)
+                return False
+        attach(self.scope, item_id)
+        intent[item_id] = decision
+        self._set_intent(intent)
         if item_id not in self._present():
-            return  # the skill is not here; the decision waits in the intent map
+            return True  # the skill is not here; the decision waits in the intent map
         try:
             store.set_enabled(item_id, decision["enabled"])
             store.set_targets(item_id, decision["targets"])
         except Exception as err:  # noqa: BLE001 - a skill that moved is not fatal
             log.warning("the synced decision for %s could not be applied: %s", item_id, err)
+        return True
 
 
 #: Manifest format of a ``skill-files`` record.
 _MANIFEST_VERSION = 1
 #: How often a running transfer tells the windows how far it got.
 _PROGRESS_INTERVAL_S = 0.5
+#: Failed downloads of one manifest before its record is given up on. Until
+#: then the record holds the scope's cursor; after, it is declined (reported
+#: by ``SkillFilesScope.failed``) so the records behind it can land.
+MAX_DOWNLOAD_ATTEMPTS = 3
 
 
 class SkillFilesScope:
@@ -409,6 +603,12 @@ class SkillFilesScope:
         self._transfers: dict[str, dict[str, Any]] = {}
         self._last_note: dict[str, float] = {}
         self._digests: Any = None
+        #: Skills naming more blobs than one record may (``Layout.max_refs``):
+        #: held here, never pushed, and listed as too large to sync.
+        self._oversized: set[str] = set()
+        #: Failed downloads, by item: (manifest digest, count). A new
+        #: manifest for the item starts the count again.
+        self._download_failures: dict[str, tuple[str, int]] = {}
 
     # ── wiring ──────────────────────────────────────────────────────────
 
@@ -418,6 +618,16 @@ class SkillFilesScope:
     def available(self) -> bool:
         """Whether the server this machine last spoke to can hold blobs."""
         return self._layout is not None
+
+    def failed(self) -> list[str]:
+        """Skills whose files were given up on after repeated failed downloads."""
+        return sorted(
+            name for name, (_d, count) in self._download_failures.items() if count >= MAX_DOWNLOAD_ATTEMPTS
+        )
+
+    def oversized(self) -> list[str]:
+        """Skills whose files are too many for one record, as of the last round."""
+        return sorted(self._oversized)
 
     def transfer(self, name: str) -> dict[str, Any] | None:
         entry = self._transfers.get(name)
@@ -504,6 +714,9 @@ class SkillFilesScope:
     def snapshot(self) -> dict[str, Any]:
         if self._layout is None:
             return {}
+        return without_detached(self.scope, self._manifests())
+
+    def _manifests(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for name, files in self._large_skills().items():
             try:
@@ -576,15 +789,31 @@ class SkillFilesScope:
         if self._layout is None:
             return False
         refs = self._refs_of(payload)
+        blob_ids = sorted({r.blob_id for r in refs.values()})
+        if len(blob_ids) > self._layout.max_refs:
+            # The server refuses the record outright. It stays in the
+            # snapshot (absence would read as a delete) and is said to be too
+            # large, rather than retried every round.
+            if item_id not in self._oversized:
+                log.warning(
+                    "skill %s has %d distinct files; one record may name %d, so its files stay here",
+                    item_id, len(blob_ids), self._layout.max_refs,
+                )
+            self._oversized.add(item_id)
+            return False
+        self._oversized.discard(item_id)
+        states: list[Any] = []
         try:
-            reply = skill_blobs._payload(
-                await self._request("blobs.stat", {"blobIds": sorted({r.blob_id for r in refs.values()})})
-            )
+            for start in range(0, len(blob_ids), skill_blobs.STAT_BATCH):
+                reply = skill_blobs._payload(
+                    await self._request("blobs.stat", {"blobIds": blob_ids[start:start + skill_blobs.STAT_BATCH]})
+                )
+                states.extend(reply.get("blobs") or [])
         except skill_blobs.BlobError as err:
             # This item waits; the rest of the round goes ahead.
             log.warning("could not ask which files of %s are uploaded: %s", item_id, err)
             return False
-        missing = {b["blobId"] for b in reply.get("blobs") or [] if b.get("state") != "complete"}
+        missing = {b["blobId"] for b in states if b.get("state") != "complete"}
         if not missing:
             return True
         files = self._store().list_files(item_id) or {}
@@ -612,7 +841,11 @@ class SkillFilesScope:
         from . import skill_blobs
 
         if payload is None:
-            return None  # a removal elsewhere never deletes files here
+            # A removal elsewhere never deletes files here (see ``detach``).
+            if self._layout is not None:
+                detach(self.scope, item_id, self._manifests().get(item_id))
+            return None
+        attach(self.scope, item_id)
         try:
             refs = self._refs_of(payload)
         except skill_blobs.BlobError as err:
@@ -621,6 +854,16 @@ class SkillFilesScope:
         store = self._store()
         if not store.can_import(item_id):
             log.warning("skill %s exists here and is not Navide's; its synced files are not fetched", item_id)
+            return False
+        manifest_digest = sync_engine.digest(payload)
+        failure = self._download_failures.get(item_id)
+        if failure is not None and failure[0] != manifest_digest:
+            self._download_failures.pop(item_id, None)
+        elif failure is not None and failure[1] >= MAX_DOWNLOAD_ATTEMPTS:
+            log.warning(
+                "the files of skill %s failed to download %d times; giving up on this version",
+                item_id, failure[1],
+            )
             return False
         staging = self._staging()
         current = {}
@@ -654,13 +897,20 @@ class SkillFilesScope:
             async def download() -> None:
                 done = 0
                 report = self._progress(item_id, "download")
-                for ref in refs_todo:
-                    base = done
-                    await skill_blobs.download(
-                        request, ref, staging / ref.blob_id, layout,
-                        progress=lambda d, _t: report(base + d, total),
-                    )
-                    done = base + layout.sealed_size(ref.size)
+                try:
+                    for ref in refs_todo:
+                        base = done
+                        await skill_blobs.download(
+                            request, ref, staging / ref.blob_id, layout,
+                            progress=lambda d, _t: report(base + d, total),
+                        )
+                        done = base + layout.sealed_size(ref.size)
+                except Exception:
+                    previous = self._download_failures.get(item_id)
+                    count = previous[1] + 1 if previous and previous[0] == manifest_digest else 1
+                    self._download_failures[item_id] = (manifest_digest, count)
+                    raise
+                self._download_failures.pop(item_id, None)
 
             self._loop.call_soon_threadsafe(self._start, item_id, download)
             raise sync_engine.DeferItem(item_id)
@@ -700,6 +950,38 @@ def skill_files_scope() -> SkillFilesScope:
     return _skill_files
 
 
+#: The characters a memory item id keeps as they are; the protocol's itemId
+#: pattern (``^[A-Za-z0-9._:@+-]{1,200}$``) allows these plus ``:@+``.
+_MEMORY_ID_PLAIN = re.compile(r"[A-Za-z0-9._-]")
+_MEMORY_ID_MAX = 200
+
+
+def memory_item_id(relative: str) -> str:
+    """The wire id of the instruction file at ``relative`` (to the home).
+
+    ``/`` becomes ``:``, and every other character outside ``[A-Za-z0-9._-]``
+    — ``:``, ``@`` and ``+`` included — becomes ``+XX`` per UTF-8 byte, so the
+    mapping is one-to-one and ``.claude/CLAUDE.md`` still reads as
+    ``.claude:CLAUDE.md``. An id that would pass the protocol's 200-character
+    limit is a digest of the path instead. Ids are only ever matched against
+    this machine's own candidates (``MemoryScope._resolve``), never decoded.
+    """
+    out: list[str] = []
+    for ch in relative:
+        if ch == "/":
+            out.append(":")
+        elif _MEMORY_ID_PLAIN.fullmatch(ch):
+            out.append(ch)
+        else:
+            out.extend(f"+{b:02X}" for b in ch.encode("utf-8"))
+    encoded = "".join(out)
+    if len(encoded) <= _MEMORY_ID_MAX:
+        return encoded
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(relative.encode("utf-8")).hexdigest()
+
+
 class MemoryScope:
     """User-scope instruction files — ``~/.claude/CLAUDE.md`` and its siblings.
 
@@ -708,10 +990,24 @@ class MemoryScope:
     systems writing one file is how both of them end up wrong.
 
     The item id is the path *relative to the home directory*, so the same file
-    is the same item on a machine whose home is somewhere else entirely.
+    is the same item on a machine whose home is somewhere else entirely —
+    encoded by ``memory_item_id``, because the protocol refuses a ``/`` in an
+    id. ``snapshot_by_path`` keeps the plain paths for the settings bundle.
     """
 
     scope = "memory"
+
+    def __init__(self) -> None:
+        #: mtime of each file as the last snapshot read it, by absolute path:
+        #: ``apply`` refuses to write over a file that has moved on since.
+        self._read_mtimes: dict[str, float] = {}
+        #: Items over the record limit, as of the last snapshot. They stay in
+        #: the snapshot — absence would read as a delete — and are listed here.
+        self._oversized: set[str] = set()
+
+    def oversized(self) -> list[str]:
+        """Item ids too large for one record, as of the last snapshot."""
+        return sorted(self._oversized)
 
     def _files(self) -> dict[str, Any]:
         from . import native_memory
@@ -720,12 +1016,20 @@ class MemoryScope:
             f.relative: f
             for f in native_memory.scan()
             if f.scope == native_memory.USER_SCOPE and f.exists and not f.error
+            and _declared(f.readers)
         }
 
     def snapshot(self) -> dict[str, Any]:
+        present = {memory_item_id(rel): payload for rel, payload in self.snapshot_by_path().items()}
+        return without_detached(self.scope, present)
+
+    def snapshot_by_path(self) -> dict[str, Any]:
+        """``snapshot``, keyed by the path relative to the home."""
         from . import native_memory
 
         out: dict[str, Any] = {}
+        oversized: set[str] = set()
+        mtimes: dict[str, float] = {}
         for relative, entry in self._files().items():
             try:
                 doc = native_memory.read(entry.path)
@@ -735,38 +1039,83 @@ class MemoryScope:
             text = doc.get("text")
             if isinstance(text, str):
                 out[relative] = {"text": text}
+                if isinstance(doc.get("modified"), (int, float)):
+                    mtimes[str(entry.path)] = float(doc["modified"])
+                if _over_record_limit(out[relative]):
+                    oversized.add(memory_item_id(relative))
+        # A file absent from this snapshot is absent from the map too, so an
+        # earlier mtime cannot refuse a file that was deleted and comes back.
+        self._read_mtimes = mtimes
+        self._oversized = oversized
         return out
 
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Write one record in. False means this machine refused it and does
+        not hold it — no known file there, or the write failed — which the
+        engine must not read as agreement."""
         from . import native_memory
 
         # A delete is never carried through to the user's disk. Removing an
         # instruction file is not the kind of thing one machine should do to
         # another unprompted, and the file is the user's, not ours.
         if payload is None:
-            log.info("ignoring a delete for instruction file %s", item_id)
-            return
+            log.info("keeping instruction file %s here; it was deleted on another device", item_id)
+            present = {memory_item_id(rel): p for rel, p in self.snapshot_by_path().items()}
+            detach(self.scope, item_id, present.get(item_id))
+            return True
         if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
             log.warning("instruction file %s arrived without text", item_id)
-            return
+            return False
         target = self._resolve(item_id)
         if target is None:
             log.warning("no known instruction file matches %s on this machine", item_id)
-            return
+            return False
         try:
-            native_memory.save(target, payload["text"])
+            # Against the mtime the snapshot read: an editor save in between
+            # is refused rather than overwritten, and the next round sees it
+            # as the local edit it is.
+            saved = native_memory.save(
+                target, payload["text"], expected_modified=self._read_mtimes.get(target)
+            )
         except Exception as err:  # noqa: BLE001 - a refused write is not fatal
             log.warning("the synced instruction file %s was not written: %s", item_id, err)
+            return False
+        if isinstance(saved, dict) and isinstance(saved.get("modified"), (int, float)):
+            self._read_mtimes[target] = float(saved["modified"])
+        attach(self.scope, item_id)
+        return True
 
     @staticmethod
     def _resolve(relative: str) -> str | None:
-        """The absolute path this machine keeps ``relative`` at, if it knows one."""
+        """The absolute path this machine keeps ``relative`` at, if it knows one.
+
+        ``relative`` is a wire id (``memory_item_id``) or, from a settings
+        bundle, the plain path.
+        """
         from . import native_memory
 
-        for path, (scope, rel, _readers, _canonical) in native_memory.candidates().items():
-            if scope == native_memory.USER_SCOPE and rel == relative:
+        for path, (scope, rel, readers, _canonical) in native_memory.candidates().items():
+            if scope != native_memory.USER_SCOPE or not _declared(readers):
+                continue
+            if relative in (rel, memory_item_id(rel)):
                 return str(path)
         return None
+
+
+def _over_record_limit(payload: Any) -> bool:
+    """Whether the engine's sealed body for *payload* would pass its limit."""
+    try:
+        return sync_keyring.sealed_length(sync_engine.canonical(payload)) > sync_engine.MAX_BODY_BYTES
+    except Exception:  # noqa: BLE001 - no key: nothing goes up anyway
+        return False
+
+
+def _declared(readers: Any) -> bool:
+    """Whether a file is in the table rather than only named by an aider
+    ``read:`` entry. Those entries can point anywhere under the home — a
+    project file included — and syncing one would copy it into another
+    machine's home. The editor still lists them; sync leaves them alone."""
+    return bool(set(readers) - {"aider"})
 
 
 # ── credentials ─────────────────────────────────────────────────────────────

@@ -428,11 +428,17 @@ def save(
     # path was a separate call: re-check the directory actually being written.
     if not _contained(target, scope, root):
         raise ValueError("not a known instruction file")
-    handle, temp = tempfile.mkstemp(dir=str(target.parent), prefix=".navide-", suffix=".tmp")
+    # A linked file is written where the link points: os.replace would
+    # otherwise swap the link itself for a plain file, cutting the user's
+    # dotfiles repo out. _contained has already kept a project link inside
+    # its workspace.
+    written = target.resolve() if target.is_symlink() else target
+    written.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp = tempfile.mkstemp(dir=str(written.parent), prefix=".navide-", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="") as stream:
             stream.write(text)
-        os.replace(temp, target)
+        os.replace(temp, written)
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise

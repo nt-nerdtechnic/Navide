@@ -387,6 +387,7 @@ def test_project_scope_instruction_files_are_never_collected(
         def __init__(self, scope, relative, path):
             self.scope, self.relative, self.path = scope, relative, path
             self.exists, self.error = True, ""
+            self.readers = ("claude",)
 
     monkeypatch.setattr(
         native_memory,

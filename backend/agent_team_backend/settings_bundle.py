@@ -207,7 +207,7 @@ def _collect_memory() -> list[Candidate]:
     out: list[Candidate] = []
     # MemoryScope lists user-scope files only; project-scope instruction files
     # never reach this loop.
-    for relative, entry in sorted(sync_scopes.MemoryScope().snapshot().items()):
+    for relative, entry in sorted(sync_scopes.MemoryScope().snapshot_by_path().items()):
         text = entry.get("text") if isinstance(entry, dict) else None
         if not isinstance(text, str):
             continue
@@ -394,7 +394,7 @@ def _local_state(scope: str) -> dict[str, Any]:
         return sync_scopes.McpScope().snapshot()
     if scope == "skills":
         return _skill_facts()
-    return sync_scopes.MemoryScope().snapshot()
+    return sync_scopes.MemoryScope().snapshot_by_path()
 
 
 def _plan_item(
@@ -639,7 +639,7 @@ def _apply_skills(items: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _apply_memory(items: dict[str, Any]) -> list[dict[str, Any]]:
     adapter = sync_scopes.MemoryScope()
-    before = adapter.snapshot()
+    before = adapter.snapshot_by_path()
     run = _Run()
     for relative, payload in items.items():
         action, reason = _plan_item("memory", relative, payload, before)
@@ -654,7 +654,7 @@ def _apply_memory(items: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         run.wrote("memory", relative, action, reason, payload["text"])
 
-    after = adapter.snapshot()
+    after = adapter.snapshot_by_path()
 
     def landed(relative: str, expect: Any) -> bool:
         stored = after.get(relative)

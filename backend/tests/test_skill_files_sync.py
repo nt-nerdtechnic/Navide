@@ -354,9 +354,11 @@ def test_the_listing_says_blobs_carry_a_large_skill_once_the_server_can(tmp_path
     a = Device(tmp_path, "a", server, blobs)
     _big_skill(a.store)
     monkeypatch.setattr(sync_scopes, "_skill_files", a.adapter)
+    monkeypatch.setattr(sync_scopes, "_skill_files", a.adapter)
     listing = sync_scopes.annotate_content_sync(a.store.list_skills(), a.store)
     assert listing["skills"][0]["sync_too_large"] is True  # server not asked yet
     _run(a.adapter.prepare(blobs.request, lambda: None))
+    monkeypatch.setattr(sync_scopes, "_skill_files", a.adapter)
     listing = sync_scopes.annotate_content_sync(a.store.list_skills(), a.store)
     assert listing["skills"][0]["sync_too_large"] is False
     assert listing["skills"][0]["sync_via_blobs"] is True
@@ -371,3 +373,88 @@ def test_the_skills_record_of_a_large_skill_keeps_its_old_shape(tmp_path, monkey
     _run(a.adapter.prepare(blobs.request, lambda: None))
     entry = sync_scopes.SkillsStateScope()._present()["big"]
     assert set(entry) == {"enabled", "targets"}
+
+
+def _many_files_skill(store: SkillsStore, count: int) -> None:
+    store.create_skill("many", "d", consent=True)
+    for i in range(count):
+        (store.root / "many" / f"f{i:03}.md").write_bytes(f"file {i}\n".encode())
+
+
+def _counting_stat(blobs, calls):
+    real = blobs.request
+
+    async def request(kind, payload):
+        if kind == "blobs.stat":
+            calls.append(len(payload["blobIds"]))
+            if len(payload["blobIds"]) > skill_blobs.STAT_BATCH:
+                return {"ok": False, "error": {"code": "BAD_REQUEST", "message": "too many blobIds"}}
+        return await real(kind, payload)
+
+    return request
+
+
+def test_blob_state_is_asked_in_batches_the_server_takes(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
+    monkeypatch.setattr(skill_blobs, "STAT_BATCH", 50)
+    calls: list[int] = []
+    monkeypatch.setattr(blobs, "request", _counting_stat(blobs, calls))
+    server = FakeServer()
+    a = Device(tmp_path, "a", server, blobs)
+    b = Device(tmp_path, "b", server, blobs)
+    _many_files_skill(a.store, 120)
+
+    async def flow() -> None:
+        await a.settle(monkeypatch)
+        await b.settle(monkeypatch)
+
+    _run(flow())
+    assert calls and max(calls) <= 50
+    assert ("skill-files", "many") in server.rows
+    assert (b.store.root / "many" / "f119.md").read_bytes() == b"file 119\n"
+
+
+def test_a_skill_with_more_files_than_a_record_may_name_is_reported(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
+    server = FakeServer()
+    a = Device(tmp_path, "a", server, blobs)
+    _many_files_skill(a.store, skill_blobs.MAX_REFS + 10)
+    monkeypatch.setattr(app, "skills_store", a.store, raising=False)
+
+    _run(a.settle(monkeypatch))
+    assert ("skill-files", "many") not in server.rows  # never pushed, never a tombstone
+    assert a.adapter.oversized() == ["many"]
+    assert "many" in a.adapter.snapshot()               # still held: absence would read as a delete
+    monkeypatch.setattr(sync_scopes, "_skill_files", a.adapter)
+    listing = sync_scopes.annotate_content_sync(a.store.list_skills(), a.store)
+    row = next(s for s in listing["skills"] if s["name"] == "many")
+    assert row["sync_too_large"] is True
+
+
+def test_files_that_never_download_stop_holding_the_scope(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
+    """A record whose download keeps failing held the cursor forever, so no
+    later skill-files record ever arrived. After a few attempts it is given up
+    on (reported, and kept out of the agreed state) and the rest go ahead."""
+    server = FakeServer()
+    a = Device(tmp_path, "a", server, blobs)
+    b = Device(tmp_path, "b", server, blobs)
+    _big_skill(a.store)
+    _run(a.settle(monkeypatch))
+    broken = {e["blob"] for e in a.adapter.snapshot()["big"]["files"].values()}
+    # a second large skill, pushed after the first
+    a.store.create_skill("big2", "d", consent=True)
+    (a.store.root / "big2" / "clip.bin").write_bytes(b"\1" + os.urandom(300 * 1024))
+    _run(a.settle(monkeypatch))
+    assert ("skill-files", "big2") in server.rows
+
+    real = skill_blobs.download
+
+    async def flaky(request, ref, dest, layout, **kw):
+        if ref.blob_id in broken:
+            raise skill_blobs.BlobError("the object store lost it")
+        return await real(request, ref, dest, layout, **kw)
+
+    monkeypatch.setattr(skill_blobs, "download", flaky)
+    for _ in range(sync_scopes.MAX_DOWNLOAD_ATTEMPTS + 2):
+        _run(b.settle(monkeypatch))
+    assert (b.store.root / "big2" / "clip.bin").is_file()
+    assert not (b.store.root / "big").exists()
+    assert b.adapter.failed() == ["big"]
