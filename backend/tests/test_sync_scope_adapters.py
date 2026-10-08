@@ -14,7 +14,7 @@ import re
 
 import pytest
 
-from agent_team_backend import app, native_memory, sync_engine, sync_keyring, sync_scopes
+from agent_team_backend import app, device_signing, native_memory, sync_engine, sync_keyring, sync_scopes
 from agent_team_backend.db import Database
 from tests.test_sync_engine import FakeServer, FakeSettingsStore
 
@@ -54,7 +54,9 @@ class Dev:
 
         self.engine = sync_engine.SyncEngine(
             self.store, request, device_id=lambda: name,
-            enabled=lambda _s: True, signing_key_for=lambda _d: "",
+            # One signing key per test process: every device reads as pinned,
+            # which is what paired devices of one account are.
+            enabled=lambda _s: True, signing_key_for=lambda _d: device_signing.public_key(),
         )
         self.engine.register(adapter)
 
