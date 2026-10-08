@@ -443,8 +443,8 @@ def annotate_content_sync(listing: dict[str, Any], store: Any) -> dict[str, Any]
         name = skill.get("name")
         if skill.get("managed") and isinstance(name, str) and name:
             too_large = skill_entry(store, skill)[1]
-            skill["sync_too_large"] = too_large and not via_blobs
-            if too_large and via_blobs:
+            skill["sync_too_large"] = too_large and (not via_blobs or name in blobs.oversized())
+            if too_large and via_blobs and not skill["sync_too_large"]:
                 skill["sync_via_blobs"] = True
                 transfer = blobs.transfer(name)
                 if transfer is not None:
@@ -599,6 +599,9 @@ class SkillFilesScope:
         self._transfers: dict[str, dict[str, Any]] = {}
         self._last_note: dict[str, float] = {}
         self._digests: Any = None
+        #: Skills naming more blobs than one record may (``Layout.max_refs``):
+        #: held here, never pushed, and listed as too large to sync.
+        self._oversized: set[str] = set()
 
     # ── wiring ──────────────────────────────────────────────────────────
 
@@ -608,6 +611,10 @@ class SkillFilesScope:
     def available(self) -> bool:
         """Whether the server this machine last spoke to can hold blobs."""
         return self._layout is not None
+
+    def oversized(self) -> list[str]:
+        """Skills whose files are too many for one record, as of the last round."""
+        return sorted(self._oversized)
 
     def transfer(self, name: str) -> dict[str, Any] | None:
         entry = self._transfers.get(name)
@@ -769,15 +776,31 @@ class SkillFilesScope:
         if self._layout is None:
             return False
         refs = self._refs_of(payload)
+        blob_ids = sorted({r.blob_id for r in refs.values()})
+        if len(blob_ids) > self._layout.max_refs:
+            # The server refuses the record outright. It stays in the
+            # snapshot (absence would read as a delete) and is said to be too
+            # large, rather than retried every round.
+            if item_id not in self._oversized:
+                log.warning(
+                    "skill %s has %d distinct files; one record may name %d, so its files stay here",
+                    item_id, len(blob_ids), self._layout.max_refs,
+                )
+            self._oversized.add(item_id)
+            return False
+        self._oversized.discard(item_id)
+        states: list[Any] = []
         try:
-            reply = skill_blobs._payload(
-                await self._request("blobs.stat", {"blobIds": sorted({r.blob_id for r in refs.values()})})
-            )
+            for start in range(0, len(blob_ids), skill_blobs.STAT_BATCH):
+                reply = skill_blobs._payload(
+                    await self._request("blobs.stat", {"blobIds": blob_ids[start:start + skill_blobs.STAT_BATCH]})
+                )
+                states.extend(reply.get("blobs") or [])
         except skill_blobs.BlobError as err:
             # This item waits; the rest of the round goes ahead.
             log.warning("could not ask which files of %s are uploaded: %s", item_id, err)
             return False
-        missing = {b["blobId"] for b in reply.get("blobs") or [] if b.get("state") != "complete"}
+        missing = {b["blobId"] for b in states if b.get("state") != "complete"}
         if not missing:
             return True
         files = self._store().list_files(item_id) or {}
