@@ -8799,6 +8799,13 @@
     "weekday-6": "土曜日"
   },
   "scheduler": {
+    "system": {
+      "tag": "システム",
+      "manage": "workspace で管理 →",
+      "locked-title": "アプリが管理するシステムジョブです。その workspace の自己改善パネルから変更してください",
+      "managed-by": "workspace で管理",
+      "name": "自己改善 · {workspace}"
+    },
     "add": "＋ 新規",
     "empty": "スケジュールされたジョブはまだありません",
     "list-failed": "ジョブを読み込めませんでした：{message}",
@@ -9975,6 +9982,138 @@
       "running": "実行中：{names}",
       "gate": "「{name}」で承認待ち",
       "review": "確認する"
+    }
+  },
+  "evolve": {
+    "badge": {
+      "tomorrow": "明日 {time}",
+      "running": "実行中 {min}m",
+      "failed": "前回失敗",
+      "on": "有効",
+      "off": "自己改善 オフ",
+      "title": "自己改善：{state}。クリックでパネルを開く"
+    },
+    "menu": {
+      "open": "自己改善…",
+      "enabled": "有効"
+    },
+    "panel": {
+      "title": "自己改善",
+      "close": "閉じる",
+      "not-git": "git リポジトリではありません",
+      "loading": "読み込み中…",
+      "enabled": "有効",
+      "next": "次回 {time}",
+      "runs-today": "今日 {n} / {max} 回実行",
+      "only-this-workspace": "この workspace のみに影響",
+      "run-now": "今すぐ 1 回実行",
+      "disable": "無効にする",
+      "one-click": "ワンクリックで開始",
+      "one-click-hint": "他の項目は既定値が入っています。押すとこの workspace だけで有効になります。",
+      "run-started": "実行を開始しました。完了したらお知らせセンターに通知します。",
+      "legacy-disabled": "古いスケジュール {n} 件を無効にしました（削除していません）。",
+      "legacy-hint": "有効にすると古いスケジュール {n} 件を無効にします（削除しません）：",
+      "disclose-title": "この機能が行うこと：",
+      "disclose-git": "毎日 agent がこの workspace のログ・診断・issue を読んで問題点を探し、リポジトリ外の独立した worktree でバグを修正して {root} のローカル {branch} に commit します。push・リリース・機能削除は行いません。修正は次回のリリースか dev 版で反映されます。",
+      "disclose-subdir": "この workspace はリポジトリのサブフォルダ（{subdir}）です。このフォルダ配下のファイルだけを変更します。",
+      "disclose-no-git": "毎日 agent がこの workspace のログ・診断・issue を読んで問題点を探します。この workspace は git リポジトリではないため、提案を .agent-team/plans/ に書くだけで、ファイルは変更しません。",
+      "last-result": "前回の結果",
+      "no-runs": "まだ実行履歴がありません",
+      "reclaimed": "（回収済み、クリックで再開）",
+      "not-reclaimed": "（未回収）",
+      "fix": "修正",
+      "proposal": "提案",
+      "history": "履歴（直近 30 回）",
+      "unsaved": "未保存の変更があります",
+      "save": "保存",
+      "ledger-open-failed": "台帳の計画を開けませんでした"
+    },
+    "field": {
+      "time": "実行時刻",
+      "daily": "毎日",
+      "catch-up-once": "逃したら 1 回だけ実行",
+      "catch-up-skip": "逃したらスキップ",
+      "unit": "実行先",
+      "unit-auto": "pane を自動で開く",
+      "unit-auto-hint": "毎回「自我優化-MMDD」を開き、終わったら回収",
+      "unit-pane": "指定した pane",
+      "pick-pane": "pane を選択",
+      "pane-gone": "{name}（存在しません）",
+      "unit-pane-hint": "この pane に送って実行し、回収・クローズはしません。pane がない場合はその回だけ自動で pane を開きます。",
+      "cli": "CLI とモデル",
+      "model-default": "モデル（空欄＝CLI の既定）",
+      "model-unsupported": "この CLI はモデルを指定できません",
+      "effort-default": "effort（既定）",
+      "effort-unsupported": "effort 非対応",
+      "budget": "予算",
+      "tokens-per-run": "token／回",
+      "runs-per-day": "回／日",
+      "fixes-per-run": "バグ／回",
+      "minutes-cap": "分 上限",
+      "scope": "権限範囲",
+      "scope-fix": "バグを直接修正",
+      "scope-propose": "提案のみ（コードを変更しない）",
+      "scope-fix-no-git": "この workspace は git リポジトリではなく、worktree もメインブランチもないため「提案のみ」しか選べません。",
+      "scope-always-propose": "新機能・設計上のトレードオフ・データ削除／migration・push・リリースは常に提案になります（組み込みルール）。",
+      "rules": "ルールテンプレート",
+      "rules-builtin": "組み込み v{version}",
+      "rules-view": "全文を表示",
+      "rules-hide": "閉じる",
+      "extra-placeholder": "追加の指示（この workspace のみ）…",
+      "ledger": "台帳",
+      "ledger-placeholder": "plan の相対パス（例：.agent-team/plans/xxx.html）。空欄＝なし"
+    },
+    "error": {
+      "at": "HH:MM 形式で入力してください",
+      "tz": "不明なタイムゾーンです",
+      "range": "範囲 {min}–{max}",
+      "budget": "正の整数を入力してください",
+      "extra": "最大 {max} 文字",
+      "pane": "pane を選んでください",
+      "fix-fields": "赤い項目を先に修正してください"
+    },
+    "status": {
+      "running": "実行中",
+      "ok": "完了",
+      "error": "失敗",
+      "timeout": "タイムアウト",
+      "skipped": "未実行"
+    },
+    "history": {
+      "date": "日付",
+      "result": "結果",
+      "fixes": "修正",
+      "proposals": "提案"
+    },
+    "reason": {
+      "busy": "この workspace ではすでに実行中です",
+      "budget": "今日の実行回数の上限に達しました",
+      "workspace_gone": "workspace フォルダが存在しません",
+      "workspace_not_open": "その時刻にこの workspace を開いたウィンドウがありませんでした。次に開いたときに実行します",
+      "not_git": "git リポジトリではないため提案のみで実行しました"
+    },
+    "notice": {
+      "started": "自己改善を開始 · {workspace}",
+      "finished": "自己改善が完了 · {workspace}",
+      "timeout": "自己改善がタイムアウト · {workspace}",
+      "failed": "自己改善が失敗 · {workspace}",
+      "skipped": "自己改善は実行されませんでした · {workspace}",
+      "fallback_auto": "自己改善は新しい pane で実行 · {workspace}",
+      "not_git": "自己改善は提案のみ · {workspace}",
+      "started-body": "pane「{pane}」を開きました（{agent}）。",
+      "finished-body": "バグ修正 {fixes} 件 · 提案 {proposals} 件 · {tokens} token",
+      "reclaimed": "pane は回収されました。",
+      "timeout-body": "上限時間を過ぎても結果の報告がありません。pane はまだ実行中で、アプリが自動で止めることはありません。",
+      "fallback-body": "指定した pane「{pane}」が存在しないため、今回は新しい pane で実行しました。",
+      "not-git-body": "この workspace は git リポジトリではないため「提案のみ」です。提案はいつもどおり作成し、ファイルは変更しません。",
+      "action": {
+        "open-pane": "pane を開く",
+        "resume-pane": "pane を再開",
+        "interrupt": "中断",
+        "reclaim": "回収",
+        "panel": "パネルを開く →",
+        "result": "結果を見る"
+      }
     }
   }
 }

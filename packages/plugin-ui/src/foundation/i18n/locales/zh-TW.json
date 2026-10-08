@@ -8799,6 +8799,13 @@
     "weekday-6": "週六"
   },
   "scheduler": {
+    "system": {
+      "tag": "系統",
+      "manage": "到 workspace 管理 →",
+      "locked-title": "由 App 管理的系統排程：只能在該 workspace 的自我優化面板修改",
+      "managed-by": "由 workspace 管理",
+      "name": "自我優化 · {workspace}"
+    },
     "add": "＋ 新增",
     "empty": "還沒有排程工作",
     "list-failed": "讀取排程失敗：{message}",
@@ -9975,6 +9982,138 @@
       "running": "執行中：{names}",
       "gate": "等待你在「{name}」核准",
       "review": "前往核准"
+    }
+  },
+  "evolve": {
+    "badge": {
+      "tomorrow": "明天 {time}",
+      "running": "執行中 {min}m",
+      "failed": "上次失敗",
+      "on": "已啟用",
+      "off": "自我優化 關",
+      "title": "自我優化：{state}。點一下開啟面板"
+    },
+    "menu": {
+      "open": "自我優化…",
+      "enabled": "已啟用"
+    },
+    "panel": {
+      "title": "自我優化",
+      "close": "關閉",
+      "not-git": "非 git repo",
+      "loading": "讀取中…",
+      "enabled": "已啟用",
+      "next": "下次 {time}",
+      "runs-today": "今天已執行 {n} / {max} 次",
+      "only-this-workspace": "只影響這個 workspace",
+      "run-now": "立即執行一次",
+      "disable": "停用",
+      "one-click": "一鍵啟動",
+      "one-click-hint": "其他欄位已帶好預設值，按下就啟用；只影響這個 workspace。",
+      "run-started": "已開始執行，完成時會在公告中心通知。",
+      "legacy-disabled": "已停用 {n} 個舊排程（未刪除）。",
+      "legacy-hint": "啟用時會停用 {n} 個舊排程（不刪除）：",
+      "disclose-title": "這個功能會做什麼：",
+      "disclose-git": "每天由 agent 讀這個 workspace 的 log、診斷與 issue，找痛點；在 repo 外的獨立 worktree 修 bug，commit 回 {root} 的本機 {branch}。不會 push、不會發版、不會刪除功能。修正要等下次發版或跑 dev 版才生效。",
+      "disclose-subdir": "這個 workspace 是 repo 的子資料夾（{subdir}），只會改這個資料夾底下的檔案。",
+      "disclose-no-git": "每天由 agent 讀這個 workspace 的 log、診斷與 issue，找痛點。這個 workspace 不是 git repo，只會把提案寫進 .agent-team/plans/，不改任何檔案。",
+      "last-result": "上次結果",
+      "no-runs": "還沒有執行紀錄",
+      "reclaimed": "（已回收，點一下續接）",
+      "not-reclaimed": "（未回收）",
+      "fix": "修正",
+      "proposal": "提案",
+      "history": "歷史（最近 30 次）",
+      "unsaved": "有未儲存的變更",
+      "save": "儲存",
+      "ledger-open-failed": "無法開啟帳本計畫"
+    },
+    "field": {
+      "time": "執行時間",
+      "daily": "每天",
+      "catch-up-once": "錯過時補跑一次",
+      "catch-up-skip": "錯過就跳過",
+      "unit": "執行單位",
+      "unit-auto": "自動開 pane",
+      "unit-auto-hint": "每次開「自我優化-MMDD」，跑完回收",
+      "unit-pane": "指定 pane",
+      "pick-pane": "選擇 pane",
+      "pane-gone": "{name}（已不在）",
+      "unit-pane-hint": "送到這個 pane 執行，不回收、不關閉；pane 不在時這次改用自動開 pane。",
+      "cli": "CLI 與模型",
+      "model-default": "模型（空白＝CLI 預設）",
+      "model-unsupported": "這個 CLI 不支援指定模型",
+      "effort-default": "effort（預設）",
+      "effort-unsupported": "不支援 effort",
+      "budget": "預算",
+      "tokens-per-run": "token／次",
+      "runs-per-day": "次／天",
+      "fixes-per-run": "bug／次",
+      "minutes-cap": "分鐘上限",
+      "scope": "權限範圍",
+      "scope-fix": "直接修 bug",
+      "scope-propose": "只提案（不改程式）",
+      "scope-fix-no-git": "這個 workspace 不是 git repo，沒有 worktree 與主分支可用，只能「只提案」。",
+      "scope-always-propose": "新功能、設計取捨、刪資料／migration、push、發版一律寫提案（內建規則）。",
+      "rules": "規則範本",
+      "rules-builtin": "內建 v{version}",
+      "rules-view": "檢視全文",
+      "rules-hide": "收起",
+      "extra-placeholder": "補充指示（只套用這個 workspace）…",
+      "ledger": "帳本",
+      "ledger-placeholder": "plan 相對路徑，例：.agent-team/plans/xxx.html；空白＝不綁"
+    },
+    "error": {
+      "at": "時間格式要是 HH:MM",
+      "tz": "不認得的時區",
+      "range": "範圍 {min}–{max}",
+      "budget": "要是正整數",
+      "extra": "最多 {max} 字",
+      "pane": "請選一個 pane",
+      "fix-fields": "請先修正標紅的欄位"
+    },
+    "status": {
+      "running": "執行中",
+      "ok": "完成",
+      "error": "失敗",
+      "timeout": "逾時",
+      "skipped": "未執行"
+    },
+    "history": {
+      "date": "日期",
+      "result": "結果",
+      "fixes": "修正",
+      "proposals": "提案"
+    },
+    "reason": {
+      "busy": "這個 workspace 已有一次在執行",
+      "budget": "今天的執行次數已達上限",
+      "workspace_gone": "workspace 資料夾不存在",
+      "workspace_not_open": "到點時沒有視窗開著這個 workspace，下次開啟時補跑",
+      "not_git": "不是 git repo，改用只提案"
+    },
+    "notice": {
+      "started": "自我優化開始 · {workspace}",
+      "finished": "自我優化完成 · {workspace}",
+      "timeout": "自我優化逾時 · {workspace}",
+      "failed": "自我優化失敗 · {workspace}",
+      "skipped": "自我優化未執行 · {workspace}",
+      "fallback_auto": "自我優化改用自動開 pane · {workspace}",
+      "not_git": "自我優化只提案 · {workspace}",
+      "started-body": "已開啟 pane「{pane}」（{agent}）。",
+      "finished-body": "修 {fixes} 個 bug · {proposals} 份提案 · {tokens} token",
+      "reclaimed": "pane 已回收。",
+      "timeout-body": "超過時間上限仍未回報結果，pane 仍在執行，App 不會自動中止。",
+      "fallback-body": "指定的 pane「{pane}」不在了，這次改用自動開 pane。",
+      "not-git-body": "這個 workspace 不是 git repo，只能用「只提案」；今天照常產出提案、不改任何檔案。",
+      "action": {
+        "open-pane": "打開 pane",
+        "resume-pane": "續接 pane",
+        "interrupt": "中斷",
+        "reclaim": "回收",
+        "panel": "開啟面板 →",
+        "result": "看結果"
+      }
     }
   }
 }

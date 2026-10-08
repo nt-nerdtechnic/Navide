@@ -8799,6 +8799,13 @@
     "weekday-6": "Saturday"
   },
   "scheduler": {
+    "system": {
+      "tag": "System",
+      "manage": "Manage in workspace →",
+      "locked-title": "A system job owned by the app: change it from that workspace's self-evolution panel",
+      "managed-by": "Managed by the workspace",
+      "name": "Self-evolution · {workspace}"
+    },
     "add": "+ New",
     "empty": "No scheduled jobs yet",
     "list-failed": "Could not load jobs: {message}",
@@ -9975,6 +9982,138 @@
       "running": "Running: {names}",
       "gate": "Waiting for your approval at {name}",
       "review": "Review"
+    }
+  },
+  "evolve": {
+    "badge": {
+      "tomorrow": "tomorrow {time}",
+      "running": "running {min}m",
+      "failed": "last run failed",
+      "on": "on",
+      "off": "Self-evolve off",
+      "title": "Self-evolution: {state}. Click to open the panel"
+    },
+    "menu": {
+      "open": "Self-evolution…",
+      "enabled": "On"
+    },
+    "panel": {
+      "title": "Self-evolution",
+      "close": "Close",
+      "not-git": "not a git repo",
+      "loading": "Loading…",
+      "enabled": "On",
+      "next": "next {time}",
+      "runs-today": "{n} / {max} runs today",
+      "only-this-workspace": "affects this workspace only",
+      "run-now": "Run once now",
+      "disable": "Turn off",
+      "one-click": "Turn on",
+      "one-click-hint": "Every field already has a default; one click turns it on for this workspace only.",
+      "run-started": "Started. The announcements centre will tell you when it finishes.",
+      "legacy-disabled": "Turned off {n} old scheduled job(s) (not deleted).",
+      "legacy-hint": "Turning this on turns off {n} old scheduled job(s) (not deleted):",
+      "disclose-title": "What this does:",
+      "disclose-git": "Every day an agent reads this workspace's logs, diagnostics and issues to find pain points; it fixes bugs in a separate worktree outside the repo and commits them to the local {branch} of {root}. It never pushes, releases or deletes features. Fixes take effect after the next release or in a dev build.",
+      "disclose-subdir": "This workspace is a subfolder of the repo ({subdir}); only files under it are changed.",
+      "disclose-no-git": "Every day an agent reads this workspace's logs, diagnostics and issues to find pain points. This workspace is not a git repo, so it only writes proposals to .agent-team/plans/ and changes no files.",
+      "last-result": "Last result",
+      "no-runs": "No runs yet",
+      "reclaimed": "(reclaimed, click to resume)",
+      "not-reclaimed": "(not reclaimed)",
+      "fix": "Fix",
+      "proposal": "Proposal",
+      "history": "History (last 30)",
+      "unsaved": "Unsaved changes",
+      "save": "Save",
+      "ledger-open-failed": "Could not open the ledger plan"
+    },
+    "field": {
+      "time": "Time",
+      "daily": "Daily",
+      "catch-up-once": "Catch up once if missed",
+      "catch-up-skip": "Skip if missed",
+      "unit": "Runs in",
+      "unit-auto": "A new pane",
+      "unit-auto-hint": "Opens \"自我優化-MMDD\" each run and reclaims it after",
+      "unit-pane": "A chosen pane",
+      "pick-pane": "Pick a pane",
+      "pane-gone": "{name} (gone)",
+      "unit-pane-hint": "Sent to this pane; never reclaimed or closed. If the pane is gone, that run opens a new pane instead.",
+      "cli": "CLI & model",
+      "model-default": "Model (empty = CLI default)",
+      "model-unsupported": "This CLI cannot pick a model",
+      "effort-default": "effort (default)",
+      "effort-unsupported": "no effort setting",
+      "budget": "Budget",
+      "tokens-per-run": "tokens / run",
+      "runs-per-day": "runs / day",
+      "fixes-per-run": "bugs / run",
+      "minutes-cap": "minute cap",
+      "scope": "Permissions",
+      "scope-fix": "Fix bugs directly",
+      "scope-propose": "Propose only (no code changes)",
+      "scope-fix-no-git": "This workspace is not a git repo: there is no worktree or main branch to work with, so it can only propose.",
+      "scope-always-propose": "New features, design trade-offs, data deletion / migrations, push and release are always proposals (built-in rule).",
+      "rules": "Rules",
+      "rules-builtin": "Built-in v{version}",
+      "rules-view": "View full text",
+      "rules-hide": "Hide",
+      "extra-placeholder": "Extra instructions (this workspace only)…",
+      "ledger": "Ledger",
+      "ledger-placeholder": "Plan path, e.g. .agent-team/plans/xxx.html; empty = none"
+    },
+    "error": {
+      "at": "Use HH:MM",
+      "tz": "Unknown time zone",
+      "range": "Range {min}–{max}",
+      "budget": "Must be a positive integer",
+      "extra": "At most {max} characters",
+      "pane": "Pick a pane",
+      "fix-fields": "Fix the fields marked in red first"
+    },
+    "status": {
+      "running": "Running",
+      "ok": "Done",
+      "error": "Failed",
+      "timeout": "Timed out",
+      "skipped": "Skipped"
+    },
+    "history": {
+      "date": "Date",
+      "result": "Result",
+      "fixes": "Fixes",
+      "proposals": "Proposals"
+    },
+    "reason": {
+      "busy": "A run is already in progress for this workspace",
+      "budget": "Today's run limit is reached",
+      "workspace_gone": "The workspace folder no longer exists",
+      "workspace_not_open": "No window had this workspace open at the time; it catches up the next time it opens",
+      "not_git": "Not a git repo; ran as propose-only"
+    },
+    "notice": {
+      "started": "Self-evolution started · {workspace}",
+      "finished": "Self-evolution finished · {workspace}",
+      "timeout": "Self-evolution timed out · {workspace}",
+      "failed": "Self-evolution failed · {workspace}",
+      "skipped": "Self-evolution did not run · {workspace}",
+      "fallback_auto": "Self-evolution used a new pane · {workspace}",
+      "not_git": "Self-evolution is propose-only · {workspace}",
+      "started-body": "Opened pane \"{pane}\" ({agent}).",
+      "finished-body": "{fixes} bug(s) fixed · {proposals} proposal(s) · {tokens} tokens",
+      "reclaimed": "The pane was reclaimed.",
+      "timeout-body": "No result after the time cap. The pane is still running; the app never stops it on its own.",
+      "fallback-body": "The chosen pane \"{pane}\" is gone, so this run opened a new pane.",
+      "not-git-body": "This workspace is not a git repo, so it can only propose; proposals are written as usual and no files are changed.",
+      "action": {
+        "open-pane": "Open pane",
+        "resume-pane": "Resume pane",
+        "interrupt": "Interrupt",
+        "reclaim": "Reclaim",
+        "panel": "Open panel →",
+        "result": "See result"
+      }
     }
   }
 }
