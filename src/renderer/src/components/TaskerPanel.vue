@@ -38,6 +38,7 @@ import {
   type Translate,
 } from '../lib/cronDescribe'
 import type { SchedulerJob } from '../lib/schedulerJobs'
+import { openEvolvePanel } from '../composables/useEvolve'
 import {
   agentKey,
   bucketOf,
@@ -300,6 +301,11 @@ const editorOpen = ref(false)
 const editing = ref<SchedulerJob | null>(null)
 
 function openEditor(job: SchedulerJob | null): void {
+  // A system job has no editor: the workspace's evolve panel manages it.
+  if (job && jobsApi.isSystem(job)) {
+    openEvolvePanel(jobsApi.systemWorkspace(job))
+    return
+  }
   editing.value = job
   editorOpen.value = true
 }

@@ -13,6 +13,9 @@
 // Ownership: this window acts as the user and may change every job; the
 // labels only say which ones an agent created, which of those no agent can
 // change any more (creator gone), and when an agent's periodic job expires.
+// The exception is a system job (owner.kind 'system', e.g. workspace
+// self-evolution): the backend refuses every mutation of it, so its row is
+// read-only and points at the workspace that manages it.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from './useBackend'
@@ -85,6 +88,7 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
   }
 
   function targetLabel(job: SchedulerJob): string {
+    if (isSystem(job)) return t('scheduler.system.managed-by')
     const a = job.action
     const name = a.pane_name || shortId(a.pane_id)
     return a.pane_id
@@ -93,7 +97,17 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
   }
 
   function isAgent(owner: JobOwner | null | undefined): boolean {
-    return !!owner && owner.kind !== 'user'
+    return !!owner && owner.kind !== 'user' && owner.kind !== 'system'
+  }
+
+  /** Owned by the app: no enable/disable, remove, edit, run-now, adopt, keep. */
+  function isSystem(job: SchedulerJob): boolean {
+    return job.owner?.kind === 'system'
+  }
+
+  /** The workspace whose panel manages a system job. */
+  function systemWorkspace(job: SchedulerJob): string {
+    return job.owner?.workspace || job.action.workspace || ''
   }
 
   function whoLabel(owner: JobOwner): string {
@@ -295,6 +309,8 @@ export function useSchedulerJobs(backend: ReturnType<typeof useBackend>) {
     rebound,
     skipLabel,
     targetLabel,
+    isSystem,
+    systemWorkspace,
     backoffLabel,
     ownerLabel,
     ownerTitle,
