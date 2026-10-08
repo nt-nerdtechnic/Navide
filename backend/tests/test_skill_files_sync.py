@@ -426,3 +426,34 @@ def test_a_skill_with_more_files_than_a_record_may_name_is_reported(tmp_path, mo
     listing = sync_scopes.annotate_content_sync(a.store.list_skills(), a.store)
     row = next(s for s in listing["skills"] if s["name"] == "many")
     assert row["sync_too_large"] is True
+
+
+def test_files_that_never_download_stop_holding_the_scope(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
+    """A record whose download keeps failing held the cursor forever, so no
+    later skill-files record ever arrived. After a few attempts it is given up
+    on (reported, and kept out of the agreed state) and the rest go ahead."""
+    server = FakeServer()
+    a = Device(tmp_path, "a", server, blobs)
+    b = Device(tmp_path, "b", server, blobs)
+    _big_skill(a.store)
+    _run(a.settle(monkeypatch))
+    broken = {e["blob"] for e in a.adapter.snapshot()["big"]["files"].values()}
+    # a second large skill, pushed after the first
+    a.store.create_skill("big2", "d", consent=True)
+    (a.store.root / "big2" / "clip.bin").write_bytes(b"\1" + os.urandom(300 * 1024))
+    _run(a.settle(monkeypatch))
+    assert ("skill-files", "big2") in server.rows
+
+    real = skill_blobs.download
+
+    async def flaky(request, ref, dest, layout, **kw):
+        if ref.blob_id in broken:
+            raise skill_blobs.BlobError("the object store lost it")
+        return await real(request, ref, dest, layout, **kw)
+
+    monkeypatch.setattr(skill_blobs, "download", flaky)
+    for _ in range(sync_scopes.MAX_DOWNLOAD_ATTEMPTS + 2):
+        _run(b.settle(monkeypatch))
+    assert (b.store.root / "big2" / "clip.bin").is_file()
+    assert not (b.store.root / "big").exists()
+    assert b.adapter.failed() == ["big"]

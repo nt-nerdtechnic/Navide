@@ -561,6 +561,10 @@ class SkillsStateScope:
 _MANIFEST_VERSION = 1
 #: How often a running transfer tells the windows how far it got.
 _PROGRESS_INTERVAL_S = 0.5
+#: Failed downloads of one manifest before its record is given up on. Until
+#: then the record holds the scope's cursor; after, it is declined (reported
+#: by ``SkillFilesScope.failed``) so the records behind it can land.
+MAX_DOWNLOAD_ATTEMPTS = 3
 
 
 class SkillFilesScope:
@@ -602,6 +606,9 @@ class SkillFilesScope:
         #: Skills naming more blobs than one record may (``Layout.max_refs``):
         #: held here, never pushed, and listed as too large to sync.
         self._oversized: set[str] = set()
+        #: Failed downloads, by item: (manifest digest, count). A new
+        #: manifest for the item starts the count again.
+        self._download_failures: dict[str, tuple[str, int]] = {}
 
     # ── wiring ──────────────────────────────────────────────────────────
 
@@ -611,6 +618,12 @@ class SkillFilesScope:
     def available(self) -> bool:
         """Whether the server this machine last spoke to can hold blobs."""
         return self._layout is not None
+
+    def failed(self) -> list[str]:
+        """Skills whose files were given up on after repeated failed downloads."""
+        return sorted(
+            name for name, (_d, count) in self._download_failures.items() if count >= MAX_DOWNLOAD_ATTEMPTS
+        )
 
     def oversized(self) -> list[str]:
         """Skills whose files are too many for one record, as of the last round."""
@@ -842,6 +855,16 @@ class SkillFilesScope:
         if not store.can_import(item_id):
             log.warning("skill %s exists here and is not Navide's; its synced files are not fetched", item_id)
             return False
+        manifest_digest = sync_engine.digest(payload)
+        failure = self._download_failures.get(item_id)
+        if failure is not None and failure[0] != manifest_digest:
+            self._download_failures.pop(item_id, None)
+        elif failure is not None and failure[1] >= MAX_DOWNLOAD_ATTEMPTS:
+            log.warning(
+                "the files of skill %s failed to download %d times; giving up on this version",
+                item_id, failure[1],
+            )
+            return False
         staging = self._staging()
         current = {}
         try:
@@ -874,13 +897,20 @@ class SkillFilesScope:
             async def download() -> None:
                 done = 0
                 report = self._progress(item_id, "download")
-                for ref in refs_todo:
-                    base = done
-                    await skill_blobs.download(
-                        request, ref, staging / ref.blob_id, layout,
-                        progress=lambda d, _t: report(base + d, total),
-                    )
-                    done = base + layout.sealed_size(ref.size)
+                try:
+                    for ref in refs_todo:
+                        base = done
+                        await skill_blobs.download(
+                            request, ref, staging / ref.blob_id, layout,
+                            progress=lambda d, _t: report(base + d, total),
+                        )
+                        done = base + layout.sealed_size(ref.size)
+                except Exception:
+                    previous = self._download_failures.get(item_id)
+                    count = previous[1] + 1 if previous and previous[0] == manifest_digest else 1
+                    self._download_failures[item_id] = (manifest_digest, count)
+                    raise
+                self._download_failures.pop(item_id, None)
 
             self._loop.call_soon_threadsafe(self._start, item_id, download)
             raise sync_engine.DeferItem(item_id)
