@@ -509,6 +509,56 @@ describe('SyncSettings', () => {
     expect(buttons[0].text()).toBe('Keep this one')
   })
 
+  // C-3 follow-up: secrets also ride in an MCP record's url (userinfo, query)
+  // and args (secret flags, KEY=value, Bearer tokens).
+  it('masks secrets in MCP url and args in a conflict preview', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'svc',
+              local: {
+                name: 'svc',
+                command: 'npx',
+                args: [
+                  '--api-key',
+                  'flagsecret1',
+                  '--Token=flagsecret2',
+                  'GITHUB_PAT_KEY=kvsecret3',
+                  'Bearer bearersecret4',
+                  '--verbose',
+                  'plain-arg',
+                ],
+              },
+              remote: {
+                name: 'svc',
+                url: 'https://alice:pwsecret5@host.example/mcp?access=qsecret6&mode=qsecret7#top',
+              },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const html = wrapper.html()
+    for (let i = 1; i <= 7; i += 1) expect(html).not.toMatch(new RegExp(`secret${i}`))
+    expect(html).not.toContain('alice')
+    const text = wrapper.text()
+    for (const kept of ['--api-key', '--Token=', 'GITHUB_PAT_KEY=', 'Bearer', '--verbose', 'plain-arg']) {
+      expect(text).toContain(kept)
+    }
+    expect(text).toContain('host.example/mcp?access=')
+    expect(text).toContain('mode=')
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

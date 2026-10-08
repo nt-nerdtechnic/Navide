@@ -322,15 +322,47 @@ async function resolve(conflict: Conflict, keep: 'local' | 'remote'): Promise<vo
 /** MCP keys whose values are secrets (tokens, auth headers). */
 const MCP_SECRET_FIELDS = ['env', 'headers']
 
+const MASK = '••••'
+/** A flag or variable name that announces a secret value. */
+const SECRET_NAME = /token|key|secret|password|passwd|auth|bearer/i
+
+/** Userinfo and every query value go; scheme, host, path and keys stay. */
+function maskUrl(url: string): string {
+  return url
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@?#]*@/i, `$1${MASK}@`)
+    .replace(/([?&][^=&#]*=)[^&#]*/g, `$1${MASK}`)
+}
+
+/** Secret flags (`--api-key v`, `--token=v`), `KEY=value` with a secret name,
+ *  and Bearer tokens; every other argument stays readable. */
+function maskArgs(args: unknown[]): unknown[] {
+  let maskNext = false
+  return args.map((arg) => {
+    if (typeof arg !== 'string') return arg
+    if (maskNext) {
+      maskNext = false
+      return MASK
+    }
+    if (/^bearer\s/i.test(arg)) return `${arg.split(/\s/)[0]} ${MASK}`
+    const eq = arg.indexOf('=')
+    if (eq > 0) return SECRET_NAME.test(arg.slice(0, eq)) ? `${arg.slice(0, eq + 1)}${MASK}` : arg
+    if (/^-/.test(arg) && SECRET_NAME.test(arg)) maskNext = true
+    return arg
+  })
+}
+
 /** One side of a conflict as it may be shown: an MCP record keeps the names
- *  in env and headers, so a person can tell the two apart, but not the values. */
+ *  in env and headers, so a person can tell the two apart, but not the values;
+ *  its url and args lose their secret parts the same way. */
 function shown(scope: string, value: unknown): unknown {
   if (scope !== 'mcp' || !isRecord(value)) return value
   const out: Record<string, unknown> = { ...value }
+  if (typeof out.url === 'string') out.url = maskUrl(out.url)
+  if (Array.isArray(out.args)) out.args = maskArgs(out.args)
   for (const field of MCP_SECRET_FIELDS) {
     const entries = out[field]
     if (isRecord(entries)) {
-      out[field] = Object.fromEntries(Object.keys(entries).map((k) => [k, '••••']))
+      out[field] = Object.fromEntries(Object.keys(entries).map((k) => [k, MASK]))
     }
   }
   return out
