@@ -492,6 +492,23 @@ describe('SyncSettings', () => {
     expect(row.text()).toContain('big-skill')
   })
 
+  // remoteAbsent: the cloud never had this item (a rev-0 synthetic tombstone);
+  // "keep theirs" would delete the local copy and the backend refuses it.
+  it('offers only "keep this one" when the cloud side never existed', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: { conflicts: [{ ...conflict, remote: null, remoteRev: 0, remoteAbsent: true }] },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const buttons = wrapper.findAll('.sync-conflict-side button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].text()).toBe('Keep this one')
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

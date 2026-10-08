@@ -33,6 +33,9 @@ interface Conflict {
   /** True for a scope whose payloads never reach the renderer: `local` and
    *  `remote` are then metadata (or a placeholder), not the item. */
   sealed?: boolean
+  /** The cloud never held this item (a rev-0 synthetic tombstone): keeping
+   *  "theirs" would only delete the local copy, and the backend refuses it. */
+  remoteAbsent?: boolean
 }
 
 /** One scope's outcome of a sync round, as sync.now returns it. */
@@ -466,6 +469,7 @@ onBeforeUnmount(() => offResult?.())
           <span class="sync-side-label">{{ c.remoteDevice || t('settings.sync.other-device') }}</span>
           <code class="sync-side-body" v-truncate="previewFull(shown(c.scope, c.remote), c.sealed)">{{ preview(shown(c.scope, c.remote), c.sealed) }}</code>
           <button
+            v-if="!c.remoteAbsent"
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"
             @click="resolve(c, 'remote')"
