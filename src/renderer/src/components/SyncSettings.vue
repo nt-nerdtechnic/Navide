@@ -11,7 +11,7 @@
  * that collapses them into one is a pane that makes someone re-enter a
  * credential that was never wrong.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../composables/useBackend'
@@ -175,6 +175,7 @@ async function load(): Promise<void> {
       keyId?: unknown
       legacyRingPending?: unknown
       link?: unknown
+      last?: unknown
     }>('sync.status', {})
     if (!resp.ok) {
       error.value = resp.error?.message ?? t('settings.sync.error-load')
@@ -187,6 +188,13 @@ async function load(): Promise<void> {
     keyId.value = typeof payload?.keyId === 'string' ? payload.keyId : ''
     legacyRingPending.value = Boolean(payload?.legacyRingPending)
     linkState.value = isRecord(payload?.link) ? String(payload.link.state ?? '') : ''
+    if (isRecord(payload?.last)) {
+      // The backend keeps the last outcome per scope; it is the whole truth.
+      results.value = {}
+      for (const [scope, last] of Object.entries(payload.last)) {
+        if (isRecord(last)) noteResult({ scope, ...last })
+      }
+    }
     await loadConflicts()
   } catch (err) {
     error.value = String(err)
@@ -338,7 +346,23 @@ function previewFull(value: unknown, sealed = false): string | undefined {
   return sealed || value === null || value === undefined ? undefined : JSON.stringify(value)
 }
 
-onMounted(load)
+/** A round the backend ran on its own (after a local save, on reconnect)
+ *  reports here, so the pane does not wait to be reopened. */
+function onSyncResult(payload: unknown): void {
+  noteResult(payload)
+  void loadConflicts().catch((err) => {
+    error.value = String(err)
+  })
+}
+
+let offResult: (() => void) | undefined
+
+onMounted(() => {
+  offResult = props.backend.on('sync.result', onSyncResult)
+  void load()
+})
+
+onBeforeUnmount(() => offResult?.())
 </script>
 
 <template>

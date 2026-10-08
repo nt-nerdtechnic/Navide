@@ -378,6 +378,65 @@ describe('SyncSettings', () => {
     expect(rows[0].text()).toContain('not connected')
   })
 
+  it('shows each scope\'s last result from sync.status on open', async () => {
+    const { backend } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'memory'],
+          scopes: { prompts: true, memory: true },
+          hasKey: true,
+          link: { state: 'connected' },
+          last: {
+            prompts: { scope: 'prompts', ok: true, pulled: 3, pushed: 0, conflicts: 0, at: 1 },
+            memory: { scope: 'memory', ok: true, pulled: 0, pushed: 0, tooLarge: ['CLAUDE.md'] },
+          },
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Pulled 3, pushed 0')
+    expect(rows[1].text()).toContain('CLAUDE.md')
+  })
+
+  // A round the backend runs on its own (after a local save, on reconnect)
+  // must show up without reopening Settings.
+  it('updates live on sync.result and reloads the conflicts', async () => {
+    const { backend, send, emit, handlers } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    const conflictLoads = () => send.mock.calls.filter(([type]) => type === 'sync.conflicts').length
+    const before = conflictLoads()
+
+    emit('sync.result', {
+      scope: 'mcp',
+      ok: false,
+      error: 'page too large',
+      pulled: 0,
+      pushed: 0,
+      conflicts: 1,
+      held: [],
+      refused: [],
+      tooLarge: [],
+      at: 2,
+    })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.sync-result')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('MCP')
+    expect(rows[0].text()).toContain('page too large')
+    expect(conflictLoads()).toBe(before + 1)
+
+    wrapper.unmount()
+    wrapper = undefined
+    expect(handlers.get('sync.result')?.size ?? 0).toBe(0)
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {
