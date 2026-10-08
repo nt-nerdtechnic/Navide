@@ -1345,19 +1345,25 @@ def credential_saved(agent_key: str, slot_id: str) -> None:
 def on_account_changed() -> None:
     """Signing out or switching the cloud account.
 
-    Everything imported is let go of and the engine's record of the scope is
-    dropped, then the scope itself is switched off: what this machine's user
-    pasted stays here, and goes up to the new account only once they turn
-    the section on again. Sync is opt-in per account, not per install.
+    Everything imported is let go of and the engine's record of every scope is
+    dropped, then every scope is switched off: what this machine's user wrote
+    stays here, and goes up to the new account only once they turn a section
+    on again. Sync is opt-in per account, not per install.
+
+    All scopes, not only credentials: the agreed state, cursor and conflicts
+    are not keyed by account, so the previous account's revs would otherwise
+    be pushed against the next one's server as edits of rows it never had,
+    and every never-synced item here would be uploaded to it unasked.
     """
     from . import app
 
     credentials_scope().clear_imported()
-    app.sync_store.forget("credentials")
+    for scope in sync_engine.SCOPES + sync_engine.INTERNAL_SCOPES:
+        app.sync_store.forget(scope)
     try:
-        set_scope_enabled("credentials", False)
+        _settings().set({SCOPES_SETTING: {scope: False for scope in sync_engine.SCOPES}})
     except Exception as err:  # noqa: BLE001 - settings that will not write do not stop a sign-out
-        log.warning("the credentials scope could not be switched off: %s", err)
+        log.warning("the sync scopes could not be switched off: %s", err)
 
 
 def _reset_credentials_for_test() -> None:

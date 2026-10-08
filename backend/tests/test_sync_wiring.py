@@ -63,3 +63,67 @@ async def test_sync_status_carries_the_last_results_and_the_account(monkeypatch)
 def test_no_link_means_no_last_results(monkeypatch):
     monkeypatch.setattr(server_link, "_link", None)
     assert server_link.sync_last_results() == {}
+
+
+# ── ACC: switching accounts ──────────────────────────────────────────────────
+class _Settings:
+    def __init__(self, values: dict) -> None:
+        self.values = values
+
+    def get(self) -> dict:
+        return dict(self.values)
+
+    def set(self, updates: dict) -> dict:
+        self.values.update(updates)
+        return updates
+
+
+def test_an_account_change_forgets_every_scope_and_switches_them_all_off(tmp_path, monkeypatch):
+    from agent_team_backend import sync_engine, sync_scopes
+    from agent_team_backend.db import Database
+
+    store = sync_engine.SyncStore(Database(tmp_path / "s.db"))
+    for scope in ("prompts", "mcp", "skills", "memory", "skill-files"):
+        store.set_state(scope, "i", rev=3, synced_hash="h", deleted=False)
+        store.set_cursor(scope, 3)
+    store.record_conflict("prompts", "c", local={"a": 1}, remote=None, remote_rev=4, remote_device="d")
+    settings = _Settings({sync_scopes.SCOPES_SETTING: {s: True for s in sync_engine.SCOPES}})
+    monkeypatch.setattr(sync_scopes, "_settings", lambda: settings)
+    monkeypatch.setattr(app, "sync_store", store)
+
+    sync_scopes.on_account_changed()
+
+    for scope in ("prompts", "mcp", "skills", "memory", "skill-files"):
+        assert store.states(scope) == {} and store.cursor(scope) == 0
+    assert store.conflicts(None) == []
+    assert not any(sync_scopes.enabled_scopes().values())
+
+
+async def test_an_account_change_while_the_app_was_closed_is_still_noticed(monkeypatch):
+    from agent_team_backend import sync_scopes
+
+    calls: list[str] = []
+    monkeypatch.setattr(sync_scopes, "on_account_changed", lambda: calls.append("cleared"))
+    settings = _Settings({server_link.SYNC_ACCOUNT_SETTING: "ns-a"})
+    monkeypatch.setattr(server_link, "_settings_store", lambda: settings)
+    # A fresh process: nothing settled in memory yet.
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    await server_link._note_account("ns-b")
+    assert calls == ["cleared"]
+    assert settings.values[server_link.SYNC_ACCOUNT_SETTING] == "ns-b"
+    # Restart again as the same account: nothing to clear.
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    await server_link._note_account("ns-b")
+    assert calls == ["cleared"]
+
+
+async def test_a_first_sign_in_on_a_fresh_install_clears_nothing(monkeypatch):
+    from agent_team_backend import sync_scopes
+
+    calls: list[str] = []
+    monkeypatch.setattr(sync_scopes, "on_account_changed", lambda: calls.append("cleared"))
+    settings = _Settings({})
+    monkeypatch.setattr(server_link, "_settings_store", lambda: settings)
+    monkeypatch.setattr(server_link, "_settled_account", server_link._UNREAD)
+    await server_link._note_account("ns-a")
+    assert calls == []

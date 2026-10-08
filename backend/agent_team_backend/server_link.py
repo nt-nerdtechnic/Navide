@@ -3701,23 +3701,65 @@ _link: ServerLink | None = None
 #: account signed in" or "signed out", both of which let go of everything the
 #: previous account imported. Kept at module level because the ServerLink
 #: instance is replaced on every reconfigure.
-_settled_account: str | None = None
+#: ``_UNREAD`` until the first call in this process, which reads the
+#: namespace the previous process settled on (``SYNC_ACCOUNT_SETTING``):
+#: an account switched while the app was closed is still a switch.
+_UNREAD: Any = object()
+_settled_account: str | None = _UNREAD
+
+#: ui_settings key holding the namespace (a hash, see
+#: ``sync_keyring.namespace_for``) of the last account sync settled on; ""
+#: after a sign-out.
+SYNC_ACCOUNT_SETTING = "sync-account-namespace"
+
+
+def _settings_store() -> Any:
+    from . import app
+
+    return app.ui_settings_store
+
+
+def _persisted_account() -> str | None:
+    value = _settings_store().get().get(SYNC_ACCOUNT_SETTING)
+    return value if isinstance(value, str) and value else None
+
+
+def _persist_account(namespace: str | None) -> None:
+    if _persisted_account() != (namespace or None):
+        _settings_store().set({SYNC_ACCOUNT_SETTING: namespace or ""})
 
 
 async def _note_account(namespace: str | None) -> None:
     """Record which account is settled now; on a real change, tell the sync
-    scopes so imported credentials and the credentials scope's engine state
-    go with the account that owned them. The ring is not touched — it stays
-    under its own namespace for that account's next sign-in."""
+    scopes so imported credentials and every scope's engine state go with the
+    account that owned them, and every scope is switched off. The ring is not
+    touched — it stays under its own namespace for that account's next
+    sign-in."""
     global _settled_account
     previous = _settled_account
     _settled_account = namespace
+    try:
+        if previous is _UNREAD:
+            previous = await asyncio.to_thread(_persisted_account)
+        await asyncio.to_thread(_persist_account, namespace)
+    except Exception as err:  # noqa: BLE001 - the link is not what this protects
+        log.warning("could not read or record the settled sync account: %s", err)
+        if previous is _UNREAD:
+            previous = None
     if previous is None or previous == namespace:
         return
     try:
-        from . import sync_scopes
+        from . import app, sync_scopes
+        from .ipc import make_event
 
         await asyncio.to_thread(sync_scopes.on_account_changed)
+        link = _link
+        if link is not None and link._sync_engine is not None:  # noqa: SLF001 - same module
+            link._sync_engine.forget_results()  # noqa: SLF001 - same module
+        scopes = await asyncio.to_thread(sync_scopes.enabled_scopes)
+        await app.broadcast(
+            make_event("ui.settings_changed", {"settings": {sync_scopes.SCOPES_SETTING: scopes}})
+        )
     except Exception as err:  # noqa: BLE001 - the link is not what this protects
         log.warning("could not clear the previous account's imported state: %s", err)
 
