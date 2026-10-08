@@ -49,6 +49,7 @@ from .base import (
 )
 from . import redact
 from .adapter_runtime import READY_STABLE_S, cancel_and_wait, download_to, media_client
+from .report import Caption
 from .text import TEXT_LIMITS, chunk_text, is_telegram_parse_error, markdown_to_telegram_html
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ DEFAULT_BASE_URL = "https://api.telegram.org"
 # https://core.telegram.org/bots/api#sending-files: "Post the file using multipart/form-data
 # ... 10 MB max size for photos, 50 MB for other files." Everything goes as a document.
 UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+CAPTION_LIMIT = 1024  # sendDocument caption, characters
 # The file kinds a Message may carry that are taken as attachments (stickers are not).
 # An animation also fills ``document`` "for backward compatibility", so it comes first.
 _FILE_KINDS = ("animation", "document", "video", "audio", "voice", "video_note")
@@ -446,8 +448,12 @@ class TelegramAdapter:
         async with media_client(self._media_transport) as client:
             return await download_to(client, f"{self._file_base}/{file_path}", dest, max_bytes)
 
-    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str,
+                        caption: Caption | None = None) -> list[str]:
         data = {key: str(value) for key, value in self._target(loc).items()}
+        if caption is not None:
+            # Plain text: no parse_mode, so nothing in a title can fail to parse.
+            data["caption"] = caption.plain()[:CAPTION_LIMIT]
         content = await asyncio.to_thread(fh.read)
         async with media_client(self._media_transport) as client:
             for _attempt in range(3):

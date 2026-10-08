@@ -23,6 +23,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -33,7 +34,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
-from . import media, quick_menu, redact, relay
+from . import media, pdf, quick_menu, redact, relay, report
 from .. import prompt_skills
 from .mirror import Mirror, normalize_verbosity, result_text, source_chat, summarize
 from .base import ChannelAdapter, InboundMessage, Location, MediaTooLarge
@@ -156,6 +157,10 @@ class Seams:
     agent_skills: Callable[[str], list[str]] = lambda _agent_key: []
     # () -> where inbound chat files are kept (channels.media)
     media_root: Callable[[], Path] = lambda: _default_media_root()
+    # () -> where HTML attachments are printed to PDF (channels.pdf)
+    pdf_root: Callable[[], Path] = lambda: _default_pdf_root()
+    # (html_path, pdf_path, timeout_ms) -> {ok, error_code?}: the Host prints a PDF
+    render_pdf: Callable[[Path, Path, int], Awaitable[dict[str, Any]]] = pdf.request_host
 
 
 AdapterFactory = Callable[[dict[str, Any], dict[str, Any], ChannelStore], ChannelAdapter]
@@ -300,6 +305,8 @@ class ChannelManager:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        # No conversion outlives a backend: whatever is there was left by a crash.
+        await asyncio.to_thread(pdf.clear, self._seams.pdf_root())
         if self._status_task is None:
             self._status_task = asyncio.create_task(self._status_watch(), name="channels-status")
         if self.store.global_enabled():
@@ -1582,7 +1589,9 @@ class ChannelManager:
 
     async def _send_attachments(self, pending: _Pending, paths: list[str]) -> None:
         """Send the files a reply named on ``---ATTACH---`` lines, each checked by
-        ``media.resolve_outbound`` against the replying pane's workspace and the media folder."""
+        ``media.resolve_outbound`` against the replying pane's workspace (its plan
+        documents included) and the media folder. Each goes with a report card; an HTML
+        file goes as an A4 PDF, or as itself with the card saying why it is not one."""
         loc = pending.loc
         adapter = self._adapters.get((loc.platform, loc.account))
         lang = prompt_skills.language(await self._ui_settings())
@@ -1595,14 +1604,16 @@ class ChannelManager:
             await note(media.text(lang, "unsupported"))
             return
         # The replying pane's own media folder only: another pane's files came from another chat.
-        roots = [self._seams.pane_workspace(pending.owner), media.pane_dir(self._seams.media_root(), pending.owner)
-                 ] if pending.owner else []
+        workspace = self._seams.pane_workspace(pending.owner) if pending.owner else ""
+        roots = [workspace, media.pane_dir(self._seams.media_root(), pending.owner)] if pending.owner else []
         limit = int(getattr(adapter, "upload_max_bytes", 0) or 0)
+        budget_end = self._clock() + pdf.REPLY_BUDGET_S
         for raw in paths[: media.MAX_ATTACHMENTS_PER_REPLY]:
+            spec = report.parse_attach(raw)
             # Only the file name ever goes back to the chat, never the folders above it.
-            name = media.safe_name(Path(raw.strip()).name)
+            name = media.safe_name(Path(spec.path).name)
             try:
-                opened, reason = await asyncio.to_thread(media.open_outbound, raw, roots)
+                opened, reason = await asyncio.to_thread(media.open_outbound, spec.path, roots, workspace or None)
             except Exception as exc:  # noqa: BLE001 — refuse this one, keep sending the rest
                 log.warning("channels: opening an attachment for %s failed: %s", loc.key(), exc)
                 opened, reason = None, "changed"
@@ -1610,21 +1621,52 @@ class ChannelManager:
                 await note(media.text(lang, "refused", name=name, reason=media.text(lang, f"reason.{reason}")))
                 continue
             try:
-                if limit and opened.size > limit:
-                    await note(media.text(lang, "too_large_out", name=name, size=media.human_size(opened.size),
-                                          limit=media.human_size(limit)))
-                    continue
-                # The adapter reads the file already open: a swap after the check cannot change it.
-                ids = await adapter.send_file(loc, opened.fh, opened.path.name)
+                ids = await self._send_one(adapter, loc, opened, spec, lang, limit, budget_end, note)
             except Exception as exc:  # noqa: BLE001
                 await note(media.text(lang, "send_failed", name=name, error=redact.redact_text(str(exc))))
                 continue
             finally:
                 opened.fh.close()
-            if pending.owner:
+            if ids and pending.owner:
                 self.mirror.owners.remember(loc.key(), ids, pending.owner)
         if len(paths) > media.MAX_ATTACHMENTS_PER_REPLY:
             await note(media.text(lang, "too_many", max=media.MAX_ATTACHMENTS_PER_REPLY))
+
+    async def _send_one(self, adapter: Any, loc: Location, opened: media.Outbound, spec: report.AttachSpec,
+                        lang: str, limit: int, budget_end: float,
+                        note: Callable[[str], Awaitable[None]]) -> list[str]:
+        """Send one checked file with its card; [] when it was refused (the chat was told)."""
+        path = opened.path
+        name = media.safe_name(path.name)
+        kind = path.suffix.lstrip(".").lower()
+        if kind in ("html", "htm"):
+            data = await asyncio.to_thread(opened.fh.read)
+            card = report.card_for(spec, path.name, data[: report.HEAD_BYTES].decode("utf-8", "replace"))
+            remaining = budget_end - self._clock()
+            if remaining <= 0:
+                failure = "budget"
+            else:
+                async with pdf.converted(data, self._seams.pdf_root(), self._seams.render_pdf,
+                                         min(pdf.TIMEOUT_S, remaining)) as result:
+                    failure = result.failure
+                    if result.path is not None and limit and result.size > limit:
+                        failure = "too_large"
+                    elif result.path is not None:
+                        fd = os.open(result.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+                        with os.fdopen(fd, "rb") as fh:
+                            # The adapter reads the PDF before the context removes it.
+                            return await adapter.send_file(loc, fh, f"{path.stem}.pdf", caption=report.caption(
+                                card.sent_as("pdf", result.size, result.pages), lang))
+            opened.fh.seek(0)
+            card = card.sent_as(kind, opened.size, failure=failure)
+        else:
+            card = report.card_for(spec, path.name, "").sent_as(kind, opened.size)
+        if limit and opened.size > limit:
+            await note(media.text(lang, "too_large_out", name=name, size=media.human_size(opened.size),
+                                  limit=media.human_size(limit)))
+            return []
+        # The adapter reads the file already open: a swap after the check cannot change it.
+        return await adapter.send_file(loc, opened.fh, path.name, caption=report.caption(card, lang))
 
     def _quote_trusted(self, msg: InboundMessage) -> bool:
         """The replied-to message may be quoted into the pane (see ``_with_reply_quote``)."""
@@ -2095,6 +2137,12 @@ def _default_media_root() -> Path:
     from ..applog import app_data_dir
 
     return media.media_root(app_data_dir())
+
+
+def _default_pdf_root() -> Path:
+    from ..applog import app_data_dir
+
+    return pdf.pdf_root(app_data_dir())
 
 
 def _chat_msg_bodies(text: str) -> list[str]:

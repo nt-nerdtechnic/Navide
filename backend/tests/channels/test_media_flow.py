@@ -29,6 +29,7 @@ class Media:
     def __init__(self, adapter, upload_max: int = 50 * 1024 * 1024) -> None:
         self.downloads: list[tuple[InboundAttachment, Path, int]] = []
         self.files: list[tuple[Location, bytes, str]] = []
+        self.captions: list = []
         self.payload = b"PNGDATA"
         self.fail: Exception | None = None
         adapter.upload_max_bytes = upload_max
@@ -42,9 +43,10 @@ class Media:
         dest.write_bytes(self.payload)
         return len(self.payload)
 
-    async def send_file(self, loc: Location, fh, filename: str) -> list[str]:
+    async def send_file(self, loc: Location, fh, filename: str, caption=None) -> list[str]:
         self.files.append((loc, fh.read(), filename))
-        return ["f1"]
+        self.captions.append(caption)
+        return [f"f{len(self.files)}"]
 
 
 @pytest.fixture
@@ -305,10 +307,10 @@ async def test_a_file_that_fails_to_open_is_refused_and_the_next_still_goes(
     (ws / "out" / "b.png").write_bytes(b"second")
     real_open = media.open_outbound
 
-    def flaky(raw, roots):
+    def flaky(raw, roots, plans_workspace=None):
         if raw.endswith("chart.png"):
             raise OSError(5, "Input/output error")
-        return real_open(raw, roots)
+        return real_open(raw, roots, plans_workspace)
 
     monkeypatch.setattr(media, "open_outbound", flaky)
     m = Media(media_env.tg)

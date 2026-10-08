@@ -57,7 +57,14 @@ from .base import (
     Location,
     backoff_delay,
 )
+from .report import Caption
 from .text import TEXT_LIMITS, chunk_text
+
+
+def _escape(text: str) -> str:
+    """``text`` safe inside mrkdwn: the three characters Slack asks to escape."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 
 log = logging.getLogger(__name__)
 
@@ -350,7 +357,17 @@ class SlackAdapter:
                     raise ChannelSendError(f"{exc} (does the app have the files:read scope?)") from exc
                 raise
 
-    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str,
+                        caption: Caption | None = None) -> list[str]:
+        # The card is a message of its own, posted first: an upload answers with a file id,
+        # and a reply in a thread names a message ts, so the card's ts is what a reply finds.
+        ids: list[str] = []
+        if caption is not None:
+            lines = (f"📄 *{_escape(caption.title)}*", _escape(caption.summary), _escape(caption.info))
+            text = "\n".join(line for line in lines if line)[:SECTION_LIMIT]
+            body = {**self._base_body(loc), "text": caption.plain(),
+                    "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]}
+            ids.append(str((await self._write("chat.postMessage", body)).get("ts") or ""))
         size = os.fstat(fh.fileno()).st_size
         try:
             ticket = await self._call("files.getUploadURLExternal", token=self._bot_token,
@@ -368,7 +385,7 @@ class SlackAdapter:
             await self._call("files.completeUploadExternal", token=self._bot_token, json_body=body)
         except (ChannelAuthError, SlackApiError, KeyError, httpx.HTTPError) as exc:
             raise ChannelSendError(f"Slack upload failed: {exc}") from exc
-        return [str(ticket["file_id"])]
+        return ids + [str(ticket["file_id"])]
 
     @staticmethod
     def _actions_block(buttons: list[tuple[str, str]]) -> dict[str, Any]:

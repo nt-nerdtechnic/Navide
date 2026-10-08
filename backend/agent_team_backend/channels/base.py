@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, BinaryIO, Callable, Literal, Protocol
+from typing import TYPE_CHECKING, Awaitable, BinaryIO, Callable, Literal, Protocol
+
+if TYPE_CHECKING:
+    from .report import Caption
 
 Platform = Literal[
     "telegram", "discord", "slack", "feishu", "dingtalk", "matrix", "mattermost", "imessage"
@@ -162,9 +165,11 @@ class MediaAdapter(Protocol):
         ``max_bytes`` (``dest`` is then removed) or ``ChannelSendError`` on failure."""
         ...
 
-    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
-        """Post the already-open, already-checked file ``fh`` as ``filename`` and return the
-        message ids. Read it from ``fh`` only: reopening by path would undo the check."""
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str,
+                        caption: "Caption | None" = None) -> list[str]:
+        """Post the already-open, already-checked file ``fh`` as ``filename`` with its report
+        card ``caption`` and return the message ids (the card's too, when it is a message of
+        its own). Read it from ``fh`` only: reopening by path would undo the check."""
         ...
 
 

@@ -155,6 +155,22 @@ def info_line(card: Card, lang: str) -> str:
     return " · ".join(parts)
 
 
+@dataclass(frozen=True)
+class Caption:
+    """A card in the chat's language, for an adapter to lay out its own way."""
+
+    title: str
+    summary: str
+    info: str
+
+    def plain(self) -> str:
+        return "\n".join(line for line in (f"📄 {self.title}", self.summary, self.info) if line)
+
+
+def caption(card: Card, lang: str) -> Caption:
+    return Caption(card.title, card.summary, info_line(card, lang))
+
+
 def plain_text(card: Card, lang: str) -> str:
     """The card as plain lines: title, summary (when there is one), info."""
-    return "\n".join(line for line in (f"📄 {card.title}", card.summary, info_line(card, lang)) if line)
+    return caption(card, lang).plain()

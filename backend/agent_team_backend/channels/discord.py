@@ -34,6 +34,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
@@ -56,7 +57,11 @@ from .base import (
     Location,
     backoff_delay,
 )
+from .report import Caption
 from .text import TEXT_LIMITS, chunk_discord
+
+# Characters that would start Discord markdown inside a card title.
+_MARKDOWN_RE = re.compile(r"[\\*_~`|]")
 
 log = logging.getLogger(__name__)
 
@@ -394,8 +399,13 @@ class DiscordAdapter:
         async with media_client(self._media_transport) as client:  # no Authorization header
             return await download_to(client, att.ref, dest, max_bytes)
 
-    async def send_file(self, loc: Location, fh: BinaryIO, filename: str) -> list[str]:
-        payload = {"attachments": [{"id": 0, "filename": filename}], "allowed_mentions": {"parse": []}}
+    async def send_file(self, loc: Location, fh: BinaryIO, filename: str,
+                        caption: Caption | None = None) -> list[str]:
+        payload: dict[str, Any] = {"attachments": [{"id": 0, "filename": filename}], "allowed_mentions": {"parse": []}}
+        if caption is not None:
+            title = _MARKDOWN_RE.sub(r"\\\g<0>", caption.title)
+            lines = (f"📄 **{title}**", caption.summary, caption.info)
+            payload["content"] = "\n".join(line for line in lines if line)[: self.capabilities.text_limit]
         content = await asyncio.to_thread(fh.read)
         try:
             resp = await send_request(self._http(), "POST", f"/channels/{self._target(loc)}/messages",

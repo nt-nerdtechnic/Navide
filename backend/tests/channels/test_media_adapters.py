@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
+from agent_team_backend.channels.report import Caption
 from agent_team_backend.channels.base import (
     ChannelSendError, InboundAttachment, InboundMessage, Location, MediaTooLarge,
 )
@@ -409,3 +410,59 @@ async def test_a_download_that_never_finishes_times_out_and_leaves_no_file(tmp_p
     with pytest.raises(ChannelSendError, match="timed out"):
         await adapter_runtime.download_to(client, "https://cdn.test/f", dest, 1 << 20)
     assert not dest.exists()
+
+
+# --- Report cards ---------------------------------------------------------------------
+
+CARD = Caption("週報 <W41> *重點*", "三項完成 & 一項延遲", "PDF 3 頁 · 1.2 MB")
+
+
+async def test_telegram_puts_the_card_in_the_caption_as_plain_text(tmp_path: Path) -> None:
+    f = tmp_path / "r.pdf"
+    f.write_bytes(b"%PDF-")
+    rec = Recorder({"/sendDocument": httpx.Response(200, json={"ok": True, "result": {"message_id": 77}})})
+    ad = TelegramAdapter(TOKEN, base_url="https://tg.test")
+    ad._media_transport = rec.transport()
+    with open(f, "rb") as fh:
+        await ad.send_file(Location("telegram", "default", "42"), fh, "r.pdf", caption=CARD)
+    body = _form(rec.requests[0])
+    assert f'name="caption"\r\n\r\n{CARD.plain()}'.encode() in body
+    assert b"parse_mode" not in body
+
+
+async def test_discord_puts_the_card_in_the_message_content(tmp_path: Path) -> None:
+    f = tmp_path / "r.pdf"
+    f.write_bytes(b"%PDF-")
+    rec = Recorder({"/channels/C1/messages": httpx.Response(200, json={"id": "m1"})})
+    ad = _discord()
+    ad._client = httpx.AsyncClient(base_url="https://discord.test/api/v10", transport=rec.transport(),
+                                   headers={"Authorization": "Bot tok"})
+    with open(f, "rb") as fh:
+        await ad.send_file(Location("discord", "default", "C1"), fh, "r.pdf", caption=CARD)
+    payload = _form(rec.requests[0]).split(b'name="payload_json"\r\n\r\n', 1)[1].split(b"\r\n--", 1)[0]
+    content = json.loads(payload)["content"]
+    assert content == "📄 **週報 <W41> \\*重點\\***\n三項完成 & 一項延遲\nPDF 3 頁 · 1.2 MB"
+    assert json.loads(payload)["allowed_mentions"] == {"parse": []}
+
+
+async def test_slack_posts_the_card_then_the_file_and_returns_both(tmp_path: Path) -> None:
+    f = tmp_path / "r.pdf"
+    f.write_bytes(b"%PDF-")
+    rec = Recorder({
+        "chat.postMessage": httpx.Response(200, json={"ok": True, "ts": "5.5"}),
+        "files.getUploadURLExternal": httpx.Response(200, json={
+            "ok": True, "upload_url": "https://files.slack.com/upload/v1/abc", "file_id": "F9"}),
+        "/upload/v1/abc": httpx.Response(200, text="OK"),
+        "files.completeUploadExternal": httpx.Response(200, json={"ok": True, "files": [{"id": "F9"}]}),
+    })
+    ad = _slack()
+    ad._client = httpx.AsyncClient(base_url="https://slack.test/api", transport=rec.transport())
+    ad._media_transport = rec.transport()
+    with open(f, "rb") as fh:
+        ids = await ad.send_file(Location("slack", "default", "C1"), fh, "r.pdf", caption=CARD)
+    assert ids == ["5.5", "F9"]
+    card = json.loads(rec.requests[0].content)
+    section = card["blocks"][0]["text"]
+    assert section == {"type": "mrkdwn",
+                       "text": "📄 *週報 &lt;W41&gt; *重點**\n三項完成 &amp; 一項延遲\nPDF 3 頁 · 1.2 MB"}
+    assert card["text"] == CARD.plain() and card["channel"] == "C1"
