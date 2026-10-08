@@ -559,6 +559,44 @@ describe('SyncSettings', () => {
     expect(text).toContain('mode=')
   })
 
+  it('masks an Authorization header and a Bearer token anywhere in an MCP arg', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'svc',
+              local: {
+                name: 'svc',
+                args: ['-H', 'Authorization: Basic hdrsecret8==', '--header=authorization: Basic inlinesecret10'],
+              },
+              remote: {
+                name: 'svc',
+                args: ['-H', 'X-Upstream: Bearer midsecret9= tail'],
+              },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const html = wrapper.html()
+    expect(html).not.toContain('hdrsecret8')
+    expect(html).not.toContain('Basic')
+    expect(html).not.toContain('midsecret9')
+    expect(html).not.toContain('inlinesecret10')
+    const text = wrapper.text()
+    expect(text).toContain('Authorization: ••••')
+    expect(text).toContain('X-Upstream: Bearer ••••')
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

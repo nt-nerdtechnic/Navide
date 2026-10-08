@@ -334,16 +334,21 @@ function maskUrl(url: string): string {
 }
 
 /** Secret flags (`--api-key v`, `--token=v`), `KEY=value` with a secret name,
- *  and Bearer tokens; every other argument stays readable. */
+ *  a whole `Authorization:` header value and a Bearer token anywhere; every
+ *  other argument stays readable. */
 function maskArgs(args: unknown[]): unknown[] {
   let maskNext = false
-  return args.map((arg) => {
-    if (typeof arg !== 'string') return arg
+  return args.map((raw) => {
+    if (typeof raw !== 'string') return raw
     if (maskNext) {
       maskNext = false
       return MASK
     }
-    if (/^bearer\s/i.test(arg)) return `${arg.split(/\s/)[0]} ${MASK}`
+    // Header and Bearer first: their values may hold '=' (base64 padding),
+    // which the KEY=value rule below would otherwise split inside the secret.
+    const header = /^(.*?authorization\s*:)/i.exec(raw)
+    if (header) return `${header[1]} ${MASK}`
+    const arg = raw.replace(/\b(bearer)\s+\S+/gi, `$1 ${MASK}`)
     const eq = arg.indexOf('=')
     if (eq > 0) return SECRET_NAME.test(arg.slice(0, eq)) ? `${arg.slice(0, eq + 1)}${MASK}` : arg
     if (/^-/.test(arg) && SECRET_NAME.test(arg)) maskNext = true
