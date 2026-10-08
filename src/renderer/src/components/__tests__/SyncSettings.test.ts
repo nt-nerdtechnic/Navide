@@ -276,6 +276,42 @@ describe('SyncSettings', () => {
     expect(wrapper.findAll('.sync-conflict-side button')).toHaveLength(2)
   })
 
+  // C-3: an MCP record carries its secrets in env and headers; a conflict
+  // preview names them but never shows their values, in the text or the hover.
+  it('masks MCP env and header values in a conflict preview', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'mcp',
+              itemId: 'github',
+              local: { name: 'github', command: 'npx', env: { GITHUB_TOKEN: 'ghp_localsecret' } },
+              remote: {
+                name: 'github',
+                url: 'https://x.example',
+                headers: { Authorization: 'Bearer remotesecret' },
+              },
+              remoteRev: 2,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const html = wrapper.html()
+    expect(html).not.toContain('ghp_localsecret')
+    expect(html).not.toContain('remotesecret')
+    expect(wrapper.text()).toContain('GITHUB_TOKEN')
+    expect(wrapper.text()).toContain('Authorization')
+    expect(wrapper.text()).toContain('npx')
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

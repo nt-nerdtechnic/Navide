@@ -208,6 +208,23 @@ async function resolve(conflict: Conflict, keep: 'local' | 'remote'): Promise<vo
   }
 }
 
+/** MCP keys whose values are secrets (tokens, auth headers). */
+const MCP_SECRET_FIELDS = ['env', 'headers']
+
+/** One side of a conflict as it may be shown: an MCP record keeps the names
+ *  in env and headers, so a person can tell the two apart, but not the values. */
+function shown(scope: string, value: unknown): unknown {
+  if (scope !== 'mcp' || !isRecord(value)) return value
+  const out: Record<string, unknown> = { ...value }
+  for (const field of MCP_SECRET_FIELDS) {
+    const entries = out[field]
+    if (isRecord(entries)) {
+      out[field] = Object.fromEntries(Object.keys(entries).map((k) => [k, '••••']))
+    }
+  }
+  return out
+}
+
 function preview(value: unknown, sealed = false): string {
   if (value === null || value === undefined) return t('settings.sync.deleted')
   if (sealed) {
@@ -297,7 +314,7 @@ onMounted(load)
         </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ t('settings.sync.this-device') }}</span>
-          <code class="sync-side-body" v-truncate="previewFull(c.local, c.sealed)">{{ preview(c.local, c.sealed) }}</code>
+          <code class="sync-side-body" v-truncate="previewFull(shown(c.scope, c.local), c.sealed)">{{ preview(shown(c.scope, c.local), c.sealed) }}</code>
           <button
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"
@@ -308,7 +325,7 @@ onMounted(load)
         </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ c.remoteDevice || t('settings.sync.other-device') }}</span>
-          <code class="sync-side-body" v-truncate="previewFull(c.remote, c.sealed)">{{ preview(c.remote, c.sealed) }}</code>
+          <code class="sync-side-body" v-truncate="previewFull(shown(c.scope, c.remote), c.sealed)">{{ preview(shown(c.scope, c.remote), c.sealed) }}</code>
           <button
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"
