@@ -754,6 +754,7 @@ class MemoryScope:
             f.relative: f
             for f in native_memory.scan()
             if f.scope == native_memory.USER_SCOPE and f.exists and not f.error
+            and _declared(f.readers)
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -775,7 +776,10 @@ class MemoryScope:
                 out[relative] = {"text": text}
         return out
 
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Write one record in. False means this machine refused it and does
+        not hold it — no known file there, or the write failed — which the
+        engine must not read as agreement."""
         from . import native_memory
 
         # A delete is never carried through to the user's disk. Removing an
@@ -783,18 +787,20 @@ class MemoryScope:
         # another unprompted, and the file is the user's, not ours.
         if payload is None:
             log.info("ignoring a delete for instruction file %s", item_id)
-            return
+            return True
         if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
             log.warning("instruction file %s arrived without text", item_id)
-            return
+            return False
         target = self._resolve(item_id)
         if target is None:
             log.warning("no known instruction file matches %s on this machine", item_id)
-            return
+            return False
         try:
             native_memory.save(target, payload["text"])
         except Exception as err:  # noqa: BLE001 - a refused write is not fatal
             log.warning("the synced instruction file %s was not written: %s", item_id, err)
+            return False
+        return True
 
     @staticmethod
     def _resolve(relative: str) -> str | None:
@@ -805,10 +811,20 @@ class MemoryScope:
         """
         from . import native_memory
 
-        for path, (scope, rel, _readers, _canonical) in native_memory.candidates().items():
-            if scope == native_memory.USER_SCOPE and relative in (rel, memory_item_id(rel)):
+        for path, (scope, rel, readers, _canonical) in native_memory.candidates().items():
+            if scope != native_memory.USER_SCOPE or not _declared(readers):
+                continue
+            if relative in (rel, memory_item_id(rel)):
                 return str(path)
         return None
+
+
+def _declared(readers: Any) -> bool:
+    """Whether a file is in the table rather than only named by an aider
+    ``read:`` entry. Those entries can point anywhere under the home — a
+    project file included — and syncing one would copy it into another
+    machine's home. The editor still lists them; sync leaves them alone."""
+    return bool(set(readers) - {"aider"})
 
 
 # ── credentials ─────────────────────────────────────────────────────────────

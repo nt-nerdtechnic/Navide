@@ -104,3 +104,22 @@ def test_memory_apply_still_accepts_a_plain_relative_path(tmp_path, monkeypatch)
     monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
     assert sync_scopes.MemoryScope._resolve(".claude/CLAUDE.md") is not None
     assert sync_scopes.MemoryScope._resolve(".claude:CLAUDE.md") is not None
+
+
+def test_memory_leaves_out_files_only_aider_config_names(tmp_path, monkeypatch):
+    """A home ``.aider.conf.yml`` can name any file under the home — a project
+    file included — and syncing it would copy that file into another machine's
+    home. Only the rows the table declares travel."""
+    home = _home(tmp_path, "h")
+    (home / ".claude" / "CLAUDE.md").write_text("mine\n")
+    (home / "work" / "repo").mkdir(parents=True)
+    (home / "work" / "repo" / "NOTES.md").write_text("project notes\n")
+    (home / ".aider.conf.yml").write_text("read: [work/repo/NOTES.md]\n")
+    monkeypatch.setattr(native_memory, "_home", lambda: home)
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    assert any(f.relative == "work/repo/NOTES.md" for f in native_memory.scan())  # still listed in the editor
+    scope = sync_scopes.MemoryScope()
+    assert set(scope.snapshot_by_path()) == {".claude/CLAUDE.md"}
+    assert scope._resolve("work/repo/NOTES.md") is None
+    assert scope.apply(sync_scopes.memory_item_id("work/repo/NOTES.md"), {"text": "x"}) is False
+    assert (home / "work" / "repo" / "NOTES.md").read_text() == "project notes\n"

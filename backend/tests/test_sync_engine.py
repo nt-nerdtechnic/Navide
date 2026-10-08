@@ -516,6 +516,7 @@ def test_memory_scope_lists_user_scope_files_only(monkeypatch):
         def __init__(self, scope, relative, path):
             self.scope, self.relative, self.path = scope, relative, path
             self.exists, self.error = True, ""
+            self.readers = ("claude",)
 
     files = [
         FakeFile(native_memory.USER_SCOPE, ".claude/CLAUDE.md", "/home/u/.claude/CLAUDE.md"),
