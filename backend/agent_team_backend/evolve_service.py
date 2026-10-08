@@ -28,10 +28,12 @@ never killed; one far past its token budget is interrupted once, disclosed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import re
+import secrets
 import sqlite3
 import time
 import uuid
@@ -227,11 +229,22 @@ def _create_schema(cur: sqlite3.Cursor) -> None:
     cur.execute("CREATE INDEX evolve_runs_started ON evolve_runs (started_at)")
 
 
+def _add_token_hash(cur: sqlite3.Cursor) -> None:
+    # The run token's hash: evolve_report must present the token that only the
+    # run's task text carried. A downgraded build ignores the extra column.
+    cur.execute("ALTER TABLE evolve_runs ADD COLUMN token_hash TEXT")
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 _JSON_COLUMNS = ("commits", "proposals", "panes")
 
 
 def _row(row: sqlite3.Row) -> dict[str, Any]:
     run = dict(row)
+    run.pop("token_hash", None)  # never handed back out
     for key in _JSON_COLUMNS:
         try:
             run[key] = json.loads(run[key]) if run[key] else []
@@ -257,6 +270,7 @@ class _Store:
         key = str(db.path)
         if key not in self._ready:
             db.migrate(_COMPONENT, 1, _create_schema)
+            db.migrate(_COMPONENT, 2, _add_token_hash)
             self._ready.add(key)
         return db
 
@@ -280,6 +294,15 @@ class _Store:
                 "SELECT * FROM evolve_runs ORDER BY started_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [_row(r) for r in rows]
+
+    def token_matches(self, workspace: str, run_id: str, token: str) -> bool:
+        db = self.db(workspace, create=False)
+        if db is None or not token:
+            return False
+        with db.transaction() as cur:
+            row = cur.execute("SELECT token_hash FROM evolve_runs WHERE id = ?", (run_id,)).fetchone()
+        stored = row["token_hash"] if row is not None else None
+        return bool(stored) and secrets.compare_digest(stored, _token_hash(token))
 
     def run(self, workspace: str, run_id: str) -> dict[str, Any] | None:
         db = self.db(workspace, create=False)
@@ -733,6 +756,7 @@ class EvolveService:
             "tokens": None, "summary": "", "commits": [], "proposals": [], "panes": [],
             "reclaimed": None, "interrupted": 0, "detail": "",
         }
+        token = secrets.token_hex(16)
         async with self._lock:
             refusal = await self._gate(workspace, settings)
             if refusal is not None:
@@ -743,16 +767,18 @@ class EvolveService:
                 await self._changed(workspace)
                 return {"status": "skipped", "reason": refusal["reason"], "detail": refusal["detail"]}
             # Claimed before anything is opened: this row is the reentry lock.
-            await asyncio.to_thread(self.store.insert, workspace, run)
-        return await self._launch(workspace, settings, run)
+            await asyncio.to_thread(self.store.insert, workspace, {**run, "token_hash": _token_hash(token)})
+        return await self._launch(workspace, settings, run, token)
 
-    async def _launch(self, workspace: str, settings: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    async def _launch(
+        self, workspace: str, settings: dict[str, Any], run: dict[str, Any], token: str
+    ) -> dict[str, Any]:
         git = await self.host.git_info(workspace)
         scope = settings["scope"] if git["is_repo"] else "propose"
         if not git["is_repo"] and settings["scope"] == "fix":
             await self._notice(workspace, "not_git", run)
         task = evolve_rules.render({
-            "run_id": run["id"], "workspace": workspace, "repo_root": git["root"],
+            "run_id": run["id"], "run_token": token, "workspace": workspace, "repo_root": git["root"],
             "branch": git["branch"], "is_repo": git["is_repo"], "scope": scope,
             "token_budget": settings["token_budget"], "max_minutes": settings["max_minutes"],
             "max_fixes": settings["max_fixes"], "ledger_plan": settings["ledger_plan"],
@@ -823,6 +849,12 @@ class EvolveService:
             return {"ok": False, "error": "only the run's own pane (or a pane it opened) may report it"}
         if run["status"] not in ("running", "timeout"):
             return {"ok": False, "error": f"run {run_id} is already {run['status']}"}
+        # The pane id alone proves little: an MCP caller names its own pane id.
+        # The token was only ever written into this run's task.
+        if not await asyncio.to_thread(
+            self.store.token_matches, workspace, run_id, str(payload.get("run_token") or "")
+        ):
+            return {"ok": False, "error": "run_token does not match this run; copy it from your task"}
         status = "ok" if payload.get("status") != "error" else "error"
         reported = payload.get("tokens")
         measured = self.host.pane_tokens(run["pane_id"]) if run["pane_id"] else None

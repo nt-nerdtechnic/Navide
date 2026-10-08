@@ -119,11 +119,12 @@ STEPS
    End each with "Produced by Navide self-evolution run $run_id".
 $ledger
 6. FINISH by calling the Navide MCP tool evolve_report exactly once:
-   evolve_report(run_id="$run_id", status="ok" or "error", summary=<3–8 lines>,
+   evolve_report(run_id="$run_id", run_token="$run_token", status="ok" or "error", summary=<3–8 lines>,
    commits=[{hash, title}], proposals=[{rel_path, name}], panes=[names you
    opened], tokens=<your best estimate of tokens used>).
    Navide reclaims this pane after it. Without it the run is reported as timed
-   out after $max_minutes minutes.
+   out after $max_minutes minutes. Keep run_token to yourself: give it only to
+   a pane you open for this run, never write it into a file, plan or message.
 """)
 
 _LEDGER = Template("""\
@@ -151,6 +152,7 @@ def render(params: dict[str, Any]) -> str:
     values = {
         "version": VERSION,
         "run_id": params["run_id"],
+        "run_token": params.get("run_token") or "<run token>",
         "workspace": params["workspace"],
         "repo_root": params.get("repo_root") or params["workspace"],
         "branch": params.get("branch") or "main",

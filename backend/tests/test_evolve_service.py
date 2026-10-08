@@ -4,6 +4,7 @@ their pane, the watchdog, and migration from the pane-owned evolve-scout job."""
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -125,6 +126,15 @@ async def enable(env, ws: str, **extra: Any) -> dict[str, Any]:
     answer = await env.service.set(ws, {"enabled": True, "tz": "Asia/Taipei", **extra})
     assert answer["ok"] is True, answer
     return answer
+
+
+async def report(env, pane_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """service.report with the run token the last task carried."""
+    import re as _re
+
+    tasks = [o["task"] for o in env.host.opened] + [t for _p, t in env.host.sent]
+    tokens = [m.group(1) for t in tasks for m in [_re.search(r'run_token="([0-9a-f]{32})"', t)] if m]
+    return await env.service.report(pane_id, {"run_token": tokens[-1] if tokens else "", **payload})
 
 
 async def drain(env) -> None:
@@ -283,7 +293,7 @@ async def test_daily_run_limit_counts_manual_runs(env) -> None:
     await enable(env, env.a, max_runs_per_day=1)
     await env.service.start_run(env.a, "manual")
     run = (await env.service.get(env.a))["running"]
-    await env.service.report("p-run", {"run_id": run["id"], "status": "ok", "summary": "done"})
+    await report(env, "p-run", {"run_id": run["id"], "status": "ok", "summary": "done"})
     await drain(env)
     outcome = await env.service.start_run(env.a, "schedule")
     assert outcome["reason"] == "budget"
@@ -299,7 +309,7 @@ async def test_chosen_pane_gets_the_task_and_is_not_reclaimed(env) -> None:
     assert env.host.opened == [] and env.host.sent[0][0] == "mine"
     run = (await env.service.get(env.a))["running"]
     assert run["mode"] == "pane" and run["pane_name"] == "lead"
-    await env.service.report("mine", {"run_id": run["id"], "status": "ok", "summary": "s"})
+    await report(env, "mine", {"run_id": run["id"], "status": "ok", "summary": "s"})
     await drain(env)
     assert env.host.actions == []
 
@@ -350,10 +360,10 @@ async def test_report_records_masks_and_reclaims(env) -> None:
     run = (await env.service.get(env.a))["running"]
     env.host.panes["stranger"] = SimpleNamespace(pane_id="stranger", name="x", workspace_path=env.a,
                                                  spawned_by="", busy=False)
-    refused = await env.service.report("stranger", {"run_id": run["id"], "status": "ok", "summary": "s"})
+    refused = await report(env, "stranger", {"run_id": run["id"], "status": "ok", "summary": "s"})
     assert refused["ok"] is False
     env.host.tokens["p-run"] = 150_000
-    answer = await env.service.report("p-run", {
+    answer = await report(env, "p-run", {
         "run_id": run["id"], "status": "ok", "summary": "fixed it; key sk-abcdefghijklmnop leaked",
         "commits": [{"hash": "a1b2c3d", "title": "fix(x): y"}],
         "proposals": [{"rel_path": ".agent-team/plans/p_1.html", "name": "P"}], "tokens": 140_000,
@@ -367,7 +377,7 @@ async def test_report_records_masks_and_reclaims(env) -> None:
     assert done["reclaimed"] is True
     assert env.host.actions == [("ui.pane.reclaim", "p-run")]
     assert "finished" in env.host.notices()
-    again = await env.service.report("p-run", {"run_id": run["id"], "status": "ok", "summary": "s"})
+    again = await report(env, "p-run", {"run_id": run["id"], "status": "ok", "summary": "s"})
     assert again["ok"] is False
 
 
@@ -377,7 +387,7 @@ async def test_a_child_pane_may_report_its_parents_run(env) -> None:
     run = (await env.service.get(env.a))["running"]
     env.host.panes["kid"] = SimpleNamespace(pane_id="kid", name="kid", workspace_path=env.a,
                                             spawned_by="p-run", busy=False)
-    assert (await env.service.report("kid", {"run_id": run["id"], "status": "error", "summary": "s"}))["ok"]
+    assert (await report(env, "kid", {"run_id": run["id"], "status": "error", "summary": "s"}))["ok"]
 
 
 async def test_reclaim_refused_every_time_is_recorded(env) -> None:
@@ -385,7 +395,7 @@ async def test_reclaim_refused_every_time_is_recorded(env) -> None:
     await enable(env, env.a)
     await env.service.start_run(env.a, "manual")
     run = (await env.service.get(env.a))["running"]
-    await env.service.report("p-run", {"run_id": run["id"], "status": "ok", "summary": "s"})
+    await report(env, "p-run", {"run_id": run["id"], "status": "ok", "summary": "s"})
     await drain(env)
     assert len(env.host.actions) == ev.RECLAIM_TRIES
     assert (await env.service.get(env.a))["runs"][0]["reclaimed"] is False
@@ -398,7 +408,7 @@ async def test_only_the_newest_cards_are_kept(env) -> None:
         env.host.open_answer = {"ok": True, "pane_id": f"p{i}", "name": f"evolve-{i}", "kickoff": "sent"}
         await env.service.start_run(env.a, "manual")
         run = (await env.service.get(env.a))["running"]
-        await env.service.report(f"p{i}", {"run_id": run["id"], "status": "ok", "summary": "s"})
+        await report(env, f"p{i}", {"run_id": run["id"], "status": "ok", "summary": "s"})
         await drain(env)
     closed = [pane for action, pane in env.host.actions if action == "ui.pane.close"]
     assert closed == ["p0", "p1"]
@@ -417,7 +427,7 @@ async def test_overdue_run_times_out_without_being_killed(env) -> None:
     assert env.host.actions == []  # nothing closed or interrupted
     assert "timeout" in env.host.notices()
     # A late report still lands.
-    late = await env.service.report("p-run", {"run_id": run["id"], "status": "ok", "summary": "late"})
+    late = await report(env, "p-run", {"run_id": run["id"], "status": "ok", "summary": "late"})
     assert late["ok"] is True
 
 
@@ -443,7 +453,7 @@ async def test_runs_live_in_the_workspace_database_under_a_versioned_component(e
     await enable(env, env.a)
     await env.service.start_run(env.a, "manual")
     db = env.databases.peek(env.a)
-    assert db.schema_version("evolve") == 1
+    assert db.schema_version("evolve") == 2
     assert db.kv_get("evolve_settings")["enabled"] is True
     assert env.databases.peek(env.b) is None
 
@@ -484,6 +494,71 @@ async def test_evolve_report_tool_needs_a_pane_and_reaches_the_service(env, monk
         pane = ctx({"pane": "p-1", "t": plan_mcp_wiring.caller_token()})
         assert (await plan_mcp.evolve_report("r1", "ok", "s", pane, tokens=5))["ok"] is True
         assert seen == [("p-1", {"run_id": "r1", "status": "ok", "summary": "s", "commits": None,
-                                 "proposals": None, "panes": None, "tokens": 5})]
+                                 "proposals": None, "panes": None, "tokens": 5,
+                                 "run_token": ""})]
     finally:
         agent_messaging._reset_for_test()
+
+
+# ── authorization (security review 1) ──────────────────────────────────────
+
+
+def _run_token(task: str) -> str:
+    import re as _re
+
+    match = _re.search(r'run_token="([0-9a-f]{32})"', task)
+    assert match, "the task must carry the run token"
+    return match.group(1)
+
+
+async def test_report_needs_the_runs_own_token(env) -> None:
+    await enable(env, env.a)
+    await env.service.start_run(env.a, "manual")
+    run = (await env.service.get(env.a))["running"]
+    token = _run_token(env.host.opened[0]["task"])
+    # The pane id alone is not enough: MCP pane identity is a shared token plus
+    # a pane id the caller names itself.
+    for forged in ({}, {"run_token": ""}, {"run_token": "0" * 32}):
+        answer = await env.service.report("p-run", {"run_id": run["id"], "status": "ok", "summary": "s", **forged})
+        assert answer["ok"] is False, forged
+    await drain(env)
+    assert env.host.actions == []  # nothing reclaimed on a forged report
+    assert (await env.service.get(env.a))["running"]["status"] == "running"
+    ok = await env.service.report("p-run", {"run_id": run["id"], "status": "ok", "summary": "s", "run_token": token})
+    assert ok["ok"] is True
+    assert token not in json.dumps(await env.service.get(env.a))  # never handed back out
+
+
+async def test_another_workspaces_pane_cannot_report_or_see_the_run(env) -> None:
+    await enable(env, env.a)
+    await env.service.start_run(env.a, "manual")
+    run = (await env.service.get(env.a))["running"]
+    token = _run_token(env.host.opened[0]["task"])
+    env.host.panes["b-pane"] = SimpleNamespace(pane_id="b-pane", name="b", workspace_path=env.b,
+                                               spawned_by="p-run", busy=False)
+    answer = await env.service.report("b-pane", {"run_id": run["id"], "status": "ok", "summary": "s", "run_token": token})
+    assert answer["ok"] is False
+
+
+def test_agents_get_no_tool_that_changes_evolve_settings() -> None:
+    from agent_team_backend.mcp_server import server as plan_mcp
+
+    names = {tool.name for tool in plan_mcp.server._tool_manager.list_tools()}  # noqa: SLF001
+    assert {n for n in names if n.startswith("evolve")} == {"evolve_report"}
+
+
+def test_a_v1_runs_table_upgrades_in_place(tmp_path: Path) -> None:
+    ws = tmp_path / "old"
+    ws.mkdir()
+    databases = WorkspaceDatabases()
+    try:
+        db = databases.get(str(ws))
+        db.migrate("evolve", 1, ev._create_schema)  # noqa: SLF001 — what the first build wrote
+        with db.transaction() as cur:
+            cur.execute("INSERT INTO evolve_runs (id, trigger, status, started_at) VALUES ('r0', 'manual', 'ok', 1)")
+        store = ev._Store(databases)  # noqa: SLF001
+        assert [r["id"] for r in store.runs(str(ws))] == ["r0"]
+        assert db.schema_version("evolve") == 2
+        assert store.token_matches(str(ws), "r0", "anything") is False  # an old run has no token
+    finally:
+        databases.close_all()

@@ -7915,11 +7915,14 @@ async def evolve_report(
     proposals: list[dict[str, Any]] | None = None,
     panes: list[str] | None = None,
     tokens: int | None = None,
+    run_token: str = "",
 ) -> dict[str, Any]:
     """Finish a Navide self-evolution run. Only for a pane Navide opened (or
     sent) a self-evolution task to: its task names the run_id.
 
-    Call it exactly once, as the last step. `status` is "ok" or "error";
+    Call it exactly once, as the last step, with the run_id and run_token
+    your task gave you — a report without the matching token is refused.
+    `status` is "ok" or "error";
     `summary` 3–8 lines for the user (mask secrets first); `commits` is
     [{hash, title}] of fixes now on the main branch; `proposals` is
     [{rel_path, name}] of plans created; `panes` the names of panes you opened;
@@ -7937,7 +7940,7 @@ async def evolve_report(
 
     return await evolve_service.get_service().report(caller.pane_id, {
         "run_id": run_id, "status": status, "summary": summary, "commits": commits,
-        "proposals": proposals, "panes": panes, "tokens": tokens,
+        "proposals": proposals, "panes": panes, "tokens": tokens, "run_token": run_token,
     })
 
 
