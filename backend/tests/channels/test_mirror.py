@@ -393,7 +393,7 @@ async def test_without_threads_child_results_ride_the_parent_chat_with_a_prefix(
     assert [b for b in env.store.bindings() if b.auto] == []
     long_text = "T" * 900
     env.turn_complete("pane-2", long_text)
-    await _until(lambda: any(t.startswith("↳ tester ✅ 完成 · 🖥 本機\n") for t in env.tg.texts()))
+    await _until(lambda: any(t.startswith(f"{mirror_mod.child_tag('tester')} ✅ 完成 · 🖥 本機\n") for t in env.tg.texts()))
     # Full verbosity: the whole text, chunked by the platform limit rather than summarised.
     assert sum(t.count("T") for t in env.tg.texts()) == 900
     _set_verbosity(env, "standard")
@@ -416,7 +416,7 @@ async def test_topic_creation_failure_falls_back_to_prefixed_messages(env: Env) 
     await env.m.mirror.sync_lineage()
     assert [b for b in env.store.bindings() if b.auto] == []
     env.turn_complete("pane-2", "still reported")
-    await _until(lambda: _said(env, "↳ tester ✅ 完成"))
+    await _until(lambda: _said(env, f"{mirror_mod.child_tag('tester')} ✅ 完成"))
 
 
 async def test_a_chat_that_is_not_a_forum_is_asked_for_a_topic_only_once(env: Env, caplog) -> None:
@@ -439,7 +439,7 @@ async def test_a_chat_that_is_not_a_forum_is_asked_for_a_topic_only_once(env: En
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "topic" in r.getMessage()]
     assert len(warnings) == 1
     env.turn_complete("pane-3", "still reported")
-    await _until(lambda: _said(env, "↳ linter ✅ 完成"))
+    await _until(lambda: _said(env, f"{mirror_mod.child_tag('linter')} ✅ 完成"))
 
 
 def _flaky_forum(env: Env) -> list[str]:
@@ -611,7 +611,7 @@ async def test_at_name_routes_to_the_child_and_its_reply_carries_the_prefix(env:
     env.fake.verdicts["k1"] = {"status": "delivered"}
     await asyncio.sleep(0.1)
     env.turn_complete("pane-2", "e2e green")
-    await _until(lambda: "↳ tester ✅ 完成 · 💬 alice\ne2e green" in env.tg.texts())
+    await _until(lambda: f"{mirror_mod.child_tag('tester')} ✅ 完成 · 💬 alice\ne2e green" in env.tg.texts())
 
 
 async def test_reply_to_a_childs_message_routes_to_that_child(env: Env) -> None:
@@ -718,3 +718,29 @@ async def test_long_local_prompts_are_mirrored_whole_up_to_the_cap(env: Env) -> 
     assert not _said(env, "完整內容請在 Navide 查看")
     env.m.mirror.on_local_prompt("pane-1", "x" * mirror_mod.LOCAL_PROMPT_MAX)
     await _until(lambda: _said(env, "完整內容請在 Navide 查看"))
+
+
+# --- C1: telling children apart in a chat without topics -------------------------------
+
+
+def test_a_child_tag_has_a_colour_that_stays_with_its_name() -> None:
+    tag = mirror_mod.child_tag("tester")
+    assert tag.startswith("↳ ") and tag.endswith(" tester")
+    assert tag.split(" ")[1] in mirror_mod.CHILD_COLOURS
+    assert mirror_mod.child_tag("tester") == tag
+    tags = {mirror_mod.child_tag(name).split(" ")[1] for name in ("a", "b", "c", "d", "e", "f", "g", "h", "i")}
+    assert len(tags) > 1
+
+
+async def test_a_chat_without_topics_is_told_once_how_to_get_them(env: Env) -> None:
+    async def not_a_forum(chat_id: str, title: str) -> Location:
+        raise ChannelSendError("這個群組沒有開啟主題功能 (the chat is not a forum)")
+
+    env.tg.create_location = not_a_forum  # type: ignore[method-assign]
+    panes = _use_directory(env, [_pane("pane-1", "main"), _pane("pane-2", "tester", "pane-1")])
+    await env.m.mirror.sync_lineage()
+    panes.append(_pane("pane-3", "linter", "pane-1"))
+    await env.m.mirror.sync_lineage()
+    await _until(lambda: _said(env, "主題"))
+    await env.m.wait_idle()
+    assert sum(mirror_mod.MSG_NO_TOPICS in t for t in env.tg.texts()) == 1

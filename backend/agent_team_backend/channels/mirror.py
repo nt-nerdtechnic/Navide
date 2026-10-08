@@ -52,6 +52,8 @@ DEFAULT_RATE_PER_MIN = 60
 DEFAULT_BURST = 5
 
 MSG_CHILD_OPENED = "🤖 {parent} 開了子視窗「{child}」"
+MSG_NO_TOPICS = ("💡 這個群組沒有開啟「主題」功能，子視窗的訊息會以「↳ 色塊 名稱」標在這裡。"
+                 "到群組設定開啟「主題」（Topics）後，之後開的子視窗會各有一個話題。")
 MSG_CHILD_TOPIC = "🔗 這個話題連接子視窗「{child}」（{parent} 開的），在這裡傳的訊息會送進該 pane；傳 stop 可以中斷。"
 MSG_CHILD_CLOSED = "🔌 ↳ {child} 已關閉，話題已釋放"
 MSG_CHILD_GONE = "🔌 子視窗「{child}」已關閉。"
@@ -91,8 +93,18 @@ def source_pane(name: str) -> str:
     return f"🤖 {name}"
 
 
+# One colour a child keeps, so panes riding a chat without topics can be told apart.
+CHILD_COLOURS = ("🟦", "🟩", "🟧", "🟪", "🟥", "🟨", "🟫", "⬛")
+
+
+def child_tag(name: str) -> str:
+    """``↳ <colour> <name>``: the prefix of a child's message in its ancestor's chat."""
+    colour = CHILD_COLOURS[hashlib.sha256(name.encode()).digest()[0] % len(CHILD_COLOURS)]
+    return f"↳ {colour} {name}"
+
+
 def result_text(source: str, text: str, child: str = "") -> str:
-    head = f"{'↳ ' + child + ' ' if child else ''}✅ 完成 · {source}"
+    head = f"{child_tag(child) + ' ' if child else ''}✅ 完成 · {source}"
     return f"{head}\n{text}" if text else head
 
 
@@ -391,6 +403,7 @@ class Mirror:
         # Chats that said they cannot have topics (a Telegram group that is not a
         # forum), mapped to when they may be asked again.
         self._no_topic_chats: dict[str, float] = {}
+        self._told_no_topics: set[str] = set()
         self._rows_seen: OrderedDict[str, None] = OrderedDict()
         self._delegations: OrderedDict[str, float] = OrderedDict()
         self._sync_task: asyncio.Task[None] | None = None
@@ -484,7 +497,7 @@ class Mirror:
         return await box.submit(redact.redact_text(text), owner, buttons)
 
     def label(self, route: Route, text: str) -> str:
-        return f"↳ {route.child} {text}" if route.child else text
+        return f"{child_tag(route.child)} {text}" if route.child else text
 
     # --- prompts and delegation -----------------------------------------------------
 
@@ -676,6 +689,10 @@ class Mirror:
                     log.info("channels: child topic for %s failed again: %s", cname, exc)
                 elif "not a forum" in str(exc).lower():
                     self._no_topic_chats[chat] = now + NO_TOPIC_RETRY_S
+                    if chat not in self._told_no_topics:
+                        # Once a backend run: the chat learns why its children share it.
+                        self._told_no_topics.add(chat)
+                        self.post(root.location(), MSG_NO_TOPICS, root.pane_id)
                     log.warning("channels: child topic for %s failed: %s; children of this chat use "
                                 "prefixed messages; topics are tried again in %d minutes",
                                 cname, exc, NO_TOPIC_RETRY_S // 60)
