@@ -367,6 +367,36 @@ class McpScope:
         return True
 
 
+#: What a conflict preview shows in place of an MCP env or header value.
+MASKED_VALUE = "••••••"
+#: The MCP record fields whose values are secrets (settings_bundle blanks the
+#: same two on export).
+_MCP_SECRET_FIELDS = ("env", "headers")
+
+
+def _mask_mcp(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    for field_name in _MCP_SECRET_FIELDS:
+        values = out.get(field_name)
+        if isinstance(values, dict):
+            out[field_name] = {str(k): MASKED_VALUE for k in values}
+    return out
+
+
+def conflict_preview(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Conflict rows as a window may show them: MCP env and header values
+    masked, names kept. The rows themselves (``SyncStore.conflict_payloads``)
+    keep the real values, which ``resolve`` writes back."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("scope") == McpScope.scope and not row.get("sealed"):
+            row = {**row, "local": _mask_mcp(row.get("local")), "remote": _mask_mcp(row.get("remote"))}
+        out.append(row)
+    return out
+
+
 #: Where a synced skill decision waits when the skill itself is not here yet.
 SKILLS_INTENT_KEY = "sync-skills-intent"
 

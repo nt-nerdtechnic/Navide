@@ -305,3 +305,26 @@ async def test_a_synced_mcp_change_reloads_the_servers_and_tells_the_windows(tmp
     await b.sync()  # nothing new: no reload
     await asyncio.sleep(0.05)
     assert len(changed) == 1
+
+
+async def test_an_mcp_conflict_preview_never_shows_env_or_header_values(tmp_path, account_key, monkeypatch):
+    from agent_team_backend import server_link
+    from agent_team_backend.mcp_settings import MCPSettingsStore
+
+    server = StrictServer()
+    a_store, b_store = MCPSettingsStore(tmp_path / "a.json"), MCPSettingsStore(tmp_path / "b.json")
+    a_store.replace_servers([{**_mcp("api"), "env": {"API_KEY": "sk-from-a"}}])
+    a = Dev(tmp_path, server, "A", monkeypatch, sync_scopes.McpScope(), mcp_settings_store=a_store)
+    b = Dev(tmp_path, server, "B", monkeypatch, sync_scopes.McpScope(), mcp_settings_store=b_store)
+    await a.sync(); await b.sync()
+    a.use(); a_store.replace_servers([{**_mcp("api"), "env": {"API_KEY": "sk-new-a"}}])
+    b.use(); b_store.replace_servers([{**_mcp("api"), "env": {"API_KEY": "sk-new-b"}}])
+    await a.sync(); await b.sync()
+    monkeypatch.setattr(app, "sync_store", b.store)
+    rows = server_link.sync_conflicts("mcp")
+    assert rows and rows[0]["itemId"] == "api"
+    text = repr(rows)
+    assert "sk-" not in text
+    assert rows[0]["local"]["env"] == {"API_KEY": sync_scopes.MASKED_VALUE}
+    # resolve still works from the real payloads
+    assert b.store.conflict_payloads("mcp", "api")["local"]["env"] == {"API_KEY": "sk-new-b"}

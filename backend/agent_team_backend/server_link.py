@@ -3912,10 +3912,11 @@ async def sync_pull_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
 
 
 def sync_conflicts(scope: str = "") -> list[dict[str, Any]]:
-    """Unresolved conflicts, readable whether or not the link is up."""
-    from . import app
+    """Unresolved conflicts, readable whether or not the link is up. MCP
+    secrets are masked (``sync_scopes.conflict_preview``)."""
+    from . import app, sync_scopes
 
-    return app.sync_store.conflicts(scope or None)
+    return sync_scopes.conflict_preview(app.sync_store.conflicts(scope or None))
 
 
 def resolve_sync_conflict(scope: str, item_id: str, keep: str) -> None:
