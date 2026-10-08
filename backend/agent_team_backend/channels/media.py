@@ -160,13 +160,14 @@ def _system_dirs() -> list[Path]:
 def _app_dirs() -> tuple[list[Path], list[Path]]:
     """Navide's own data folders (credential vault state, device keys, hook auth, the
     renderer's storage), never sent from, and the folders inside them that hold what a
-    pane is meant to send: received attachments and converted PDFs."""
+    pane is meant to send: received attachments, converted PDFs and the copies of files
+    the user dragged in (the renderer's dropped-files)."""
     from .. import osplat
     from ..applog import app_data_dir
     from .pdf import pdf_root
 
-    data = app_data_dir()
-    return [data, osplat.paths.app_support_dir("Agent-Team")], [media_root(data), pdf_root(data)]
+    data, user_data = app_data_dir(), osplat.paths.app_support_dir("Agent-Team")
+    return [data, user_data], [media_root(data), pdf_root(data), user_data / "dropped-files"]
 
 
 def _scope(real: Path) -> tuple[str, ...]:

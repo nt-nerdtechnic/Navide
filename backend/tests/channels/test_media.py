@@ -530,3 +530,13 @@ def test_navides_own_data_is_refused_but_its_outbound_folders_are_not(tmp_path: 
         assert media.resolve_outbound(str(_file(data / rel))) == (None, "system"), rel
     for f in (_file(media.media_root(data) / "pane-1" / "ab-x.png"), _file(pdf.pdf_root(data) / "p" / "a.pdf")):
         assert media.resolve_outbound(str(f)) == (f.resolve(), "")
+
+
+def test_files_the_user_dropped_in_may_be_sent_but_not_their_neighbours(tmp_path: Path, monkeypatch) -> None:
+    """The renderer's userData (~/.config/Agent-Team on Linux) is Navide's too; only its
+    dropped-files, the copies of what the user dragged in, may go."""
+    user_data = tmp_path / "userData"
+    monkeypatch.setattr(osplat.paths, "app_support_dir", lambda name, **_kw: user_data / name)
+    dropped = _file(user_data / "Agent-Team" / "dropped-files" / "123-shot.png")
+    assert media.resolve_outbound(str(dropped)) == (dropped.resolve(), "")
+    assert media.resolve_outbound(str(_file(user_data / "Agent-Team" / "Local State"))) == (None, "system")
