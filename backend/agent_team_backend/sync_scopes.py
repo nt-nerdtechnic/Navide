@@ -700,6 +700,38 @@ def skill_files_scope() -> SkillFilesScope:
     return _skill_files
 
 
+#: The characters a memory item id keeps as they are; the protocol's itemId
+#: pattern (``^[A-Za-z0-9._:@+-]{1,200}$``) allows these plus ``:@+``.
+_MEMORY_ID_PLAIN = re.compile(r"[A-Za-z0-9._-]")
+_MEMORY_ID_MAX = 200
+
+
+def memory_item_id(relative: str) -> str:
+    """The wire id of the instruction file at ``relative`` (to the home).
+
+    ``/`` becomes ``:``, and every other character outside ``[A-Za-z0-9._-]``
+    — ``:``, ``@`` and ``+`` included — becomes ``+XX`` per UTF-8 byte, so the
+    mapping is one-to-one and ``.claude/CLAUDE.md`` still reads as
+    ``.claude:CLAUDE.md``. An id that would pass the protocol's 200-character
+    limit is a digest of the path instead. Ids are only ever matched against
+    this machine's own candidates (``MemoryScope._resolve``), never decoded.
+    """
+    out: list[str] = []
+    for ch in relative:
+        if ch == "/":
+            out.append(":")
+        elif _MEMORY_ID_PLAIN.fullmatch(ch):
+            out.append(ch)
+        else:
+            out.extend(f"+{b:02X}" for b in ch.encode("utf-8"))
+    encoded = "".join(out)
+    if len(encoded) <= _MEMORY_ID_MAX:
+        return encoded
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(relative.encode("utf-8")).hexdigest()
+
+
 class MemoryScope:
     """User-scope instruction files — ``~/.claude/CLAUDE.md`` and its siblings.
 
@@ -708,7 +740,9 @@ class MemoryScope:
     systems writing one file is how both of them end up wrong.
 
     The item id is the path *relative to the home directory*, so the same file
-    is the same item on a machine whose home is somewhere else entirely.
+    is the same item on a machine whose home is somewhere else entirely —
+    encoded by ``memory_item_id``, because the protocol refuses a ``/`` in an
+    id. ``snapshot_by_path`` keeps the plain paths for the settings bundle.
     """
 
     scope = "memory"
@@ -723,6 +757,10 @@ class MemoryScope:
         }
 
     def snapshot(self) -> dict[str, Any]:
+        return {memory_item_id(rel): payload for rel, payload in self.snapshot_by_path().items()}
+
+    def snapshot_by_path(self) -> dict[str, Any]:
+        """``snapshot``, keyed by the path relative to the home."""
         from . import native_memory
 
         out: dict[str, Any] = {}
@@ -760,11 +798,15 @@ class MemoryScope:
 
     @staticmethod
     def _resolve(relative: str) -> str | None:
-        """The absolute path this machine keeps ``relative`` at, if it knows one."""
+        """The absolute path this machine keeps ``relative`` at, if it knows one.
+
+        ``relative`` is a wire id (``memory_item_id``) or, from a settings
+        bundle, the plain path.
+        """
         from . import native_memory
 
         for path, (scope, rel, _readers, _canonical) in native_memory.candidates().items():
-            if scope == native_memory.USER_SCOPE and rel == relative:
+            if scope == native_memory.USER_SCOPE and relative in (rel, memory_item_id(rel)):
                 return str(path)
         return None
 

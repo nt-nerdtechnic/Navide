@@ -525,7 +525,7 @@ def test_memory_scope_lists_user_scope_files_only(monkeypatch):
     monkeypatch.setattr(native_memory, "read", lambda path, *a, **k: {"text": f"text of {path}"})
 
     snap = scopes.MemoryScope().snapshot()
-    assert set(snap) == {".claude/CLAUDE.md"}
+    assert set(snap) == {".claude:CLAUDE.md"}
 
 
 def test_memory_scope_refuses_to_delete_a_users_file(monkeypatch):
