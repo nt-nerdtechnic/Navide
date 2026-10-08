@@ -1144,6 +1144,10 @@ class SyncEngine:
                 key = ""
         else:
             key = self._signing_key_for(device)
+        if device and device == self._device_id() and not str(raw.get("sig") or ""):
+            # This release signs everything it writes, so an unsigned row that
+            # names this machine was not written by it.
+            return _ORIGIN_FORGED
         if not key or not str(raw.get("sig") or ""):
             # No key to check against — or no signature to check: releases up
             # to 0.2.3 did not sign. Either way nothing proves who wrote it,

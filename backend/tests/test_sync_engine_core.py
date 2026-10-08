@@ -981,3 +981,15 @@ async def test_a_pending_delete_survives_a_round_cut_short(tmp_path, account_key
     assert "z" not in b.adapter.items
     assert server.rows[("prompts", "z")]["deleted"] == 1
     assert b.store.conflict_ids("prompts") == set()
+
+
+async def test_an_unsigned_record_claiming_to_be_ours_is_dropped(tmp_path, account_key):
+    # R-A3: this release always signs; an unsigned "own" row is not ours.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}})
+    await b.sync()
+    before = b.store.state("prompts", "x")
+    _unsigned(server, "x", None, device="dev-b", deleted=True)
+    result = await b.sync()
+    assert result["refused"] == ["x"]
+    assert b.store.state("prompts", "x") == before
