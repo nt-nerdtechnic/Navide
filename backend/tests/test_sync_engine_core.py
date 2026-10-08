@@ -420,3 +420,88 @@ async def test_an_explicit_pull_the_adapter_refuses_says_refused(tmp_path, accou
     _Refusing(b, {"y"})
     assert await b.engine.pull_items("prompts", ["y"]) == [{"itemId": "y", "result": "refused"}]
     assert b.store.state("prompts", "y") is None
+
+
+# ── S-6: one item that cannot land must not hold the scope ───────────────────
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _Stuck:
+    """An adapter apply that defers chosen items until told otherwise."""
+
+    def __init__(self, device: Device, stuck: set[str]) -> None:
+        self.inner = device.adapter.apply
+        self.stuck = set(stuck)
+        self.calls: list[str] = []
+        device.adapter.apply = self.apply
+
+    def apply(self, item_id, payload):
+        self.calls.append(item_id)
+        if item_id in self.stuck:
+            raise sync_engine.DeferItem(item_id)
+        return self.inner(item_id, payload)
+
+
+async def _stuck_pair(tmp_path):
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"stuck": {"v": 1}})
+    await a.sync()
+    a.adapter.items["after"] = {"v": 2}
+    await a.sync()
+    b = Device(tmp_path, server, "dev-b")
+    clock = _Clock()
+    b.engine._clock = clock
+    return server, a, b, clock
+
+
+async def test_a_deferred_item_does_not_stop_the_rows_behind_it(tmp_path, account_key):
+    _server, _a, b, _clock = await _stuck_pair(tmp_path)
+    _Stuck(b, {"stuck"})
+    result = await b.sync()
+    assert b.adapter.items == {"after": {"v": 2}}
+    assert result["held"] == ["stuck"]
+    # The read position stays short of it, so a restart still retries it.
+    assert b.store.cursor("prompts") == 0
+
+
+async def test_a_deferred_item_is_retried_with_backoff_not_every_round(tmp_path, account_key):
+    _server, _a, b, clock = await _stuck_pair(tmp_path)
+    stuck = _Stuck(b, {"stuck"})
+    await b.sync()
+    await b.sync()  # the first deferral is retried at once
+    assert stuck.calls.count("stuck") == 2
+    await b.sync()  # the second one waits
+    assert stuck.calls.count("stuck") == 2
+    clock.now += 3600
+    await b.sync()
+    assert stuck.calls.count("stuck") == 3
+
+
+async def test_an_item_deferred_too_often_is_marked_given_up_and_still_retried(tmp_path, account_key):
+    _server, _a, b, clock = await _stuck_pair(tmp_path)
+    stuck = _Stuck(b, {"stuck"})
+    result = None
+    for _ in range(sync_engine.DEFER_GIVE_UP_ATTEMPTS):
+        result = await b.sync()
+        clock.now += 3600
+    assert result["gaveUp"] == ["stuck"] and "stuck" in result["held"]
+    stuck.stuck.clear()
+    result = await b.sync()
+    assert b.adapter.items["stuck"] == {"v": 1}
+    assert result["held"] == [] and result["gaveUp"] == []
+    assert b.store.cursor("prompts") == 2
+
+
+async def test_a_held_item_survives_a_restart(tmp_path, account_key):
+    server, _a, b, _clock = await _stuck_pair(tmp_path)
+    _Stuck(b, {"stuck"})
+    await b.sync()
+    restarted = Device(tmp_path, server, "dev-b")  # same db file, fresh engine
+    restarted.adapter.items = dict(b.adapter.items)
+    await restarted.sync()
+    assert restarted.adapter.items["stuck"] == {"v": 1}

@@ -75,6 +75,14 @@ MAX_PUSH_BYTES = 768 * 1024
 #: the client asks for no more rows than this budget holds at the largest row
 #: size it expects. A guess first, then the largest row actually seen.
 PULL_FRAME_BUDGET = 768 * 1024
+#: An adapter's ``DeferItem`` (files still downloading) is retried at once the
+#: first time, then with an exponential backoff from the base to the cap, and
+#: reported as given up —
+#: still retried — after this many attempts or this long.
+DEFER_BACKOFF_BASE_S = 30.0
+DEFER_BACKOFF_MAX_S = 15 * 60.0
+DEFER_GIVE_UP_ATTEMPTS = 5
+DEFER_GIVE_UP_AFTER_S = 30 * 60.0
 #: The row size a scope's first page is sized for. Instruction files and
 #: inline skills run up to the record limit, so those scopes page one row at a
 #: time until their rows are seen; prompt and MCP records are small.
@@ -541,6 +549,12 @@ class SyncEngine:
         self._last: dict[str, dict[str, Any]] = {}
         #: Per scope, the largest pulled row seen in this process, in bytes.
         self._row_bytes: dict[str, int] = {}
+        #: Items whose ``apply`` deferred, by (scope, item id): attempts, first
+        #: and next-allowed time. In memory on purpose: the stored cursor
+        #: already keeps a held row coming back across restarts, so all that
+        #: is lost on a restart is the backoff, which then starts over.
+        self._defers: dict[tuple[str, str], dict[str, float]] = {}
+        self._clock: Callable[[], float] = time.monotonic
         self._adapters: dict[str, ScopeAdapter] = {}
         #: Per scope, the highest cursor a push reply may move to while a
         #: pulled row is waiting for its key. Set by ``_pull``, honoured by
@@ -626,6 +640,9 @@ class SyncEngine:
             "held": list(notes.get("held", [])),
             "refused": list(notes.get("refused", [])),
             "tooLarge": list(notes.get("tooLarge", [])),
+            # Held items that have deferred too often or too long; a subset
+            # of ``held``, still retried.
+            "gaveUp": list(notes.get("gaveUp", [])),
             **outcome,
             "at": now_iso(),
         }
@@ -648,6 +665,10 @@ class SyncEngine:
     def _kick(self, scope: str) -> None:
         """Run one more round of *scope* soon. For an adapter whose background
         work (a finished download) has made a held record appliable."""
+        # The adapter says its files are here: retry now, not at the end of
+        # the backoff a deferral earned while they were on their way.
+        for key in [k for k in self._defers if k[0] == scope]:
+            self._defers[key]["next"] = 0.0
         task = asyncio.get_running_loop().create_task(self.sync(scope))
         self._kicked.add(task)
         task.add_done_callback(self._kicked.discard)
@@ -668,8 +689,12 @@ class SyncEngine:
         applied = 0
         self._cursor_barrier.pop(scope, None)
         reset = False
+        #: Paging position, kept apart from the stored cursor: a held row stops
+        #: the stored cursor just short of it, but not the reading of the rows
+        #: behind it — one item that cannot land must not hold the whole scope.
+        since = self._store.cursor(scope)
+        barrier: int | None = None
         while True:
-            since = self._store.cursor(scope)
             reply = _payload(
                 await self._request(
                     "sync.pull", {"scope": scope, "since": since, "limit": self._pull_limit(scope)}
@@ -687,6 +712,7 @@ class SyncEngine:
                 )
                 self._store.forget(scope)
                 reset = True
+                since = 0
                 continue
             items = reply.get("items")
             items = items if isinstance(items, list) else []
@@ -700,20 +726,18 @@ class SyncEngine:
             # only the last page may take the server's maximum.
             highest = max((_rev_of(raw) for raw in items), default=since)
             cursor = highest if reply.get("more") else max(highest, int(reply.get("cursor") or since))
-            if held_rev is not None:
+            if held_rev is not None and barrier is None:
                 # A record sealed under a key this machine has not been handed
-                # yet. The cursor stops just short of it, so the next round —
-                # after a paired device sends the ring — reads it again; the
-                # rows behind it in this page were not applied either, so
-                # nothing is skipped past. Once per round, not a retry loop.
-                cursor = max(since, held_rev - 1)
-                if cursor > since:
-                    self._store.set_cursor(scope, cursor)
-                self._cursor_barrier[scope] = cursor
+                # yet, or whose files are still on their way. The stored cursor
+                # stops just short of it for good — across restarts too — so a
+                # later round reads it again; the rows behind it are applied
+                # now and simply re-read (as no-ops) until it lands.
+                barrier = max(0, held_rev - 1)
                 log.info("sync.pull on %s is holding at rev %d (a newer key, or files in transit)", scope, held_rev)
-                break
-            if cursor > since:
-                self._store.set_cursor(scope, cursor)
+            stored = self._store.cursor(scope)
+            durable = cursor if barrier is None else min(cursor, barrier)
+            if durable > stored:
+                self._store.set_cursor(scope, durable)
             if not reply.get("more"):
                 break
             if cursor <= since:
@@ -721,6 +745,9 @@ class SyncEngine:
                 # than loop forever on a server that disagrees with itself.
                 log.warning("sync.pull on %s made no progress; stopping this round", scope)
                 break
+            since = cursor
+        if barrier is not None:
+            self._cursor_barrier[scope] = max(barrier, self._store.cursor(scope))
         return applied
 
     def _apply_page(
@@ -728,20 +755,28 @@ class SyncEngine:
     ) -> tuple[int, int | None]:
         """Apply one pull page. Runs in a worker thread; touches disk freely.
 
-        Returns how many rows were applied and, when a row named a key this
-        machine does not hold, that row's rev — the page stops there.
+        Returns how many rows were applied and the lowest rev of a row that
+        is held — a key this machine lacks, or files still on their way — or
+        None. A held row does not stop the rows behind it.
         """
         snapshot = adapter.snapshot()
         blocked = self._store.conflict_ids(adapter.scope)
         applied = 0
+        held: int | None = None
         for raw in sorted(items, key=_rev_of):
             try:
                 if self._apply_one(adapter, raw, snapshot, blocked):
                     applied += 1
             except _HoldPull as hold:
                 self._note(adapter.scope, "held", hold.item_id)
-                return applied, hold.rev
-        return applied, None
+                if self._gave_up(adapter.scope, hold.item_id):
+                    self._note(adapter.scope, "gaveUp", hold.item_id)
+                held = hold.rev if held is None else min(held, hold.rev)
+                if _sensitive(adapter):
+                    # A secret scope keeps the stricter rule: nothing behind a
+                    # held row is applied until it lands.
+                    break
+        return applied, held
 
     def _apply_one(
         self,
@@ -848,9 +883,13 @@ class SyncEngine:
             # does not hold it — a credential switched off on this device.
             # The rev is still recorded so the row is not re-read, but the
             # agreed hash stays empty: this machine holds nothing for it.
+            if self._backing_off(scope, item_id):
+                raise _HoldPull(rev, item_id)
             try:
                 held = adapter.apply(item_id, remote) is not False
+                self._defers.pop((scope, item_id), None)
             except DeferItem:
+                self._deferred(scope, item_id)
                 raise _HoldPull(rev, item_id) from None
             except Exception as err:  # noqa: BLE001 - a refusal, see below
                 if _sensitive(adapter):
@@ -876,6 +915,31 @@ class SyncEngine:
             sealed_kid=_kid_of(body) if (held and not deleted) else "",
         )
         return held
+
+    def _backing_off(self, scope: str, item_id: str) -> bool:
+        entry = self._defers.get((scope, item_id))
+        return entry is not None and self._clock() < entry["next"]
+
+    def _deferred(self, scope: str, item_id: str) -> None:
+        now = self._clock()
+        entry = self._defers.setdefault((scope, item_id), {"attempts": 0, "first": now, "next": now})
+        entry["attempts"] += 1
+        # The first deferral is free: it is usually "the download just
+        # started", and the next round should simply look again.
+        attempts = int(entry["attempts"])
+        delay = 0.0 if attempts < 2 else min(DEFER_BACKOFF_BASE_S * 2 ** (attempts - 2), DEFER_BACKOFF_MAX_S)
+        entry["next"] = now + delay
+
+    def _gave_up(self, scope: str, item_id: str) -> bool:
+        """Whether an item has deferred long or often enough to say so: it is
+        still retried (on the longest backoff), only reported as stuck."""
+        entry = self._defers.get((scope, item_id))
+        if entry is None:
+            return False
+        return (
+            entry["attempts"] >= DEFER_GIVE_UP_ATTEMPTS
+            or self._clock() - entry["first"] >= DEFER_GIVE_UP_AFTER_S
+        )
 
     def _pull_limit(self, scope: str) -> int:
         """How many rows to ask one pull page for; see ``PULL_FRAME_BUDGET``."""
