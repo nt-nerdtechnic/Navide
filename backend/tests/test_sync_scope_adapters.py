@@ -625,3 +625,16 @@ async def test_an_mcp_conflict_preview_says_which_masked_values_differ(tmp_path,
                   "remote": {"name": "web", "url": "https://x", "headers": {"Authorization": "t0"}}}
     (preview,) = sync_scopes.conflict_preview([remote_row])
     assert preview["masked"] == {"headers": {"Authorization": "same", "X-Old": "local-only"}}
+
+
+def test_a_stale_round_does_not_write_detach_marks(monkeypatch):
+    """A round begun for the previous account (sync-core's round_is_current
+    says so) must not write its marks into the next account's settings."""
+    settings = FakeSettingsStore()
+    monkeypatch.setattr(app, "ui_settings_store", settings)
+    monkeypatch.setattr(sync_engine, "round_is_current", lambda: False, raising=False)
+    sync_scopes.detach("memory", ".claude:CLAUDE.md", {"text": "x"})
+    assert sync_scopes.DETACHED_KEY not in settings.doc
+    monkeypatch.setattr(sync_engine, "round_is_current", lambda: True, raising=False)
+    sync_scopes.detach("memory", ".claude:CLAUDE.md", {"text": "x"})
+    assert ".claude:CLAUDE.md" in settings.doc[sync_scopes.DETACHED_KEY]["memory"]

@@ -113,6 +113,11 @@ def _detached(scope: str) -> dict[str, str]:
 
 
 def _set_detached(scope: str, entries: dict[str, str]) -> None:
+    # sync-core's engine says whether this round was begun for the account
+    # signed in now; a build without it has no such rounds to worry about.
+    is_current = getattr(sync_engine, "round_is_current", None)
+    if is_current is not None and not is_current():
+        return  # a round begun for the previous account must not write its marks into the next one
     raw = _settings().get().get(DETACHED_KEY)
     doc = dict(raw) if isinstance(raw, dict) else {}
     if entries:
