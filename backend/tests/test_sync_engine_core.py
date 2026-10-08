@@ -218,7 +218,7 @@ async def test_a_failing_scope_is_reported_and_the_others_still_run(tmp_path, ac
     broken.snapshot = snapshot
     b.engine.register(broken)
     results = {r["scope"]: r for r in await b.engine.sync_all()}
-    assert results["mcp"]["ok"] is False and "disk on fire" in results["mcp"]["error"]
+    assert results["mcp"]["ok"] is False and "RuntimeError" in results["mcp"]["error"]
     assert results["prompts"]["ok"] is True and results["prompts"]["pushed"] == 1
     assert b.engine.last_results()["mcp"]["ok"] is False
 
@@ -847,8 +847,6 @@ async def test_a_second_reset_within_the_hour_is_refused_and_reported(tmp_path, 
 
 
 # ── security re-review (sync審-資安, round 2) ────────────────────────────────
-
-
 async def test_a_round_queued_across_an_account_switch_writes_nothing(tmp_path, account_key):
     # R-B1: it passed its checks under A, waited for the lock, and must not
     # then run under B's generation.
@@ -865,6 +863,61 @@ async def test_a_round_queued_across_an_account_switch_writes_nothing(tmp_path, 
     with pytest.raises(sync_engine.StaleRound):
         await queued
     assert server.rows == {}
+
+
+async def test_a_pending_delete_survives_a_too_large_stub(tmp_path, account_key):
+    # R-A1 (a): the re-read after a reset brings the deleted item back as a stub.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("x")
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        elif msg_type == "sync.pull":
+            reply["payload"]["items"] = [
+                dict(_stub("x", r["rev"]), deviceId=r["deviceId"]) if r["itemId"] == "x" else r
+                for r in reply["payload"]["items"]
+            ]
+        return reply
+
+    b.engine._request = request
+    await b.sync()
+    await b.sync()
+    assert server.rows[("prompts", "x")]["deleted"] == 1
+
+
+async def test_a_pending_delete_survives_a_round_cut_short(tmp_path, account_key, monkeypatch):
+    # R-A1 (b): the re-read stops at the page cap before reaching the item.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}, "z": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("z")  # rev 3: the last page of the re-read
+    monkeypatch.setattr(sync_engine, "PULL_PAGE", 1)
+    monkeypatch.setattr(sync_engine, "MAX_PULL_PAGES", 1)
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        return reply
+
+    b.engine._request = request
+    for _ in range(5):
+        await b.sync()
+    assert "z" not in b.adapter.items
+    assert server.rows[("prompts", "z")]["deleted"] == 1
+    assert b.store.conflict_ids("prompts") == set()
 
 
 async def test_push_items_waits_for_the_running_round_and_checks_the_generation(tmp_path, account_key):
@@ -928,61 +981,6 @@ async def test_a_stale_round_never_reaches_the_adapter(tmp_path, account_key):
     assert applied == []
 
 
-async def test_a_pending_delete_survives_a_too_large_stub(tmp_path, account_key):
-    # R-A1 (a): the re-read after a reset brings the deleted item back as a stub.
-    server = FakeServer()
-    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}})
-    await b.sync()
-    b.adapter.items.pop("x")
-    forward = b.engine._request
-    lied = False
-
-    async def request(msg_type, payload):
-        nonlocal lied
-        reply = await forward(msg_type, payload)
-        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
-            lied = True
-            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
-        elif msg_type == "sync.pull":
-            reply["payload"]["items"] = [
-                dict(_stub("x", r["rev"]), deviceId=r["deviceId"]) if r["itemId"] == "x" else r
-                for r in reply["payload"]["items"]
-            ]
-        return reply
-
-    b.engine._request = request
-    await b.sync()
-    await b.sync()
-    assert server.rows[("prompts", "x")]["deleted"] == 1
-
-
-async def test_a_pending_delete_survives_a_round_cut_short(tmp_path, account_key, monkeypatch):
-    # R-A1 (b): the re-read stops at the page cap before reaching the item.
-    server = FakeServer()
-    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}, "z": {"v": 1}})
-    await b.sync()
-    b.adapter.items.pop("z")  # rev 3: the last page of the re-read
-    monkeypatch.setattr(sync_engine, "PULL_PAGE", 1)
-    monkeypatch.setattr(sync_engine, "MAX_PULL_PAGES", 1)
-    forward = b.engine._request
-    lied = False
-
-    async def request(msg_type, payload):
-        nonlocal lied
-        reply = await forward(msg_type, payload)
-        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
-            lied = True
-            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
-        return reply
-
-    b.engine._request = request
-    for _ in range(5):
-        await b.sync()
-    assert "z" not in b.adapter.items
-    assert server.rows[("prompts", "z")]["deleted"] == 1
-    assert b.store.conflict_ids("prompts") == set()
-
-
 async def test_an_unsigned_record_claiming_to_be_ours_is_dropped(tmp_path, account_key):
     # R-A3: this release always signs; an unsigned "own" row is not ours.
     server = FakeServer()
@@ -993,3 +991,19 @@ async def test_an_unsigned_record_claiming_to_be_ours_is_dropped(tmp_path, accou
     result = await b.sync()
     assert result["refused"] == ["x"]
     assert b.store.state("prompts", "x") == before
+
+
+async def test_errors_are_reported_by_class_not_by_their_text(tmp_path, account_key, caplog):
+    # R-B5: an exception's text can carry what it failed on.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b")
+
+    def snapshot():
+        raise RuntimeError("token sk-live-123 in the way")
+
+    b.adapter.snapshot = snapshot
+    with caplog.at_level("WARNING"):
+        [result] = await b.engine.sync_all()
+    assert result["ok"] is False
+    assert "sk-live-123" not in result["error"] and "RuntimeError" in result["error"]
+    assert "sk-live-123" not in caplog.text

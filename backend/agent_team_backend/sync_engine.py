@@ -171,6 +171,18 @@ class ScopeAdapter(Protocol):
         """Write one incoming item in, or remove it when payload is None."""
 
 
+def _why(err: BaseException) -> str:
+    """What may be said about *err* in a log line or a round's result.
+
+    The engine's own errors carry fixed text it wrote; anything else is named
+    by its class only, because its message can quote what it failed on — a
+    prompt, an MCP header, a path.
+    """
+    if isinstance(err, SyncError):
+        return str(err)
+    return f"{type(err).__name__} (details withheld)"
+
+
 def _sensitive(adapter: Any) -> bool:
     return bool(getattr(adapter, "sensitive", False))
 
@@ -187,7 +199,7 @@ def _describe(adapter: Any, payload: Any) -> dict[str, Any] | None:
     try:
         out = fn(payload)
     except Exception as err:  # noqa: BLE001 - see docstring
-        log.warning("%s could not describe an item: %s", getattr(adapter, "scope", "?"), err)
+        log.warning("%s could not describe an item: %s", getattr(adapter, "scope", "?"), _why(err))
         return None
     return out if isinstance(out, dict) else None
 
@@ -510,7 +522,7 @@ class SyncStore:
             try:
                 described = redact(payload)
             except Exception as err:  # noqa: BLE001 - never leak by failing open
-                log.warning("%s could not describe a conflict half: %s", scope, err)
+                log.warning("%s could not describe a conflict half: %s", scope, _why(err))
             out.append(described if isinstance(described, dict) else dict(SEALED_PLACEHOLDER))
         return out[0], out[1]
 
@@ -659,7 +671,7 @@ class SyncEngine:
         try:
             result = await self._round(scope)
         except Exception as err:
-            self._finish(scope, {"ok": False, "error": str(err)})
+            self._finish(scope, {"ok": False, "error": _why(err)})
             raise
         return self._finish(scope, result)
 
@@ -742,7 +754,7 @@ class SyncEngine:
             try:
                 self._on_result(dict(result))
             except Exception as err:  # noqa: BLE001 - a listener cannot fail a round
-                log.warning("the sync result listener failed: %s", err)
+                log.warning("the sync result listener failed: %s", _why(err))
         return result
 
     def last_results(self) -> dict[str, dict[str, Any]]:
@@ -784,8 +796,8 @@ class SyncEngine:
             try:
                 results.append(await self.sync(scope))
             except Exception as err:  # noqa: BLE001 - one bad scope must not stop the rest
-                log.warning("sync of %s failed: %s", scope, err)
-                results.append(self._last.get(scope) or {"scope": scope, "ok": False, "error": str(err)})
+                log.warning("sync of %s failed: %s", scope, _why(err))
+                results.append(self._last.get(scope) or {"scope": scope, "ok": False, "error": _why(err)})
         return results
 
     # ── pull ────────────────────────────────────────────────────────────
@@ -844,7 +856,7 @@ class SyncEngine:
                 try:
                     await asyncio.to_thread(self._on_forget, scope)
                 except Exception as err:  # noqa: BLE001 - the reset itself happened
-                    log.warning("could not let go of %s's marks after a reset: %s", scope, err)
+                    log.warning("could not let go of %s's marks after a reset: %s", scope, _why(err))
                 reset = True
                 since = 0
                 continue
@@ -1001,8 +1013,8 @@ class SyncEngine:
                 # A credential that will not open is not a row to step over:
                 # skipping it would move the cursor past a secret this machine
                 # never received. The round fails and is retried whole.
-                raise SyncError(f"{scope}/{item_id} could not be opened: {err}") from err
-            log.warning("dropping %s/%s: %s", scope, item_id, err)
+                raise SyncError(f"{scope}/{item_id} could not be opened ({type(err).__name__})") from err
+            log.warning("dropping %s/%s: %s", scope, item_id, _why(err))
             return False
 
         state = self._store.state(scope, item_id)
@@ -1433,10 +1445,10 @@ class SyncEngine:
                     # Nothing is recorded; the item is pushed again next round
                     # and clashes again, readable or held by then.
                     raise SyncError(
-                        f"the conflicting copy of {scope}/{item_id} could not be opened: {err}"
+                        f"the conflicting copy of {scope}/{item_id} could not be opened ({type(err).__name__})"
                     ) from err
                 opened = False
-                log.warning("the conflicting copy of %s/%s did not open: %s", scope, item_id, err)
+                log.warning("the conflicting copy of %s/%s did not open: %s", scope, item_id, _why(err))
         remote_rev = int(entry.get("rev") or 0)
         if opened and remote is not None and digest(remote) == local_hash:
             # The server refused our write because another device got there
@@ -1476,7 +1488,9 @@ class SyncEngine:
         try:
             row = self._store.conflict_payloads(scope, item_id)
         except sync_keyring.KeyringError as err:
-            raise SyncError(f"the conflict on {scope}/{item_id} cannot be opened here: {err}") from err
+            raise SyncError(
+                f"the conflict on {scope}/{item_id} cannot be opened here ({type(err).__name__})"
+            ) from err
         if row is None:
             raise SyncError(f"no unresolved conflict for {scope}/{item_id}")
         if keep == KEEP_REMOTE:
@@ -1657,7 +1671,7 @@ class SyncEngine:
                 fingerprint = digest(payload)
                 meta = _describe(adapter, payload)
             except Exception as err:  # noqa: BLE001 - an unreadable record still lists
-                log.warning("the cloud copy of %s/%s did not open: %s", scope, item_id, err)
+                log.warning("the cloud copy of %s/%s did not open: %s", scope, item_id, _why(err))
                 readable = False
         out = {
             "present": not deleted,
@@ -1885,7 +1899,7 @@ def _adapter_ids(adapter: Any, name: str) -> list[str]:
     try:
         ids = fn()
     except Exception as err:  # noqa: BLE001 - see docstring
-        log.warning("%s could not list its %s items: %s", getattr(adapter, "scope", "?"), name, err)
+        log.warning("%s could not list its %s items: %s", getattr(adapter, "scope", "?"), name, _why(err))
         return []
     return [str(i) for i in ids if i] if isinstance(ids, (list, tuple, set)) else []
 
