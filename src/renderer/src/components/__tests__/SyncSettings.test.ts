@@ -594,7 +594,8 @@ describe('SyncSettings', () => {
     expect(html).not.toContain('inlinesecret10')
     const text = wrapper.text()
     expect(text).toContain('Authorization: ••••')
-    expect(text).toContain('X-Upstream: Bearer ••••')
+    // Any `Name: value` header loses its whole value (D2), Bearer included.
+    expect(text).toContain('X-Upstream: ••••')
   })
 
   // gaveUp is the part of held that has been deferred for long (5+ rounds or
