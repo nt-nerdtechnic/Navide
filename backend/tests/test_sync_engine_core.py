@@ -926,3 +926,58 @@ async def test_a_stale_round_never_reaches_the_adapter(tmp_path, account_key):
     b.engine._request = request
     await b.engine.sync_all()
     assert applied == []
+
+
+async def test_a_pending_delete_survives_a_too_large_stub(tmp_path, account_key):
+    # R-A1 (a): the re-read after a reset brings the deleted item back as a stub.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("x")
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        elif msg_type == "sync.pull":
+            reply["payload"]["items"] = [
+                dict(_stub("x", r["rev"]), deviceId=r["deviceId"]) if r["itemId"] == "x" else r
+                for r in reply["payload"]["items"]
+            ]
+        return reply
+
+    b.engine._request = request
+    await b.sync()
+    await b.sync()
+    assert server.rows[("prompts", "x")]["deleted"] == 1
+
+
+async def test_a_pending_delete_survives_a_round_cut_short(tmp_path, account_key, monkeypatch):
+    # R-A1 (b): the re-read stops at the page cap before reaching the item.
+    server = FakeServer()
+    b = Device(tmp_path, server, "dev-b", {"x": {"v": 1}, "y": {"v": 1}, "z": {"v": 1}})
+    await b.sync()
+    b.adapter.items.pop("z")  # rev 3: the last page of the re-read
+    monkeypatch.setattr(sync_engine, "PULL_PAGE", 1)
+    monkeypatch.setattr(sync_engine, "MAX_PULL_PAGES", 1)
+    forward = b.engine._request
+    lied = False
+
+    async def request(msg_type, payload):
+        nonlocal lied
+        reply = await forward(msg_type, payload)
+        if msg_type == "sync.pull" and int(payload.get("since") or 0) > 0 and not lied:
+            lied = True
+            reply["payload"] = dict(reply["payload"], cursor=0, items=[], more=False)
+        return reply
+
+    b.engine._request = request
+    for _ in range(5):
+        await b.sync()
+    assert "z" not in b.adapter.items
+    assert server.rows[("prompts", "z")]["deleted"] == 1
+    assert b.store.conflict_ids("prompts") == set()

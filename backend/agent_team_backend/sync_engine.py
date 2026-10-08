@@ -800,6 +800,7 @@ class SyncEngine:
         since = self._store.cursor(scope)
         barrier: int | None = None
         pages = 0
+        finished = False
         while True:
             pages += 1
             reply = _payload(
@@ -831,8 +832,15 @@ class SyncEngine:
                 # A delete made here and not yet carried up would be lost with
                 # the state it is computed from — and the re-read below would
                 # bring the item back. Remembered across the reset instead.
-                self._reset_deletes[scope] = await asyncio.to_thread(self._pending_deletes, adapter)
+                pending = await asyncio.to_thread(self._pending_deletes, adapter)
+                self._reset_deletes[scope] = pending
                 self._store.forget(scope)
+                for item_id in pending:
+                    # Written down at once, so a restart before the re-read
+                    # reaches the item still carries the delete up (from rev
+                    # 0, which the server answers as a conflict to ask about
+                    # rather than as nothing).
+                    self._store.set_state(scope, item_id, rev=0, synced_hash="", deleted=False)
                 try:
                     await asyncio.to_thread(self._on_forget, scope)
                 except Exception as err:  # noqa: BLE001 - the reset itself happened
@@ -865,6 +873,7 @@ class SyncEngine:
             if durable > stored:
                 self._store.set_cursor(scope, durable)
             if not reply.get("more"):
+                finished = True
                 break
             if cursor <= since:
                 # No progress and the server still says "more": stop rather
@@ -877,7 +886,10 @@ class SyncEngine:
             since = cursor
         if barrier is not None:
             self._cursor_barrier[scope] = max(barrier, self._store.cursor(scope))
-        self._reset_deletes.pop(scope, None)
+        if finished:
+            # The re-read reached the end: a remembered delete whose item was
+            # not on the server at all goes up from rev 0 as it stands.
+            self._reset_deletes.pop(scope, None)
         return applied
 
     def _pending_deletes(self, adapter: ScopeAdapter) -> set[str]:
@@ -944,12 +956,6 @@ class SyncEngine:
         updated_at = str(raw.get("updatedAt") or "")
         deleted = bool(raw.get("deleted"))
         body = str(raw.get("body") or "")
-        if raw.get("tooLarge"):
-            # A row the server would not fit in a frame: it names the item and
-            # its rev and carries no body. Neither a delete nor anything to
-            # apply; reported, and the cursor moves past it as usual.
-            self._note(scope, "tooLarge", item_id)
-            return False
         origin = self._origin(raw, scope=scope, item_id=item_id)
         if origin == _ORIGIN_FORGED:
             log.warning("dropping %s/%s: its signature does not match the pinned key", scope, item_id)
@@ -957,9 +963,16 @@ class SyncEngine:
             return False
         if item_id in self._reset_deletes.get(scope, ()):
             # Deleted here before a reset (see ``_pull``): the row is not
-            # applied, only its rev recorded, so the push that follows sends
-            # the delete against it.
+            # applied — even when it came as a too-large stub — only its rev
+            # recorded, so the push that follows sends the delete against it.
             self._store.set_state(scope, item_id, rev=rev, synced_hash="", deleted=deleted)
+            self._reset_deletes[scope].discard(item_id)
+            return False
+        if raw.get("tooLarge"):
+            # A row the server would not fit in a frame: it names the item and
+            # its rev and carries no body. Neither a delete nor anything to
+            # apply; reported, and the cursor moves past it as usual.
+            self._note(scope, "tooLarge", item_id)
             return False
         if device == self._device_id() and not explicit:
             # Our own write coming back. Record the rev so the next push edits
@@ -1259,8 +1272,13 @@ class SyncEngine:
             # set up on this machine" or "removed from this machine only", and
             # a tombstone would sign every other device out. Those scopes
             # never delete by absence; the cloud copy outlives the local one.
+            waiting = self._reset_deletes.get(scope, set())
             for item_id, state in states.items():
                 if item_id in snapshot or item_id in blocked or state.deleted or item_id in oversized:
+                    continue
+                if item_id in waiting and state.rev == 0:
+                    # A delete carried across a reset whose row the re-read
+                    # has not reached yet: it waits for that row's rev.
                     continue
                 pending.append((item_id, None, ""))
 
