@@ -15,6 +15,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../composables/useBackend'
+import { maskMcpRecord } from '../lib/syncMask'
 import SettingRow from './settings/SettingRow.vue'
 import SettingsCard from './settings/SettingsCard.vue'
 import SettingsSection from './settings/SettingsSection.vue'
@@ -328,58 +329,10 @@ async function resolve(conflict: Conflict, keep: 'local' | 'remote'): Promise<vo
   }
 }
 
-/** MCP keys whose values are secrets (tokens, auth headers). */
-const MCP_SECRET_FIELDS = ['env', 'headers']
-
-const MASK = '••••'
-/** A flag or variable name that announces a secret value. */
-const SECRET_NAME = /token|key|secret|password|passwd|auth|bearer/i
-
-/** Userinfo and every query value go; scheme, host, path and keys stay. */
-function maskUrl(url: string): string {
-  return url
-    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@?#]*@/i, `$1${MASK}@`)
-    .replace(/([?&][^=&#]*=)[^&#]*/g, `$1${MASK}`)
-}
-
-/** Secret flags (`--api-key v`, `--token=v`), `KEY=value` with a secret name,
- *  a whole `Authorization:` header value and a Bearer token anywhere; every
- *  other argument stays readable. */
-function maskArgs(args: unknown[]): unknown[] {
-  let maskNext = false
-  return args.map((raw) => {
-    if (typeof raw !== 'string') return raw
-    if (maskNext) {
-      maskNext = false
-      return MASK
-    }
-    // Header and Bearer first: their values may hold '=' (base64 padding),
-    // which the KEY=value rule below would otherwise split inside the secret.
-    const header = /^(.*?authorization\s*:)/i.exec(raw)
-    if (header) return `${header[1]} ${MASK}`
-    const arg = raw.replace(/\b(bearer)\s+\S+/gi, `$1 ${MASK}`)
-    const eq = arg.indexOf('=')
-    if (eq > 0) return SECRET_NAME.test(arg.slice(0, eq)) ? `${arg.slice(0, eq + 1)}${MASK}` : arg
-    if (/^-/.test(arg) && SECRET_NAME.test(arg)) maskNext = true
-    return arg
-  })
-}
-
-/** One side of a conflict as it may be shown: an MCP record keeps the names
- *  in env and headers, so a person can tell the two apart, but not the values;
- *  its url and args lose their secret parts the same way. */
+/** One side of a conflict as it may be shown: an MCP record loses its
+ *  secrets (see maskMcpRecord); every other scope is shown as it is. */
 function shown(scope: string, value: unknown): unknown {
-  if (scope !== 'mcp' || !isRecord(value)) return value
-  const out: Record<string, unknown> = { ...value }
-  if (typeof out.url === 'string') out.url = maskUrl(out.url)
-  if (Array.isArray(out.args)) out.args = maskArgs(out.args)
-  for (const field of MCP_SECRET_FIELDS) {
-    const entries = out[field]
-    if (isRecord(entries)) {
-      out[field] = Object.fromEntries(Object.keys(entries).map((k) => [k, MASK]))
-    }
-  }
-  return out
+  return scope === 'mcp' ? maskMcpRecord(value) : value
 }
 
 function preview(value: unknown, sealed = false): string {
