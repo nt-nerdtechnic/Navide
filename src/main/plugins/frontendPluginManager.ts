@@ -2186,6 +2186,24 @@ export class FrontendPluginManager {
     this.refreshHostSessionRegistration()
   }
 
+  /** Whether a failed Plans view call proves the backend unavailable. A call
+   *  rejected because its own instance is being closed or restarted says
+   *  nothing about the child - closing a Plans window, or a remount, used to
+   *  withdraw Plans into legacy recovery for the whole session. Every
+   *  withdrawal is logged with the call and code: none of these failures
+   *  carries a cause, so main.log otherwise said only "withdrawn". */
+  private plansCallFailureWithdraws(plugin: RunningPlugin, method: string, error: unknown): boolean {
+    if (!this.isPlansBackendAvailabilityError(error)) return false
+    if (plugin.releasing || this.running.get(plugin.instanceId) !== plugin || this.isPluginStopping(plugin)) {
+      return false
+    }
+    warnMain(
+      `[plugin-backend] ${PLANS_PLUGIN_ID} ${method} failed with ${(error as BackendPluginError).code} ` +
+      `for ${plugin.instanceId}`,
+    )
+    return true
+  }
+
   private isPlansBackendAvailabilityError(error: unknown): boolean {
     return error instanceof BackendPluginError && (
       error.code === 'BACKEND_UNAVAILABLE' ||
@@ -5475,7 +5493,7 @@ export class FrontendPluginManager {
         )
         return buildSuccess(record.reqId, result)
       } catch (error) {
-        if (plugin.id === PLANS_PLUGIN_ID && this.isPlansBackendAvailabilityError(error)) {
+        if (plugin.id === PLANS_PLUGIN_ID && this.plansCallFailureWithdraws(plugin, record.name, error)) {
           this.markPlansBackendUnavailable('child-unavailable')
         }
         const response = this.backendError(record.reqId, error)
@@ -6644,7 +6662,7 @@ export class FrontendPluginManager {
       )
       return buildSuccess(record.reqId, result)
     } catch (error) {
-      if (plugin.id === PLANS_PLUGIN_ID && this.isPlansBackendAvailabilityError(error)) {
+      if (plugin.id === PLANS_PLUGIN_ID && this.plansCallFailureWithdraws(plugin, record.name, error)) {
         this.markPlansBackendUnavailable('child-unavailable')
       }
       return this.backendError(record.reqId, error)

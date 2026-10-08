@@ -4552,6 +4552,65 @@ describe('devPlansPluginDescriptor', () => {
 })
 
 describe('production Plans agent backend routing', () => {
+  it.each([
+    ['torn down mid-call', 'PLUGIN_STOPPING', true, true],
+    ['live instance', 'BACKEND_UNAVAILABLE', false, false],
+  ] as const)('withdraws Plans for a failed view call only when the child failed: %s', async (_label, code, tearDown, available) => {
+    const mgr = new FrontendPluginManager()
+    const packageVersion = '1.0.0'
+    const view: NonNullable<PluginLaunchDescriptor['views']>[number] = {
+      id: 'window', contributionKey: `${PLANS_PLUGIN_ID}.window`, kind: 'custom', location: 'window',
+      title: 'Plans', entryFile: '/plugins/navide.plans/index.html',
+    }
+    const descriptor: PluginLaunchDescriptor = {
+      id: PLANS_PLUGIN_ID, packageVersion, packageDir: process.cwd(), requires: ['fs'],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['fs'] }),
+      devUrl: '', entryFile: view.entryFile, views: [view],
+    }
+    mgr.registerDescriptor(descriptor, { builtin: true })
+    mgr.registerBackendActivation({
+      pluginId: PLANS_PLUGIN_ID, packageVersion, packageDir: process.cwd(),
+      entryFile: '/plugins/navide.plans/backend', protocolVersion: 1, activation: 'startup',
+      approvedMethods: ['plans.list'], approvedEvents: [], approvedBridgePorts: ['filesystem'],
+    })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion, system: ['fs'], storage: true }))
+    const bind = vi.spyOn(PluginBackendHost.prototype, 'bindView').mockResolvedValue()
+    const unbind = vi.spyOn(PluginBackendHost.prototype, 'unbindView').mockResolvedValue()
+    const host = new FakeBrowserWindow()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    let instanceId = ''
+    const hostCall = vi.spyOn(PluginBackendHost.prototype, 'call').mockImplementation(async () => {
+      // Closing the view drains its child, which rejects the call in flight.
+      if (tearDown) mgr.destroyInstance(instanceId)
+      throw new BackendPluginError(code)
+    })
+    try {
+      const handle = await mgr.openView(descriptor, view, {
+        hostWindow: asHost(host), bounds: 'fill', workspacePath: '/workspace',
+        capabilityContext: mgr.plansCapabilityContext(packageVersion, '/workspace', view.contributionKey)!,
+      })
+      instanceId = handle.instanceId
+      expect(mgr.isPlansBackendAvailable()).toBe(true)
+      const response = await ipcHandlers.get('plugin:backend:call')!(
+        { sender: { id: (host.children[0] as FakeViewLike).webContents.id } },
+        { reqId: 'teardown-call', name: 'plans.list', args: {} },
+      )
+      expect(response).toMatchObject({ ok: false, error: { code } })
+      expect(mgr.isPlansBackendAvailable()).toBe(available)
+      if (!available) {
+        // The withdrawal names the call and the code that caused it.
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`plans.list failed with ${code}`))
+      }
+      if (!tearDown) mgr.destroyInstance(handle.instanceId)
+    } finally {
+      warn.mockRestore()
+      hostCall.mockRestore()
+      unbind.mockRestore()
+      bind.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
   it.each(['ready', 'failed', 'revoked'] as const)('gates renderer and agent storage writes on migration: %s', async (outcome) => {
     const mgr = new FrontendPluginManager()
     const packageVersion = '1.0.0'
