@@ -65,6 +65,8 @@ const keyId = ref('')
 const legacyRingPending = ref(false)
 const rotateArmed = ref(false)
 const linkState = ref('')
+/** Whose cloud these sections go to, when the backend says. */
+const accountEmail = ref('')
 const conflicts = ref<Conflict[]>([])
 const busy = ref('')
 const error = ref('')
@@ -176,6 +178,7 @@ async function load(): Promise<void> {
       legacyRingPending?: unknown
       link?: unknown
       last?: unknown
+      account?: unknown
     }>('sync.status', {})
     if (!resp.ok) {
       error.value = resp.error?.message ?? t('settings.sync.error-load')
@@ -188,6 +191,8 @@ async function load(): Promise<void> {
     keyId.value = typeof payload?.keyId === 'string' ? payload.keyId : ''
     legacyRingPending.value = Boolean(payload?.legacyRingPending)
     linkState.value = isRecord(payload?.link) ? String(payload.link.state ?? '') : ''
+    const email = isRecord(payload?.account) ? payload.account.email : undefined
+    accountEmail.value = typeof email === 'string' ? email : ''
     if (isRecord(payload?.last)) {
       // The backend keeps the last outcome per scope; it is the whole truth.
       results.value = {}
@@ -367,6 +372,9 @@ onBeforeUnmount(() => offResult?.())
 
 <template>
   <SettingsSection :label="t('settings.sync.title')">
+    <p v-if="accountEmail" class="sync-account">
+      {{ t('settings.sync.account', { email: accountEmail }) }}
+    </p>
     <SettingsCard>
       <SettingRow
         v-for="scope in available"
@@ -481,6 +489,12 @@ onBeforeUnmount(() => offResult?.())
   font-size: var(--font-row-desc);
   color: var(--text-secondary);
   margin: 6px 0 0;
+}
+.sync-account {
+  font-size: var(--font-row-desc);
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
 }
 .sync-actions {
   margin-top: 10px;

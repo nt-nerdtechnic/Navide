@@ -6230,7 +6230,8 @@
       "skipped-other": "スキップ（{reason}）。",
       "result-held": "待機中、まだ適用されていません：{items}",
       "result-refused": "このデバイスでは適用できません：{items}",
-      "result-too-large": "大きすぎて同期できません：{items}"
+      "result-too-large": "大きすぎて同期できません：{items}",
+      "account": "同期アカウント：{email}"
     },
     "sharing": {
       "intro": "この 4 つの項目をマシン間で移す方法は、ファイルを受け渡す方法と、共通のアカウントを使う方法の 2 つです。",

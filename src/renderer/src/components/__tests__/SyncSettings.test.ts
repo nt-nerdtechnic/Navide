@@ -437,6 +437,35 @@ describe('SyncSettings', () => {
     expect(handlers.get('sync.result')?.size ?? 0).toBe(0)
   })
 
+  // ACC-12: with more than one account on a machine, "Sync" alone does not
+  // say whose cloud these sections go to.
+  it('names the account that is syncing', async () => {
+    const { backend } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts'],
+          scopes: { prompts: true },
+          hasKey: true,
+          link: { state: 'connected' },
+          account: { email: 'me@example.com', memberId: 'm-123' },
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.get('.sync-account').text()).toContain('me@example.com')
+  })
+
+  it('says nothing about an account when sync.status names none', async () => {
+    const { backend } = mockBackend()
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.find('.sync-account').exists()).toBe(false)
+  })
+
   it('shows the active key by id and rotates only on the second click', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {

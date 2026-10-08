@@ -6230,7 +6230,8 @@
       "skipped-other": "已略過（{reason}）。",
       "result-held": "等待中，尚未套用：{items}",
       "result-refused": "無法在此裝置套用：{items}",
-      "result-too-large": "太大，無法同步：{items}"
+      "result-too-large": "太大，無法同步：{items}",
+      "account": "同步帳號：{email}"
     },
     "sharing": {
       "intro": "把這四個區段搬到別台機器的兩條路：一份可以交出去的檔案，以及這些機器本來就共用的帳號。",
