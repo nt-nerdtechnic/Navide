@@ -5977,7 +5977,10 @@ async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
     # workspace and never expands "~", so an unexpanded path would be held
     # under a key that the probe, workspace_list (Recent stores expanded paths)
     # and a later cli_open_agent with the absolute path all fail to match.
-    path = os.path.expanduser(path)
+    # normpath too, only then: on Windows the expansion leaves the separators
+    # mixed (C:\Users\me/Desktop/x), unlike the form Recent stores.
+    if path.startswith("~"):
+        path = os.path.normpath(os.path.expanduser(path))
     result = await _ui_request(
         "",
         "invoke",
