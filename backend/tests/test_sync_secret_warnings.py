@@ -43,10 +43,10 @@ def test_a_prompt_memory_file_or_mcp_argument_with_a_token_is_named(setup):
         {"name": "quiet", "transport": "stdio", "command": "npx", "args": [], "env": {"GITHUB_TOKEN": TOKEN}, "enabled": True},
     ])
     warnings = sync_scopes.secret_warnings()
-    assert _ids(warnings) == {("prompts", "p1"), ("memory", ".claude:CLAUDE.md"), ("mcp", "gh")}
+    # Memory is no longer synced, so it is no longer warned about.
+    assert _ids(warnings) == {("prompts", "p1"), ("mcp", "gh")}
     by = {(w["scope"], w["itemId"]): w for w in warnings}
     assert by[("prompts", "p1")]["label"] == "deploy" and by[("prompts", "p1")]["fields"] == ["prompt"]
-    assert by[("memory", ".claude:CLAUDE.md")]["lines"] == [3]
     assert by[("mcp", "gh")]["fields"] == ["args"]
     assert TOKEN not in repr(warnings)  # a warning never repeats the secret
 

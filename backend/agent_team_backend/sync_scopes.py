@@ -57,7 +57,15 @@ _EXEC_BITS = os.name != "nt"
 
 
 def scope_enabled(scope: str) -> bool:
-    return enabled_scopes().get(_RIDES_WITH.get(scope, scope), False)
+    """Whether a sync round runs *scope*. Never for a scope sync no longer
+    offers (``sync_approvals.RETIRED_SCOPES``: memory), whatever its stored
+    switch says — left on by an older build or written by a window: such a
+    round pulls nothing, pushes nothing and deletes nothing, here or on the
+    server."""
+    base = _RIDES_WITH.get(scope, scope)
+    if base in sync_approvals.RETIRED_SCOPES:
+        return False
+    return enabled_scopes().get(base, False)
 
 
 def set_scope_enabled(scope: str, enabled: bool) -> dict[str, bool]:
@@ -67,6 +75,9 @@ def set_scope_enabled(scope: str, enabled: bool) -> dict[str, bool]:
         blocker = credentials_enable_blocker()
         if blocker:
             raise sync_engine.SyncError(blocker)
+    if enabled and scope in sync_approvals.RETIRED_SCOPES:
+        # Switching it off stays possible, to clear a switch an older build left on.
+        raise sync_engine.SyncError(f"{scope} is not synced any more; it can only be switched off")
     current = enabled_scopes()
     current[scope] = bool(enabled)
     _settings().set({SCOPES_SETTING: current})
@@ -2643,7 +2654,8 @@ def secret_warnings() -> list[dict[str, Any]]:
     changes."""
     from .settings_bundle import CARRIED_FIELDS
 
-    enabled = enabled_scopes()
+    # What a round actually syncs: a retired scope's switch may still be on.
+    enabled = {scope: scope_enabled(scope) for scope in sync_engine.SCOPES}
     raw = _settings().get().get(SECRET_DISMISSED_KEY)
     dismissed = raw if isinstance(raw, dict) else {}
     out: list[dict[str, Any]] = []

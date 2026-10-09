@@ -79,6 +79,9 @@ APPROVED = "approved"
 KIND_NEW = "new"
 KIND_CHANGED = "changed"
 KIND_DELETE = "delete"
+#: Scopes sync no longer offers (user decision 2026-10-09: memory). Their
+#: holds are not listed and never land; their code stays.
+RETIRED_SCOPES = frozenset({"memory"})
 #: The payload a held delete is sealed as: a real record never has this key.
 DELETE_PAYLOAD: dict[str, Any] = {"$delete": True}
 #: A listing row whose summary is longer than this is sent collapsed: its
@@ -604,6 +607,8 @@ def listing(*, brief: bool = False) -> list[dict[str, Any]]:
     for) collapses long summaries; ``detail`` gives one whole."""
     out = []
     for scope, entries in sorted(_index().items()):
+        if scope in RETIRED_SCOPES:
+            continue
         for item_id, record in sorted(entries.items()):
             out.append(_row(scope, item_id, record, brief=brief))
     return out
@@ -612,7 +617,7 @@ def listing(*, brief: bool = False) -> list[dict[str, Any]]:
 def detail(scope: str, item_id: str) -> dict[str, Any]:
     """One held record with its whole summary (the card, expanded)."""
     record = entry(scope, item_id)
-    if record is None:
+    if record is None or scope in RETIRED_SCOPES:
         raise sync_engine.SyncError(f"nothing from {scope}/{item_id} is waiting for approval")
     return _row(scope, item_id, record, brief=False)
 
@@ -628,6 +633,8 @@ def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict
     the cloud copy goes on standing in for the local one.
     """
     scope = adapter.scope
+    if scope in RETIRED_SCOPES:
+        raise sync_engine.SyncError(f"{scope} is not synced any more; nothing from it lands")
     with _lock:
         record = entry(scope, item_id)
         if record is None:

@@ -133,7 +133,15 @@ const results = ref<Record<string, ScopeResult>>({})
  *  (useCliProfiles.refreshCloud), so with no way to switch it on, nothing
  *  downstream can reach a credential either. Put it back once the review
  *  lands. */
-const READY: ReadonlySet<string> = new Set(['prompts', 'mcp', 'skills', 'memory'])
+const READY: ReadonlySet<string> = new Set(['prompts', 'mcp', 'skills'])
+
+/** Scopes sync no longer offers (2026-10-09: memory — sync covers assets and
+ *  extensions only). Listed only while an older build's switch is still on,
+ *  so it can be switched off; the backend never runs them either way. */
+const RETIRED: ReadonlySet<string> = new Set(['memory'])
+
+/** The rows to list: a retired scope only while its switch is on. */
+const listed = computed(() => available.value.filter((scope) => !RETIRED.has(scope) || Boolean(scopes.value[scope])))
 
 const connected = computed(() => linkState.value === 'connected')
 
@@ -538,11 +546,15 @@ onBeforeUnmount(() => offResult?.())
     </p>
     <SettingsCard>
       <SettingRow
-        v-for="scope in available"
+        v-for="scope in listed"
         :key="scope"
         :title="t('settings.sync.scope-' + scope)"
         :description="
-          READY.has(scope) ? t('settings.sync.scope-hint-' + scope) : t('settings.sync.not-yet')
+          READY.has(scope)
+            ? t('settings.sync.scope-hint-' + scope)
+            : RETIRED.has(scope)
+              ? t('settings.sync.retired-' + scope)
+              : t('settings.sync.not-yet')
         "
       >
         <template #control>

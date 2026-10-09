@@ -6191,6 +6191,7 @@
       "title": "Sync",
       "hint": "Turn on a section to keep it the same on every device signed in to this account. Records are encrypted on this machine; the server stores ciphertext it has no key for.",
       "not-yet": "Not syncable yet.",
+      "retired-memory": "Memory is not synced any more. Switch it off; your instruction files here and the copies in the cloud are left as they are.",
       "not-connected": "Not connected — synced sections catch up when the link is back.",
       "no-key": "This device has no sync key yet; nothing is uploaded until it has one.",
       "now": "Sync now",
