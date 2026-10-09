@@ -413,7 +413,8 @@ def _import_summary(scope: str, item_id: str, payload: Any) -> tuple[dict[str, A
             return None, "the file is over the memory size limit"
         # Shown whole up to the memory scope's own limit, as a sync approval
         # shows it: the full text and a diff against this machine's file.
-        wire_id = item_id if ":" in item_id else sync_scopes.memory_item_id(item_id)
+        # A bundle names a memory file by its path, always (never a wire id).
+        wire_id = sync_scopes.memory_item_id(item_id)
         summary = sync_scopes._present_memory(wire_id, payload, {"path": item_id, "bytes": size})
         return summary, "" if sync_approvals._displayable(summary) else "it cannot be shown in full here"
     if scope == "prompts":

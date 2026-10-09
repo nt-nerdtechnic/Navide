@@ -242,9 +242,11 @@ class PromptsScope:
         this machine's in any field — its text, its switch, being the default
         and so the loop prompt — waits for the user's approval
         (``sync_approvals``, decision S2): a prompt is what a looping pane
-        types on the user's behalf. A delete applies as before, the default
-        and loop prompt's too: it brings nothing in, and the loop falls back
-        on a prompt this machine already has."""
+        types on the user's behalf. A delete of a prompt that is not the
+        default applies as before. A delete of the default is held too: it
+        makes another prompt this machine has the loop prompt, and the card
+        names which (computed when shown; approval is refused if that prompt
+        changed since)."""
         skills = self._list()
         index = next((i for i, s in enumerate(skills) if s.get("id") == item_id), -1)
         if payload == sync_approvals.DELETE_PAYLOAD:
@@ -262,8 +264,6 @@ class PromptsScope:
                 # is asked too. Other deletes apply as before.
                 if sync_approvals.is_rejected(self.scope, item_id, sync_approvals.DELETE_PAYLOAD):
                     return True
-                rest = _single_default([s for i, s in enumerate(skills) if i != index])
-                successor = next((s for s in rest if s.get("isDefault")), None)
                 return sync_approvals.hold(
                     self.scope, item_id, sync_approvals.DELETE_PAYLOAD, local=skills[index],
                     kind=sync_approvals.KIND_DELETE,
@@ -271,9 +271,16 @@ class PromptsScope:
                         "id": item_id,
                         "name": str(skills[index].get("name") or item_id),
                         "deletes": True,
-                        "newLoopPrompt": str(successor.get("name") or successor.get("id")) if successor else None,
+                        **_successor_fields(skills, item_id),
                     },
                 )
+            if approved_delete:
+                shown = (sync_approvals.held_summary(self.scope, item_id) or {}).get("newLoopPromptId")
+                if _successor_fields(skills, item_id)["newLoopPromptId"] != shown:
+                    raise sync_engine.SyncError(
+                        f"the prompt that would become the loop prompt changed since {item_id} was shown; "
+                        "review it again"
+                    )
             sync_approvals.drop(self.scope, item_id)
             skills.pop(index)
         else:
@@ -784,6 +791,12 @@ class SkillsStateScope:
         """Rejected records whose held copy no longer opens: nothing goes up
         for them (``sync_approvals.withheld``)."""
         return sync_approvals.withheld(self.scope)
+
+    def approval_local(self, item_id: str) -> Any | None:
+        """This machine's copy of *item_id* as a hold is filed against it
+        (``_local``, detached or not): what ``decide`` compares, so a skill
+        re-added elsewhere after a delete there can still be approved here."""
+        return self._local().get(item_id)
 
     def local_snapshot(self) -> dict[str, Any]:
         """The skills this machine actually has (and remembers), approvals
@@ -1909,12 +1922,24 @@ def _present_memory(item_id: str, payload: Any, summary: dict[str, Any]) -> dict
     return {**summary, "text": text, "diff": diff}
 
 
+def _successor_fields(skills: list[dict[str, Any]], item_id: str) -> dict[str, Any]:
+    """Which prompt would become the default — the loop prompt — were
+    *item_id* deleted from *skills*: its name and id, or None for both."""
+    rest = _single_default([s for s in skills if s.get("id") != item_id])
+    successor = next((s for s in rest if s.get("isDefault")), None)
+    if successor is None:
+        return {"newLoopPrompt": None, "newLoopPromptId": None}
+    return {"newLoopPrompt": str(successor.get("name") or successor.get("id")), "newLoopPromptId": successor.get("id")}
+
+
 def _present_prompt(item_id: str, payload: Any, summary: dict[str, Any]) -> dict[str, Any]:
     """A held prompt, every field, with what differs from this machine's.
-    A held delete shows as itself (``deletes``, the prompt that would become
-    the loop prompt), which its summary already says."""
+    A held delete shows as itself, with the prompt that would become the
+    loop prompt worked out now, from this machine's list as it is: what the
+    card shows is kept (``persist``) so approval can be refused if it moves."""
     if payload == sync_approvals.DELETE_PAYLOAD:
-        return summary
+        now = _successor_fields(PromptsScope()._list(), item_id)
+        return {**summary, **now, "persist": now}
     record = {k: v for k, v in payload.items() if k != "id"} if isinstance(payload, dict) else {}
     local = PromptsScope().local_snapshot().get(item_id)
     changes = []

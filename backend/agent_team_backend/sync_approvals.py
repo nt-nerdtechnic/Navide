@@ -570,6 +570,12 @@ def _row(scope: str, item_id: str, record: dict[str, Any], *, brief: bool) -> di
         summary, collapsed = stored, True
     else:
         summary = _presented(scope, item_id, stored)
+        persist = summary.pop("persist", None) if isinstance(summary, dict) else None
+        if isinstance(persist, dict) and isinstance(stored, dict) and any(
+            stored.get(k) != v for k, v in persist.items()
+        ):
+            # What the card now shows is what an approval is checked against.
+            update_summary(scope, item_id, str(record.get("digest", "")), {**stored, **persist})
     displayable = _displayable(summary)
     if brief and summary is not None and len(json.dumps(summary)) > BRIEF_BYTES:
         summary = {k: v for k, v in summary.items() if len(json.dumps(v)) <= 256}
@@ -635,14 +641,28 @@ def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict
             # Nothing reviewed is kept for a "no".
             drop_held_files(scope, item_id, shown_digest)
             return {"scope": scope, "itemId": item_id, "status": REJECTED}
+        # The local copy the hold was filed against, read the way the adapter
+        # read it then (approval_local, or its local snapshot).
+        approval_local = getattr(adapter, "approval_local", None)
         local_snapshot = getattr(adapter, "local_snapshot", None)
-        if local_snapshot is not None:
-            local = local_snapshot().get(item_id)
-            if (digest(local) if local is not None else "") != record.get("base", ""):
+        local = approval_local(item_id) if approval_local is not None else (
+            local_snapshot().get(item_id) if local_snapshot is not None else None
+        )
+        if (approval_local is not None or local_snapshot is not None) and (
+            digest(local) if local is not None else ""
+        ) != record.get("base", ""):
+            if isinstance(local, dict) and digest({**local, "isDefault": not local.get("isDefault")}) == record.get("base"):
                 raise sync_engine.SyncError(
-                    f"{scope}/{item_id} changed here since it was shown; review it again"
+                    f"another approval changed which prompt is the default here since {item_id} was shown; "
+                    "review it again"
                 )
-        if not _displayable(_presented(scope, item_id, _open_summary(scope, item_id, record))):
+            raise sync_engine.SyncError(
+                f"{scope}/{item_id} changed here since it was shown; review it again"
+            )
+        presented = _presented(scope, item_id, _open_summary(scope, item_id, record))
+        if isinstance(presented, dict):
+            presented.pop("persist", None)
+        if not _displayable(presented):
             raise sync_engine.SyncError(
                 f"{scope}/{item_id} cannot be shown in full here, so it cannot be approved; reject it"
             )
