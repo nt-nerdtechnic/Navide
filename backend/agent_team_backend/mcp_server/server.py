@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -5959,6 +5960,8 @@ async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
     workspace may not have a window yet), so it errors only when no Navide
     window is open at all.
 
+    A leading "~" is expanded; the `path` returned is the expanded one.
+
     Returns {ok: true, path, ready} once the window has handled the request,
     or the error the window (or the routing) reported. A new window takes a
     moment to load, so this waits (up to about 15s) for the window holding
@@ -5970,6 +5973,11 @@ async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
     caller = _resolve_caller(ctx)
     if not path:
         return {"ok": False, "result": None, "error": "workspace_open requires path"}
+    # Expanded here, once: the window keeps whatever string it is handed as its
+    # workspace and never expands "~", so an unexpanded path would be held
+    # under a key that the probe, workspace_list (Recent stores expanded paths)
+    # and a later cli_open_agent with the absolute path all fail to match.
+    path = os.path.expanduser(path)
     result = await _ui_request(
         "",
         "invoke",

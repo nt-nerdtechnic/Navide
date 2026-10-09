@@ -240,3 +240,32 @@ async def test_workspace_open_then_cli_open_agent_opens_the_pane(windows: _Windo
     assert opened["ready"] is True
     assert result["ok"] is True
     assert result["kickoff"] == "sent"
+
+
+# ── a "~/..." path is expanded once, before anything sees it ────────────────
+
+
+@pytest.mark.asyncio
+async def test_workspace_open_expands_a_tilde_path_for_the_window_probe_and_list(
+    windows: _Windows, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "Desktop" / "James-AI 工廠導入專案"
+    project.mkdir(parents=True)
+    absolute = str(project)
+    windows.owned.add(absolute)
+
+    opened = await plan_mcp.workspace_open("~/Desktop/James-AI 工廠導入專案", _ctx())
+    listed = await plan_mcp.workspace_list(_ctx())
+    spawned = await asyncio.wait_for(_open(absolute), timeout=5.0)
+
+    open_request = next(e for e in windows.events if e["payload"].get("action") == "ui.workspace.open")
+    assert open_request["payload"]["args"] == {"path": absolute}
+    probes = [e["payload"]["workspace_path"] for e in windows.events if e["payload"].get("op") == "list_actions"]
+    assert probes and all(p == absolute for p in probes)
+    assert opened["ready"] is True
+    assert opened["path"] == absolute
+    rows = {row["path"]: row for row in listed["workspaces"]}
+    assert rows[absolute]["window_ready"] is True
+    assert not any(p.startswith("~") for p in rows)
+    assert spawned["ok"] is True
