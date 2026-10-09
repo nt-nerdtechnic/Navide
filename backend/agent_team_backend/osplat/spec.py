@@ -780,6 +780,9 @@ class Scripts(Protocol):
 _WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$")
 
 
+_SHORT_NAME = re.compile(r"~\d")
+
+
 def windows_refused_file_name(name: str) -> bool:
     """``Paths.file_name_refused`` as Windows answers it. A pure string rule,
     kept here so the tests of any platform can exercise it.
@@ -788,4 +791,8 @@ def windows_refused_file_name(name: str) -> bool:
     spaces dropped, which is how Windows reads ``con .txt``."""
     if not name:
         return False
+    if _SHORT_NAME.search(name):
+        # An 8.3 short name ("REFERE~1.MD") opens the long-named file it
+        # stands for, so it is another spelling of a path already there.
+        return True
     return name[-1] in ". " or bool(_WINDOWS_RESERVED.match(name.split(".", 1)[0].rstrip(" ")))

@@ -907,33 +907,55 @@ def _preview(raw: bytes) -> tuple[str, bool]:
 #: whole or the record is refused, since the CLIs act on it (hooks, tools).
 MAX_FRONTMATTER_CHARS = 16 * 1024
 #: Frontmatter keys an approval calls out: they make a CLI run or allow more.
-_RISKY_FRONTMATTER = re.compile(r"^(allowed[-_]tools|hooks)\s*:", re.IGNORECASE | re.MULTILINE)
+_RISKY_FRONTMATTER = re.compile(r"^([\"']?)(allowed[-_]tools|hooks)\1\s*:", re.IGNORECASE | re.MULTILINE)
 
 
 def _skill_md_name(paths: Any) -> str | None:
     """The path a CLI reads as SKILL.md, compared as a case-insensitive,
-    normalising volume would (``Skill.md`` is it)."""
-    import unicodedata
+    normalising volume would (``Skill.md`` is it) — by the same key the
+    path checks use (skills_store._alias_key)."""
+    from .skills_store import _alias_key
 
-    return next(
-        (str(p) for p in sorted(paths, key=str) if unicodedata.normalize("NFC", str(p)).casefold() == "skill.md"),
-        None,
-    )
+    want = _alias_key("SKILL.md")
+    return next((str(p) for p in sorted(paths, key=str) if _alias_key(str(p)) == want), None)
 
 
 def _frontmatter(skill_md_text: str) -> dict[str, Any]:
     """SKILL.md's frontmatter, whole, apart from the body, with the keys
     that make a CLI run or allow more named — or a ``truncated`` mark (the
     record is then refused) when it is too long to show whole."""
-    text = skill_md_text.replace("\r\n", "\n")
-    if not text.startswith("---\n"):
+    from .skills_store import _FRONTMATTER_RE
+
+    # Read as Navide's own parser reads it (skills_store._FRONTMATTER_RE),
+    # past a BOM, so the frontmatter shown is the one that takes effect.
+    text = skill_md_text[1:] if skill_md_text.startswith("\ufeff") else skill_md_text
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
+        if text.startswith("---"):
+            # Looks like frontmatter but does not parse as Navide's: a CLI
+            # with a looser reader might still find one, unseen here.
+            return {"truncated": "SKILL.md opens frontmatter that does not parse"}
         return {"frontmatter": "", "frontmatterFlags": []}
-    end = text.find("\n---", 4)
-    block = text[4:end] if end >= 0 else text[4:]
+    block = match.group("yaml")
     if len(block) > MAX_FRONTMATTER_CHARS:
         return {"truncated": "the SKILL.md frontmatter is too long to show whole"}
-    flags = sorted({m.group(1).lower().replace("_", "-") for m in _RISKY_FRONTMATTER.finditer(block)})
-    return {"frontmatter": block, "frontmatterFlags": flags}
+    return {"frontmatter": block, "frontmatterFlags": _risky_keys(block)}
+
+
+def _risky_keys(block: str) -> list[str]:
+    """hooks / allowed-tools among the frontmatter's keys, as the YAML
+    parses them (quoted forms included); by pattern if it does not parse."""
+    import yaml
+
+    try:
+        parsed = yaml.safe_load(block)
+    except yaml.YAMLError:
+        parsed = None
+    if isinstance(parsed, dict):
+        keys = {str(k).strip().lower().replace("_", "-") for k in parsed}
+    else:
+        keys = {m.group(2).lower().replace("_", "-") for m in _RISKY_FRONTMATTER.finditer(block)}
+    return sorted(keys & {"hooks", "allowed-tools"})
 
 
 def _skill_paths_problem(paths: Any) -> str:

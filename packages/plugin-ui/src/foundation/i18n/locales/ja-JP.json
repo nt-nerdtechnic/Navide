@@ -6310,7 +6310,8 @@
         "results-title": "書き込み結果",
         "applied": "{total} 件中 {count} 件を書き込みました。",
         "needs-credentials": "認証情報が必要",
-        "needs-credentials-hint": "機密情報はバンドルから除外されています。ここで入力してください：{fields}"
+        "needs-credentials-hint": "機密情報はバンドルから除外されています：{fields}。サーバーのコマンドまたは URL がこのデバイスと同じ場合のみ、このデバイスの値を使います。それ以外は空のままなので入力してください。",
+        "replaces-here": "このデバイスで置き換えるもの：{what}"
       },
       "cloud": {
         "title": "クラウドの内容",
