@@ -85,6 +85,28 @@ describe('CredentialsPane', () => {
     expect(send).toHaveBeenLastCalledWith('credentials.scan', { force: true })
   })
 
+  it('flags an incomplete scan and each truncated root', async () => {
+    const partial = {
+      ...scan,
+      complete: false,
+      roots: [
+        { path: '/Users/x/work', source: 'workspace', repo_count: 4, truncated: true },
+        { path: '/Users/x/src', source: 'user', repo_count: 2, truncated: false },
+      ],
+    }
+    await mountPane({ 'credentials.scan': { ok: true, payload: partial } })
+    expect(wrapper!.find('.cred-incomplete').text()).toBe(i18n.global.t('settings.credentials.incomplete'))
+    const marks = wrapper!.findAll('.cred-root-truncated')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]!.text()).toBe(i18n.global.t('settings.credentials.roots.truncated'))
+  })
+
+  it('shows no incomplete banner for a complete scan', async () => {
+    await mountPane({ 'credentials.scan': { ok: true, payload: { ...scan, complete: true } } })
+    expect(wrapper!.find('.cred-incomplete').exists()).toBe(false)
+    expect(wrapper!.find('.cred-root-truncated').exists()).toBe(false)
+  })
+
   it('shows a manual-fix note instead of steps when the backend withheld them', async () => {
     const manual = {
       ...scan,

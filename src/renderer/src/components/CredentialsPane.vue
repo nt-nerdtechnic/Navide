@@ -21,9 +21,10 @@ interface Finding {
   reminder: Reminder
 }
 interface Item { id: string; kind: string; label: string; detail: Record<string, string | number | boolean> }
-interface Root { path: string; source: 'workspace' | 'user'; repoCount: number }
+interface Root { path: string; source: 'workspace' | 'user'; repoCount: number; truncated: boolean }
 interface Keyring { available: boolean; backend: string | null; reason: string }
 interface Scan {
+  complete: boolean
   scannedAt: string
   durationMs: number
   keyring: Keyring
@@ -77,11 +78,12 @@ function normalizeScan(p: Record<string, unknown>): Scan {
   const summary = isRecord(p.summary) ? p.summary : {}
   const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
   return {
+    complete: p.complete !== false,
     scannedAt: str(p.scanned_at),
     durationMs: Number(p.duration_ms) || 0,
     keyring: { available: kr.available === true, backend: typeof kr.backend === 'string' ? kr.backend : null, reason: str(kr.reason) },
     roots: arr(p.roots).flatMap((r) => (isRecord(r) && str(r.path)
-      ? [{ path: str(r.path), source: r.source === 'workspace' ? 'workspace' as const : 'user' as const, repoCount: Number(r.repo_count) || 0 }]
+      ? [{ path: str(r.path), source: r.source === 'workspace' ? 'workspace' as const : 'user' as const, repoCount: Number(r.repo_count) || 0, truncated: r.truncated === true }]
       : [])),
     high: Number(summary.high) || 0,
     items: arr(p.items).flatMap((i) => {
@@ -351,6 +353,15 @@ async function saveRoots(): Promise<void> {
 
     <p v-if="error" class="cred-error" role="alert">{{ error }}</p>
     <p v-if="scan && !scan.keyring.available" class="cred-warn">{{ t('settings.credentials.keyring-bad-hint') }}</p>
+    <div v-if="scan && !scan.complete" class="cred-warn" role="status">
+      <p class="cred-incomplete">{{ t('settings.credentials.incomplete') }}</p>
+      <ul class="cred-root-list">
+        <li v-for="r in scan.roots.filter((x) => x.truncated)" :key="r.path">
+          <code v-truncate>{{ r.path }}</code>
+          <span class="cred-tag cred-root-truncated">{{ t('settings.credentials.roots.truncated') }}</span>
+        </li>
+      </ul>
+    </div>
     <div v-if="scan && scan.high > 0" class="cred-banner" role="status">
       <strong>{{ t('settings.credentials.banner-high', { count: scan.high }) }}</strong>
       <span>{{ t('settings.credentials.banner-high-hint') }}</span>
@@ -381,6 +392,7 @@ async function saveRoots(): Promise<void> {
             <code v-truncate>{{ r.path }}</code>
             <span class="cred-tag">{{ t(`settings.credentials.roots.source.${r.source}`) }}</span>
             <span class="cred-muted">{{ t('settings.credentials.roots.repos', { count: r.repoCount }) }}</span>
+            <span v-if="r.truncated" class="cred-tag">{{ t('settings.credentials.roots.truncated') }}</span>
           </li>
         </ul>
       </template>

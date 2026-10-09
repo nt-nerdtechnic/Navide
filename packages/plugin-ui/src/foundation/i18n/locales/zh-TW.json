@@ -6106,6 +6106,7 @@
       "keyring-ok-plain": "鑰匙圈可用",
       "keyring-bad": "鑰匙圈無法使用",
       "keyring-bad-hint": "沒有系統鑰匙圈時，憑證容易被存成明文檔案。",
+      "incomplete": "這次掃描不完整：達到時間或資料夾數量上限，或略過了無法安全讀取的 repo，下列位置的發現項目可能有遺漏。",
       "keyring-reason-unknown": "未回報原因。",
       "scan": "掃描",
       "scanning": "掃描中…",
@@ -6181,6 +6182,7 @@
           "user": "使用者"
         },
         "repos": "{count} 個 repo",
+        "truncated": "部分掃描",
         "error": "無法儲存掃描範圍。",
         "error-load": "無法載入掃描範圍。"
       },

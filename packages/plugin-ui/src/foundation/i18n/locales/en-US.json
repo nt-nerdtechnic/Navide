@@ -6106,6 +6106,7 @@
       "keyring-ok-plain": "Keyring available",
       "keyring-bad": "Keyring unavailable",
       "keyring-bad-hint": "Without a system keyring, credentials tend to end up in plain files.",
+      "incomplete": "This scan is incomplete: it hit a time or folder limit, or skipped a repository it could not read safely, so findings in the folders below may be missing.",
       "keyring-reason-unknown": "No reason was reported.",
       "scan": "Scan",
       "scanning": "Scanning…",
@@ -6181,6 +6182,7 @@
           "user": "user"
         },
         "repos": "{count} repos",
+        "truncated": "partial",
         "error": "Could not save the scan roots.",
         "error-load": "Could not load the scan roots."
       },
