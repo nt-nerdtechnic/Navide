@@ -764,4 +764,81 @@ describe('SyncSettings', () => {
     await flushPromises()
     expect(send).toHaveBeenCalledWith('sync.adopt_legacy_key', {}, 30_000)
   })
+
+  describe('approvals and secret warnings', () => {
+    const held = {
+      scope: 'mcp',
+      itemId: 'runner',
+      status: 'pending',
+      kind: 'new',
+      summary: { name: 'runner', command: '/tmp/evil', args: ['--x'], env: ['TOKEN'] },
+      at: 1,
+    }
+
+    it('lists what is waiting for approval and approves exactly one', async () => {
+      const { backend, send } = mockBackend({
+        'sync.approvals': { ok: true, payload: { approvals: [held] } },
+        'sync.approval.decide': { ok: true, payload: { approval: { status: 'applied' }, approvals: [] } },
+      })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+
+      const card = wrapper.find('.sync-approval')
+      expect(card.exists()).toBe(true)
+      expect(card.text()).toContain('runner')
+      expect(card.text()).toContain('/tmp/evil --x')
+      expect(card.text()).toContain('TOKEN')
+      await card.find('button.sync-approve').trigger('click')
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith('sync.approval.decide', { scope: 'mcp', itemId: 'runner', approve: true })
+      expect(wrapper.find('.sync-approval').exists()).toBe(false)
+    })
+
+    it('rejects without approving', async () => {
+      const { backend, send } = mockBackend({
+        'sync.approvals': { ok: true, payload: { approvals: [held] } },
+        'sync.approval.decide': {
+          ok: true,
+          payload: { approval: { status: 'rejected' }, approvals: [{ ...held, status: 'rejected' }] },
+        },
+      })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      await wrapper.find('button.sync-reject').trigger('click')
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith('sync.approval.decide', { scope: 'mcp', itemId: 'runner', approve: false })
+      // A rejected record is no longer asked about.
+      expect(wrapper.find('.sync-approval').exists()).toBe(false)
+    })
+
+    it('names an item that may carry a secret, and dismisses it', async () => {
+      const warning = { scope: 'prompts', itemId: 'p1', label: 'deploy', fields: ['prompt'] }
+      const { backend, send } = mockBackend({
+        'sync.secret_warnings': { ok: true, payload: { warnings: [warning] } },
+        'sync.secret_warning.dismiss': { ok: true, payload: { warnings: [] } },
+      })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const row = wrapper.find('.sync-secret-warning')
+      expect(row.text()).toContain('deploy')
+      await row.find('button').trigger('click')
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith('sync.secret_warning.dismiss', { scope: 'prompts', itemId: 'p1' })
+      expect(wrapper.find('.sync-secret-warning').exists()).toBe(false)
+    })
+
+    it('re-reads both lists when a round reports', async () => {
+      const { backend, send, emit } = mockBackend({
+        'sync.approvals': { ok: true, payload: { approvals: [] } },
+        'sync.secret_warnings': { ok: true, payload: { warnings: [] } },
+      })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const count = (type: string) => send.mock.calls.filter(([t]) => t === type).length
+      const before = [count('sync.approvals'), count('sync.secret_warnings')]
+      emit('sync.result', { scope: 'mcp', ok: true })
+      await flushPromises()
+      expect([count('sync.approvals'), count('sync.secret_warnings')]).toEqual([before[0] + 1, before[1] + 1])
+    })
+  })
 })

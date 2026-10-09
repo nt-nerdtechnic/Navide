@@ -65,6 +65,25 @@ interface ScopeResult {
   at?: string
 }
 
+/** A synced skill or MCP server held until the user approves it (D1). The
+ *  summary says what would run; it never carries an env or header value. */
+interface Approval {
+  scope: string
+  itemId: string
+  status: string
+  kind: string
+  summary: Record<string, unknown>
+}
+
+/** An item that reads like it carries a secret (D2): where, never what. */
+interface SecretWarning {
+  scope: string
+  itemId: string
+  label: string
+  fields: string[]
+  lines?: number[]
+}
+
 interface ResultLine {
   text: string
   error?: boolean
@@ -85,6 +104,10 @@ const accountEmail = ref('')
 const conflicts = ref<Conflict[]>([])
 const busy = ref('')
 const error = ref('')
+const approvals = ref<Approval[]>([])
+const secretWarnings = ref<SecretWarning[]>([])
+/** Held records still asking; a rejected one is not asked about again. */
+const waiting = computed(() => approvals.value.filter((a) => a.status !== 'rejected'))
 /** The latest outcome per scope ('all' when the round never reached one). */
 const results = ref<Record<string, ScopeResult>>({})
 
@@ -224,6 +247,87 @@ async function load(): Promise<void> {
       }
     }
     await loadConflicts()
+    await loadApprovals()
+  } catch (err) {
+    error.value = String(err)
+  }
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : []
+}
+
+async function loadApprovals(): Promise<void> {
+  const [held, warned] = await Promise.all([
+    props.backend.send<{ approvals?: unknown }>('sync.approvals', {}),
+    props.backend.send<{ warnings?: unknown }>('sync.secret_warnings', {}),
+  ])
+  const rows = held?.ok ? held.payload?.approvals : null
+  approvals.value = Array.isArray(rows) ? (rows as Approval[]) : []
+  const found = warned?.ok ? warned.payload?.warnings : null
+  secretWarnings.value = Array.isArray(found) ? (found as SecretWarning[]) : []
+}
+
+/** One line per thing the user is approving: what runs, then the names of
+ *  what it would be handed, then the files. */
+function approvalLines(a: Approval): string[] {
+  const s = a.summary ?? {}
+  const lines: string[] = []
+  const command = [typeof s.command === 'string' ? s.command : '', ...strings(s.args)].filter(Boolean).join(' ')
+  if (command) lines.push(command)
+  if (typeof s.url === 'string' && s.url) lines.push(s.url)
+  if (strings(s.env).length) lines.push(t('settings.sync.approval-env', { names: strings(s.env).join(', ') }))
+  if (strings(s.headers).length) {
+    lines.push(t('settings.sync.approval-headers', { names: strings(s.headers).join(', ') }))
+  }
+  if (strings(s.files).length) lines.push(t('settings.sync.approval-files', { files: strings(s.files).join(', ') }))
+  if (strings(s.executable).length) {
+    lines.push(t('settings.sync.approval-executable', { files: strings(s.executable).join(', ') }))
+  }
+  return lines
+}
+
+function approvalKind(a: Approval): string {
+  if (a.status === 'approved') return t('settings.sync.approval-downloading')
+  return a.kind === 'changed' ? t('settings.sync.approval-changed') : t('settings.sync.approval-new')
+}
+
+async function decide(a: Approval, approve: boolean): Promise<void> {
+  busy.value = a.scope + '/' + a.itemId
+  error.value = ''
+  try {
+    const resp = await props.backend.send<{ approvals?: unknown }>('sync.approval.decide', {
+      scope: a.scope,
+      itemId: a.itemId,
+      approve,
+    })
+    if (!resp?.ok) {
+      error.value = resp?.error?.message ?? t('settings.sync.error-load')
+      return
+    }
+    const rows = resp.payload?.approvals
+    approvals.value = Array.isArray(rows) ? (rows as Approval[]) : []
+  } catch (err) {
+    error.value = String(err)
+  } finally {
+    busy.value = ''
+  }
+}
+
+function warningDetail(w: SecretWarning): string {
+  const parts = [t('settings.sync.secret-warning-fields', { fields: strings(w.fields).join(', ') })]
+  if (w.lines?.length) parts.push(t('settings.sync.secret-warning-lines', { lines: w.lines.join(', ') }))
+  return parts.join(' · ')
+}
+
+async function dismissWarning(w: SecretWarning): Promise<void> {
+  try {
+    const resp = await props.backend.send<{ warnings?: unknown }>('sync.secret_warning.dismiss', {
+      scope: w.scope,
+      itemId: w.itemId,
+    })
+    const rows = resp?.ok ? resp.payload?.warnings : null
+    secretWarnings.value = Array.isArray(rows) ? (rows as SecretWarning[]) : []
   } catch (err) {
     error.value = String(err)
   }
@@ -394,6 +498,9 @@ function onSyncResult(payload: unknown): void {
   void loadConflicts().catch((err) => {
     error.value = String(err)
   })
+  void loadApprovals().catch((err) => {
+    error.value = String(err)
+  })
 }
 
 let offResult: (() => void) | undefined
@@ -476,6 +583,50 @@ onBeforeUnmount(() => offResult?.())
         </button>
       </p>
       <p v-if="hasKey" class="sync-hint">{{ t('settings.sync.rotate-hint') }}</p>
+    </div>
+
+    <div v-if="waiting.length" class="sync-conflicts">
+      <h3>{{ t('settings.sync.approvals-title', { count: waiting.length }) }}</h3>
+      <p class="sync-hint">{{ t('settings.sync.approvals-hint') }}</p>
+      <div v-for="a in waiting" :key="a.scope + '/' + a.itemId" class="sync-conflict sync-approval">
+        <div class="sync-conflict-head">
+          <strong>{{ t('settings.sync.scope-' + a.scope) }}</strong>
+          <code>{{ a.itemId }}</code>
+          <span class="sync-hint">{{ approvalKind(a) }}</span>
+        </div>
+        <code v-for="(line, i) in approvalLines(a)" :key="i" class="sync-approval-line">{{ line }}</code>
+        <div v-if="a.status !== 'approved'" class="sync-approval-actions">
+          <button
+            type="button"
+            class="sync-approve"
+            :disabled="busy === a.scope + '/' + a.itemId"
+            @click="decide(a, true)"
+          >
+            {{ t('settings.sync.approve') }}
+          </button>
+          <button
+            type="button"
+            class="sync-reject"
+            :disabled="busy === a.scope + '/' + a.itemId"
+            @click="decide(a, false)"
+          >
+            {{ t('settings.sync.reject') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="secretWarnings.length" class="sync-conflicts">
+      <h3>{{ t('settings.sync.secret-warnings-title', { count: secretWarnings.length }) }}</h3>
+      <p class="sync-hint">{{ t('settings.sync.secret-warnings-hint') }}</p>
+      <ul class="sync-results">
+        <li v-for="w in secretWarnings" :key="w.scope + '/' + w.itemId" class="sync-result sync-secret-warning">
+          <strong>{{ t('settings.sync.scope-' + w.scope) }}</strong>
+          <span class="sync-result-line">{{ w.label }}</span>
+          <span class="sync-result-line">{{ warningDetail(w) }}</span>
+          <button type="button" @click="dismissWarning(w)">{{ t('settings.sync.secret-dismiss') }}</button>
+        </li>
+      </ul>
     </div>
 
     <div v-if="conflicts.length" class="sync-conflicts">
@@ -617,6 +768,17 @@ onBeforeUnmount(() => offResult?.())
 }
 .sync-secret-state.is-differs {
   color: var(--text-danger, #e07060);
+}
+.sync-approval-line {
+  display: block;
+  font-size: var(--font-row-desc);
+  overflow-wrap: anywhere;
+  padding: 1px 0;
+}
+.sync-approval-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
 }
 .sync-conflict-side {
   display: flex;
