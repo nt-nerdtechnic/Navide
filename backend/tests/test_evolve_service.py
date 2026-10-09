@@ -446,6 +446,78 @@ async def test_far_over_budget_is_interrupted_once(env) -> None:
     assert env.host.notices().count("over_budget") == 1
 
 
+async def _idle_run(env) -> dict[str, Any]:
+    await enable(env, env.a, max_minutes=90)
+    await env.service.start_run(env.a, "manual")
+    return (await env.service.get(env.a))["running"]
+
+
+def _nudges(env) -> list[str]:
+    return [t for p, t in env.host.sent if p == "p-run" and "evolve_report" in t]
+
+
+async def test_an_idle_unreported_run_is_nudged_after_the_threshold(env) -> None:
+    run = await _idle_run(env)
+    env.host.panes["p-run"].busy = True
+    await env.service.watch_once()
+    env.host.panes["p-run"].busy = False  # turn ended
+    env.clock["now"] = NOW_MS + 60_000
+    await env.service.watch_once()  # idle starts being counted here
+    env.clock["now"] += ev.IDLE_NUDGE_AFTER_S * 1000 - 1000
+    await env.service.watch_once()
+    assert _nudges(env) == []
+    env.clock["now"] += 1000
+    await env.service.watch_once()
+    nudges = _nudges(env)
+    assert len(nudges) == 1
+    assert "unattended" in nudges[0] and run["id"] in nudges[0]
+    assert "nudged" in env.host.notices()
+    # Not again until another full idle window passes.
+    await env.service.watch_once()
+    assert len(_nudges(env)) == 1
+
+
+async def test_a_busy_pane_resets_the_idle_clock(env) -> None:
+    await _idle_run(env)
+    await env.service.watch_once()
+    env.clock["now"] += ev.IDLE_NUDGE_AFTER_S * 1000 - 1000
+    env.host.panes["p-run"].busy = True
+    await env.service.watch_once()
+    env.host.panes["p-run"].busy = False
+    env.clock["now"] += 2000
+    await env.service.watch_once()
+    assert _nudges(env) == []
+
+
+async def test_nudges_are_capped_per_run(env) -> None:
+    await _idle_run(env)
+    for _ in range(ev.IDLE_NUDGE_MAX + 3):
+        await env.service.watch_once()
+        env.clock["now"] += ev.IDLE_NUDGE_AFTER_S * 1000
+    await env.service.watch_once()
+    assert len(_nudges(env)) == ev.IDLE_NUDGE_MAX
+
+
+async def test_a_reported_or_timed_out_run_is_never_nudged(env) -> None:
+    run = await _idle_run(env)
+    await env.service.watch_once()
+    await report(env, "p-run", {"run_id": run["id"], "status": "ok", "summary": "s"})
+    await drain(env)
+    env.clock["now"] += ev.IDLE_NUDGE_AFTER_S * 1000 * 2
+    await env.service.watch_once()
+    assert _nudges(env) == []
+
+    env.clock["now"] += 86_400_000  # a new day, a new run that then runs out of time
+    env.host.open_answer = {"ok": True, "pane_id": "p-run", "name": "evolve-y", "kickoff": "sent"}
+    await env.service.start_run(env.a, "manual")
+    await env.service.watch_once()
+    env.clock["now"] += 91 * 60_000
+    await env.service.watch_once()  # times out
+    env.clock["now"] += ev.IDLE_NUDGE_AFTER_S * 1000 * 2
+    await env.service.watch_once()
+    assert _nudges(env) == []
+
+
 # ── storage ────────────────────────────────────────────────────────────────
 
 
@@ -603,6 +675,13 @@ def test_extra_instructions_cannot_close_their_own_block() -> None:
     assert "never replace or override" in task
     # A different run gets a different fence.
     assert nonce not in evolve_rules.render(_params(extra="x"))
+
+
+def test_rules_say_the_run_is_unattended_and_must_always_report() -> None:
+    task = evolve_rules.render(_params())
+    assert "UNATTENDED" in task
+    assert "Never stop to ask" in task
+    assert 'status="error"' in task and "branches" in task
 
 
 async def test_unsafe_settings_are_refused(env) -> None:
