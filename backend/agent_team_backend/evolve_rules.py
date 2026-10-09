@@ -19,7 +19,7 @@ import shlex
 from string import Template
 from typing import Any
 
-VERSION = 1
+VERSION = 2
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -104,6 +104,13 @@ DIVISION OF WORK
   them in the task that run $run_id opened them, give them these rules, and
   have them report back to you with cli_send. Do not close them.
 
+UNATTENDED
+- Nobody watches this run and nobody will answer you. Never stop to ask a
+  question or wait for confirmation; pick the safe default and keep going.
+- If a tool hangs, errors or is interrupted, note it, skip or work around that
+  step with the safe default, and continue with the rest.
+- Your turn ends only after evolve_report (step 6), in every case.
+
 NEVER
 - push, release or tag; stash; delete branches or worktrees; touch other
   people's uncommitted work; damage databases or the machine; install
@@ -140,7 +147,9 @@ $ledger
    commits=[{hash, title}], proposals=[{rel_path, name}], panes=[names you
    opened], tokens=<your best estimate of tokens used>).
    Navide reclaims this pane after it. Without it the run is reported as timed
-   out after $max_minutes minutes. Keep run_token to yourself: give it only to
+   out after $max_minutes minutes. Call it before you stop no matter what went
+   wrong: on failure use status="error" and list in the summary the work done
+   and any worktrees or branches left behind. Keep run_token to yourself: give it only to
    a pane you open for this run, never write it into a file, plan or message.
 """)
 
