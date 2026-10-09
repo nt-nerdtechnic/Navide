@@ -9931,7 +9931,14 @@ async def _sweep_pane_ptys(session: "Session", pane_id: str, *, force: bool = Tr
         # A slot with no pane record resolves to a blank id; sweeping on that
         # would match whatever the lookup returns for "no pane".
         return
-    for term_session_id in session.terminals.live_session_ids_for_pane(pane_id):
+    # A reattached PTY keeps the pane id it was created with; a restore since
+    # then renamed the pane, and only the alias table knows the old id.
+    term_session_ids: list[str] = []
+    for known_id in (pane_id, *agent_messaging.former_ids(pane_id)):
+        for term_session_id in session.terminals.live_session_ids_for_pane(known_id):
+            if term_session_id not in term_session_ids:
+                term_session_ids.append(term_session_id)
+    for term_session_id in term_session_ids:
         await session.terminals.kill(term_session_id, force=force)
         app._PTY_OWNERS.pop(term_session_id, None)
         app.attribution.unregister_pane(pane_id)
