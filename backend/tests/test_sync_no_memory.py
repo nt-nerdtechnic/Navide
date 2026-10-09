@@ -83,3 +83,39 @@ def test_secret_warnings_no_longer_list_memory(memory_on):
     settings, home = memory_on
     (home / ".claude" / "CLAUDE.md").write_text(f"bearer {TOKEN}\n")
     assert [w for w in sync_scopes.secret_warnings() if w["scope"] == "memory"] == []
+
+
+# ── the cloud inventory and its selective moves ─────────────────────────────
+async def test_the_cloud_inventory_leaves_a_retired_scope_out(monkeypatch, memory_on):
+    from agent_team_backend import server_link
+
+    monkeypatch.setattr(server_link, "_link", None)
+    listing = await server_link.sync_inventory("")
+    assert "memory" not in listing["scopes"] and "prompts" in listing["scopes"]
+    only = await server_link.sync_inventory("memory")
+    assert only["scopes"]["memory"]["status"] == "retired" and only["scopes"]["memory"]["items"] == []
+
+
+@pytest.mark.parametrize("call", ["sync_push_items", "sync_pull_items"])
+async def test_a_retired_scope_is_never_pushed_or_pulled(monkeypatch, memory_on, call):
+    from agent_team_backend import server_link
+
+    monkeypatch.setattr(server_link, "_link", None)
+    with pytest.raises(sync_approvals.RetiredScopeError, match="not synced any more"):
+        await getattr(server_link, call)("memory", [MID])
+
+
+@pytest.mark.parametrize("msg_type", ["sync.push_items", "sync.pull_items"])
+async def test_the_window_is_told_plainly_that_memory_is_not_synced(memory_on, msg_type):
+    from agent_team_backend import ws_handlers
+
+    sent = []
+
+    class Session:
+        async def send_json(self, message):
+            sent.append(message)
+
+    await ws_handlers.lookup(msg_type)(Session(), "m1", msg_type, {"scope": "memory", "itemIds": [MID]})
+    (reply,) = sent
+    assert reply["error"]["code"] == "SYNC_SCOPE_RETIRED"
+    assert "not synced any more" in reply["error"]["message"]

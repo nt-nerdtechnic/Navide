@@ -312,7 +312,7 @@ describe('SharingCloudSection', () => {
     expect(wrapper.find('[role="table"]').exists()).toBe(false)
   })
 
-  it('tells no-key, disabled, unknown-scope and empty apart per scope', async () => {
+  it('tells no-key, disabled and empty apart per scope, and lists no retired scope', async () => {
     const { backend } = mockBackend({
       'sync.inventory': {
         ok: true,
@@ -333,7 +333,9 @@ describe('SharingCloudSection', () => {
     await flushPromises()
 
     const notices = wrapper.findAll('.sc-notice[data-notice]').map((n) => n.attributes('data-notice'))
-    expect(notices).toEqual(['no-key', 'disabled', 'empty', 'unknown-scope'])
+    // Memory is no longer synced: the cloud half does not list it at all.
+    expect(notices).toEqual(['no-key', 'disabled', 'empty'])
+    expect(wrapper.text()).not.toContain('Memory')
   })
 
   it('labels an unreadable record as such, not as diverged, and will not move it', async () => {

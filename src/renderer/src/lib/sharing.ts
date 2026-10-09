@@ -15,6 +15,9 @@
 
 export const SHARE_SCOPES = ['prompts', 'mcp', 'skills', 'memory'] as const
 export type ShareScope = (typeof SHARE_SCOPES)[number]
+/** The scopes cloud sync covers (2026-10-09: memory is no longer synced; a
+ *  bundle still carries it, being a copy the user makes, not sync). */
+export const CLOUD_SCOPES: readonly ShareScope[] = SHARE_SCOPES.filter((scope) => scope !== 'memory')
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

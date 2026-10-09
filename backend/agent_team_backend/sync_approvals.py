@@ -82,6 +82,16 @@ KIND_DELETE = "delete"
 #: Scopes sync no longer offers (user decision 2026-10-09: memory). Their
 #: holds are not listed and never land; their code stays.
 RETIRED_SCOPES = frozenset({"memory"})
+#: The inventory status of a retired scope asked for by name.
+INVENTORY_RETIRED = "retired"
+
+
+class RetiredScopeError(sync_engine.SyncError):
+    """A selective push or pull of a scope sync no longer offers."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(f"{scope} is not synced any more; nothing of it is pushed or pulled")
+        self.scope = scope
 #: The payload a held delete is sealed as: a real record never has this key.
 DELETE_PAYLOAD: dict[str, Any] = {"$delete": True}
 #: A listing row whose summary is longer than this is sent collapsed: its

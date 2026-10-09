@@ -3867,11 +3867,16 @@ async def _sync_selection_ok(
     missing list as "all" would make a UI that failed to collect a tick box
     upload the whole scope.
     """
-    from . import sync_engine
+    from . import sync_approvals, sync_engine
 
     if scope not in sync_engine.SCOPES:
         await session.send_json(
             make_error(msg_id, msg_type, "SYNC_UNKNOWN_SCOPE", f"unknown scope {scope!r}")
+        )
+        return False
+    if scope in sync_approvals.RETIRED_SCOPES:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_SCOPE_RETIRED", str(sync_approvals.RetiredScopeError(scope)))
         )
         return False
     if not item_ids:
