@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from agent_team_backend import app, native_memory, settings_bundle, sync_approvals, sync_engine, sync_scopes
@@ -21,6 +23,7 @@ def P(i, prompt, d=False):
 
 
 # ── N11-1: a bundle memory id is a path, always ────────────────────────────
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot name a file with ':' (it reads 'a:' as a drive)")
 def test_a_bundle_memory_path_with_a_colon_diffs_against_the_real_file(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
     home = _home(tmp_path, "h")
@@ -33,6 +36,19 @@ def test_a_bundle_memory_path_with_a_colon_diffs_against_the_real_file(tmp_path,
     (row,) = settings_bundle.preview_import(bundle)
     assert row["action"] == settings_bundle.OVERWRITE
     assert "-old line" in row["summary"]["diff"]
+
+
+def test_a_bundle_memory_path_with_a_colon_and_no_such_file_here_is_refused(tmp_path, monkeypatch):
+    """Where no file of that name can be (Windows), the row is refused, not crashed."""
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    home = _home(tmp_path, "h")
+    monkeypatch.setattr(native_memory, "_home", lambda: home)
+    bundle = {"bundleVersion": settings_bundle.BUNDLE_VERSION, "scopes": {
+        "memory": {"items": {".cursor/rules/a:b.mdc": {"text": "new line\n"}}}}}
+    (row,) = settings_bundle.preview_import(bundle)
+    assert row["action"] == settings_bundle.SKIP and "summary" not in row
+    out = settings_bundle.apply_import(bundle, {"memory": [".cursor/rules/a:b.mdc"]})
+    assert out["results"][0]["action"] == settings_bundle.SKIP
 
 
 # ── N11-2: a skill re-added after a remote delete can be approved ──────────
