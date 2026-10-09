@@ -144,9 +144,9 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': 'ペインはワークスペース外のファイル、隠しファイル、Navide にドラッグしたファイルもチャットへ送れるようになりました。ただし ~/.ssh、~/.aws、GitHub CLI、GnuPG、Kubernetes、Docker、キーリング、各 CLI のログインファイル、Navide 自身のデータは、どのプラットフォームでも送りません。',
       },
       {
-        'zh-TW': '給 agent：開啟工作區會等新視窗準備好再回報，視窗還沒好時開 pane 會立刻告知而不是卡住，「~/」路徑也會展開；新增 cli_reclaim_agent 收掉已完成的 pane。排程執行的自我優化不會再停下來問問題，閒置太久會被提醒並一定回報。開 pane 時的記憶體提醒只計算真的在執行的 pane。',
-        'en-US': 'For agents: opening a workspace waits until its window is ready, opening a pane before then says so at once instead of hanging, and a "~/" path is expanded; cli_reclaim_agent releases a finished pane. Scheduled self-evolution runs no longer stop to ask a question, are nudged when idle too long and always report back. The memory advisory when opening a pane counts only panes that are actually running.',
-        'ja-JP': 'エージェント向け：ワークスペースを開くとウィンドウの準備ができるまで待ってから応答し、準備前にペインを開こうとするとすぐにそう伝えて止まらなくなりました。「~/」のパスも展開されます。完了したペインを片付ける cli_reclaim_agent を追加しました。スケジュール実行の自己改善は質問で止まらなくなり、長く停止すると促され、必ず報告します。ペインを開くときのメモリの注意は、実際に動いているペインだけを数えます。',
+        'zh-TW': '給 agent：開啟工作區會等新視窗準備好再回報，視窗還沒好時開 pane 會立刻告知而不是卡住，「~/」路徑也會展開；新增 cli_reclaim_agent 收掉已完成的 pane。排程執行的自我優化不會再停下來問問題，閒置太久會被提醒並一定回報。開 pane 時的記憶體提醒只計算真的在執行的 pane。pane 一輪結束後，cli_get_status 會正確回報已完成，不會再停在進行中；排隊的訊息也不會因此多等最多 2 分鐘。',
+        'en-US': 'For agents: opening a workspace waits until its window is ready, opening a pane before then says so at once instead of hanging, and a "~/" path is expanded; cli_reclaim_agent releases a finished pane. Scheduled self-evolution runs no longer stop to ask a question, are nudged when idle too long and always report back. The memory advisory when opening a pane counts only panes that are actually running. Once a pane finishes a turn, cli_get_status now reports it as finished instead of leaving it in progress, and queued messages no longer wait up to 2 minutes extra because of it.',
+        'ja-JP': 'エージェント向け：ワークスペースを開くとウィンドウの準備ができるまで待ってから応答し、準備前にペインを開こうとするとすぐにそう伝えて止まらなくなりました。「~/」のパスも展開されます。完了したペインを片付ける cli_reclaim_agent を追加しました。スケジュール実行の自己改善は質問で止まらなくなり、長く停止すると促され、必ず報告します。ペインを開くときのメモリの注意は、実際に動いているペインだけを数えます。ペインのターンが終わると cli_get_status は正しく完了と報告し、実行中のままにならなくなりました。そのせいでキュー内のメッセージが最大 2 分余計に待つこともなくなりました。',
       },
       {
         'zh-TW': '被「…」截斷的文字，滑鼠移上去就能看到完整內容。Windows：同步來的 skill 不能再透過磁碟機路徑、替代資料流或裝置名稱把檔案寫到 skill 以外的地方，「~」開頭的工作區路徑也能正確對應。',
