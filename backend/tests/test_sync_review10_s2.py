@@ -100,6 +100,7 @@ async def test_a_prompt_edited_here_after_it_was_shown_cannot_be_approved(tmp_pa
 
 # ── F5: the listing is light; bodies load one at a time ─────────────────────
 async def test_the_window_listing_collapses_long_bodies_and_details_load_per_item(tmp_path, account_key, monkeypatch):
+    monkeypatch.setattr(sync_approvals, "RETIRED_SCOPES", frozenset())  # memory's code, retirement lifted
     server, a, b, pa, pb = _memory_pair(tmp_path, monkeypatch)
     pa.write_text("line\n" * 60_000)
     await a.sync(); await b.sync()

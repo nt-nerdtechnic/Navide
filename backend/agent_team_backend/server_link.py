@@ -3972,15 +3972,19 @@ async def sync_inventory(scope: str = "") -> dict[str, Any]:
     own: reaching the adapters means building the engine, which belongs to the
     link. ``share.inventory`` already lists this machine's own items offline.
     """
-    from . import sync_engine as engine_mod, sync_scopes
+    from . import sync_approvals, sync_engine as engine_mod, sync_scopes
 
     enabled = await asyncio.to_thread(sync_scopes.enabled_scopes)
     link = _link
     connected = link is not None and link._authenticated  # noqa: SLF001 - same module
-    wanted = [scope] if scope else list(engine_mod.SCOPES)
+    # A scope sync no longer offers (memory) is left out of the whole-account
+    # listing, and answers "retired" when asked for by name.
+    wanted = [scope] if scope else [s for s in engine_mod.SCOPES if s not in sync_approvals.RETIRED_SCOPES]
     scopes: dict[str, Any] = {}
     for name in wanted:
-        if name not in engine_mod.SCOPES:
+        if name in sync_approvals.RETIRED_SCOPES:
+            scopes[name] = {"scope": name, "status": sync_approvals.INVENTORY_RETIRED, "items": []}
+        elif name not in engine_mod.SCOPES:
             scopes[name] = {
                 "scope": name,
                 "status": engine_mod.INVENTORY_UNKNOWN_SCOPE,
@@ -4074,6 +4078,10 @@ def _inventory_devices(
 
 async def sync_push_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
     """Send the chosen items of one scope and report what became of each."""
+    from . import sync_approvals
+
+    if scope in sync_approvals.RETIRED_SCOPES:
+        raise sync_approvals.RetiredScopeError(scope)
     link = _link
     if link is None or not link._authenticated:  # noqa: SLF001 - same module
         raise ConnectionError("the navide-server link is not connected")
@@ -4084,6 +4092,10 @@ async def sync_push_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
 
 async def sync_pull_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
     """Take the chosen items of one scope and report what became of each."""
+    from . import sync_approvals
+
+    if scope in sync_approvals.RETIRED_SCOPES:
+        raise sync_approvals.RetiredScopeError(scope)
     link = _link
     if link is None or not link._authenticated:  # noqa: SLF001 - same module
         raise ConnectionError("the navide-server link is not connected")

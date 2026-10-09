@@ -24,7 +24,7 @@ import { useI18n } from 'vue-i18n'
 import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../../composables/useBackend'
 import {
-  SHARE_SCOPES,
+  CLOUD_SCOPES,
   deviceLabel,
   displayState,
   isActionable,
@@ -123,7 +123,7 @@ async function load(): Promise<void> {
     }
     view.value = readSyncInventory(resp.payload)
     const live = new Set<string>()
-    for (const scope of SHARE_SCOPES) {
+    for (const scope of CLOUD_SCOPES) {
       for (const row of rowsFor(scope)) live.add(rowKey(scope, row.itemId))
     }
     picked.value = new Set([...picked.value].filter((key) => live.has(key)))
@@ -191,7 +191,7 @@ onMounted(load)
     </div>
 
     <template v-else-if="view">
-      <div v-for="scope in SHARE_SCOPES" :key="scope" class="sc-scope">
+      <div v-for="scope in CLOUD_SCOPES" :key="scope" class="sc-scope">
         <div class="sc-scope-head">
           <span class="sc-scope-name">{{ t('settings.sync.scope-' + scope) }}</span>
           <span v-if="!view.scopeEnabled[scope]" class="sc-off-tag">

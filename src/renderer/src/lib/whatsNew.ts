@@ -111,6 +111,46 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.18',
+    title: {
+      'zh-TW': '雲端同步先經你核准、聊天室報告卡與 PDF、Windows 修正',
+      'en-US': 'Cloud Sync You Approve, Report Cards and PDFs in Chats, and Windows Fixes',
+      'ja-JP': 'クラウド同期は承認してから反映、チャットのレポートカードと PDF、Windows の修正',
+    },
+    highlights: [
+      {
+        'zh-TW': '其他裝置同步過來、會在這台電腦執行的內容——新的或有變更的 MCP server、skill、prompt——會先暫停，在「設定 → 同步」列出完整內容（指令、參數、檔案、哪些可執行、改了什麼），你核准後才寫入；大型 skill 會先下載到隔離區給你檢視。匯入設定包的預覽也會完整顯示每一項。',
+        'en-US': 'What another device syncs that would run on this computer — a new or changed MCP server, skill or prompt — now waits in Settings → Sync, shown in full (command, args, files, which are executable, what changed), and lands only once you approve it. A large skill is downloaded into a holding area for you to review first. A settings-bundle import previews every item in full too.',
+        'ja-JP': '別のデバイスから同期され、このコンピューターで実行される内容（新規または変更された MCP サーバー・スキル・プロンプト）は、いったん保留され、「設定 → 同期」に全内容（コマンド、引数、ファイル、実行可能なもの、変更点）が表示されます。承認してはじめて反映されます。大きなスキルは先に隔離領域へダウンロードして確認できます。設定パックの取り込みプレビューも各項目を全文表示します。',
+      },
+      {
+        'zh-TW': '同步更安全：舊版紀錄被重送時不會把項目倒回舊版；prompt 與 MCP 參數看起來含有密鑰時會告訴你在哪裡（不顯示內容、不阻擋）；同步區會顯示正在同步的帳號，「立即同步」後列出每一類的結果，存檔後也會自動上傳。記憶（CLAUDE.md 等指示檔）不再雲端同步，本機與雲端既有的檔案都不會被動到。',
+        'en-US': 'Safer sync: a replayed older record can no longer roll an item back; prompts and MCP args that look like they hold a secret are flagged with where, never what, and nothing is blocked; the Sync section names the account it syncs with, lists each scope’s result after Sync now, and sends a save up shortly after you make it. Memory (CLAUDE.md and other instruction files) is no longer synced; local files and copies already in the cloud are left as they are.',
+        'ja-JP': '同期がより安全に：古い記録が再送されても項目が古い版に戻らなくなりました。プロンプトや MCP の引数に秘密情報らしきものがあると、場所だけを知らせます（内容は表示せず、ブロックもしません）。同期セクションには同期先のアカウントが表示され、「今すぐ同期」の後に種類ごとの結果が並び、保存した変更も自動でアップロードされます。メモリ（CLAUDE.md などの指示ファイル）はクラウド同期の対象外になりました。ローカルのファイルとクラウド上の既存のコピーはそのまま残ります。',
+      },
+      {
+        'zh-TW': '聊天室：pane 傳出的 HTML 檔會轉成 A4 PDF，每個附件都附上一張報告卡（標題與一句摘要），你回覆報告卡時 pane 會知道你指的是哪份報告；很長的回覆改成一則預覽加上完整內容的 Markdown 檔。「設定 → Channels」會列出每個 bot 的聊天室與綁定的 pane，可以跳過去、多選解除綁定、清掉 pane 已不存在的綁定。',
+        'en-US': 'Chats: an HTML file a pane sends arrives as an A4 PDF, every attachment comes with a report card (a title and a one-line summary), and replying to a card tells the pane which report you mean. A very long reply arrives as one preview plus the whole text as a Markdown file. Settings → Channels lists each bot’s chats and bound panes, so you can jump to a pane, unbind several at once, and clear bindings whose pane is gone.',
+        'ja-JP': 'チャット：ペインが送る HTML ファイルは A4 の PDF になり、すべての添付にレポートカード（タイトルと一行の要約）が付きます。カードに返信すると、どのレポートの話かがペインに伝わります。長い返信は 1 件のプレビューと全文の Markdown ファイルで届きます。「設定 → Channels」では bot ごとにチャットと紐づいたペインが一覧でき、ペインへの移動、まとめての紐づけ解除、ペインがなくなった紐づけの削除ができます。',
+      },
+      {
+        'zh-TW': 'pane 現在可以把工作區外的檔案、隱藏檔，以及你拖進 Navide 的檔案傳回聊天室；但 ~/.ssh、~/.aws、GitHub CLI、GnuPG、Kubernetes、Docker、鑰匙圈、各 CLI 的登入檔與 Navide 自己的資料，在每個平台上都一律不傳。',
+        'en-US': 'A pane can now send files from outside its workspace, hidden files, and files you dragged into Navide; ~/.ssh, ~/.aws, the GitHub CLI, GnuPG, Kubernetes, Docker, keyrings, the CLIs’ sign-in files and Navide’s own data are still never sent, on every platform.',
+        'ja-JP': 'ペインはワークスペース外のファイル、隠しファイル、Navide にドラッグしたファイルもチャットへ送れるようになりました。ただし ~/.ssh、~/.aws、GitHub CLI、GnuPG、Kubernetes、Docker、キーリング、各 CLI のログインファイル、Navide 自身のデータは、どのプラットフォームでも送りません。',
+      },
+      {
+        'zh-TW': '給 agent：開啟工作區會等新視窗準備好再回報，視窗還沒好時開 pane 會立刻告知而不是卡住，「~/」路徑也會展開；新增 cli_reclaim_agent 收掉已完成的 pane。排程執行的自我優化不會再停下來問問題，閒置太久會被提醒並一定回報。開 pane 時的記憶體提醒只計算真的在執行的 pane。',
+        'en-US': 'For agents: opening a workspace waits until its window is ready, opening a pane before then says so at once instead of hanging, and a "~/" path is expanded; cli_reclaim_agent releases a finished pane. Scheduled self-evolution runs no longer stop to ask a question, are nudged when idle too long and always report back. The memory advisory when opening a pane counts only panes that are actually running.',
+        'ja-JP': 'エージェント向け：ワークスペースを開くとウィンドウの準備ができるまで待ってから応答し、準備前にペインを開こうとするとすぐにそう伝えて止まらなくなりました。「~/」のパスも展開されます。完了したペインを片付ける cli_reclaim_agent を追加しました。スケジュール実行の自己改善は質問で止まらなくなり、長く停止すると促され、必ず報告します。ペインを開くときのメモリの注意は、実際に動いているペインだけを数えます。',
+      },
+      {
+        'zh-TW': '被「…」截斷的文字，滑鼠移上去就能看到完整內容。Windows：同步來的 skill 不能再透過磁碟機路徑、替代資料流或裝置名稱把檔案寫到 skill 以外的地方，「~」開頭的工作區路徑也能正確對應。',
+        'en-US': 'Text cut off with "…" shows in full on hover. Windows: a synced skill can no longer place files outside itself through drive paths, alternate data streams or device names, and a workspace path starting with "~" now matches the same folder.',
+        'ja-JP': '「…」で切れた文字は、マウスを重ねると全文が表示されます。Windows：同期されたスキルが、ドライブパス・代替データストリーム・デバイス名を使ってスキル外にファイルを書き込めなくなりました。「~」で始まるワークスペースのパスも正しく同じフォルダーを指します。',
+      },
+    ],
+  },
+  {
     version: '0.2.17',
     title: {
       'zh-TW': '修正後端自行停止、畫面卡在「connecting…」',

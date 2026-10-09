@@ -65,8 +65,37 @@ describe('SyncSettings', () => {
     await flushPromises()
 
     const switches = wrapper.findAll('button[role="switch"]')
-    expect(switches).toHaveLength(4)
+    // Memory is no longer synced: with its switch off it is not listed.
+    expect(switches).toHaveLength(3)
     expect(switches.every((s) => s.attributes('aria-checked') === 'false')).toBe(true)
+    expect(wrapper.text()).not.toContain('Memory')
+  })
+
+  it('shows memory left on with only an off switch and a note that it is not synced', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'mcp', 'skills', 'memory'],
+          scopes: { prompts: false, mcp: false, skills: false, memory: true },
+          hasKey: true,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+      'sync.set_scope': { ok: true, payload: { scopes: { prompts: false, mcp: false, skills: false, memory: false } } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    const switches = wrapper.findAll('button[role="switch"]')
+    expect(switches).toHaveLength(4)
+    expect(wrapper.text()).toContain('Memory is not synced any more')
+    expect(switches[3].attributes('disabled')).toBeUndefined()
+    await switches[3].trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('sync.set_scope', { scope: 'memory', enabled: false })
+    // Once off, it is gone from the list.
+    expect(wrapper.findAll('button[role="switch"]')).toHaveLength(3)
   })
 
   it('turning a scope on sends exactly that scope', async () => {
@@ -175,15 +204,15 @@ describe('SyncSettings', () => {
     await flushPromises()
 
     const switches = wrapper.findAll('button[role="switch"]')
-    expect(switches).toHaveLength(5)
+    expect(switches).toHaveLength(4)
     // Still listed, so the section does not silently disappear…
     expect(wrapper.text()).toContain('Credentials')
     // …but described as unavailable rather than by what it would sync.
     expect(wrapper.text()).toContain('Not syncable yet.')
     expect(wrapper.text()).not.toContain('never removes it from the cloud')
-    expect(switches[4].attributes('disabled')).toBeDefined()
+    expect(switches[3].attributes('disabled')).toBeDefined()
 
-    await switches[4].trigger('click')
+    await switches[3].trigger('click')
     await flushPromises()
     expect(send).not.toHaveBeenCalledWith('sync.set_scope', {
       scope: 'credentials',
@@ -229,7 +258,7 @@ describe('SyncSettings', () => {
     })
   })
 
-  it('still lets the four reviewed scopes be turned on', async () => {
+  it('still lets the three reviewed scopes be turned on', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {
         ok: true,
@@ -246,7 +275,7 @@ describe('SyncSettings', () => {
     await flushPromises()
 
     const switches = wrapper.findAll('button[role="switch"]')
-    for (const [index, scope] of ['prompts', 'mcp', 'skills', 'memory'].entries()) {
+    for (const [index, scope] of ['prompts', 'mcp', 'skills'].entries()) {
       expect(switches[index].attributes('disabled')).toBeUndefined()
       await switches[index].trigger('click')
       await flushPromises()
