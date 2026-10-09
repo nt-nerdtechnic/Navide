@@ -252,25 +252,28 @@ async def test_skill_md_preview_says_it_was_cut_and_referenced_files_are_preview
 
 
 # ── N7: invisible characters do not get into what runs ─────────────────────
+# Round 6 (R6-1) moved the check from the store's schema to synced records
+# and approval, and allows the invisible characters real paths carry (NBSP,
+# NNBSP, ZWJ, ZWNJ, VS16): see test_sync_approvals_review6.
 @pytest.mark.parametrize("field, value", [
     ("command", "np\u200bx"),
     ("command", "np\u202ex"),
     ("args", ["safe\u202e.js"]),
-    ("args", ["a\u00a0b"]),
     ("args", ["a\u2028b"]),
     ("args", ["a\u3164b"]),
-    ("args", ["a\ufe0fb"]),
 ])
-def test_the_mcp_store_refuses_invisible_characters_in_what_runs(tmp_path, field, value):
-    store = MCPSettingsStore(tmp_path / "m.json")
-    with pytest.raises(Exception):
-        store.replace_servers([{**_mcp("x"), field: value}])
+def test_a_synced_record_with_hidden_characters_is_not_valid(field, value):
+    assert sync_scopes._mcp_hides({**_mcp("x"), field: value})
+    assert not sync_scopes._mcp_valid([], -1, {**_mcp("x"), field: value})
 
 
-def test_the_mcp_store_refuses_invisible_characters_in_a_url(tmp_path):
-    store = MCPSettingsStore(tmp_path / "m.json")
-    with pytest.raises(Exception):
-        store.replace_servers([{"name": "w", "transport": "http", "url": "https://ok.example/\u200b", "enabled": True}])
+@pytest.mark.parametrize("value", ["a\u00a0b", "a\ufe0fb"])
+def test_invisible_characters_real_paths_carry_are_allowed(value):
+    assert not sync_scopes._mcp_hides({**_mcp("x"), "args": [value]})
+
+
+def test_a_synced_url_with_hidden_characters_is_not_valid():
+    assert sync_scopes._mcp_hides({"name": "w", "transport": "http", "url": "https://ok.example/\u200b"})
 
 
 def test_ordinary_text_still_passes(tmp_path):

@@ -392,6 +392,9 @@ class McpScope:
                     kind=sync_approvals.KIND_NEW if local is None else sync_approvals.KIND_CHANGED,
                     summary=_mcp_summary(item_id, payload),
                 )
+            if self._gate and _mcp_hides(payload):
+                # Checked again when an approved record lands.
+                raise sync_engine.SyncError(f"MCP record {item_id} hides characters in what it runs; refused")
             incoming = dict(payload)
             incoming["name"] = item_id
             if index < 0:
@@ -483,8 +486,12 @@ def _mcp_needs_approval(local: Any, incoming: dict[str, Any]) -> bool:
 
 def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, Any]) -> bool:
     """Whether the store would take the document with *incoming* in it, and
-    an approval could show all of it (``MAX_SYNCED_ENV``, ``MAX_SYNCED_NAME``)."""
+    an approval could show all of it (``MAX_SYNCED_ENV``, ``MAX_SYNCED_NAME``,
+    nothing in what runs that hides what it is, ``_mcp_hides``)."""
     from .mcp_settings import MCPServersDocument
+
+    if _mcp_hides(incoming):
+        return False
 
     for field_name in ("env", "headers"):
         values = incoming.get(field_name)
@@ -502,6 +509,18 @@ def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, An
     except Exception:  # noqa: BLE001 - any refusal is a refusal
         return False
     return True
+
+
+def _mcp_hides(server: dict[str, Any]) -> bool:
+    """Whether a synced record's command, args or url hold a character that
+    hides what it says (``mcp_settings._has_invisible``)."""
+    from .mcp_settings import _has_invisible
+
+    values = [server.get("command"), server.get("url")]
+    args = server.get("args")
+    if isinstance(args, list):
+        values.extend(args)
+    return any(isinstance(v, str) and _has_invisible(v) for v in values)
 
 
 def _mcp_summary(name: str, server: dict[str, Any]) -> dict[str, Any]:
@@ -860,8 +879,13 @@ _PROGRESS_INTERVAL_S = 0.5
 #: Most bytes a large skill may download to be reviewed before approval;
 #: past it the record is held but cannot be approved.
 MAX_REVIEW_BYTES = 64 * 1024 * 1024
-#: The ``unavailable`` of a held large skill whose review download is due.
+#: Most bytes the sealed review copies of all held large skills may take;
+#: a review past it waits for space (a hold decided frees its copies).
+MAX_REVIEW_CACHE_BYTES = 512 * 1024 * 1024
+#: The ``unavailable`` of a held large skill whose review download is due,
+#: and the start of one waiting for space in the review cache.
 REVIEW_PENDING = "downloading its files for review"
+REVIEW_NO_SPACE = "waiting for space to download its files for review"
 #: Failed downloads of one manifest before its record is given up on. Until
 #: then the record holds the scope's cursor; after, it is declined (reported
 #: by ``SkillFilesScope.failed``) so the records behind it can land.
@@ -910,6 +934,10 @@ class SkillFilesScope:
         #: Failed downloads, by item: (manifest digest, count). A new
         #: manifest for the item starts the count again.
         self._download_failures: dict[str, tuple[str, int]] = {}
+        #: Bytes of review downloads started and not yet sealed, by item:
+        #: counted against MAX_REVIEW_CACHE_BYTES with what is on disk.
+        self._review_reserved: dict[str, int] = {}
+        self._temps_cleaned = False
 
     # ── wiring ──────────────────────────────────────────────────────────
 
@@ -958,6 +986,10 @@ class SkillFilesScope:
         from . import skill_blobs
 
         self._request, self._kick, self._loop = request, kick, asyncio.get_running_loop()
+        if not self._temps_cleaned:
+            # Once per process: plaintext a crash left mid-review or mid-land.
+            self._temps_cleaned = True
+            await asyncio.to_thread(sync_approvals.clean_leftover_temps, self._staging())
         try:
             self._layout = await skill_blobs.server_layout(request)
         except skill_blobs.BlobError as err:
@@ -976,10 +1008,17 @@ class SkillFilesScope:
     def _reviews_due(self) -> list[str]:
         out = []
         for row in sync_approvals.listing():
-            if row["scope"] == self.scope and row["status"] == sync_approvals.PENDING \
-                    and row["summary"].get("unavailable") == REVIEW_PENDING:
+            unavailable = str(row["summary"].get("unavailable") or "")
+            if row["scope"] == self.scope and row["status"] == sync_approvals.PENDING and (
+                unavailable == REVIEW_PENDING or unavailable.startswith(REVIEW_NO_SPACE)
+            ):
                 out.append(row["itemId"])
         return out
+
+    def _review_space(self, item_id: str, total: int) -> bool:
+        """Whether a review of *total* bytes fits the review cache now."""
+        reserved = sum(v for k, v in self._review_reserved.items() if k != item_id)
+        return sync_approvals.review_cache_bytes() + reserved + total <= MAX_REVIEW_CACHE_BYTES
 
     def _store(self):
         from . import app
@@ -1202,20 +1241,25 @@ class SkillFilesScope:
             if sync_approvals.is_rejected(self.scope, item_id, payload):
                 return True
             total = sum(ref.size for ref in refs.values())
+            if total > MAX_REVIEW_BYTES:
+                unavailable = f"too large to review here: {total} bytes, the limit is {MAX_REVIEW_BYTES}"
+            elif not self._review_space(item_id, total):
+                unavailable = f"{REVIEW_NO_SPACE} (decide the skills already waiting to free it)"
+            else:
+                unavailable = REVIEW_PENDING
             summary: dict[str, Any] = {
                 "name": item_id,
                 "files": [{"path": rel, "size": refs[rel].size} for rel in sorted(refs)],
                 "bytes": total,
-                "unavailable": REVIEW_PENDING if total <= MAX_REVIEW_BYTES else (
-                    f"too large to review here: {total} bytes, the limit is {MAX_REVIEW_BYTES}"
-                ),
+                "unavailable": unavailable,
             }
             held = sync_approvals.hold(
                 self.scope, item_id, payload, local=local_manifest,
                 kind=sync_approvals.KIND_NEW if local_manifest is None else sync_approvals.KIND_CHANGED,
                 summary=summary,
             )
-            if held and total <= MAX_REVIEW_BYTES and self._loop is not None and not self._loop.is_closed():
+            if held and unavailable == REVIEW_PENDING and self._loop is not None and not self._loop.is_closed():
+                self._review_reserved[item_id] = total
                 self._loop.call_soon_threadsafe(self._start_review, item_id, payload)
             return held
         manifest_digest = sync_engine.digest(payload)
@@ -1314,6 +1358,17 @@ class SkillFilesScope:
             return
         layout, request = self._layout, self._request
         payload_digest = sync_engine.digest(payload)
+        try:
+            total = sum(ref.size for ref in self._refs_of(payload).values())
+        except Exception:  # noqa: BLE001 - reported by the review below
+            total = 0
+        if not self._review_space(item_id, total):
+            note = {"name": item_id, "files": [], "unavailable":
+                    f"{REVIEW_NO_SPACE} (decide the skills already waiting to free it)"}
+            sync_approvals.update_summary(self.scope, item_id, payload_digest, note)
+            self._review_reserved.pop(item_id, None)
+            return
+        self._review_reserved[item_id] = total
 
         async def review() -> None:
             try:
@@ -1328,6 +1383,8 @@ class SkillFilesScope:
                     "files": [],
                     "unavailable": f"its files could not be downloaded for review: {err}",
                 }
+            finally:
+                self._review_reserved.pop(item_id, None)
             await asyncio.to_thread(sync_approvals.update_summary, self.scope, item_id, payload_digest, summary)
 
         self._start(f"review:{item_id}", review)
@@ -1340,14 +1397,16 @@ class SkillFilesScope:
         temporary file beside the sealed ones while it is sealed."""
         from . import skill_blobs
 
-        directory = sync_approvals._held_files_dir(self.scope, item_id, payload_digest)
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = sync_approvals._private_dir(sync_approvals._held_files_dir(self.scope, item_id, payload_digest))
         fetched: dict[str, Any] = {}
         try:
             for rel, ref in sorted(refs.items()):
                 temp = fetched.get(ref.blob_id)
                 if temp is None:
                     temp = directory / f"fetch-{ref.blob_id}.tmp"
+                    # download() appends to <temp>.part and renames it into
+                    # place: created 0600 here, it keeps that mode.
+                    sync_approvals.private_file(temp.with_name(temp.name + ".part"))
                     await skill_blobs.download(request, ref, temp, layout)
                     fetched[ref.blob_id] = temp
                 await asyncio.to_thread(
@@ -1414,7 +1473,8 @@ class SkillFilesScope:
         payload_digest = sync_engine.digest(payload)
         summary = sync_approvals.held_summary(self.scope, item_id) or {}
         shown = {f.get("path"): f.get("sha256") for f in summary.get("files") or [] if isinstance(f, dict)}
-        staging = self._staging()
+        # Plaintext copies to land from, private, beside the sealed ones.
+        staging = sync_approvals._private_dir(sync_approvals._held_files_dir(self.scope, item_id, payload_digest))
         sources: dict[str, Any] = {}
         try:
             for rel in sorted(refs):

@@ -31,17 +31,27 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 #: Characters that print as nothing or as a blank though they are not a
 #: space: Hangul fillers, the braille blank, the combining grapheme joiner.
 _BLANK_LOOKING = frozenset("\u115f\u1160\u3164\uffa0\u2800\u034f")
+#: Invisible characters real paths and names carry, allowed: ZWNJ (Persian),
+#: ZWJ and VS16 (emoji), NBSP, and NNBSP (macOS screenshot file names). The
+#: approval screen shows them escaped.
+_ALLOWED_INVISIBLE = frozenset("\u200c\u200d\ufe0f\u00a0\u202f")
 
 
 def _has_invisible(value: str) -> bool:
     """Whether *value* holds a character that hides what it says: format
-    characters (bidi overrides, zero-width), separators other than the plain
-    space, private-use or surrogate code points, variation selectors and the
-    blank-looking letters above. A command, an argument or a URL is shown to
-    a person who approves it; what runs must read as what it is."""
+    characters (bidi overrides, zero-width space), separators other than the
+    plain space, private-use or surrogate code points, variation selectors
+    and the blank-looking letters above — less the ones real paths carry
+    (``_ALLOWED_INVISIBLE``).
+
+    Not part of the schema: a config this machine already has loads whatever
+    it holds. Sync asks it of records that arrive from another device, and of
+    a record again when it is approved (sync_scopes)."""
     import unicodedata
 
     for ch in value:
+        if ch in _ALLOWED_INVISIBLE:
+            continue
         cat = unicodedata.category(ch)
         cp = ord(ch)
         if cat in ("Cf", "Co", "Cs", "Zl", "Zp") or (cat == "Zs" and ch != " "):
@@ -118,8 +128,8 @@ class MCPStdioServerSetting(_MCPServerBase):
     @classmethod
     def validate_command(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized or _CONTROL_CHARS_RE.search(normalized) or _has_invisible(normalized):
-            raise ValueError("command must not contain control or invisible characters")
+        if not normalized or _CONTROL_CHARS_RE.search(normalized):
+            raise ValueError("command must not contain control characters")
         return normalized
 
     @field_validator("args")
@@ -129,8 +139,8 @@ class MCPStdioServerSetting(_MCPServerBase):
         for arg in values:
             if not isinstance(arg, str):
                 raise ValueError("args must be strings")
-            if len(arg) > 512 or _CONTROL_CHARS_RE.search(arg) or _has_invisible(arg):
-                raise ValueError("args must not contain control or invisible characters")
+            if len(arg) > 512 or _CONTROL_CHARS_RE.search(arg):
+                raise ValueError("args must not contain control characters")
             clean.append(arg)
         return clean
 
@@ -160,7 +170,6 @@ class _MCPRemoteServerSetting(_MCPServerBase):
         if (
             not normalized
             or _CONTROL_CHARS_RE.search(normalized)
-            or _has_invisible(normalized)
             or not normalized.startswith(("http://", "https://"))
         ):
             raise ValueError("url must use http or https and contain no control characters")

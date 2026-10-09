@@ -84,6 +84,51 @@ def _stash_dir() -> Path:
     return app.app_data_dir() / "sync-approvals"
 
 
+def _private_dir(path: Path) -> Path:
+    """*path* as a directory only this user can open (0700), with every
+    directory this module made on the way to it."""
+    root = _stash_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        current = path
+        while True:
+            os.chmod(current, 0o700)
+            if current == root or root not in current.parents:
+                break
+            current = current.parent
+    return path
+
+
+def private_file(path: Path) -> Path:
+    """Create *path* empty, readable by this user only (0600)."""
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    os.close(fd)
+    return path
+
+
+def clean_leftover_temps(staging: Path | None = None) -> None:
+    """Remove plaintext temporaries a crash left behind: review downloads in
+    the hold area (fetch-*), and landing copies (review-*) here or in an
+    older build's *staging* directory."""
+    root = _stash_dir() / "files"
+    patterns = ("fetch-*", "review-*")
+    for base in (root, staging):
+        if base is None or not base.is_dir():
+            continue
+        for pattern in patterns:
+            for leftover in base.rglob(pattern):
+                if leftover.is_file():
+                    leftover.unlink(missing_ok=True)
+
+
+def review_cache_bytes() -> int:
+    """Bytes the sealed review copies of every hold take on disk."""
+    root = _stash_dir() / "files"
+    if not root.is_dir():
+        return 0
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
 def _stash_path(scope: str, item_id: str) -> Path:
     name = hashlib.sha256(f"{scope}\0{item_id}".encode("utf-8")).hexdigest()
     return _stash_dir() / scope / f"{name}.sealed"
@@ -272,10 +317,9 @@ def seal_held_file(scope: str, item_id: str, payload_digest: str, rel: str, sour
     label = _file_label(scope, item_id, payload_digest, rel)
     size = source.stat().st_size
     count = max(1, -(-size // _SEGMENT))
-    directory = _held_files_dir(scope, item_id, payload_digest)
-    directory.mkdir(parents=True, exist_ok=True)
+    directory = _private_dir(_held_files_dir(scope, item_id, payload_digest))
     target = directory / label
-    temp = target.with_suffix(".tmp")
+    temp = private_file(target.with_suffix(".tmp"))
     with open(source, "rb") as src, open(temp, "wb") as out:
         out.write(_HELD_FILE_MAGIC + kid.encode("ascii") + b"\n" + str(count).encode() + b"\n")
         for index in range(count):
@@ -316,7 +360,7 @@ def held_file_head(scope: str, item_id: str, payload_digest: str, rel: str, limi
 def open_held_file(scope: str, item_id: str, payload_digest: str, rel: str, dest: Path) -> str:
     """Write a held file's plaintext to *dest*; returns its SHA-256."""
     sha = hashlib.sha256()
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    private_file(dest)
     with open(dest, "wb") as out:
         for segment in _held_file_segments(scope, item_id, payload_digest, rel):
             sha.update(segment)
@@ -425,23 +469,22 @@ def overlay(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
             continue
         payload = held_payload(scope, item_id)
         if payload is None:
-            if record.get("status") == REJECTED:
-                # Fails closed: the "no" stays, and ``withheld`` keeps the
-                # engine from pushing this machine's copy (or its absence, a
-                # delete) over the change it rejected.
-                continue
-            drop(scope, item_id)
+            # Fails closed, waiting or rejected alike: the hold stays, and
+            # ``withheld`` keeps the engine from pushing this machine's copy —
+            # or its absence, a delete — over the change it held. A missing
+            # payload is never a delete.
             continue
         out[item_id] = payload
     return out
 
 
 def withheld(scope: str) -> list[str]:
-    """Rejected holds whose payload no longer opens here: the engine sends
-    nothing for them — no edit, no delete — and reports them as held."""
+    """Holds whose payload no longer opens here (or is gone): the engine
+    sends nothing for them — no edit, no delete — and reports them as held,
+    until a newer record for the item replaces the hold."""
     return sorted(
-        item_id for item_id, record in _index().get(scope, {}).items()
-        if record.get("status") == REJECTED and held_payload(scope, item_id) is None
+        item_id for item_id in _index().get(scope, {})
+        if held_payload(scope, item_id) is None
     )
 
 
@@ -503,6 +546,8 @@ def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict
             )
         if not approve:
             set_status(scope, item_id, REJECTED)
+            # Nothing reviewed is kept for a "no".
+            drop_held_files(scope, item_id, shown_digest)
             return {"scope": scope, "itemId": item_id, "status": REJECTED}
         if not _displayable(_open_summary(scope, item_id, record)):
             raise sync_engine.SyncError(
@@ -510,8 +555,9 @@ def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict
             )
         payload = held_payload(scope, item_id)
         if payload is None or digest(payload) != shown_digest:
-            drop(scope, item_id)
-            raise sync_engine.SyncError(f"the held {scope}/{item_id} could not be opened here")
+            # Kept, not dropped: dropping would let the engine push this
+            # machine's copy (or a delete) over it.
+            raise sync_engine.SyncError(f"the held {scope}/{item_id} could not be opened here; reject it")
         set_status(scope, item_id, APPROVED, token=_approval_token(scope, item_id, shown_digest))
     return {"scope": scope, "itemId": item_id, "status": land(adapter, item_id, payload)}
 
@@ -523,6 +569,9 @@ def land(adapter: Any, item_id: str, payload: Any) -> str:
         result = adapter.apply(item_id, payload)
     except sync_engine.DeferItem:
         return APPROVED  # files on their way; landed on a later round
+    except sync_engine.SyncError:
+        set_status(scope, item_id, PENDING)  # not landed: back to waiting, without the token
+        raise
     if result is False:
         # Refused here after all (the store would not take it). The hold goes
         # back to waiting, so the window shows it still unresolved.
