@@ -4100,6 +4100,27 @@ def sync_conflicts(scope: str = "") -> list[dict[str, Any]]:
     return sync_scopes.conflict_preview(app.sync_store.conflicts(scope or None))
 
 
+def sync_approvals() -> list[dict[str, Any]]:
+    """Synced skills and MCP servers waiting for the user's approval
+    (``sync_approvals``), readable whether or not the link is up."""
+    from . import sync_approvals as approvals
+
+    return approvals.listing()
+
+
+def decide_sync_approval(scope: str, item_id: str, approve: bool) -> dict[str, Any]:
+    """Approve or reject one held record. Blocking; call off the loop. Goes
+    through the link's engine, whose registered adapter writes the record
+    (an approved MCP server then reloads like a save in Settings)."""
+    from . import sync_approvals as approvals
+
+    link = _link
+    if link is None:
+        raise ConnectionError("the navide-server link is not running")
+    adapter = link.sync_engine()._require_adapter(scope)  # noqa: SLF001 - same package
+    return approvals.decide(adapter, item_id, approve)
+
+
 def resolve_sync_conflict(scope: str, item_id: str, keep: str) -> None:
     """Answer one conflict. Needs the adapters, so it goes through the link."""
     link = _link

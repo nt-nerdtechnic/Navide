@@ -3718,6 +3718,32 @@ async def sync_conflicts(session: "Session", msg_id: str, msg_type: str, payload
     await session.send_json(make_response(msg_id, msg_type, {"conflicts": rows}))
 
 
+@handler("sync.approvals")
+async def sync_approvals_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Synced skills and MCP servers waiting for approval (decision D1)."""
+    rows = await asyncio.to_thread(server_link.sync_approvals)
+    await session.send_json(make_response(msg_id, msg_type, {"approvals": rows}))
+
+
+@handler("sync.approval.decide")
+async def sync_approval_decide(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    scope = str(payload.get("scope") or "")
+    item_id = str(payload.get("itemId") or "")
+    approve = payload.get("approve")
+    if not isinstance(approve, bool):
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_BAD_CHOICE", "approve must be true or false")
+        )
+        return
+    try:
+        result = await asyncio.to_thread(server_link.decide_sync_approval, scope, item_id, approve)
+    except Exception as err:  # noqa: BLE001 - a hold that went away is a normal race
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_APPROVAL_FAILED", str(err)))
+        return
+    rows = await asyncio.to_thread(server_link.sync_approvals)
+    await session.send_json(make_response(msg_id, msg_type, {"approval": result, "approvals": rows}))
+
+
 @handler("sync.resolve")
 async def sync_resolve(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import sync_engine

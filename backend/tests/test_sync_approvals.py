@@ -207,3 +207,25 @@ async def test_changed_skill_files_wait_for_approval(tmp_path, account_key, monk
     b.use()
     (held,) = sync_approvals.listing()
     assert held["kind"] == "changed" and "extra.sh" in held["summary"]["files"]
+
+
+# ── the window's surface ─────────────────────────────────────────────────────
+async def test_the_window_lists_and_decides_through_the_link(tmp_path, account_key, monkeypatch):
+    from agent_team_backend import server_link
+
+    server, a, b, a_store, b_store = _mcp_pair(tmp_path, monkeypatch)
+    a.use(); a_store.replace_servers([_mcp("x")])
+    await a.sync(); await b.sync()
+
+    class Link:
+        def sync_engine(self):
+            return b.engine
+
+    monkeypatch.setattr(server_link, "_link", Link())
+    b.use()
+    assert [h["itemId"] for h in server_link.sync_approvals()] == ["x"]
+    with pytest.raises(Exception):
+        server_link.decide_sync_approval("prompts", "x", True)
+    result = server_link.decide_sync_approval("mcp", "x", True)
+    assert result["status"] == "applied" and "x" in _names(b_store)
+    assert server_link.sync_approvals() == []
