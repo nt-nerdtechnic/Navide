@@ -2765,7 +2765,12 @@ async def cli_hook(vendor: str, request: Request) -> Any:
             # call the pane idle and start injecting the NEXT queued message
             # over stdin, into a pane that is already working.
             event_type = "agent_active"
-    if pane_id:
+    # idle_prompt fires about a minute after EVERY finished turn (draft in the
+    # composer or not). It reports the pane waiting, not working, so recording
+    # it as agent_active would replace the turn_complete entry for good —
+    # cli_get_status would show a finished pane as active, with no turn text.
+    # The broadcast below still carries it for the renderer to judge.
+    if pane_id and notification_type != "idle_prompt":
         # The log-reader sink is not the only writer of _pane_activity any
         # more: for the hook vendors the Stop hook is the earliest and most
         # reliable end-of-turn signal there is, and cli_wait_idle could not see
