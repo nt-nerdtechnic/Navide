@@ -39,6 +39,14 @@ async def _noop_emit(event: dict[str, Any]) -> None:
     return None
 
 
+def _fake_base(*real: int) -> int:
+    """A base for fake pids that can never be one of the real pids a test
+    mixes them with. A hardcoded fake (900) once matched the spawned child's
+    pid on a Windows runner: the fake entry overwrote the child's own row and
+    the test saw no descendants at all."""
+    return max(real) + 1_000_000
+
+
 # ---- _ps_snapshot: parsing ----
 # _ps_snapshot delegates to whichever tree osplat wired for the host; the
 # ps-table parser under test is the POSIX one, so it is driven directly.
@@ -72,20 +80,22 @@ async def test_refresh_updates_sessions_and_returns_detached_only_payload():
     session = svc.create(pane_id="p1", agent_key=None, command=["sleep", "30"], cwd="/")
     try:
         pid = session.proc.pid
-        # tree: child -> 900 (detached, own group) -> 901 (900's group),
-        # child -> 902 (same group as child: transient helper), unrelated 999
+        base = _fake_base(pid, os.getpid())
+        a, b, c, other = base + 900, base + 901, base + 902, base + 999
+        # tree: child -> a (detached, own group) -> b (a's group),
+        # child -> c (same group as child: transient helper), unrelated other
         snap = {
             pid: (os.getpid(), pid, "L-child"),
-            900: (pid, 900, "L900"),
-            901: (900, 900, "L901"),
-            902: (pid, pid, "L902"),
-            999: (1, 999, "L999"),
+            a: (pid, a, "L900"),
+            b: (a, a, "L901"),
+            c: (pid, pid, "L902"),
+            other: (1, other, "L999"),
         }
         payload = svc._refresh_descendants(snap)
         # In-memory snapshot keeps the whole tree (runtime reaper needs it)…
-        assert session.descendants == {900: "L900", 901: "L901", 902: "L902"}
+        assert session.descendants == {a: "L900", b: "L901", c: "L902"}
         # …but only descendants outside the root's group are registry-worthy.
-        assert payload == {pid: {900: "L900", 901: "L901"}}
+        assert payload == {pid: {a: "L900", b: "L901"}}
     finally:
         await svc.kill_all(grace=0.3)
 
@@ -95,14 +105,16 @@ async def test_refresh_keeps_last_snapshot_on_ps_failure_or_missing_root():
     session = svc.create(pane_id="p1", agent_key=None, command=["sleep", "30"], cwd="/")
     try:
         pid = session.proc.pid
-        svc._refresh_descendants({pid: (os.getpid(), pid, "L"), 900: (pid, 900, "L900")})
-        assert session.descendants == {900: "L900"}
+        base = _fake_base(pid, os.getpid())
+        a, other = base + 900, base + 999
+        svc._refresh_descendants({pid: (os.getpid(), pid, "L"), a: (pid, a, "L900")})
+        assert session.descendants == {a: "L900"}
         # ps failure ({}) must not wipe the good snapshot.
         assert svc._refresh_descendants({}) == {}
-        assert session.descendants == {900: "L900"}
+        assert session.descendants == {a: "L900"}
         # Child absent from the table (death racing EOF) — keep the snapshot.
-        svc._refresh_descendants({999: (1, 999, "L999")})
-        assert session.descendants == {900: "L900"}
+        svc._refresh_descendants({other: (1, other, "L999")})
+        assert session.descendants == {a: "L900"}
     finally:
         await svc.kill_all(grace=0.3)
 
@@ -116,23 +128,24 @@ async def test_snapshot_loop_persists_descendants_to_registry(monkeypatch):
     svc = TerminalService(emit=_noop_emit)
     session = svc.create(pane_id="p1", agent_key=None, command=["sleep", "30"], cwd="/")
     pid = session.proc.pid
+    a = _fake_base(pid, os.getpid()) + 900
     persisted: list[dict[int, dict[int, str]]] = []
     monkeypatch.setattr(
         terminals.pty_registry, "update_descendants", persisted.append
     )
     monkeypatch.setattr(
         terminals, "_ps_snapshot",
-        lambda: {pid: (os.getpid(), pid, "L-child"), 900: (pid, 900, "L900")},
+        lambda: {pid: (os.getpid(), pid, "L-child"), a: (pid, a, "L900")},
     )
     # The fake table is still in force when kill_all runs below, so its
-    # breakaway sweep would take pid 900 for a verified grandchild and SIGKILL
+    # breakaway sweep would take the fake pid for a verified grandchild and SIGKILL
     # whatever real process holds that pid on the host (on a CI runner: the
     # runner itself). Stub the kill; the sweep is not what this test is about.
     monkeypatch.setattr(terminals, "_kill_breakaway", lambda pids: None)
     try:
         # The first snapshot tick runs on the fake table: a ps read off the
         # loop, then a registry write. Wait for the write, not a fixed time.
-        assert await _until(lambda: persisted and persisted[-1] == {pid: {900: "L900"}}), persisted
+        assert await _until(lambda: persisted and persisted[-1] == {pid: {a: "L900"}}), persisted
     finally:
         await svc.kill_all(grace=0.3)
 
@@ -140,16 +153,18 @@ async def test_snapshot_loop_persists_descendants_to_registry(monkeypatch):
 async def test_reap_kills_orphaned_snapshot_pids_and_their_subtree(monkeypatch):
     svc = TerminalService(emit=_noop_emit)
     me = os.getpid()
+    base = _fake_base(me)
+    p200, p250, p300, p400, p555, p999 = (base + n for n in (200, 250, 300, 400, 555, 999))
     # Snapshot was {200, 300, 400}. Now: 200 reparented to launchd with a
     # fresh child 250; 300 reparented to this backend; 400 still has a live
     # parent (555) — must be spared, as must unrelated 999.
     snap = {
-        200: (1, 200, "L200"),
-        250: (200, 200, "L250"),
-        300: (me, 300, "L300"),
-        400: (555, 400, "L400"),
-        555: (1, 555, "L555"),
-        999: (1, 999, "L999"),
+        p200: (1, p200, "L200"),
+        p250: (p200, p200, "L250"),
+        p300: (me, p300, "L300"),
+        p400: (p555, p400, "L400"),
+        p555: (1, p555, "L555"),
+        p999: (1, p999, "L999"),
     }
     monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
     # The table above is POSIX-shaped (launchd is ppid 1); pin the seam to
@@ -162,8 +177,8 @@ async def test_reap_kills_orphaned_snapshot_pids_and_their_subtree(monkeypatch):
     monkeypatch.setattr(
         terminals, "_kill_breakaway", lambda pids: killed.extend(pids)
     )
-    await svc._reap_exit_orphans({200: "L200", 300: "L300", 400: "L400"})
-    assert sorted(killed) == [200, 250, 300]
+    await svc._reap_exit_orphans({p200: "L200", p300: "L300", p400: "L400"})
+    assert sorted(killed) == [p200, p250, p300]
 
 
 # Which ppid marks an orphan is the tree's call (Windows normalises a stale

@@ -156,12 +156,13 @@ def test_update_descendants_attaches_to_existing_entry_only() -> None:
     proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
     try:
         pty_registry.register(proc.pid, ["sleep", "30"])
+        unknown = proc.pid + 1_000_000  # never the registered root
         pty_registry.update_descendants(
-            {proc.pid: {900: "L900"}, 555555: {901: "L901"}}
+            {proc.pid: {900: "L900"}, unknown: {901: "L901"}}
         )
         entries = _registry()
         assert entries[str(proc.pid)]["descendants"] == {"900": "L900"}
-        assert "555555" not in entries  # unknown root must not create an entry
+        assert str(unknown) not in entries  # unknown root must not create an entry
     finally:
         proc.kill()
         proc.wait()
