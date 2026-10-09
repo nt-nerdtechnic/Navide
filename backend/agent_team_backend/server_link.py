@@ -4108,7 +4108,7 @@ def sync_approvals() -> list[dict[str, Any]]:
     return approvals.listing()
 
 
-def decide_sync_approval(scope: str, item_id: str, approve: bool) -> dict[str, Any]:
+def decide_sync_approval(scope: str, item_id: str, approve: bool, shown_digest: str) -> dict[str, Any]:
     """Approve or reject one held record. Blocking; call off the loop. Goes
     through the link's engine, whose registered adapter writes the record
     (an approved MCP server then reloads like a save in Settings)."""
@@ -4118,7 +4118,7 @@ def decide_sync_approval(scope: str, item_id: str, approve: bool) -> dict[str, A
     if link is None:
         raise ConnectionError("the navide-server link is not running")
     adapter = link.sync_engine()._require_adapter(scope)  # noqa: SLF001 - same package
-    return approvals.decide(adapter, item_id, approve)
+    return approvals.decide(adapter, item_id, approve, shown_digest)
 
 
 def resolve_sync_conflict(scope: str, item_id: str, keep: str) -> None:

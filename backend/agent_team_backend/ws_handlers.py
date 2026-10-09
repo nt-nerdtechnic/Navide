@@ -3730,13 +3730,14 @@ async def sync_approval_decide(session: "Session", msg_id: str, msg_type: str, p
     scope = str(payload.get("scope") or "")
     item_id = str(payload.get("itemId") or "")
     approve = payload.get("approve")
-    if not isinstance(approve, bool):
+    shown = str(payload.get("digest") or "")
+    if not isinstance(approve, bool) or not shown:
         await session.send_json(
-            make_error(msg_id, msg_type, "SYNC_BAD_CHOICE", "approve must be true or false")
+            make_error(msg_id, msg_type, "SYNC_BAD_CHOICE", "approve must be true or false, with the digest shown")
         )
         return
     try:
-        result = await asyncio.to_thread(server_link.decide_sync_approval, scope, item_id, approve)
+        result = await asyncio.to_thread(server_link.decide_sync_approval, scope, item_id, approve, shown)
     except Exception as err:  # noqa: BLE001 - a hold that went away is a normal race
         await session.send_json(make_error(msg_id, msg_type, "SYNC_APPROVAL_FAILED", str(err)))
         return
@@ -4004,6 +4005,13 @@ async def _reinstall_claude_hooks() -> None:
         app.log.warning("claude hooks reinstall failed: %s", err)
 
 
+#: UI settings only the backend writes: sync's own bookkeeping (detached
+#: marks, dismissed secret warnings, and the key an earlier build kept sync
+#: approvals under). A window writing them could hide items from sync or
+#: approve what the user never saw, so ui.settings.set drops them.
+UI_SETTINGS_BACKEND_ONLY_KEYS = frozenset({"sync-detached", "sync-secret-dismissed", "sync-approvals"})
+
+
 @handler("ui.settings.set")
 async def ui_settings_set(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -4011,6 +4019,12 @@ async def ui_settings_set(session: "Session", msg_id: str, msg_type: str, payloa
     from . import push_delivery
 
     updates = payload.get("updates")
+    if isinstance(updates, dict) and UI_SETTINGS_BACKEND_ONLY_KEYS & set(updates):
+        log.warning(
+            "ui.settings.set: ignoring backend-only keys %s",
+            sorted(UI_SETTINGS_BACKEND_ONLY_KEYS & set(updates)),
+        )
+        updates = {k: v for k, v in updates.items() if k not in UI_SETTINGS_BACKEND_ONLY_KEYS}
     touches_channels = (
         isinstance(updates, dict) and push_delivery.DISABLED_SETTING_KEY in updates
     )

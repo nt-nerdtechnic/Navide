@@ -16,6 +16,14 @@ from agent_team_backend.mcp_settings import MCPSettingsStore
 from tests.test_sync_scope_adapters import Dev, StrictServer, _mcp, _skill_pair, account_key  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _own_app_data(tmp_path, monkeypatch):
+    """Holds live in app data; every test gets its own (a Dev swaps in its
+    device's own on each round)."""
+    data_dir = tmp_path / "app-data"
+    monkeypatch.setattr(app, "app_data_dir", lambda: data_dir)
+
+
 def _names(store):
     return {s["name"] for s in store.list_servers()}
 
@@ -33,8 +41,10 @@ def _mcp_pair(tmp_path, monkeypatch):
 
 
 def _decide(dev, item_id, approve):
+    """As the window decides: on the row it listed, by that row's digest."""
     dev.use()
-    return sync_approvals.decide(dev.adapter, item_id, approve)
+    (row,) = [h for h in sync_approvals.listing() if h["itemId"] == item_id]
+    return sync_approvals.decide(dev.adapter, item_id, approve, row["digest"])
 
 
 # ── MCP ──────────────────────────────────────────────────────────────────────
@@ -82,7 +92,7 @@ async def test_a_changed_command_waits_but_a_rotated_env_value_does_not(tmp_path
     await a.sync(); await b.sync()
     b.use()
     (held,) = sync_approvals.listing()
-    assert held["summary"]["env"] == ["NODE_OPTIONS", "TOKEN"]
+    assert held["summary"]["env"] == {"NODE_OPTIONS": "--require x", "TOKEN": sync_scopes.MASKED_VALUE}
     assert "NODE_OPTIONS" not in _server(b_store, "api")["env"]
 
 
@@ -169,8 +179,8 @@ async def test_a_new_skill_with_scripts_waits_and_lands_executable_on_approval(t
     assert "runner" not in {s["name"] for s in sb.list_skills()["skills"]}
     (held,) = sync_approvals.listing()
     assert held["scope"] == "skills" and held["kind"] == "new"
-    assert held["summary"]["files"] == ["SKILL.md", "go.sh"]
-    assert held["summary"]["executable"] == (["go.sh"] if os.name != "nt" else [])
+    assert [f["path"] for f in held["summary"]["files"]] == ["SKILL.md", "go.sh"]
+    assert [e["path"] for e in held["summary"]["executable"]] == (["go.sh"] if os.name != "nt" else [])
     pushes = server.pushes
     await b.sync(); await a.sync()
     assert server.pushes == pushes and (ra / "runner").is_dir()
@@ -206,7 +216,7 @@ async def test_changed_skill_files_wait_for_approval(tmp_path, account_key, monk
     assert (rb / "writer" / "SKILL.md").read_bytes() == before
     b.use()
     (held,) = sync_approvals.listing()
-    assert held["kind"] == "changed" and "extra.sh" in held["summary"]["files"]
+    assert held["kind"] == "changed" and "extra.sh" in [f["path"] for f in held["summary"]["files"]]
 
 
 # ── the window's surface ─────────────────────────────────────────────────────
@@ -225,8 +235,9 @@ async def test_the_window_lists_and_decides_through_the_link(tmp_path, account_k
     b.use()
     assert [h["itemId"] for h in server_link.sync_approvals()] == ["x"]
     with pytest.raises(Exception):
-        server_link.decide_sync_approval("prompts", "x", True)
-    result = server_link.decide_sync_approval("mcp", "x", True)
+        server_link.decide_sync_approval("prompts", "x", True, "d")
+    digest = server_link.sync_approvals()[0]["digest"]
+    result = server_link.decide_sync_approval("mcp", "x", True, digest)
     assert result["status"] == "applied" and "x" in _names(b_store)
     assert server_link.sync_approvals() == []
 

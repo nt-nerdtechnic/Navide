@@ -183,6 +183,7 @@ class Device:
         self.adapter._digests = skill_blobs.DigestCache(Database(tmp_path / f"{name}-digests.db"))
         staging = tmp_path / name / "staging"
         staging.mkdir(parents=True)
+        self.data_dir = tmp_path / name / "data"
         self.adapter._staging = lambda: staging
 
         async def request(kind: str, payload: dict) -> dict:
@@ -202,6 +203,7 @@ class Device:
     async def settle(self, monkeypatch) -> None:
         """One round, then every transfer it started and the rounds those kick."""
         monkeypatch.setattr(app, "skills_store", self.store, raising=False)
+        monkeypatch.setattr(app, "app_data_dir", lambda: self.data_dir, raising=False)
         await self.engine.sync("skill-files")
         for _ in range(50):
             pending = [t for t in list(self.adapter._tasks.values()) + list(self.engine._kicked) if not t.done()]
@@ -526,14 +528,15 @@ def test_a_large_skill_waits_for_approval_then_downloads(tmp_path, monkeypatch, 
     assert not (b.store.root / "big").exists() and downloads == []   # nothing fetched before approval
     (held,) = sync_approvals.listing()
     assert held["scope"] == "skill-files" and held["kind"] == "new"
-    assert held["summary"]["executable"] == (["run.sh"] if os.name != "nt" else [])
+    assert [e["path"] for e in held["summary"]["executable"]] == (["run.sh"] if os.name != "nt" else [])
 
     monkeypatch.setattr(app, "skills_store", b.store, raising=False)
+    monkeypatch.setattr(app, "app_data_dir", lambda: b.data_dir, raising=False)
 
     async def approve_and_settle() -> None:
         # As the WS handler does it: off the loop, with the loop running.
         b.adapter._loop = asyncio.get_running_loop()
-        decided = await asyncio.to_thread(sync_approvals.decide, b.adapter, "big", True)
+        decided = await asyncio.to_thread(sync_approvals.decide, b.adapter, "big", True, held["digest"])
         assert decided["status"] == "approved"  # files still to come
         for _ in range(3):
             await b.settle(monkeypatch)

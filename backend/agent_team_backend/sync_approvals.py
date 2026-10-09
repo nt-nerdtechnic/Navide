@@ -18,12 +18,17 @@ adapter shows the engine the held payload in place of the local item (see
 hold on a restart would make the next round push this machine's old copy over
 the change on every other device. Hence:
 
-- the index lives in the UI settings under ``APPROVALS_KEY``, as
-  ``{scope: {item_id: {digest, base, status, kind, summary, at}}}`` — no
-  secret in it (``summary`` names what would run, env and header *values*
-  are never in it);
-- the payload itself is sealed under the account key, the same way it
-  travelled, in a file under the app data directory.
+- the index is a store of its own, ``index.json`` beside the payloads under
+  the app data directory — not a UI setting, which the window may write —
+  as ``{scope: {item_id: {digest, base, status, kind, summary, at}}}``. The
+  summary is stored redacted (secret-looking values masked);
+- each payload is sealed under the account key, the same way it travelled;
+- an approval is a token sealed under that key too (``_approval_token``),
+  written only by ``decide``: a hand-edited ``status`` approves nothing.
+
+Bounded: at most ``MAX_HOLDS_PER_SCOPE`` records per scope (the oldest
+rejected one makes room first; when every slot is pending, a new record is
+refused rather than held) and ``MAX_SUMMARY_BYTES`` of summary each.
 
 A rejection is kept: the cloud copy goes on standing in for the local item, so
 nothing is pushed back, until a newer record for the item arrives — which is
@@ -36,6 +41,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -44,7 +51,15 @@ from . import sync_engine, sync_keyring
 
 log = logging.getLogger("agent_team_backend.sync_approvals")
 
+#: The UI-settings key an earlier build of this branch kept the index under.
+#: Nothing reads it now; ws_handlers refuses it from the window all the same.
 APPROVALS_KEY = "sync-approvals"
+#: Records held per scope, and the summary bytes one may keep.
+MAX_HOLDS_PER_SCOPE = 64
+MAX_SUMMARY_BYTES = 32 * 1024
+#: One lock for every read-modify-write of the index: a sync worker filing a
+#: record and the window deciding one must not interleave.
+_lock = threading.RLock()
 
 PENDING = "pending"
 REJECTED = "rejected"
@@ -54,12 +69,6 @@ APPROVED = "approved"
 #: Why a record waits: the item is not here at all, or what runs changed.
 KIND_NEW = "new"
 KIND_CHANGED = "changed"
-
-
-def _settings():
-    from . import app
-
-    return app.ui_settings_store
 
 
 def _stash_dir() -> Path:
@@ -73,8 +82,18 @@ def _stash_path(scope: str, item_id: str) -> Path:
     return _stash_dir() / scope / f"{name}.sealed"
 
 
+def _index_path() -> Path:
+    return _stash_dir() / "index.json"
+
+
 def _index() -> dict[str, dict[str, dict[str, Any]]]:
-    raw = _settings().get().get(APPROVALS_KEY)
+    try:
+        raw = json.loads(_index_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as err:
+        log.warning("the sync approval index could not be read: %s", err)
+        return {}
     if not isinstance(raw, dict):
         return {}
     return {
@@ -85,7 +104,37 @@ def _index() -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def _write_index(index: dict[str, dict[str, dict[str, Any]]]) -> None:
-    _settings().set({APPROVALS_KEY: {s: e for s, e in index.items() if e} or None})
+    """Atomically. Raises OSError when it cannot be written: a hold that is
+    not on disk would be forgotten, and the engine told it was taken."""
+    path = _index_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f".{os.getpid()}.tmp")
+    temp.write_text(json.dumps({s: e for s, e in index.items() if e}), encoding="utf-8")
+    temp.replace(path)
+
+
+def _approval_token(scope: str, item_id: str, payload_digest: str) -> str:
+    """Proof that ``decide`` approved this exact payload: sealed under the
+    account key, so editing the index cannot mint one."""
+    return sync_keyring.encrypt(f"approved:{payload_digest}", scope=f"approval:{scope}", item_id=item_id)
+
+
+def _token_ok(scope: str, item_id: str, record: dict[str, Any]) -> bool:
+    token = record.get("token")
+    if not isinstance(token, str) or not token:
+        return False
+    try:
+        opened = sync_keyring.decrypt(token, scope=f"approval:{scope}", item_id=item_id)
+    except Exception:  # noqa: BLE001 - a token that does not open approves nothing
+        return False
+    return opened == f"approved:{record.get('digest', '')}"
+
+
+def _fit(summary: dict[str, Any]) -> dict[str, Any]:
+    """*summary*, or a stub saying it was too large to keep."""
+    if len(json.dumps(summary)) <= MAX_SUMMARY_BYTES:
+        return summary
+    return {"name": summary.get("name"), "truncated": True}
 
 
 def _round_is_stale() -> bool:
@@ -111,31 +160,50 @@ def hold(
     local: Any | None,
     kind: str,
     summary: dict[str, Any],
-) -> None:
+) -> bool:
     """File *payload* for approval instead of applying it. Worker thread.
 
     ``local`` is the item as this machine holds it now (None when absent);
-    its digest is what ``overlay`` checks to notice a local edit.
+    its digest is what ``overlay`` checks to notice a local edit. False when
+    nothing was filed — a stale round, a scope full of pending records, or a
+    store that would not write — which the adapter reports as a refusal.
     """
     if _round_is_stale():
-        return
-    path = _stash_path(scope, item_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    sealed = sync_keyring.encrypt(sync_engine.canonical(payload), scope=scope, item_id=item_id)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(sealed, encoding="utf-8")
-    temp.replace(path)
-    index = _index()
-    index.setdefault(scope, {})[item_id] = {
-        "digest": digest(payload),
-        "base": digest(local) if local is not None else "",
-        "status": PENDING,
-        "kind": kind,
-        "summary": summary,
-        "at": int(time.time()),
-    }
-    _write_index(index)
+        return False
+    with _lock:
+        index = _index()
+        entries = index.setdefault(scope, {})
+        if item_id not in entries and len(entries) >= MAX_HOLDS_PER_SCOPE:
+            rejected = sorted(
+                (e.get("at", 0), i) for i, e in entries.items() if e.get("status") == REJECTED
+            )
+            if not rejected:
+                log.warning("%s already holds %d records for approval; %s is refused", scope, len(entries), item_id)
+                return False
+            _, oldest = rejected[0]
+            entries.pop(oldest, None)
+            _stash_path(scope, oldest).unlink(missing_ok=True)
+        try:
+            path = _stash_path(scope, item_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            sealed = sync_keyring.encrypt(sync_engine.canonical(payload), scope=scope, item_id=item_id)
+            temp = path.with_suffix(".tmp")
+            temp.write_text(sealed, encoding="utf-8")
+            temp.replace(path)
+            entries[item_id] = {
+                "digest": digest(payload),
+                "base": digest(local) if local is not None else "",
+                "status": PENDING,
+                "kind": kind,
+                "summary": _fit(summary),
+                "at": int(time.time()),
+            }
+            _write_index(index)
+        except (OSError, sync_keyring.KeyringError) as err:
+            log.warning("synced %s/%s could not be held for approval: %s", scope, item_id, err)
+            return False
     log.info("synced %s/%s is waiting for approval (%s)", scope, item_id, kind)
+    return True
 
 
 def held_payload(scope: str, item_id: str) -> Any | None:
@@ -152,16 +220,20 @@ def held_payload(scope: str, item_id: str) -> Any | None:
 
 
 def drop(scope: str, item_id: str) -> None:
-    index = _index()
-    if index.get(scope, {}).pop(item_id, None) is not None:
-        _write_index(index)
-    _stash_path(scope, item_id).unlink(missing_ok=True)
+    with _lock:
+        index = _index()
+        if index.get(scope, {}).pop(item_id, None) is not None:
+            _write_index(index)
+        _stash_path(scope, item_id).unlink(missing_ok=True)
 
 
 def is_approved(scope: str, item_id: str, payload: Any) -> bool:
-    """Whether the user approved exactly *payload* for this item."""
+    """Whether ``decide`` approved exactly *payload* for this item."""
     held = entry(scope, item_id)
-    return bool(held and held.get("status") == APPROVED and held.get("digest") == digest(payload))
+    return bool(
+        held and held.get("status") == APPROVED and held.get("digest") == digest(payload)
+        and _token_ok(scope, item_id, held)
+    )
 
 
 def is_rejected(scope: str, item_id: str, payload: Any) -> bool:
@@ -195,23 +267,31 @@ def overlay(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def set_status(scope: str, item_id: str, status: str) -> None:
-    index = _index()
-    record = index.get(scope, {}).get(item_id)
-    if record is None:
-        return
-    record["status"] = status
-    _write_index(index)
+def set_status(scope: str, item_id: str, status: str, *, token: str = "") -> None:
+    with _lock:
+        index = _index()
+        record = index.get(scope, {}).get(item_id)
+        if record is None:
+            return
+        record["status"] = status
+        if token:
+            record["token"] = token
+        else:
+            record.pop("token", None)
+        _write_index(index)
 
 
 def listing() -> list[dict[str, Any]]:
-    """Every held record, for the window: no payload, only its summary."""
+    """Every held record, for the window: no payload, only its summary, and
+    the digest of the exact payload — which ``decide`` must be handed back,
+    so what is approved is what was shown."""
     out = []
     for scope, entries in sorted(_index().items()):
         for item_id, record in sorted(entries.items()):
             out.append({
                 "scope": scope,
                 "itemId": item_id,
+                "digest": record.get("digest", ""),
                 "status": record.get("status", PENDING),
                 "kind": record.get("kind", KIND_NEW),
                 "summary": record.get("summary") or {},
@@ -220,26 +300,33 @@ def listing() -> list[dict[str, Any]]:
     return out
 
 
-def decide(adapter: Any, item_id: str, approve: bool) -> dict[str, Any]:
+def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict[str, Any]:
     """Apply the user's decision on one held record. Worker thread.
 
-    Approval writes the held payload through the adapter, now let past the
-    gate; a large skill whose files must download first stays ``approved``
-    until they land (``SkillFilesScope`` retries it each round). Rejection
-    keeps the hold, so the cloud copy goes on standing in for the local one.
+    *shown_digest* is the ``digest`` the window listed: a record replaced by
+    a newer version since is refused, to be reviewed again. Approval writes
+    the held payload through the adapter, now let past the gate; a large
+    skill whose files must download first stays ``approved`` until they land
+    (``SkillFilesScope`` retries it each round). Rejection keeps the hold, so
+    the cloud copy goes on standing in for the local one.
     """
     scope = adapter.scope
-    record = entry(scope, item_id)
-    if record is None:
-        raise sync_engine.SyncError(f"nothing from {scope}/{item_id} is waiting for approval")
-    if not approve:
-        set_status(scope, item_id, REJECTED)
-        return {"scope": scope, "itemId": item_id, "status": REJECTED}
-    payload = held_payload(scope, item_id)
-    if payload is None:
-        drop(scope, item_id)
-        raise sync_engine.SyncError(f"the held {scope}/{item_id} could not be opened here")
-    set_status(scope, item_id, APPROVED)
+    with _lock:
+        record = entry(scope, item_id)
+        if record is None:
+            raise sync_engine.SyncError(f"nothing from {scope}/{item_id} is waiting for approval")
+        if not shown_digest or record.get("digest") != shown_digest:
+            raise sync_engine.SyncError(
+                f"{scope}/{item_id} changed since it was shown; review it again"
+            )
+        if not approve:
+            set_status(scope, item_id, REJECTED)
+            return {"scope": scope, "itemId": item_id, "status": REJECTED}
+        payload = held_payload(scope, item_id)
+        if payload is None or digest(payload) != shown_digest:
+            drop(scope, item_id)
+            raise sync_engine.SyncError(f"the held {scope}/{item_id} could not be opened here")
+        set_status(scope, item_id, APPROVED, token=_approval_token(scope, item_id, shown_digest))
     return {"scope": scope, "itemId": item_id, "status": land(adapter, item_id, payload)}
 
 
@@ -260,12 +347,13 @@ def land(adapter: Any, item_id: str, payload: Any) -> str:
 
 
 def land_approved(adapter: Any) -> None:
-    """Retry every approved-but-not-landed hold of *adapter*'s scope."""
+    """Retry every approved-but-not-landed hold of *adapter*'s scope — only
+    those ``decide`` approved (its token checks out for the held payload)."""
     for item_id, record in list(_index().get(adapter.scope, {}).items()):
-        if record.get("status") != APPROVED:
+        if record.get("status") != APPROVED or not _token_ok(adapter.scope, item_id, record):
             continue
         payload = held_payload(adapter.scope, item_id)
-        if payload is None:
+        if payload is None or digest(payload) != record.get("digest"):
             drop(adapter.scope, item_id)
             continue
         try:
@@ -277,10 +365,11 @@ def land_approved(adapter: Any) -> None:
 def forget_approvals(scope: str | None = None) -> None:
     """Drop every hold of *scope*, or of every scope — on an account change,
     whose key the held payloads are sealed under."""
-    index = _index()
-    scopes = list(index) if scope is None else [scope]
-    for name in scopes:
-        for item_id in list(index.get(name, {})):
-            _stash_path(name, item_id).unlink(missing_ok=True)
-        index.pop(name, None)
-    _write_index(index)
+    with _lock:
+        index = _index()
+        scopes = list(index) if scope is None else [scope]
+        for name in scopes:
+            for item_id in list(index.get(name, {})):
+                _stash_path(name, item_id).unlink(missing_ok=True)
+            index.pop(name, None)
+        _write_index(index)

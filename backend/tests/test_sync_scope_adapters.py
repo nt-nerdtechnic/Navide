@@ -52,7 +52,9 @@ class Dev:
 
     def __init__(self, tmp_path, server, name, monkeypatch, adapter, *, home=None, **stores):
         self.name, self.mp, self.adapter, self.home = name, monkeypatch, adapter, home
-        self.stores = {"ui_settings_store": FakeSettingsStore(), **stores}
+        data_dir = tmp_path / f"{name}-data"
+        # Its own app data too: sync keeps approval holds there (sync_approvals).
+        self.stores = {"ui_settings_store": FakeSettingsStore(), "app_data_dir": lambda: data_dir, **stores}
         self.store = sync_engine.SyncStore(Database(tmp_path / f"{name}.db"))
 
         async def request(msg_type, payload):

@@ -176,7 +176,8 @@ def _collect_mcp() -> list[Candidate]:
 def _collect_skills() -> list[Candidate]:
     facts = _skill_facts()
     out: list[Candidate] = []
-    for name, entry in sorted(sync_scopes.SkillsStateScope().snapshot().items()):
+    # Approvals aside: a record held or rejected here is not this machine's.
+    for name, entry in sorted(sync_scopes.SkillsStateScope().local_snapshot().items()):
         content = entry.get("content") if isinstance(entry, dict) else None
         if isinstance(content, dict) and content:
             # The adapter only ever puts content here for a skill carrying the

@@ -373,16 +373,20 @@ class McpScope:
                 log.warning("MCP record %s arrived as %s", item_id, type(payload).__name__)
                 return False
             local = servers[index] if index >= 0 else None
-            if self._gate and _mcp_runs(local) != _mcp_runs({**payload, "name": item_id}) and not sync_approvals.is_approved(
-                self.scope, item_id, payload
-            ):
-                if not sync_approvals.is_rejected(self.scope, item_id, payload):
-                    sync_approvals.hold(
-                        self.scope, item_id, payload, local=local,
-                        kind=sync_approvals.KIND_NEW if local is None else sync_approvals.KIND_CHANGED,
-                        summary=_mcp_summary(item_id, payload),
-                    )
-                return True
+            if self._gate and _mcp_needs_approval(local, {**payload, "name": item_id}) \
+                    and not sync_approvals.is_approved(self.scope, item_id, payload):
+                if not _mcp_valid(servers, index, {**payload, "name": item_id}):
+                    # The store would refuse it on approval anyway; holding it
+                    # would only let one device fill this machine's disk.
+                    log.warning("MCP record %s is not a valid server here; refused", item_id)
+                    return False
+                if sync_approvals.is_rejected(self.scope, item_id, payload):
+                    return True
+                return sync_approvals.hold(
+                    self.scope, item_id, payload, local=local,
+                    kind=sync_approvals.KIND_NEW if local is None else sync_approvals.KIND_CHANGED,
+                    summary=_mcp_summary(item_id, payload),
+                )
             incoming = dict(payload)
             incoming["name"] = item_id
             if index < 0:
@@ -398,28 +402,116 @@ class McpScope:
         return True
 
 
+#: Env names whose value decides what a process loads or runs, whatever
+#: else the name says.
+_EXEC_ENV_NAMES = frozenset({
+    "PATH", "NODE_OPTIONS", "NODE_PATH", "RUBYOPT", "PERL5OPT", "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS", "CLASSPATH", "SHELL", "HOME",
+})
+_EXEC_ENV_PREFIXES = ("PYTHON", "DYLD_", "LD_", "NPM_CONFIG_", "UV_", "BUN_", "DENO_", "GIT_")
+_EXEC_ENV_SUFFIXES = ("_OPTIONS", "_OPTS", "_PATH", "_HOME")
+#: Longest string an approval summary keeps of one value, and most args.
+_SUMMARY_STR = 200
+_SUMMARY_LIST = 64
+
+
+def _env_runs(name: str) -> bool:
+    upper = name.upper()
+    return (
+        upper in _EXEC_ENV_NAMES
+        or upper.startswith(_EXEC_ENV_PREFIXES)
+        or upper.endswith(_EXEC_ENV_SUFFIXES)
+    )
+
+
+def _env_secret(name: str) -> bool:
+    upper = name.upper()
+    return upper.endswith(("TOKEN", "KEY", "SECRET", "PASSWORD")) or "CREDENTIAL" in upper or "AUTH" in upper
+
+
+def _env_rotates(name: str) -> bool:
+    """Whether a value change of this env name is a secret rotation, which
+    needs no approval: a secret-like name that cannot change what runs."""
+    return _env_secret(name) and not _env_runs(name)
+
+
 def _mcp_runs(server: Any) -> Any:
-    """What of an MCP record decides what runs: everything but the on/off
-    switch and the env and header *values* (a rotated token is not a new
-    program; a new env name, such as NODE_OPTIONS, can be)."""
+    """What of an MCP record decides what runs, for comparing two versions:
+    everything but the on/off switch, every env value except a rotated
+    secret's (``_env_rotates``), and the header names (a header value change
+    is a token rotation; a new header is a new request to some server)."""
     if not isinstance(server, dict):
         return None
     out = {k: v for k, v in server.items() if k not in ("enabled", "env", "headers")}
     env = server.get("env")
-    out["env"] = sorted(env) if isinstance(env, dict) else []
+    out["env"] = (
+        {str(k): (None if _env_rotates(str(k)) else v) for k, v in env.items()}
+        if isinstance(env, dict) else env
+    )
+    headers = server.get("headers")
+    out["headers"] = sorted(str(k) for k in headers) if isinstance(headers, dict) else headers
     return out
 
 
+def _mcp_needs_approval(local: Any, incoming: dict[str, Any]) -> bool:
+    if local is None or _mcp_runs(local) != _mcp_runs(incoming):
+        return True
+    # Switched off here and on elsewhere: turning it back on is asked too.
+    return local.get("enabled") is False and incoming.get("enabled", True) is not False
+
+
+def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, Any]) -> bool:
+    """Whether the store would take the document with *incoming* in it."""
+    from .mcp_settings import MCPServersDocument
+
+    candidate = list(servers)
+    if index < 0:
+        candidate.append(incoming)
+    else:
+        candidate[index] = incoming
+    try:
+        MCPServersDocument(servers=candidate)
+    except Exception:  # noqa: BLE001 - any refusal is a refusal
+        return False
+    return True
+
+
+def _clip(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > _SUMMARY_STR:
+        return value[:_SUMMARY_STR] + "…"
+    return value
+
+
+def _redact(value: Any) -> Any:
+    """A summary value as stored: clipped, and masked when it reads like a
+    credential (the stored summary carries no secret; the sealed payload
+    keeps the real one)."""
+    return MASKED_VALUE if _looks_secret(value) else _clip(value)
+
+
 def _mcp_summary(name: str, server: dict[str, Any]) -> dict[str, Any]:
-    """What the approval list shows: what would run, never a secret value."""
+    """What the approval list shows: what would run, env values unless the
+    name or the value says secret, header names, never a secret value."""
     out: dict[str, Any] = {"name": name}
-    for key in ("transport", "command", "args", "url", "cwd"):
+    for key in ("transport", "command", "url", "cwd"):
         if server.get(key) not in (None, "", []):
-            out[key] = server[key]
-    for key in ("env", "headers"):
-        values = server.get(key)
-        if isinstance(values, dict) and values:
-            out[key] = sorted(str(k) for k in values)
+            out[key] = _redact(server[key])
+    args = server.get("args")
+    if isinstance(args, list) and args:
+        out["args"] = [_redact(a) for a in args[:_SUMMARY_LIST]]
+        if len(args) > _SUMMARY_LIST:
+            out["argsTruncated"] = len(args)
+    env = server.get("env")
+    if isinstance(env, dict) and env:
+        out["env"] = {
+            str(k): MASKED_VALUE if _env_secret(str(k)) else _redact(v)
+            for k, v in sorted(env.items())[:_SUMMARY_LIST]
+        }
+    headers = server.get("headers")
+    if isinstance(headers, dict) and headers:
+        out["headers"] = {str(k): MASKED_VALUE for k in sorted(headers)[:_SUMMARY_LIST]}
+    if server.get("enabled") is False:
+        out["enabled"] = False
     return out
 
 
@@ -597,6 +689,11 @@ class SkillsStateScope:
         # waiting for approval stands in for the local one (sync_approvals).
         return without_detached(self.scope, sync_approvals.overlay(self.scope, self._local()))
 
+    def local_snapshot(self) -> dict[str, Any]:
+        """The skills this machine actually has (and remembers), approvals
+        aside — what a settings bundle may offer."""
+        return without_detached(self.scope, self._local())
+
     def _local(self) -> dict[str, Any]:
         return {**self._intent(), **self._present()}
 
@@ -621,8 +718,10 @@ class SkillsStateScope:
         }
         store = self._store()
         content = payload.get("content")
-        if isinstance(content, dict) and self._needs_approval(store, item_id, payload, content):
-            return True
+        if isinstance(content, dict):
+            gate = self._approval_gate(store, item_id, payload, content)
+            if gate != "write":
+                return gate == "held"
         if isinstance(content, dict):
             # Files first: a decision recorded for files that did not land
             # would snapshot as an entry without them, and pushing that up
@@ -647,41 +746,86 @@ class SkillsStateScope:
             log.warning("the synced decision for %s could not be applied: %s", item_id, err)
         return True
 
-    def _needs_approval(self, store: Any, item_id: str, payload: Any, content: dict[str, Any]) -> bool:
-        """Hold a record whose files are new here or differ from this
-        machine's copy, unless the user approved exactly it. True when held
-        (or rejected before), i.e. nothing is to be written now."""
+    def _approval_gate(self, store: Any, item_id: str, payload: Any, content: dict[str, Any]) -> str:
+        """``write`` when the files may land now: they match this machine's
+        copy, or the user approved exactly this record. Otherwise the record
+        is held for approval (``held``, also for one rejected before) or, when
+        it cannot be held, ``refused``."""
         try:
             if not store.can_import(item_id):
-                return False  # import_content refuses it; reported as before
+                return "write"  # import_content refuses it; reported as before
             local_content = store.export_content(item_id)
         except Exception:  # noqa: BLE001 - an unreadable copy is no copy
             local_content = None
         if local_content is not None and sync_engine.digest(local_content) == sync_engine.digest(content):
-            return False
+            return "write"
         if sync_approvals.is_approved(self.scope, item_id, payload):
-            return False
-        if not sync_approvals.is_rejected(self.scope, item_id, payload):
-            sync_approvals.hold(
-                self.scope, item_id, payload, local=self._local().get(item_id),
-                kind=sync_approvals.KIND_NEW if local_content is None else sync_approvals.KIND_CHANGED,
-                summary=_skill_summary(item_id, payload, content),
-            )
-        return True
+            return "write"
+        if sync_approvals.is_rejected(self.scope, item_id, payload):
+            return "held"
+        held = sync_approvals.hold(
+            self.scope, item_id, payload, local=self._local().get(item_id),
+            kind=sync_approvals.KIND_NEW if local_content is None else sync_approvals.KIND_CHANGED,
+            summary=_skill_summary(item_id, payload, content),
+        )
+        return "held" if held else "refused"
+
+
+#: Characters of SKILL.md, and of each executable file, an approval previews;
+#: and how many executables and file rows it lists.
+SKILL_PREVIEW_CHARS = 2000
+_SKILL_PREVIEW_FILES = 3
+_SKILL_SUMMARY_FILES = 100
+
+
+def _skill_file_bytes(entry: Any) -> bytes | None:
+    import base64
+
+    if not isinstance(entry, dict) or not isinstance(entry.get("v"), str):
+        return None
+    try:
+        return entry["v"].encode("utf-8") if entry.get("t") == "text" else base64.b64decode(entry["v"])
+    except (ValueError, TypeError):
+        return None
+
+
+def _preview(raw: bytes) -> tuple[str, bool]:
+    text = raw.decode("utf-8", errors="replace")
+    return text[:SKILL_PREVIEW_CHARS], len(text) > SKILL_PREVIEW_CHARS
 
 
 def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
-    """What the approval list shows of a held skill: its files, which of them
-    would be executable, and the routing it asks for."""
-    return {
+    """What the approval list shows of a held skill: SKILL.md (what the agent
+    will be told), each file with its size and SHA-256, the files that would
+    be executable with the start of each, and the routing it asks for."""
+    import hashlib
+
+    rows: list[dict[str, Any]] = []
+    executable: list[dict[str, Any]] = []
+    skill_md = ""
+    for rel in sorted(files, key=str):
+        raw = _skill_file_bytes(files[rel])
+        if raw is None:
+            continue
+        if len(rows) < _SKILL_SUMMARY_FILES:
+            rows.append({"path": _clip(str(rel)), "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+        if str(rel) == "SKILL.md":
+            skill_md = _preview(raw)[0]
+        entry = files[rel]
+        if _EXEC_BITS and isinstance(entry, dict) and entry.get("x") and len(executable) < _SKILL_PREVIEW_FILES:
+            text, truncated = _preview(raw)
+            executable.append({"path": _clip(str(rel)), "preview": text, "truncated": truncated})
+    out: dict[str, Any] = {
         "name": name,
-        "files": sorted(str(rel) for rel in files),
-        "executable": sorted(
-            str(rel) for rel, entry in files.items() if isinstance(entry, dict) and entry.get("x")
-        ) if _EXEC_BITS else [],
+        "files": rows,
+        "skillMd": skill_md,
+        "executable": executable,
         "enabled": bool(payload.get("enabled", True)),
         "targets": payload.get("targets"),
     }
+    if len(files) > len(rows):
+        out["filesTruncated"] = len(files)
+    return out
 
 
 #: Manifest format of a ``skill-files`` record.
@@ -1003,21 +1147,27 @@ class SkillFilesScope:
         local_manifest = self._manifests().get(item_id) if self._layout is not None else None
         if (local_manifest is None or sync_engine.digest(local_manifest) != sync_engine.digest(payload)) \
                 and not sync_approvals.is_approved(self.scope, item_id, payload):
-            # New or changed files: nothing is downloaded until approved.
-            if not sync_approvals.is_rejected(self.scope, item_id, payload):
-                sync_approvals.hold(
-                    self.scope, item_id, payload, local=local_manifest,
-                    kind=sync_approvals.KIND_NEW if local_manifest is None else sync_approvals.KIND_CHANGED,
-                    summary={
-                        "name": item_id,
-                        "files": sorted(refs),
-                        "executable": sorted(
-                            rel for rel, e in payload["files"].items() if isinstance(e, dict) and e.get("x")
-                        ) if _EXEC_BITS else [],
-                        "bytes": sum(ref.size for ref in refs.values()),
-                    },
-                )
-            return True
+            # New or changed files: nothing is downloaded until approved, so
+            # the approval can name them and their sizes but not show them.
+            if sync_approvals.is_rejected(self.scope, item_id, payload):
+                return True
+            rels = sorted(refs)
+            summary: dict[str, Any] = {
+                "name": item_id,
+                "files": [{"path": _clip(rel), "size": refs[rel].size} for rel in rels[:_SKILL_SUMMARY_FILES]],
+                "executable": [
+                    {"path": _clip(rel)} for rel, e in sorted(payload["files"].items())
+                    if isinstance(e, dict) and e.get("x")
+                ][:_SKILL_SUMMARY_FILES] if _EXEC_BITS else [],
+                "bytes": sum(ref.size for ref in refs.values()),
+            }
+            if len(rels) > _SKILL_SUMMARY_FILES:
+                summary["filesTruncated"] = len(rels)
+            return sync_approvals.hold(
+                self.scope, item_id, payload, local=local_manifest,
+                kind=sync_approvals.KIND_NEW if local_manifest is None else sync_approvals.KIND_CHANGED,
+                summary=summary,
+            )
         manifest_digest = sync_engine.digest(payload)
         failure = self._download_failures.get(item_id)
         if failure is not None and failure[0] != manifest_digest:
