@@ -480,7 +480,7 @@ def test_mcp_scope_round_trips_a_server(monkeypatch):
 
     store = FakeMcpStore([{"name": "one", "url": "https://example.test"}])
     monkeypatch.setattr(app, "mcp_settings_store", store)
-    scope = sync_scopes.McpScope()
+    scope = sync_scopes.McpScope(gate=False)  # the approval hold has its own tests
 
     assert set(scope.snapshot()) == {"one"}
     scope.apply("two", {"name": "two", "url": "https://other.test"})

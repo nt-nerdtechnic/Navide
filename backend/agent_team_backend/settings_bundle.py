@@ -156,7 +156,7 @@ def _collect_prompts() -> list[Candidate]:
 
 def _collect_mcp() -> list[Candidate]:
     out: list[Candidate] = []
-    for name, raw in sorted(sync_scopes.McpScope().snapshot().items()):
+    for name, raw in sorted(sync_scopes.McpScope().local_snapshot().items()):
         if not isinstance(raw, dict):
             continue
         payload, redacted = strip_secrets(raw)
@@ -391,7 +391,7 @@ def _local_state(scope: str) -> dict[str, Any]:
     if scope == "prompts":
         return sync_scopes.PromptsScope().snapshot()
     if scope == "mcp":
-        return sync_scopes.McpScope().snapshot()
+        return sync_scopes.McpScope().local_snapshot()
     if scope == "skills":
         return _skill_facts()
     return sync_scopes.MemoryScope().snapshot_by_path()
@@ -548,8 +548,9 @@ def _apply_prompts(items: dict[str, Any], deltas: list[dict[str, Any]]) -> list[
 
 
 def _apply_mcp(items: dict[str, Any]) -> list[dict[str, Any]]:
-    adapter = sync_scopes.McpScope()
-    before = adapter.snapshot()
+    # The user picked these records in the import dialog: nothing to hold.
+    adapter = sync_scopes.McpScope(gate=False)
+    before = adapter.local_snapshot()
     run = _Run()
     for name, payload in items.items():
         action, reason = _plan_item("mcp", name, payload, before)
@@ -566,7 +567,7 @@ def _apply_mcp(items: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         run.wrote("mcp", name, action, reason, record)
 
-    after = adapter.snapshot()
+    after = adapter.local_snapshot()
 
     def landed(name: str, expect: Any) -> bool:
         stored = after.get(name)

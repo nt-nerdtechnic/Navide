@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from . import sync_engine, sync_keyring
+from . import sync_approvals, sync_engine, sync_keyring
 
 log = logging.getLogger("agent_team_backend.sync_scopes")
 
@@ -302,7 +302,11 @@ class McpScope:
 
     scope = "mcp"
 
-    def __init__(self, on_change: Callable[[], Any] | None = None) -> None:
+    def __init__(self, on_change: Callable[[], Any] | None = None, *, gate: bool = True) -> None:
+        #: False for a caller that already asked the user about this very
+        #: record (a settings-bundle import the user picked items from):
+        #: then nothing is held for approval.
+        self._gate = gate
         #: Coroutine function run on the loop after a synced write, so the
         #: running servers and the open windows follow it the way they follow
         #: a save in Settings. One run covers every write before it starts.
@@ -340,16 +344,27 @@ class McpScope:
         task.add_done_callback(self._change_tasks.discard)
 
     def snapshot(self) -> dict[str, Any]:
+        # A record waiting for approval stands in for the local one, so the
+        # engine pushes nothing over it (see ``sync_approvals``).
+        return sync_approvals.overlay(self.scope, self.local_snapshot())
+
+    def local_snapshot(self) -> dict[str, Any]:
+        """The servers this machine actually has, approvals aside."""
         servers = self._store().list_servers()
         return {str(s["name"]): s for s in servers if isinstance(s.get("name"), str) and s["name"]}
 
     def apply(self, item_id: str, payload: Any | None) -> bool:
         """Write one record in. False means the store refused it (malformed,
-        over the document's limits) and this machine does not hold it."""
+        over the document's limits) and this machine does not hold it.
+
+        A server new here, or one whose command, arguments, url or env names
+        changed, is held for the user's approval instead (``sync_approvals``):
+        it would run here otherwise. A record held that way counts as taken."""
         store = self._store()
         servers = [s for s in store.list_servers() if isinstance(s, dict)]
         index = next((i for i, s in enumerate(servers) if s.get("name") == item_id), -1)
         if payload is None:
+            sync_approvals.drop(self.scope, item_id)
             if index < 0:
                 return True
             servers.pop(index)
@@ -357,6 +372,17 @@ class McpScope:
             if not isinstance(payload, dict):
                 log.warning("MCP record %s arrived as %s", item_id, type(payload).__name__)
                 return False
+            local = servers[index] if index >= 0 else None
+            if self._gate and _mcp_runs(local) != _mcp_runs({**payload, "name": item_id}) and not sync_approvals.is_approved(
+                self.scope, item_id, payload
+            ):
+                if not sync_approvals.is_rejected(self.scope, item_id, payload):
+                    sync_approvals.hold(
+                        self.scope, item_id, payload, local=local,
+                        kind=sync_approvals.KIND_NEW if local is None else sync_approvals.KIND_CHANGED,
+                        summary=_mcp_summary(item_id, payload),
+                    )
+                return True
             incoming = dict(payload)
             incoming["name"] = item_id
             if index < 0:
@@ -370,6 +396,31 @@ class McpScope:
             return False
         self._changed()
         return True
+
+
+def _mcp_runs(server: Any) -> Any:
+    """What of an MCP record decides what runs: everything but the on/off
+    switch and the env and header *values* (a rotated token is not a new
+    program; a new env name, such as NODE_OPTIONS, can be)."""
+    if not isinstance(server, dict):
+        return None
+    out = {k: v for k, v in server.items() if k not in ("enabled", "env", "headers")}
+    env = server.get("env")
+    out["env"] = sorted(env) if isinstance(env, dict) else []
+    return out
+
+
+def _mcp_summary(name: str, server: dict[str, Any]) -> dict[str, Any]:
+    """What the approval list shows: what would run, never a secret value."""
+    out: dict[str, Any] = {"name": name}
+    for key in ("transport", "command", "args", "url", "cwd"):
+        if server.get(key) not in (None, "", []):
+            out[key] = server[key]
+    for key in ("env", "headers"):
+        values = server.get(key)
+        if isinstance(values, dict) and values:
+            out[key] = sorted(str(k) for k in values)
+    return out
 
 
 #: What a conflict preview shows in place of an MCP env or header value.
@@ -542,8 +593,12 @@ class SkillsStateScope:
 
     def snapshot(self) -> dict[str, Any]:
         # What is here wins over what was remembered for it; the remembered
-        # entries survive for the skills this machine does not hold.
-        return without_detached(self.scope, {**self._intent(), **self._present()})
+        # entries survive for the skills this machine does not hold. A record
+        # waiting for approval stands in for the local one (sync_approvals).
+        return without_detached(self.scope, sync_approvals.overlay(self.scope, self._local()))
+
+    def _local(self) -> dict[str, Any]:
+        return {**self._intent(), **self._present()}
 
     def apply(self, item_id: str, payload: Any | None) -> bool:
         """Take one record in. False means this machine refused it and holds
@@ -551,6 +606,7 @@ class SkillsStateScope:
         not land (the name is the user's own skill here, or a path is unsafe)."""
         intent = self._intent()
         if payload is None:
+            sync_approvals.drop(self.scope, item_id)
             intent.pop(item_id, None)
             self._set_intent(intent)
             # The files stay (see ``detach``); they just stop syncing.
@@ -565,6 +621,8 @@ class SkillsStateScope:
         }
         store = self._store()
         content = payload.get("content")
+        if isinstance(content, dict) and self._needs_approval(store, item_id, payload, content):
+            return True
         if isinstance(content, dict):
             # Files first: a decision recorded for files that did not land
             # would snapshot as an entry without them, and pushing that up
@@ -588,6 +646,42 @@ class SkillsStateScope:
         except Exception as err:  # noqa: BLE001 - a skill that moved is not fatal
             log.warning("the synced decision for %s could not be applied: %s", item_id, err)
         return True
+
+    def _needs_approval(self, store: Any, item_id: str, payload: Any, content: dict[str, Any]) -> bool:
+        """Hold a record whose files are new here or differ from this
+        machine's copy, unless the user approved exactly it. True when held
+        (or rejected before), i.e. nothing is to be written now."""
+        try:
+            if not store.can_import(item_id):
+                return False  # import_content refuses it; reported as before
+            local_content = store.export_content(item_id)
+        except Exception:  # noqa: BLE001 - an unreadable copy is no copy
+            local_content = None
+        if local_content is not None and sync_engine.digest(local_content) == sync_engine.digest(content):
+            return False
+        if sync_approvals.is_approved(self.scope, item_id, payload):
+            return False
+        if not sync_approvals.is_rejected(self.scope, item_id, payload):
+            sync_approvals.hold(
+                self.scope, item_id, payload, local=self._local().get(item_id),
+                kind=sync_approvals.KIND_NEW if local_content is None else sync_approvals.KIND_CHANGED,
+                summary=_skill_summary(item_id, payload, content),
+            )
+        return True
+
+
+def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
+    """What the approval list shows of a held skill: its files, which of them
+    would be executable, and the routing it asks for."""
+    return {
+        "name": name,
+        "files": sorted(str(rel) for rel in files),
+        "executable": sorted(
+            str(rel) for rel, entry in files.items() if isinstance(entry, dict) and entry.get("x")
+        ) if _EXEC_BITS else [],
+        "enabled": bool(payload.get("enabled", True)),
+        "targets": payload.get("targets"),
+    }
 
 
 #: Manifest format of a ``skill-files`` record.
@@ -690,6 +784,9 @@ class SkillFilesScope:
         except skill_blobs.BlobError as err:
             log.warning("the server's blob storage could not be asked about: %s", err)
             self._layout = None
+        if self._layout is not None:
+            # Approved skills whose files had to download first land now.
+            await asyncio.to_thread(sync_approvals.land_approved, self)
         return self._layout is not None
 
     def _store(self):
@@ -761,7 +858,7 @@ class SkillFilesScope:
     def snapshot(self) -> dict[str, Any]:
         if self._layout is None:
             return {}
-        return without_detached(self.scope, self._manifests())
+        return without_detached(self.scope, sync_approvals.overlay(self.scope, self._manifests()))
 
     def _manifests(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -888,6 +985,7 @@ class SkillFilesScope:
         from . import skill_blobs
 
         if payload is None:
+            sync_approvals.drop(self.scope, item_id)
             # A removal elsewhere never deletes files here (see ``detach``).
             if self._layout is not None:
                 detach(self.scope, item_id, self._manifests().get(item_id))
@@ -902,6 +1000,24 @@ class SkillFilesScope:
         if not store.can_import(item_id):
             log.warning("skill %s exists here and is not Navide's; its synced files are not fetched", item_id)
             return False
+        local_manifest = self._manifests().get(item_id) if self._layout is not None else None
+        if (local_manifest is None or sync_engine.digest(local_manifest) != sync_engine.digest(payload)) \
+                and not sync_approvals.is_approved(self.scope, item_id, payload):
+            # New or changed files: nothing is downloaded until approved.
+            if not sync_approvals.is_rejected(self.scope, item_id, payload):
+                sync_approvals.hold(
+                    self.scope, item_id, payload, local=local_manifest,
+                    kind=sync_approvals.KIND_NEW if local_manifest is None else sync_approvals.KIND_CHANGED,
+                    summary={
+                        "name": item_id,
+                        "files": sorted(refs),
+                        "executable": sorted(
+                            rel for rel, e in payload["files"].items() if isinstance(e, dict) and e.get("x")
+                        ) if _EXEC_BITS else [],
+                        "bytes": sum(ref.size for ref in refs.values()),
+                    },
+                )
+            return True
         manifest_digest = sync_engine.digest(payload)
         failure = self._download_failures.get(item_id)
         if failure is not None and failure[0] != manifest_digest:
@@ -935,7 +1051,7 @@ class SkillFilesScope:
             else:
                 wanted[ref.blob_id] = ref
         if wanted:
-            if self._layout is None or self._loop is None:
+            if self._layout is None or self._loop is None or self._loop.is_closed():
                 raise sync_engine.DeferItem(item_id)
             layout, request = self._layout, self._request
             refs_todo = list(wanted.values())
@@ -1825,6 +1941,13 @@ def forget_detached(scope: str | None = None) -> None:
         return
     rest = {k: v for k, v in raw.items() if k != scope}
     _settings().set({DETACHED_KEY: rest or None})
+
+
+def forget_approvals(scope: str | None = None) -> None:
+    """Drop the records waiting for approval (``sync_approvals``) of *scope*,
+    or of every scope; on_account_changed calls it, since they are sealed
+    under the previous account's key."""
+    sync_approvals.forget_approvals(scope)
 
 
 def _reset_credentials_for_test() -> None:

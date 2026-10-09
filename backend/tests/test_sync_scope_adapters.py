@@ -22,6 +22,15 @@ from tests.test_sync_engine import FakeServer, FakeSettingsStore
 ITEM_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,200}$")
 
 
+@pytest.fixture(autouse=True)
+def _approve_everything(monkeypatch):
+    """What these tests check is not the approval hold (test_sync_approvals
+    is): every synced record counts as approved here."""
+    from agent_team_backend import sync_approvals
+
+    monkeypatch.setattr(sync_approvals, "is_approved", lambda *_a: True)
+
+
 class StrictServer(FakeServer):
     async def request(self, msg_type, payload):
         if msg_type == "sync.push":
