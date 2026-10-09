@@ -1008,6 +1008,50 @@ describe('SyncSettings', () => {
       expect(card.find('.sync-approval-change').text()).toContain('"be nice"')
     })
 
+    it('keeps the lines of a held text as lines', async () => {
+      const memory = {
+        ...held,
+        scope: 'memory',
+        itemId: '.claude:CLAUDE.md',
+        summary: { path: '~/.claude/CLAUDE.md', text: 'one\ntwo\u200b\n', diff: '' },
+      }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [memory] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const text = wrapper.find('pre.sync-approval-text').text()
+      expect(text).toContain('one\ntwo\\u{200B}')
+      expect(text).not.toContain('\\u{000A}')
+    })
+
+    it('loads a collapsed card whole before it offers Approve', async () => {
+      const brief = { ...held, scope: 'memory', itemId: '.claude:CLAUDE.md', collapsed: true,
+        summary: { path: '~/.claude/CLAUDE.md', bytes: 300000 } }
+      const whole = { ...brief, collapsed: false, summary: { ...brief.summary, text: 'big body', diff: '+big body\n' } }
+      const { backend, send } = mockBackend({
+        'sync.approvals': { ok: true, payload: { approvals: [brief] } },
+        'sync.approval.detail': { ok: true, payload: { approval: whole } },
+      })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      expect(wrapper.find('button.sync-approve').exists()).toBe(false)
+      await wrapper.find('button.sync-expand').trigger('click')
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith('sync.approval.detail', { scope: 'memory', itemId: '.claude:CLAUDE.md' })
+      expect(wrapper.find('pre.sync-approval-text').text()).toContain('big body')
+      expect(wrapper.find('button.sync-approve').exists()).toBe(true)
+    })
+
+    it('says which prompt a held delete would make the loop prompt', async () => {
+      const del = { ...held, scope: 'prompts', itemId: 'p1', kind: 'delete',
+        summary: { id: 'p1', name: 'a', deletes: true, newLoopPrompt: 'force' } }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [del] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const lines = wrapper.findAll('.sync-approval-decision').map((l) => l.text())
+      expect(lines[0]).toContain('delete')
+      expect(lines[1]).toContain('force')
+    })
+
     it('says when a queue is full and new records are being refused', async () => {
       const { backend } = mockBackend({
         'sync.approvals': { ok: true, payload: { approvals: [], full: ['mcp'] } },

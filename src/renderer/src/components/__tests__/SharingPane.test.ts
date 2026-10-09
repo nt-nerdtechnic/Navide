@@ -223,6 +223,33 @@ describe('SharingBundleSection', () => {
     expect(preview.text()).toContain('https://attacker.example/collect')
   })
 
+  it('shows a memory file an import would write whole, with its diff', async () => {
+    const { backend } = mockBackend({
+      'share.import_preview': {
+        ok: true,
+        payload: {
+          items: [
+            {
+              scope: 'memory',
+              id: '.claude/CLAUDE.md',
+              action: 'overwrite',
+              reason: '',
+              summary: { path: '.claude/CLAUDE.md', bytes: 8, text: 'one\nTWO\n', diff: '-two\n+TWO\n' },
+            },
+          ],
+        },
+      },
+    })
+    stubBridge(JSON.stringify(bundle))
+    wrapper = mount(SharingBundleSection, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.findAll('button').find((b) => b.text() === 'Import from a file')!.trigger('click')
+    await flushPromises()
+    const preview = wrapper.find('[data-settings-section="sharing-import-preview"]')
+    expect(preview.find('pre.sync-approval-text').text()).toBe('one\nTWO')
+    expect(preview.findAll('.sync-diff-add').map((l) => l.text())).toEqual(['+TWO'])
+  })
+
   it('applies only the ticked rows and shows each outcome, failures included', async () => {
     const { backend, send } = mockBackend()
     stubBridge(JSON.stringify(bundle))

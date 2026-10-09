@@ -80,6 +80,9 @@ interface Approval {
   summary: Record<string, unknown>
   /** False when the summary cannot show the whole record: no Approve. */
   displayable?: boolean
+  /** True when the listing sent only the small fields; the card loads the
+   *  record whole (sync.approval.detail) before it offers Approve. */
+  collapsed?: boolean
 }
 
 /** An item that reads like it carries a secret (D2): where, never what. */
@@ -281,6 +284,29 @@ async function loadApprovals(): Promise<void> {
 function approvalKind(a: Approval): string {
   if (a.status === 'approved') return t('settings.sync.approval-downloading')
   return a.kind === 'changed' ? t('settings.sync.approval-changed') : t('settings.sync.approval-new')
+}
+
+async function expand(a: Approval): Promise<void> {
+  busy.value = a.scope + '/' + a.itemId
+  error.value = ''
+  try {
+    const resp = await props.backend.send<{ approval?: unknown }>('sync.approval.detail', {
+      scope: a.scope,
+      itemId: a.itemId,
+    })
+    const whole = resp?.ok ? resp.payload?.approval : null
+    if (!isRecord(whole)) {
+      error.value = resp?.error?.message ?? t('settings.sync.error-load')
+      return
+    }
+    approvals.value = approvals.value.map((row) =>
+      row.scope === a.scope && row.itemId === a.itemId ? (whole as unknown as Approval) : row,
+    )
+  } catch (err) {
+    error.value = String(err)
+  } finally {
+    busy.value = ''
+  }
 }
 
 async function decide(a: Approval, approve: boolean): Promise<void> {
@@ -596,7 +622,16 @@ onBeforeUnmount(() => offResult?.())
         <SyncRecordSummary v-else :summary="a.summary" />
         <div v-if="a.status !== 'approved'" class="sync-approval-actions">
           <button
-            v-if="a.displayable !== false"
+            v-if="a.collapsed && a.displayable !== false"
+            type="button"
+            class="sync-expand"
+            :disabled="busy === a.scope + '/' + a.itemId"
+            @click="expand(a)"
+          >
+            {{ t('settings.sync.approval-expand') }}
+          </button>
+          <button
+            v-if="a.displayable !== false && !a.collapsed"
             type="button"
             class="sync-approve"
             :disabled="busy === a.scope + '/' + a.itemId"

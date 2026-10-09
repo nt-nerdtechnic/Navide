@@ -9,3 +9,9 @@ export function visible(value: unknown): string {
     ch === ' ' ? ch : '\\u{' + ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0') + '}',
   )
 }
+
+/** A multi-line text escaped line by line: its line breaks stay line breaks
+ *  (visible() alone would show them as \u{000A}). */
+export function visibleText(value: unknown): string {
+  return String(value ?? '').split('\n').map(visible).join('\n')
+}

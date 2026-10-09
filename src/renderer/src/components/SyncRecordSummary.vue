@@ -7,7 +7,7 @@
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { visible } from '../lib/syncVisible'
+import { visible, visibleText } from '../lib/syncVisible'
 
 interface SummaryFile {
   path: string
@@ -65,8 +65,13 @@ const flags = computed(() =>
 /** A skill whose files are unchanged but whose switch or CLIs would change. */
 const decision = computed(() => {
   const s = props.summary
-  if (!('previousEnabled' in s) && !('previousTargets' in s)) return []
   const out: string[] = []
+  if (s.deletes === true) {
+    out.push(t('settings.sync.approval-deletes', { name: visible(s.name) }))
+    if (typeof s.newLoopPrompt === 'string') out.push(t('settings.sync.approval-new-loop', { name: visible(s.newLoopPrompt) }))
+    return out
+  }
+  if (!('previousEnabled' in s) && !('previousTargets' in s)) return []
   if (s.enabled === true && s.previousEnabled === false) out.push(t('settings.sync.approval-turn-on'))
   const show = (v: unknown) => (Array.isArray(v) ? v.map(visible).join(', ') : t('settings.sync.approval-all-clis'))
   if (JSON.stringify(s.targets) !== JSON.stringify(s.previousTargets)) {
@@ -138,7 +143,7 @@ function fileLine(f: SummaryFile): string {
     </template>
     <template v-if="typeof summary.text === 'string'">
       <span class="sync-hint">{{ t('settings.sync.approval-text') }}</span>
-      <pre class="sync-approval-preview sync-approval-text">{{ visible(summary.text) }}</pre>
+      <pre class="sync-approval-preview sync-approval-text">{{ visibleText(summary.text) }}</pre>
     </template>
     <ul v-if="env.length" class="sync-approval-files">
       <li v-for="(row, i) in env" :key="'env:' + i" class="sync-approval-env">
@@ -155,18 +160,18 @@ function fileLine(f: SummaryFile): string {
       <span v-for="flag in flags" :key="flag" class="sync-note sync-result-error sync-approval-flag">
         {{ t('settings.sync.approval-frontmatter-flag', { key: flag }) }}
       </span>
-      <pre class="sync-approval-preview sync-approval-frontmatter">{{ visible(summary.frontmatter) }}</pre>
+      <pre class="sync-approval-preview sync-approval-frontmatter">{{ visibleText(summary.frontmatter) }}</pre>
     </template>
     <template v-if="typeof summary.skillMd === 'string' && summary.skillMd">
       <span class="sync-hint">SKILL.md</span>
-      <pre class="sync-approval-preview sync-approval-skillmd">{{ visible(summary.skillMd) }}</pre>
+      <pre class="sync-approval-preview sync-approval-skillmd">{{ visibleText(summary.skillMd) }}</pre>
       <span v-if="summary.skillMdTruncated" class="sync-hint sync-approval-cut">{{ t('settings.sync.approval-cut') }}</span>
     </template>
     <template v-for="x in previews" :key="'p:' + x.path">
       <span class="sync-hint">{{
         x.executable ? t('settings.sync.approval-executable', { files: visible(x.path) }) : visible(x.path)
       }}</span>
-      <pre class="sync-approval-preview sync-approval-script">{{ visible(x.preview) }}</pre>
+      <pre class="sync-approval-preview sync-approval-script">{{ visibleText(x.preview) }}</pre>
       <span v-if="x.truncated" class="sync-hint sync-approval-cut">{{ t('settings.sync.approval-cut') }}</span>
     </template>
   </div>
