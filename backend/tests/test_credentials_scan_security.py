@@ -691,3 +691,78 @@ async def test_r2_9_findings_docstring_no_longer_mentions_steps():
 
     tools = {tool.name: tool for tool in await plan_mcp.server.list_tools()}
     assert "steps" not in (tools["credentials_findings"].description or "")
+
+
+# ══ Security review round 3 (R3-1, R3-2, R3-4) ══════════════════════════════
+
+
+@pytest.mark.parametrize("bad", ["@x", "=x", "~x", "+x", ".x", ":x", "_x"])
+def test_r3_1_scanned_values_must_start_alphanumeric_or_slash(bad):
+    assert cs.safe_command("git", "-C", cs.StepValue(bad)) is None
+    assert cs.safe_command("git", "-C", cs.StepValue("/a/b"), cs.StepValue("x1@y")) == "git -C /a/b x1@y"
+
+
+def test_r3_1_remote_names_may_not_start_with_a_digit():
+    assert cs.safe_command("git", "remote", "set-url", "--", cs.RemoteName("1origin"), cs.StepValue("https://h/x")) is None
+    assert cs.safe_command("git", "remote", "set-url", "--", cs.RemoteName("origin2"), cs.StepValue("https://h/x")) == \
+        "git remote set-url -- origin2 https://h/x"
+
+
+@needs_git
+@pytest.mark.parametrize("name", ["@upstream", "=x", "~x", "+x", "9lives"])
+def test_r3_1_hostile_remote_name_starts_need_a_manual_fix(home, tmp_path, name):
+    root = tmp_path / "ws"
+    repo = _repo(home, root / "r")
+    _git(home, "-C", str(repo), "config", f"remote.{name}.url", f"https://{TOKEN}@github.com/a/b")
+    findings = _url_token_steps(cs.run_scan(_ctx(home, [root])))
+    assert findings and all(f["manual_fix"] and not f["steps"] for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_r3_2_a_scan_from_an_older_roots_generation_is_not_joined(tmp_path):
+    import asyncio
+
+    gate = threading.Event()
+    seen_roots: list[list[str]] = []
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    db = Database(tmp_path / "navide.db")
+    db.kv_set(cs.ROOTS_KV_KEY, [str(keep)], now=1)
+
+    def factory(roots):
+        seen_roots.append([p for p, _ in roots])
+        if len(seen_roots) == 1:
+            gate.wait(5)
+        return _ctx(tmp_path, [Path(p) for p, _ in roots], which=lambda n: None, system_dirs=[])
+
+    svc = cs.CredentialsService(db_getter=lambda: db, workspace_roots=lambda: [], context_factory=factory,
+                                system_dirs=lambda: [])
+    old = asyncio.ensure_future(svc.scan(force=True))
+    await asyncio.sleep(0.2)
+    await asyncio.get_running_loop().run_in_executor(None, svc.roots_set, [])
+    new = asyncio.ensure_future(svc.scan(force=True))
+    await asyncio.sleep(0.05)
+    gate.set()
+    await old
+    result = await new
+    assert result["roots"] == []
+    assert seen_roots[-1] == []
+
+
+def test_r3_4_yaml_host_keys_may_carry_a_port():
+    gh = "git.corp.example:8443:\n    oauth_token: gho_x\n    user: me\n"
+    assert cs.yaml_token_hosts(gh) == {"git.corp.example:8443": True}
+    glab = "hosts:\n    gitlab.corp.example:8443:\n        token: x\n        api_host: gitlab.corp.example:8443\n"
+    assert cs.yaml_token_hosts(glab) == {"gitlab.corp.example:8443": True}
+    assert cs.yaml_token_hosts("github.com:\n    oauth_token: x\n") == {"github.com": True}
+
+
+def test_r3_4_port_host_from_cli_config_gets_trusted_links(home):
+    cfg = home / ".config" / "glab-cli"
+    cfg.mkdir(parents=True)
+    (cfg / "config.yml").write_text("hosts:\n    gitlab.corp.example:8443:\n        token: x\n")
+    ctx = _ctx(home, [], which=lambda n: None)
+    result = cs.run_scan(ctx)
+    finding = next(f for f in result["findings"] if f["code"] == "cli-token-plaintext")
+    assert finding["params"]["host"] == "gitlab.corp.example:8443"
+    assert finding["links"][0]["url"] == "https://gitlab.corp.example:8443/-/user_settings/personal_access_tokens"

@@ -265,7 +265,15 @@ MAX_READ_BYTES = 1024 * 1024
 class StepValue(str):
     """A part of a step that came from scanned data (a path, URL, remote
     name, host, login) rather than from this module. Besides the allowlist
-    it may not start with "-" (an option) or "(" (a PowerShell expression)."""
+    it must start with a letter, digit or "/" (R3-1): no option ("-"), no
+    PowerShell splat or expression ("@", "("), no "=", "~" or "+"."""
+
+
+class RemoteName(StepValue):
+    """A git remote name: additionally may not start with a digit (R3-1)."""
+
+
+_STEP_VALUE_START_RE = re.compile(r"[A-Za-z0-9/]")
 
 
 def safe_command(*parts: str) -> str | None:
@@ -275,7 +283,9 @@ def safe_command(*parts: str) -> str | None:
     for part in parts:
         if not _STEP_PART_RE.fullmatch(part):
             return None
-        if isinstance(part, StepValue) and part.startswith(("-", "(")):
+        if isinstance(part, StepValue) and not _STEP_VALUE_START_RE.match(part):
+            return None
+        if isinstance(part, RemoteName) and part[:1].isdigit():
             return None
     return " ".join(parts)
 
@@ -813,7 +823,9 @@ def yaml_token_hosts(text: str) -> dict[str, bool]:
     for raw in text.splitlines():
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
-        match = re.match(r"^(\s*)([^:#\s][^:]*?)\s*:(?:\s+(.*))?$", raw)
+        # A key ends at the first ":" followed by whitespace or the line end, so
+        # a host:port key stays whole (R3-4).
+        match = re.match(r"^(\s*)([^#\s]\S*?)\s*:(?:\s+(.*))?$", raw)
         if not match:
             continue
         indent = len(match.group(1).expandtabs(4))
@@ -1569,7 +1581,7 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
             else:
                 push = ["--push"] if kind == "pushurl" else []
                 steps = [["git", "-C", StepValue(str(repo)), "remote", "set-url", *push, "--",
-                          StepValue(remote), StepValue(_clean_url(redacted))]]
+                          RemoteName(remote), StepValue(_clean_url(redacted))]]
                 actions = ["remote-set-url"]
             out.finding(
                 "url-token", "high", "remote", location,
@@ -1721,6 +1733,7 @@ class CredentialsService:
         #: Bumped whenever the roots change; a scan that started under an
         #: older generation is returned to its waiters but never cached (R2-7).
         self._roots_generation = 0
+        self._inflight_generation = 0
 
     # KV ------------------------------------------------------------------
     def _kv_get(self, key: str, default: Any) -> Any:
@@ -1830,7 +1843,8 @@ class CredentialsService:
                 self._cache = (time.monotonic(), raw)
             return raw
         finally:
-            self._inflight = None
+            if self._inflight_generation == generation:
+                self._inflight = None
 
     async def scan(self, *, force: bool = False) -> dict[str, Any]:
         """At most one scan runs; nobody waits on it who need not (CR-3).
@@ -1844,7 +1858,10 @@ class CredentialsService:
         if not force and cached is not None and (fresh or self._inflight is not None):
             raw = cached[1]
         else:
-            if self._inflight is None:
+            # A running scan from an older roots generation is not joined: it
+            # scans roots that are no longer configured (R3-2).
+            if self._inflight is None or self._inflight_generation != self._roots_generation:
+                self._inflight_generation = self._roots_generation
                 self._inflight = asyncio.ensure_future(self._refresh())
             raw = await asyncio.shield(self._inflight)
         return await asyncio.get_running_loop().run_in_executor(
