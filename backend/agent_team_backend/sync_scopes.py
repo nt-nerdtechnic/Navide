@@ -490,15 +490,8 @@ def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, An
     nothing in what runs that hides what it is, ``_mcp_hides``)."""
     from .mcp_settings import MCPServersDocument
 
-    if _mcp_hides(incoming):
+    if mcp_record_problem(incoming):
         return False
-
-    for field_name in ("env", "headers"):
-        values = incoming.get(field_name)
-        if isinstance(values, dict) and (
-            len(values) > MAX_SYNCED_ENV or any(len(str(k)) > MAX_SYNCED_NAME for k in values)
-        ):
-            return False
     candidate = list(servers)
     if index < 0:
         candidate.append(incoming)
@@ -509,6 +502,21 @@ def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, An
     except Exception:  # noqa: BLE001 - any refusal is a refusal
         return False
     return True
+
+
+def mcp_record_problem(server: dict[str, Any]) -> str:
+    """Why an MCP record from elsewhere (sync, a settings bundle) cannot be
+    shown whole and as it is, or "": hidden characters in what runs, more
+    env entries or headers than an approval shows, a name too long."""
+    if _mcp_hides(server):
+        return "its command, arguments or URL hide characters"
+    for field_name in ("env", "headers"):
+        values = server.get(field_name)
+        if isinstance(values, dict) and len(values) > MAX_SYNCED_ENV:
+            return f"it carries more than {MAX_SYNCED_ENV} {field_name} entries"
+        if isinstance(values, dict) and any(len(str(k)) > MAX_SYNCED_NAME for k in values):
+            return f"a name in {field_name} is longer than {MAX_SYNCED_NAME} characters"
+    return ""
 
 
 def _mcp_hides(server: dict[str, Any]) -> bool:
@@ -758,6 +766,9 @@ class SkillsStateScope:
             gate = self._approval_gate(store, item_id, payload, content)
             if gate != "write":
                 return gate == "held"
+        gate = self._decision_gate(item_id, payload, decision)
+        if gate != "write":
+            return gate == "held"
         if isinstance(content, dict):
             # Files first: a decision recorded for files that did not land
             # would snapshot as an entry without them, and pushing that up
@@ -782,6 +793,34 @@ class SkillsStateScope:
             log.warning("the synced decision for %s could not be applied: %s", item_id, err)
         return True
 
+    def _decision_gate(self, item_id: str, payload: Any, decision: dict[str, Any]) -> str:
+        """For a skill this machine has: switching it on when it is off here,
+        or sending it to CLIs it does not go to here, is asked — as the same
+        change to an MCP server is. Switching off and narrowing are not."""
+        local = self._present().get(item_id)
+        if local is None or sync_approvals.is_approved(self.scope, item_id, payload):
+            return "write"
+        turned_on = local.get("enabled") is False and decision["enabled"]
+        mine, theirs = local.get("targets"), decision["targets"]
+        widened = (isinstance(mine, list) and theirs is None) or (
+            isinstance(mine, list) and isinstance(theirs, list) and bool(set(theirs) - set(mine))
+        )
+        if not (turned_on or widened):
+            return "write"
+        if sync_approvals.is_rejected(self.scope, item_id, payload):
+            return "held"
+        held = sync_approvals.hold(
+            self.scope, item_id, payload, local=self._local().get(item_id), kind=sync_approvals.KIND_CHANGED,
+            summary={
+                "name": item_id,
+                "enabled": decision["enabled"],
+                "targets": theirs,
+                "previousEnabled": local.get("enabled"),
+                "previousTargets": mine,
+            },
+        )
+        return "held" if held else "refused"
+
     def _approval_gate(self, store: Any, item_id: str, payload: Any, content: dict[str, Any]) -> str:
         """``write`` when the files may land now: they match this machine's
         copy, or the user approved exactly this record. Otherwise the record
@@ -797,6 +836,11 @@ class SkillsStateScope:
             return "write"
         if sync_approvals.is_approved(self.scope, item_id, payload):
             return "write"
+        problem = _skill_paths_problem(content)
+        if problem:
+            # Paths that are one file here would land as other than shown.
+            log.warning("skill %s refused: %s", item_id, problem)
+            return "refused"
         if sync_approvals.is_rejected(self.scope, item_id, payload):
             return "held"
         held = sync_approvals.hold(
@@ -831,6 +875,50 @@ def _preview(raw: bytes) -> tuple[str, bool]:
     return text[:SKILL_PREVIEW_CHARS], len(text) > SKILL_PREVIEW_CHARS
 
 
+#: Most characters of SKILL.md frontmatter an approval shows; it is shown
+#: whole or the record is refused, since the CLIs act on it (hooks, tools).
+MAX_FRONTMATTER_CHARS = 16 * 1024
+#: Frontmatter keys an approval calls out: they make a CLI run or allow more.
+_RISKY_FRONTMATTER = re.compile(r"^(allowed[-_]tools|hooks)\s*:", re.IGNORECASE | re.MULTILINE)
+
+
+def _skill_md_name(paths: Any) -> str | None:
+    """The path a CLI reads as SKILL.md, compared as a case-insensitive,
+    normalising volume would (``Skill.md`` is it)."""
+    import unicodedata
+
+    return next(
+        (str(p) for p in sorted(paths, key=str) if unicodedata.normalize("NFC", str(p)).casefold() == "skill.md"),
+        None,
+    )
+
+
+def _frontmatter(skill_md_text: str) -> dict[str, Any]:
+    """SKILL.md's frontmatter, whole, apart from the body, with the keys
+    that make a CLI run or allow more named — or a ``truncated`` mark (the
+    record is then refused) when it is too long to show whole."""
+    text = skill_md_text.replace("\r\n", "\n")
+    if not text.startswith("---\n"):
+        return {"frontmatter": "", "frontmatterFlags": []}
+    end = text.find("\n---", 4)
+    block = text[4:end] if end >= 0 else text[4:]
+    if len(block) > MAX_FRONTMATTER_CHARS:
+        return {"truncated": "the SKILL.md frontmatter is too long to show whole"}
+    flags = sorted({m.group(1).lower().replace("_", "-") for m in _RISKY_FRONTMATTER.finditer(block)})
+    return {"frontmatter": block, "frontmatterFlags": flags}
+
+
+def _skill_paths_problem(paths: Any) -> str:
+    """Why a skill's paths cannot land as shown (aliases, unsafe names), or ""."""
+    from .skills_store import SkillValidationError, _validate_bundle_paths
+
+    try:
+        _validate_bundle_paths([str(p) for p in paths], portable_names=False)
+    except SkillValidationError as err:
+        return str(err)
+    return ""
+
+
 def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
     """What the approval list shows of a held skill: SKILL.md (what the agent
     will be told) and whether its preview was cut, every file with its size
@@ -840,7 +928,8 @@ def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) ->
     import hashlib
 
     decoded = {str(rel): _skill_file_bytes(entry) for rel, entry in files.items()}
-    skill_md_raw = decoded.get("SKILL.md") or b""
+    skill_md_path = _skill_md_name(decoded)
+    skill_md_raw = (decoded.get(skill_md_path) if skill_md_path else None) or b""
     skill_md, skill_md_cut = _preview(skill_md_raw)
     skill_md_text = skill_md_raw.decode("utf-8", errors="replace")
     rows: list[dict[str, Any]] = []
@@ -855,7 +944,7 @@ def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) ->
         marked = _EXEC_BITS and isinstance(entry, dict) and bool(entry.get("x"))
         if marked:
             executable.append(rel)
-        if rel == "SKILL.md":
+        if rel == skill_md_path:
             continue
         if marked or rel.lower().endswith(_SCRIPT_SUFFIXES) or raw[:2] == b"#!" or rel in skill_md_text:
             text, cut = _preview(raw)
@@ -865,6 +954,7 @@ def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) ->
         "files": rows,
         "skillMd": skill_md,
         "skillMdTruncated": skill_md_cut,
+        **_frontmatter(skill_md_text),
         "previews": previews,
         "executable": executable,
         "enabled": bool(payload.get("enabled", True)),
@@ -1234,6 +1324,9 @@ class SkillFilesScope:
         local_manifest = self._manifests().get(item_id) if self._layout is not None else None
         if sync_approvals.is_approved(self.scope, item_id, payload):
             return self._land_reviewed(item_id, payload, refs)
+        if self._needs_review(local_manifest, payload) and _skill_paths_problem(refs):
+            log.warning("skill-files %s refused: %s", item_id, _skill_paths_problem(refs))
+            return False
         if self._needs_review(local_manifest, payload):
             # New or changed files. They are downloaded into the hold area,
             # sealed, to be shown before approval (``_review``); nothing lands
@@ -1436,9 +1529,10 @@ class SkillFilesScope:
                 size += len(segment)
             shas[rel] = sha.hexdigest()
             rows.append({"path": rel, "size": size, "sha256": shas[rel]})
+        skill_md_path = _skill_md_name(refs)
         skill_md_raw, _ = sync_approvals.held_file_head(
-            self.scope, item_id, payload_digest, "SKILL.md", 1024 * 1024
-        ) if "SKILL.md" in refs else (b"", False)
+            self.scope, item_id, payload_digest, skill_md_path, 1024 * 1024
+        ) if skill_md_path else (b"", False)
         skill_md, skill_md_cut = _preview(skill_md_raw)
         skill_md_text = skill_md_raw.decode("utf-8", errors="replace")
         files = payload.get("files") if isinstance(payload, dict) else {}
@@ -1446,7 +1540,7 @@ class SkillFilesScope:
             rel for rel, e in (files or {}).items() if _EXEC_BITS and isinstance(e, dict) and e.get("x")
         )
         for rel in sorted(refs):
-            if rel == "SKILL.md":
+            if rel == skill_md_path:
                 continue
             head, more = sync_approvals.held_file_head(
                 self.scope, item_id, payload_digest, rel, SKILL_PREVIEW_CHARS * 4
@@ -1460,6 +1554,7 @@ class SkillFilesScope:
             "files": rows,
             "skillMd": skill_md,
             "skillMdTruncated": skill_md_cut,
+            **_frontmatter(skill_md_text),
             "previews": previews,
             "executable": executable,
             "bytes": sum(r["size"] for r in rows),

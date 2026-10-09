@@ -924,6 +924,11 @@ class SkillsStore:
             decoded[safe] = raw
             if entry.get("x") is True:
                 executable.add(safe)
+        try:
+            _validate_bundle_paths(list(decoded), portable_names=False)
+        except SkillValidationError as err:
+            log.warning("skill %s: %s", name, err)
+            return False
 
         self._root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=self._root))
@@ -1016,6 +1021,11 @@ class SkillsStore:
                 log.warning("skill %s: refusing the path %r", name, relative)
                 return False
             safe_files[safe] = source
+        try:
+            _validate_bundle_paths(list(safe_files), portable_names=False)
+        except SkillValidationError as err:
+            log.warning("skill %s: %s", name, err)
+            return False
 
         self._root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=self._root))
@@ -1426,8 +1436,16 @@ def _valid_installation_receipt(receipt: Any) -> bool:
     return False
 
 
-def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: bool = False) -> None:
-    """Reject filenames that cannot retain distinct identities on all hosts."""
+def _validate_bundle_paths(
+    paths: Any, *, directories: Any = (), allow_hidden: bool = False, portable_names: bool = True
+) -> None:
+    """Reject filenames that cannot retain distinct identities on all hosts.
+
+    Two paths that are one file on a case-insensitive or normalising volume
+    (``SKILL.md``/``skill.md``, NFC/NFD) are refused: one would be written
+    over the other, so what was shown is not what lands. ``portable_names``
+    False leaves Windows-reserved names to the platform that reserves them
+    (``osplat.paths.file_name_refused``), as sync does."""
     spellings: dict[str, str] = {}
     files = set(paths)
     directories = set(directories)
@@ -1438,7 +1456,8 @@ def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: b
             raise SkillValidationError("invalid skill bundle path")
         parts = relative.split("/")
         for index, part in enumerate(parts):
-            if windows_refused_file_name(part):
+            refused = windows_refused_file_name(part) if portable_names else osplat.paths.file_name_refused(part)
+            if refused:
                 raise SkillValidationError(f"nonportable skill path: {relative}")
             prefix = "/".join(parts[:index + 1])
             key = unicodedata.normalize("NFC", prefix).casefold()

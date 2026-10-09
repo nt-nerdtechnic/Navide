@@ -224,6 +224,12 @@ def _displayable(summary: dict[str, Any] | None) -> bool:
     return isinstance(summary, dict) and not (_STUB_KEYS & set(summary)) and "unavailable" not in summary
 
 
+def showable(summary: Any) -> bool:
+    """Whether *summary* can be put in front of a person whole: what a hold
+    requires, and what a settings-bundle import requires too."""
+    return _displayable(summary) and len(json.dumps(summary)) <= MAX_SUMMARY_BYTES
+
+
 def _waiting(entries: dict[str, dict[str, Any]]) -> int:
     return sum(1 for e in entries.values() if e.get("status") != REJECTED)
 

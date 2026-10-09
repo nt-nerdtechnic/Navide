@@ -383,8 +383,38 @@ def preview_import(raw: Any) -> list[dict[str, Any]]:
         local = _local_state(scope)
         for item_id, payload in parsed[scope].items():
             action, reason = _plan_item(scope, item_id, payload, local)
-            rows.append({"scope": scope, "id": item_id, "action": action, "reason": reason})
+            row = {"scope": scope, "id": item_id, "action": action, "reason": reason}
+            summary, _problem = _import_summary(scope, item_id, payload)
+            if summary is not None and action != SKIP:
+                # The whole record, as the sync approval card shows one: what
+                # the user ticks is what lands.
+                row["summary"] = summary
+            rows.append(row)
     return rows
+
+
+def _import_summary(scope: str, item_id: str, payload: Any) -> tuple[dict[str, Any] | None, str]:
+    """For an MCP server or a skill: the summary a sync approval would show
+    (sync_scopes), and why the record cannot be shown whole and as it is —
+    the checks a synced record goes through — or ""."""
+    from . import sync_approvals
+
+    if not isinstance(payload, dict):
+        return None, ""
+    if scope == "mcp":
+        problem = sync_scopes.mcp_record_problem(payload)
+        summary = sync_scopes._mcp_summary(item_id, payload)
+    elif scope == "skills":
+        files = payload.get("files")
+        if not isinstance(files, dict):
+            return None, ""
+        problem = sync_scopes._skill_paths_problem(files)
+        summary = sync_scopes._skill_summary(item_id, {}, files)
+    else:
+        return None, ""
+    if not problem and not sync_approvals.showable(summary):
+        problem = "it cannot be shown in full here"
+    return summary, problem
 
 
 def _local_state(scope: str) -> dict[str, Any]:
@@ -408,6 +438,9 @@ def _plan_item(
     if scope == "mcp":
         if not isinstance(payload, dict):
             return SKIP, "the item is not an object"
+        _summary, problem = _import_summary(scope, item_id, payload)
+        if problem:
+            return SKIP, f"not imported: {problem}"
         blanks = _blank_secret_fields(payload)
         reason = ""
         if blanks:
@@ -420,6 +453,9 @@ def _plan_item(
         files = payload.get("files") if isinstance(payload, dict) else None
         if not isinstance(files, dict) or SKILL_FILE not in files:
             return SKIP, f"the bundle carries no {SKILL_FILE} for this skill"
+        _summary, problem = _import_summary(scope, item_id, payload)
+        if problem:
+            return SKIP, f"not imported: {problem}"
         fact = local.get(item_id)
         if fact is None:
             return CREATE, ""
