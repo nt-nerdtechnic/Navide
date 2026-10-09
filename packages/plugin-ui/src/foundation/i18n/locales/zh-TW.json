@@ -1021,6 +1021,10 @@
           "title": "各 CLI 的 MCP",
           "summary": "唯讀檢視各家 CLI 自己設定檔裡的 MCP server，以及每個 server 是在哪裡設定的。"
         },
+        "credentials": {
+          "title": "憑證與金鑰",
+          "summary": "唯讀掃描這台機器上憑證與金鑰的存放位置，並可設定提醒。"
+        },
         "skills": {
           "title": "技能",
           "summary": "建立、編輯、啟用、停用並檢視由 Navide 管理的 agent 技能。"
@@ -1814,6 +1818,7 @@
       "roles": "角色",
       "pipelines": "流程",
       "mcp": "MCP",
+      "credentials": "憑證與金鑰",
       "skills": "技能",
       "prompts": "Prompt 技能",
       "memory": "記憶",
@@ -4579,7 +4584,7 @@
         },
         "s1": {
           "title": "方向一：Navide 提供給 CLI agent 的工具",
-          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>59 個</strong>（核心 53 個，加上計畫外掛註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
+          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>61 個</strong>（核心 55 個，加上計畫外掛註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
           "h1": "計畫文件",
           "planTools": {
             "plan_list": "列出這個工作區的所有計畫，含階段與待辦進度",
@@ -4619,7 +4624,9 @@
             "workspace_open": "在 Navide 裡開啟一個專案；要開成新視窗還是併進已經開著它的視窗，由 Navide 決定",
             "workspace_switch": "把自己所在的視窗切到它本來就持有的另一個專案；被切走的專案，它的 pane 會繼續跑。視窗裡有 pipeline 正在跑時會拒絕，因為切換會中止它",
             "prompt_list": "使用者在「設定 → Prompt 技能」存的提示技能有哪些；唯讀，新增與編輯是使用者的事",
-            "mcp_list": "Navide 自己連的 MCP server 與各家 CLI 自己設定的 server 各有哪些，含連線狀態與工具數量；唯讀，跟「設定 → MCP」看到的是同一份"
+            "mcp_list": "Navide 自己連的 MCP server 與各家 CLI 自己設定的 server 各有哪些，含連線狀態與工具數量；唯讀，跟「設定 → MCP」看到的是同一份",
+            "credentials_list": "掃描盤點到的憑證，只含類型與名稱，絕不含值",
+            "credentials_findings": "憑證風險發現與嚴重度、提醒狀態；唯讀"
           },
           "note2": "這幾個是 agent 用自己的工具做不到的事——額度、pipeline 狀態、skill 投遞對象都只有 Navide 知道。Git、檔案讀寫、shell 刻意<strong>沒有</strong>包成 MCP 工具：agent 本來就有這些能力，包一層只會更難用，還要每個 pane 都付工具清單的 context 成本。",
           "h3": "與其他 CLI 協作",
@@ -6090,6 +6097,150 @@
       "catalog-hint": "這份目錄只收錄<strong>「Orchestrator 情境讀取」</strong>類的 MCP — 也就是讀取 workspace／文件／外部服務資料，再注入 kickoff prompt 以校正 agent 認知的工具。執行類動作（測試、瀏覽器自動化等）由 CLI agent 自己處理。",
       "catalog-requires-env": "需要環境變數：{vars}",
       "catalog-empty": "找不到符合的 MCP server"
+    },
+    "credentials": {
+      "title": "憑證與金鑰",
+      "intro": "唯讀掃描這台機器上憑證與金鑰存放的位置。不會修改、搬移或傳送任何東西。",
+      "meta": "僅限本機 · 絕不顯示值 · 同步關閉",
+      "keyring-ok": "鑰匙圈可用：{backend}",
+      "keyring-ok-plain": "鑰匙圈可用",
+      "keyring-bad": "鑰匙圈無法使用",
+      "keyring-bad-hint": "沒有系統鑰匙圈時，憑證容易被存成明文檔案。",
+      "keyring-reason-unknown": "未回報原因。",
+      "scan": "掃描",
+      "scanning": "掃描中…",
+      "scan-roots": "掃描範圍…",
+      "scanned-at": "掃描於 {time} · {ms} 毫秒",
+      "banner-high": "有 {count} 項高風險發現需要處理",
+      "banner-high-hint": "點開卡片查看建議。這個頁面不會替你修改任何東西。",
+      "filter-label": "依類型篩選",
+      "search": "搜尋名稱、位置、host…",
+      "view-label": "檢視",
+      "view-findings": "發現",
+      "view-inventory": "清單",
+      "all": "全部",
+      "loading": "正在掃描這台機器…",
+      "error-load": "掃描失敗。",
+      "empty-findings-title": "沒有發現項目",
+      "empty-findings-body": "目前的篩選條件下沒有風險項目。",
+      "empty-inventory-title": "沒有清單項目",
+      "empty-inventory-body": "目前的篩選條件下沒有憑證。",
+      "not-scanned": "按「掃描」開始檢查這台機器上的憑證。",
+      "severity": {
+        "high": "高",
+        "medium": "中",
+        "low": "低"
+      },
+      "kind": {
+        "git-helper": "Git helper",
+        "cli-account": "CLI 帳號",
+        "ssh-key": "SSH 金鑰",
+        "keychain-item": "鑰匙圈項目",
+        "remote": "Git remote",
+        "env-var": "環境變數",
+        "plaintext-file": "明文檔案",
+        "keyring": "鑰匙圈"
+      },
+      "reminder": {
+        "title": "提醒",
+        "active": "進行中",
+        "snoozed": "已延後",
+        "dismissed": "已忽略",
+        "until": "至 {date}",
+        "snooze": "延後 7 天",
+        "dismiss": "忽略",
+        "reactivate": "重新啟用",
+        "error": "無法更新提醒。"
+      },
+      "drawer": {
+        "close": "關閉詳細",
+        "location": "位置",
+        "why": "這代表什麼",
+        "todo": "建議做法",
+        "steps": "你可以自己執行的指令",
+        "steps-note": "只提供複製，Navide 不會代為執行。",
+        "links": "服務商頁面",
+        "copy": "複製",
+        "copied": "已複製",
+        "details": "詳細資料",
+        "no-reveal": "這裡絕不顯示值，也沒有顯示按鈕。要查看值請開啟系統的鑰匙圈 App。"
+      },
+      "roots": {
+        "title": "掃描範圍",
+        "intro": "搜尋 git repo 的資料夾。工作區根目錄來自你開啟的工作區；若 repo 放在別處可再新增。",
+        "placeholder": "/資料夾/路徑",
+        "add": "新增",
+        "browse": "瀏覽…",
+        "remove": "移除",
+        "save": "儲存並重新掃描",
+        "empty": "尚未新增額外範圍。",
+        "scanned": "上次掃描搜尋過的位置",
+        "source": {
+          "workspace": "工作區",
+          "user": "使用者"
+        },
+        "repos": "{count} 個 repo",
+        "error": "無法儲存掃描範圍。",
+        "error-load": "無法載入掃描範圍。"
+      },
+      "code-unknown": {
+        "title": "憑證發現項目",
+        "body": "此版本沒有這種發現類型的說明。"
+      },
+      "code": {
+        "url-token": {
+          "title": "remote URL 內嵌了 token",
+          "body": "任何能讀到 repo 設定、shell 歷史或紀錄的人都看得到這個 token。請先到服務商撤銷該 token，再把它從 remote URL 移除，讓 git 改用鑰匙圈。"
+        },
+        "ssh-no-passphrase-default-host": {
+          "title": "預設 SSH 金鑰沒有 passphrase",
+          "body": "這把金鑰預設用於某個 host，任何拿到檔案的人都能使用。請加上 passphrase（ssh-keygen -p），並載入 ssh-agent 或鑰匙圈。"
+        },
+        "ssh-no-passphrase": {
+          "title": "SSH 金鑰沒有 passphrase",
+          "body": "任何複製到這個私鑰檔的人都能使用它。請用 ssh-keygen -p 加上 passphrase，若已不使用就刪除這把金鑰。"
+        },
+        "ssh-key-unreferenced": {
+          "title": "沒有任何設定引用這把 SSH 金鑰",
+          "body": "沒有任何 ssh 設定或已知 host 指向這把金鑰，可能是遺留物。若不再需要，請從服務商帳號移除並刪除檔案。"
+        },
+        "ssh-key-mode": {
+          "title": "SSH 金鑰檔權限過寬",
+          "body": "這台機器上的其他使用者可以讀取這把私鑰。請對檔案執行 chmod 600，只留給自己存取。"
+        },
+        "cli-token-plaintext": {
+          "title": "CLI token 以明文檔案儲存",
+          "body": "CLI 把登入 token 放在可讀的檔案而不是鑰匙圈。若該 CLI 支援鑰匙圈，請登出後改用鑰匙圈選項重新登入，或把檔案權限限制給自己。"
+        },
+        "gh-active-account-only": {
+          "title": "只有 gh 的 active 帳號可用",
+          "body": "GitHub CLI 同一時間只服務一個 active 帳號，綁在其他帳號的 repo 會默默用錯身分。推送前請執行 gh auth switch，或為每個 repo 設定各自的 credential helper。"
+        },
+        "helper-duplicate": {
+          "title": "git credential helper 重複",
+          "body": "同一個 helper 被設定多次，git 可能重複詢問或重複儲存憑證。請從 git 設定移除多餘的 credential.helper。"
+        },
+        "helper-shadowed": {
+          "title": "有 git credential helper 永遠輪不到",
+          "body": "前面的 helper 先回應，所以這個永遠不會被用到。請檢查 credential.helper 的順序，只保留你要的那個。"
+        },
+        "env-token-in-shell-rc": {
+          "title": "shell 啟動檔匯出了 token",
+          "body": "你啟動的每個程式都會繼承這個 token，而且檔案很容易外流或被 commit。請先到服務商撤銷，移除 export 那一行，需要時再從鑰匙圈載入。"
+        },
+        "env-token-set": {
+          "title": "環境變數中設有 token",
+          "body": "這個 App 的環境變數中有憑證，並會傳給每個子行程。若不需要到處都帶著，請在定義它的地方取消設定。"
+        },
+        "plaintext-credential-file": {
+          "title": "憑證存在明文檔案",
+          "body": "磁碟上有檔案以可讀文字存放憑證。請把它們搬進系統鑰匙圈、把檔案權限限制給自己，若檔案曾被分享或備份，請輪替該憑證。"
+        },
+        "keyring-unavailable": {
+          "title": "沒有可用的系統鑰匙圈",
+          "body": "沒有鑰匙圈時，工具會退回使用明文檔案。請安裝並解鎖一個（macOS 鑰匙圈、Windows 認證管理員，或 GNOME Keyring 等 Secret Service）後重新登入。"
+        }
+      }
     },
     "skills": {
       "title": "受管 Skills",

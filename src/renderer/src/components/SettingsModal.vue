@@ -126,6 +126,7 @@ import { usePluginUpdates } from '../composables/usePluginUpdates'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
+import CredentialsPane from './CredentialsPane.vue'
 import PromptSkillsPane from './PromptSkillsPane.vue'
 import SyncSettings from './SyncSettings.vue'
 import MemoryPane from './MemoryPane.vue'
@@ -228,7 +229,10 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'security' | 'help'
+/** Active high-risk credential findings, shown as the nav badge. */
+const credentialsHighCount = ref(0)
+
+type Tab = 'mcp' | 'skills' | 'credentials' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'security' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -798,6 +802,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     group: t('settings.nav.group.integration'),
     summary: t('settings.search.item.skills.summary'),
     keywords: 'skills skill agent instructions markdown enable disable attachments 技能 指令 啟用 停用 附件',
+  },
+  {
+    id: 'credentials',
+    tab: 'credentials',
+    section: 'credentials',
+    title: t('settings.search.item.credentials.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.credentials.summary'),
+    keywords: 'credentials keys secrets token ssh keychain keyring git helper scan risk reminder 憑證 金鑰 密鑰 鑰匙圈 掃描 風險 提醒',
   },
   {
     id: 'prompts',
@@ -1488,6 +1501,7 @@ type SettingsScope = 'user' | 'userWorkspace' | 'accountServer' | 'userWorkspace
 const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' }> = {
   mcp: { scope: 'user', storage: 'mcp' },
   skills: { scope: 'user', storage: 'skills' },
+  credentials: { scope: 'user', storage: 'mainProcess' },
   prompts: { scope: 'user', storage: 'localStorage' },
   // The CLIs' own instruction files: each one lives where its CLI looks for
   // it, so the pane shows per-file paths and this tab has none of its own.
@@ -2545,6 +2559,11 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3.2h4.2v4.2H3zM8.8 3.2H13v4.2H8.8zM3 9H7.2v3.8H3z"/><path d="M10.9 9v3.8M9 10.9h3.8"/></svg>
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.credentials')" :active="activeTab === 'credentials'" :badge="credentialsHighCount" @select="activeTab = 'credentials'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.2" cy="10.8" r="2.6"/><path d="M7.1 9 13 3.1M10.9 5.2l1.7 1.7M9 7.1l1.4 1.4"/></svg>
+                </template>
+              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.prompts')" :active="activeTab === 'prompts'" @select="activeTab = 'prompts'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.6" y="2.6" width="12.8" height="10.8" rx="1.6"/><path d="M4.6 6.2 6.8 8.2l-2.2 2"/><path d="M8.6 10.4h3"/></svg>
@@ -2765,6 +2784,15 @@ watch(activeTab, (tab) => {
             <button class="settings-path-btn" :disabled="!settingsPaths.skills" @click="openSettingsPath(settingsPaths.skills)">{{ $t('action.open') }}</button>
           </div>
           <SkillsPane :backend="props.backend" />
+        </div>
+
+        <!-- ── CREDENTIALS TAB ──────────────────────────────────────────── -->
+        <div v-show="activeTab === 'credentials'" class="s-body s-body--bleed" data-settings-section="credentials">
+          <h1 class="s-page-title">{{ $t('settings.nav.credentials') }}</h1>
+          <div class="settings-meta-row">
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.credentials.scope) }}</span>
+          </div>
+          <CredentialsPane :backend="props.backend" :active="activeTab === 'credentials'" @high-count="credentialsHighCount = $event" />
         </div>
 
         <!-- ── PROMPTS TAB ──────────────────────────────────────────────── -->
