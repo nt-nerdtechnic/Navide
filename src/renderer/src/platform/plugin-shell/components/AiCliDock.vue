@@ -601,7 +601,8 @@ function stop(): void {
   // a hung terminal.create would be uncancellable — cancel the pending create.
   if (term.status === 'starting') void term.cancelPendingCreate().catch(() => {})
   // The user does not want this CLI back: no restore on the next window open.
-  else void term.kill({ retireRestore: true })
+  // A refused kill rejects now; it is logged, not left unhandled.
+  else void term.kill({ retireRestore: true }).catch((err) => console.warn('[AiCliDock] stop failed:', err))
 }
 
 function pasteText(text: string): boolean {

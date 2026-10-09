@@ -7536,6 +7536,10 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
         message: `terminal kill failed while closing pane: ${String(err)}`,
         paneId,
       })
+      // A caller that keeps the record sends no unspawn, so nothing else would
+      // sweep what this missed: ask for the same sweep a kept-record workspace
+      // close asks for.
+      if (!markRemoved) await sendQuiet<{ ok: boolean }>('manual_pane.release_pty', { pane_id: paneId })
     }
   }
   if (markRemoved && pane?.origin === 'pipeline' && pane.slotLabel && stageIndex >= 0) {

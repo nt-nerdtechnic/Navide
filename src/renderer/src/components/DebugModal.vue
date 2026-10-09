@@ -373,7 +373,8 @@ function stopTerm(term: InstanceType<typeof AiCliTerminal> | null): void {
   // While 'starting' there is no sessionId yet, so kill() is a no-op and a hung
   // terminal.create would be uncancellable — cancel the pending create instead.
   if (term.status === 'starting') void term.cancelPendingCreate().catch(() => {})
-  else void term.kill()
+  // A refused kill rejects now; it is logged, not left unhandled.
+  else void term.kill().catch((err) => console.warn('[DebugModal] stop failed:', err))
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────────────

@@ -3241,11 +3241,22 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
 
   async function kill(opts?: { force?: boolean; retireRestore?: boolean }): Promise<void> {
     if (!sessionId.value) return
+    const killedId = sessionId.value
     rememberSessionId('')  // explicit kill — never reattach to this PTY
     const force = opts?.force ?? false
     // Only an explicit Stop carries the flag; every other kill stays two-argument.
-    if (opts?.retireRestore) await terminalPort.kill(sessionId.value, force, { retireRestore: true })
-    else await terminalPort.kill(sessionId.value, force)
+    const reply = opts?.retireRestore
+      ? await terminalPort.kill(killedId, force, { retireRestore: true })
+      : await terminalPort.kill(killedId, force)
+    // wsClient resolves an `ok: false` rather than rejecting it (see interrupt).
+    // A refused kill left the PTY running, so it must not read as done: keep the
+    // id the pane still owns and let the caller sweep.
+    if (reply && typeof reply === 'object' && (reply as { ok?: unknown }).ok === false) {
+      rememberSessionId(killedId)
+      const error = (reply as { error?: unknown }).error
+      const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : error
+      throw new Error(`terminal kill refused: ${String(code ?? 'unknown')}`)
+    }
   }
 
   // Pin this pane's width at its current column count, so a layout mode that
