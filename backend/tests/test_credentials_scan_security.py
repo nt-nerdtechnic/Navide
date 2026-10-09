@@ -143,22 +143,24 @@ def test_cr1_helper_shadowed_context_payload_is_withheld(home, tmp_path):
 
 
 @needs_git
-def test_cr1_safe_values_are_quoted(home, tmp_path):
+def test_cr1_values_outside_the_allowlist_need_a_manual_fix(home, tmp_path):
+    # Superseded by R2-1: nothing is escaped any more, so a path with a space
+    # gets no command rather than a quoted one.
     root = tmp_path / "ws"
     repo = _repo(home, root / "with space")
     _git(home, "-C", str(repo), "config", "remote.origin.url", f"https://{TOKEN}@github.com/a/b.git")
     result = cs.run_scan(_ctx(home, [root]))
     finding = next(f for f in result["findings"] if f["code"] == "url-token")
-    assert finding["manual_fix"] is False
-    assert finding["actions"] == ["remote-set-url"]
-    assert finding["steps"] == [
-        f"git -C {cs.osplat.paths.quote_arg(str(repo))} remote set-url origin https://github.com/a/b.git"]
+    assert finding["manual_fix"] is True
+    assert finding["actions"] == ["remote-set-url", "manual-fix"]
+    assert finding["steps"] == []
 
 
 def test_cr1_step_builder_refuses_metacharacters():
     for bad in ("a$(b)", "a`b`", "a;b", "a|b", "a&b", "a\nb", "a\rb"):
         assert cs.safe_command("git", "-C", bad) is None
-    assert cs.safe_command("chmod", "600", "/x y/z") == "chmod 600 " + cs.osplat.paths.quote_arg("/x y/z")
+    assert cs.safe_command("chmod", "600", "/x y/z") is None
+    assert cs.safe_command("chmod", "600", "/x/y.z") == "chmod 600 /x/y.z"
 
 
 # ── CR-2: helper names never carry an assignment or a body ─────────────────
@@ -486,3 +488,206 @@ def test_cr10_putty_key_passphrase_is_unknown(home):
     result = cs.run_scan(_ctx(home, [], which=lambda n: "/x/ssh-keygen" if n == "ssh-keygen" else None, run=run))
     item = next(i for i in result["items"] if i["kind"] == "ssh-key")
     assert item["detail"]["passphrase_checked"] is False and "has_passphrase" not in item["detail"]
+
+
+# ══ Security review round 2 (R2-1..R2-11) ══════════════════════════════════
+
+
+def _url_token_steps(result: dict) -> list[dict]:
+    return [f for f in result["findings"] if f["code"] == "url-token"]
+
+
+@needs_git
+@pytest.mark.parametrize("name", [
+    "(iex(-join([char[]](99,97,108,99))))",
+    "@(calc)",
+    "{calc}",
+    "a,b",
+    "--push",
+    "x\x1b[201~\x15touch PWNCTL\x0f",
+    "tab\there",
+])
+def test_r2_1_hostile_remote_names_never_reach_a_step(home, tmp_path, monkeypatch, name):
+    import subprocess as sp
+
+    monkeypatch.setattr(cs.osplat.paths, "quote_arg", lambda a: sp.list2cmdline([a]))
+    root = tmp_path / "ws"
+    repo = _repo(home, root / "r")
+    _git(home, "-C", str(repo), "config", f"remote.{name}.url", f"https://{TOKEN}@github.com/a/b")
+    ctx = _ctx(home, [root])
+    ctx.platform = "win32"
+    findings = _url_token_steps(cs.run_scan(ctx))
+    assert findings and all(f["manual_fix"] and f["steps"] == [] for f in findings)
+
+
+@needs_git
+def test_r2_1_hostile_url_path_is_withheld(home, tmp_path):
+    root = tmp_path / "ws"
+    repo = _repo(home, root / "r")
+    _git(home, "-C", str(repo), "config", "remote.origin.url", f"https://{TOKEN}@github.com/x/y%PATH%^!x!(z)\"q")
+    findings = _url_token_steps(cs.run_scan(_ctx(home, [root])))
+    assert findings and all(f["manual_fix"] and not f["steps"] for f in findings)
+
+
+@needs_git
+def test_r2_1_safe_step_ends_options_before_the_remote_name(home, tmp_path):
+    root = tmp_path / "ws"
+    repo = _repo(home, root / "r")
+    _git(home, "-C", str(repo), "config", "remote.origin.url", f"https://{TOKEN}@github.com/a/b.git")
+    finding = _url_token_steps(cs.run_scan(_ctx(home, [root])))[0]
+    assert finding["steps"] == [f"git -C {repo} remote set-url -- origin https://github.com/a/b.git"]
+
+
+def test_r2_1_values_are_allowlisted_not_escaped():
+    V = cs.StepValue
+    assert cs.safe_command("git", "-C", V("/a/b"), "remote", "set-url", "--", V("origin"), V("https://h/x")) == \
+        "git -C /a/b remote set-url -- origin https://h/x"
+    for bad in ("(calc)", "@(calc)", "{calc}", "a,b", "-x", "a b", "a\x1bb", "%PATH%", "a^b", "a'b", 'a"b', "a!b",
+                "a$b", "a`b", "a;b", "a|b", "a&b", "a\\b", "a*b", "a\tb", "é"):
+        assert cs.safe_command("git", V(bad)) is None, bad
+
+
+@needs_git
+@pytest.mark.parametrize("key", [
+    "credential.https://me:pa SECRETSP@host.example.helper",
+    "credential.https://me:pb\tSECRETSP@host2.example.helper",
+])
+def test_r2_3_whitespace_in_helper_context_password_is_masked(home, key):
+    _git(home, "config", "--global", key, "store")
+    assert "SECRETSP" not in json.dumps(cs.run_scan(_ctx(home, [])))
+
+
+@needs_git
+def test_r2_4_token_shaped_helper_word_is_inline_shell(home):
+    assert cs.helper_name("!" + TOKEN + " get") == "inline-shell"
+    assert cs.helper_name("!a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 get") == "inline-shell"
+    _git(home, "config", "--global", "credential.helper", "!" + TOKEN + " get")
+    assert TOKEN not in json.dumps(cs.run_scan(_ctx(home, [])))
+
+
+@needs_git
+def test_r2_5_partial_walk_is_flagged(home, tmp_path, monkeypatch):
+    root = tmp_path / "big"
+    for i in range(30):
+        (root / f"a{i:02d}").mkdir(parents=True)
+    late = _repo(home, root / "zz_repo")
+    _git(home, "-C", str(late), "config", "remote.origin.url", f"https://{TOKEN}@github.com/a/b")
+    monkeypatch.setattr(cs, "MAX_WALK_DIRS", 10)
+    result = cs.run_scan(_ctx(home, [root]))
+    assert result["roots"][0]["truncated"] is True
+    assert result["complete"] is False
+
+
+@needs_git
+def test_r2_5_full_walk_is_complete(home, tmp_path):
+    root = tmp_path / "ws"
+    _repo(home, root / "r")
+    result = cs.run_scan(_ctx(home, [root]))
+    assert result["roots"][0]["truncated"] is False
+    assert result["complete"] is True
+
+
+@needs_git
+@has_mkfifo
+def test_r2_6_fifo_repo_config_is_skipped_quickly(home, tmp_path):
+    root = tmp_path / "ws"
+    for i in range(4):
+        repo = _repo(home, root / f"r{i}")
+        (repo / ".git" / "config").unlink()
+        os.mkfifo(repo / ".git" / "config")
+    started = time.monotonic()
+    result = cs.run_scan(_ctx(home, [root]))
+    assert time.monotonic() - started < 5.0
+    assert result["roots"][0]["truncated"] is True
+
+
+@needs_git
+def test_r2_6_repo_reads_respect_the_deadline(home, tmp_path, monkeypatch):
+    root = tmp_path / "ws"
+    repo = _repo(home, root / "r")
+    _git(home, "-C", str(repo), "config", "remote.origin.url", f"https://{TOKEN}@github.com/a/b")
+    monkeypatch.setattr(cs, "REPO_READ_SECONDS", 0.0)
+    result = cs.run_scan(_ctx(home, [root]))
+    assert not _url_token_steps(result)
+    assert result["roots"][0]["truncated"] is True and result["complete"] is False
+
+
+@needs_git
+@pytest.mark.asyncio
+async def test_r2_7_roots_removed_mid_scan_are_not_cached(home, tmp_path):
+    import asyncio
+
+    a = tmp_path / "A"
+    repo = _repo(home, a / "r")
+    _git(home, "-C", str(repo), "config", "remote.origin.url", f"https://{TOKEN}@github.com/a/b")
+    gate = threading.Event()
+    db = Database(tmp_path / "navide.db")
+    db.kv_set(cs.ROOTS_KV_KEY, [str(a)], now=1)
+
+    def factory(roots):
+        ctx = _ctx(home, [Path(p) for p, _ in roots])
+        real = ctx.run
+
+        def slow(argv, **kw):
+            gate.wait(5)
+            return real(argv, **kw)
+
+        ctx.run = slow
+        return ctx
+
+    svc = cs.CredentialsService(db_getter=lambda: db, workspace_roots=lambda: [], context_factory=factory,
+                                system_dirs=lambda: [home / ".ssh"])
+    task = asyncio.ensure_future(svc.scan(force=True))
+    await asyncio.sleep(0.2)
+    await asyncio.get_running_loop().run_in_executor(None, svc.roots_set, [])
+    gate.set()
+    await task
+    after = await svc.scan()
+    assert after["roots"] == []
+    assert not _url_token_steps(after)
+
+
+def test_r2_8_keychain_item_ids_are_not_recomputable(home):
+    dump = 'class: "inet"\nattributes:\n    "acct"<blob>="alice"\n    "srvr"<blob>="github.com"\n'
+
+    def run(argv, **kw):
+        return cs.RunResult(0, dump) if Path(argv[0]).name == "security" else cs.RunResult(1)
+
+    ctx = _ctx(home, [], which=lambda n: "/fake/security" if n == "security" else None, run=run)
+    first = [i["id"] for i in cs.run_scan(ctx)["items"] if i["kind"] == "keychain-item"]
+    second = [i["id"] for i in cs.run_scan(ctx)["items"] if i["kind"] == "keychain-item"]
+    guess = cs._fingerprint("item", "keychain-item", "internet-password||github.com|alice|")
+    assert len(first) == 1 and guess not in first and first != second
+
+
+def test_r2_10_cli_config_hosts_are_validated(home):
+    cfg = home / ".config" / "gh"
+    cfg.mkdir(parents=True)
+    (cfg / "hosts.yml").write_text("github.com@evil.example/x?:\n    oauth_token: gho_zzz\n    user: me\n")
+    ctx = _ctx(home, [], which=lambda n: None)
+    ctx.env = {"HOME": str(home), "GH_CONFIG_DIR": str(cfg)}
+    result = cs.run_scan(ctx)
+    plaintext = [f for f in result["findings"] if f["code"] == "cli-token-plaintext"]
+    assert plaintext and all(f["links"] == [] for f in plaintext)
+    assert "evil.example" not in json.dumps([f["links"] for f in result["findings"]])
+    assert cs._host_links("github.com@evil.example/x?", {"github.com@evil.example/x?"}) == []
+    assert cs._host_links("git.corp.example:8443", {"git.corp.example:8443"}) != []
+
+
+@needs_git
+def test_r2_11_masked_helper_context_gets_no_mismatched_step(home):
+    key = "credential.https://me:SECRETPW@host.example.helper"
+    _git(home, "config", "--global", "--add", key, "store")
+    _git(home, "config", "--global", "--add", key, "store")
+    result = cs.run_scan(_ctx(home, []))
+    dup = [f for f in result["findings"] if f["code"] == "helper-duplicate"]
+    assert dup and all(f["manual_fix"] and not f["steps"] for f in dup)
+    assert "SECRETPW" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_r2_9_findings_docstring_no_longer_mentions_steps():
+    from agent_team_backend.mcp_server import server as plan_mcp
+
+    tools = {tool.name: tool for tool in await plan_mcp.server.list_tools()}
+    assert "steps" not in (tools["credentials_findings"].description or "")

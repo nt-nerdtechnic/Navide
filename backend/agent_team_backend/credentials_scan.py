@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import stat
 import subprocess
 import time
@@ -63,6 +64,8 @@ WALK_DEPTH = 3
 #: Whole-scan wall-clock limit for walking roots, and the share one root gets.
 WALK_SECONDS = 20.0
 ROOT_WALK_SECONDS = 10.0
+#: Wall-clock limit for reading the repos' git config (R2-6).
+REPO_READ_SECONDS = 30.0
 MAX_REMINDERS = 1000
 SNOOZE_DEFAULT_DAYS = 7
 SNOOZE_MAX_DAYS = 90
@@ -252,18 +255,29 @@ def _parse_iso(text: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-#: Characters a pasted step must never carry, quoted or not (CR-1).
-_SHELL_META_RE = re.compile(r"[$`;|&\n\r\x00<>]")
+#: The only characters a copyable step may contain (R2-1/R2-2). Nothing is
+#: escaped: escaping differs per shell (sh, cmd, PowerShell) and got Windows
+#: wrong, so a part outside this set means no command at all.
+_STEP_PART_RE = re.compile(r"[A-Za-z0-9._~:/@+=-]+")
 MAX_READ_BYTES = 1024 * 1024
 
 
+class StepValue(str):
+    """A part of a step that came from scanned data (a path, URL, remote
+    name, host, login) rather than from this module. Besides the allowlist
+    it may not start with "-" (an option) or "(" (a PowerShell expression)."""
+
+
 def safe_command(*parts: str) -> str | None:
-    """A copyable command with every part quoted for this platform's shell, or
-    None when any part carries a shell metacharacter (the finding then asks
-    for a manual fix rather than offering a command)."""
-    if any(_SHELL_META_RE.search(part) for part in parts):
-        return None
-    return " ".join(osplat.paths.quote_arg(part) for part in parts)
+    """A copyable command, or None when any part falls outside the allowlist
+    (the finding then asks for a manual fix rather than offering a command).
+    The same rule on every platform."""
+    for part in parts:
+        if not _STEP_PART_RE.fullmatch(part):
+            return None
+        if isinstance(part, StepValue) and part.startswith(("-", "(")):
+            return None
+    return " ".join(parts)
 
 
 def read_text_capped(path: Path, limit: int = MAX_READ_BYTES) -> str | None:
@@ -360,11 +374,11 @@ def _split_userinfo(rest: str) -> tuple[str | None, str]:
     whitespace, so a password with an unencoded ``/``, ``?`` or ``#`` is still
     userinfo (CR-5); an ``@`` that only appears after the path started (no
     ``:`` before the first ``/``, or a ``:port``) is part of the path."""
-    segment = rest.split()[0] if rest.split() else ""
-    at = segment.rfind("@")
+    # Whitespace does not end the authority (R2-3): a password may contain it.
+    at = rest.rfind("@")
     if at < 0:
         return None, rest
-    candidate = segment[:at]
+    candidate = rest[:at]
     slash = candidate.find("/")
     colon = candidate.find(":")
     if slash != -1:
@@ -401,7 +415,9 @@ def redact_url(raw: str) -> RedactedUrl:
         token = bool(sep and secret)
         del secret
         name = unquote(name)
-        if plain_login(name):
+        if re.search(r"[\s\x00-\x1f\x7f]", userinfo):
+            token = True  # in doubt, the whole userinfo goes
+        elif plain_login(name):
             user = name
         elif name:
             token = True
@@ -413,6 +429,10 @@ def redact_url(raw: str) -> RedactedUrl:
         path = parts.path
     except ValueError:
         return RedactedUrl("", token, "", "", scheme, "", has_userinfo)
+    if "@" in hostport or re.search(r"[\s\x00-\x1f\x7f]", hostport):
+        # Never show an authority that still carries userinfo-like text.
+        token = True
+        hostport = host
     shown_netloc = (f"{user}@" if user else "") + hostport
     shown = urlunsplit((scheme, shown_netloc, path, "", ""))
     return RedactedUrl(shown, token, user, host, scheme, path, has_userinfo, hostport)
@@ -423,12 +443,22 @@ def redact_url(raw: str) -> RedactedUrl:
 _TRUSTED_LINK_HOSTS = frozenset({"github.com", "gitlab.com"})
 
 
+_HOST_RE = re.compile(r"[a-z0-9.-]+(?::\d{1,5})?")
+
+
+def valid_host(host: str) -> bool:
+    """A bare host name with an optional port, nothing else (R2-10)."""
+    return bool(_HOST_RE.fullmatch(host)) and not host.startswith((".", "-"))
+
+
 def _host_links(host: str, trusted: frozenset[str] | set[str], *, ssh: bool = False,
                 provider: str = "") -> list[dict[str, str]]:
     """Provider links for ``host`` — only github.com, gitlab.com, or a host
     the user's own gh / glab setup lists (``trusted``); a host taken from a
     repository's config never gets a link of its own (CR-9)."""
     host = host.lower()
+    if not valid_host(host):
+        return []
     if host == "github.com":
         return [dict(_LINKS["github-ssh" if ssh else "github-tokens"])]
     if host == "gitlab.com":
@@ -483,8 +513,8 @@ class _Collector:
         self._item_ids: set[str] = set()
         self._finding_ids: set[str] = set()
 
-    def item(self, kind: str, label: str, key: str, detail: dict[str, Any]) -> None:
-        item_id = _fingerprint("item", kind, key)
+    def item(self, kind: str, label: str, key: str, detail: dict[str, Any], *, item_id: str | None = None) -> None:
+        item_id = item_id or _fingerprint("item", kind, key)
         if item_id in self._item_ids:
             return
         self._item_ids.add(item_id)
@@ -500,6 +530,7 @@ class _Collector:
         links: list[dict[str, str]] | None = None,
         steps: list[Sequence[str]] | None = None,
         actions: list[str] | None = None,
+        manual: bool = False,
     ) -> None:
         """``steps`` are argv lists. Each is rendered with every part quoted; a
         step any part of which carries a shell metacharacter is withheld and
@@ -510,7 +541,6 @@ class _Collector:
             return
         self._finding_ids.add(finding_id)
         rendered: list[str] = []
-        manual = False
         for argv in steps or []:
             command = safe_command(*argv)
             if command is None:
@@ -548,6 +578,7 @@ class HelperEntry:
     origin: str     # file the entry came from (tilde form)
     context: str    # "*" or a redacted URL
     name: str       # helper name; "" is a reset
+    masked: bool = False  # the context lost userinfo, so it no longer matches the real key
 
 
 def helper_name(value: str) -> str:
@@ -569,7 +600,7 @@ def helper_name(value: str) -> str:
         base = base[:-4]
     if not inline and base.startswith("git-credential-"):
         base = base[len("git-credential-"):]
-    if not _HELPER_NAME_RE.fullmatch(base):
+    if not _HELPER_NAME_RE.fullmatch(base) or looks_like_token(base) or not plain_login(base):
         return "inline-shell"
     return base
 
@@ -596,12 +627,21 @@ def parse_helper_config(out: str, scope: str, home: Path, *, with_origin: bool) 
         if not lower.startswith("credential.") or not lower.endswith(".helper"):
             continue
         middle = key[len("credential."):-len(".helper")]
-        context = "*"
-        if middle:
-            context = redact_url(middle).url or "*"
+        context, masked = _helper_context(middle)
         entries.append(HelperEntry(scope, _tilde(origin, home) if origin else "", context,
-                                   helper_name(value)))
+                                   helper_name(value), masked))
     return entries
+
+
+def _helper_context(middle: str) -> tuple[str, bool]:
+    """The shown context for ``credential.<middle>.helper`` and whether it had
+    to be masked (any userinfo, or anything that cannot be shown verbatim)."""
+    if not middle:
+        return "*", False
+    redacted = redact_url(middle)
+    shown = redacted.url or "*"
+    masked = redacted.has_userinfo or redacted.token_present or shown != middle
+    return shown, masked
 
 
 def effective_chains(entries: Sequence[HelperEntry]) -> dict[str, list[HelperEntry]]:
@@ -644,15 +684,17 @@ def _report_duplicates(context: str, chain: Sequence[HelperEntry], out: _Collect
                        repo: str | None = None) -> None:
     seen: set[str] = set()
     key = "credential.helper" if context == "*" else f"credential.{context}.helper"
-    git_prefix = ["git", "-C", repo] if repo else ["git"]
+    git_prefix = ["git", "-C", StepValue(repo)] if repo else ["git"]
+    masked = any(entry.masked for entry in chain)
     for name in _chain_names(chain):
         if name in seen:
             out.finding(
                 "helper-duplicate", "low", "git-helper",
                 f"{location_prefix} · {key} · {name}",
                 params={"helper": name, "context": context},
-                steps=[[*git_prefix, "config", "--show-origin", "--get-all", key]],
+                steps=[] if masked else [[*git_prefix, "config", "--show-origin", "--get-all", StepValue(key)]],
                 actions=["inspect-helper-config"],
+                manual=masked,
             )
         seen.add(name)
 
@@ -680,8 +722,10 @@ def _local_helper_findings(repo: str, repo_t: str, local: list[HelperEntry],
                 f"{repo_t} · {key}",
                 params={"repo": repo_t, "context": context, "helper": entries[0].name,
                         "answered_by": before[0]},
-                steps=[["git", "-C", repo, "config", "--show-origin", "--get-all", key]],
+                steps=[] if entries[0].masked else [
+                    ["git", "-C", StepValue(repo), "config", "--show-origin", "--get-all", StepValue(key)]],
                 actions=["inspect-helper-config"],
+                manual=entries[0].masked,
             )
 
 
@@ -834,7 +878,7 @@ def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[
     if glab:
         result = ctx.run([glab, "auth", "status"], timeout=20)
         accounts.extend(parse_auth_status_text("glab", result.out + "\n" + result.err))
-    trusted: dict[str, str] = {account.host: account.tool for account in accounts if account.host}
+    trusted: dict[str, str] = {account.host: account.tool for account in accounts if valid_host(account.host)}
     for account in accounts:
         out.item("cli-account", f"{account.tool} · {account.host} · {account.account}",
                  f"{account.tool}|{account.host}|{account.account}",
@@ -856,7 +900,7 @@ def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[
             params={"host": host, "accounts": ", ".join(logins), "active": active,
                     "helper_chain_gh_only": "true" if gh_only else "false"},
             links=_host_links(host, set(trusted), provider="gh"),
-            steps=[["gh", "auth", "switch", "--hostname", host, "--user", login]
+            steps=[["gh", "auth", "switch", "--hostname", StepValue(host), "--user", StepValue(login)]
                    for login in logins if login != active],
             actions=["gh-auth-switch"],
         )
@@ -874,14 +918,15 @@ def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[
         hosts = yaml_token_hosts(text)
         del text
         for host in hosts:
-            trusted.setdefault(host, tool)
+            if valid_host(host):
+                trusted.setdefault(host, tool)
         shown = _tilde(path, ctx.home)
         out.item("plaintext-file", shown, f"{tool}-config|{path}",
                  {"path": shown, "tool": tool, "mode": _mode_text(info.st_mode),
                   "token_present": bool(hosts)})
         for host in sorted(hosts):
-            step = (["glab", "auth", "login", "--hostname", host, "--use-keyring"] if tool == "glab"
-                    else ["gh", "auth", "login", "--hostname", host])
+            step = (["glab", "auth", "login", "--hostname", StepValue(host), "--use-keyring"] if tool == "glab"
+                    else ["gh", "auth", "login", "--hostname", StepValue(host)])
             out.finding(
                 "cli-token-plaintext", "medium", "cli-account", f"{shown} · {host}",
                 params={"tool": tool, "host": host, "path": shown, "mode": _mode_text(info.st_mode)},
@@ -1046,7 +1091,7 @@ def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
         if ctx.enforces_modes and stat.S_IMODE(info.st_mode) & 0o077:
             out.finding("ssh-key-mode", "high", "ssh-key", shown,
                         params={"path": shown, "mode": _mode_text(info.st_mode)},
-                        steps=[["chmod", "600", str(path)]], actions=["chmod-600"])
+                        steps=[["chmod", "600", StepValue(str(path))]], actions=["chmod-600"])
         if has_passphrase is False:
             forge = sorted({h.lower() for h in hosts if h.lower() in _FORGE_HOSTS})
             if forge:
@@ -1055,12 +1100,12 @@ def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
                                 f"{shown} · Host {host}",
                                 params={"path": shown, "host": host},
                                 links=_host_links(host, frozenset(), ssh=True),
-                                steps=[["ssh-keygen", "-p", "-f", str(path)]],
+                                steps=[["ssh-keygen", "-p", "-f", StepValue(str(path))]],
                                 actions=["ssh-add-passphrase"])
             else:
                 out.finding("ssh-no-passphrase", "medium", "ssh-key", shown,
                             params={"path": shown, "hosts": ", ".join(hosts)},
-                            steps=[["ssh-keygen", "-p", "-f", str(path)]],
+                            steps=[["ssh-keygen", "-p", "-f", StepValue(str(path))]],
                             actions=["ssh-add-passphrase"])
         if not hosts and name not in _DEFAULT_IDENTITIES and norm not in referenced:
             out.finding("ssh-key-unreferenced", "low", "ssh-key", shown, params={"path": shown})
@@ -1227,9 +1272,9 @@ def _scan_keyring(ctx: ScanContext, out: _Collector, git_hosts: set[str]) -> Key
     report = reader(ctx, git_hosts)
     for item in report.items:
         label = item.get("service") or item.get("server") or item.get("class", "")
-        out.item("keychain-item", label,
-                 "|".join(item.get(k, "") for k in ("class", "service", "server", "account", "protocol")),
-                 dict(item))
+        # A random id per scan (R2-8): a hash of the metadata would let a caller
+        # confirm a guessed account name by recomputing it.
+        out.item("keychain-item", label, "", dict(item), item_id=secrets.token_hex(8))
     if not report.available:
         out.finding("keyring-unavailable", "low", "keychain-item", f"keyring · {ctx.platform}",
                     params={"reason": report.reason, "platform": ctx.platform})
@@ -1266,6 +1311,12 @@ def _dir_prefixes(dirs: Sequence[Path]) -> tuple[tuple[str, ...], frozenset[str]
 def find_repos(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPOS,
                depth: int = WALK_DEPTH, budget: WalkBudget | None = None,
                deadline: float | None = None) -> list[Path]:
+    return find_repos_report(root, system_dirs, limit=limit, depth=depth, budget=budget, deadline=deadline)[0]
+
+
+def find_repos_report(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPOS,
+                      depth: int = WALK_DEPTH, budget: WalkBudget | None = None,
+                      deadline: float | None = None) -> tuple[list[Path], bool]:
     """Repos (a ``.git`` dir or file) under ``root`` to ``depth``.
 
     System directories are matched as precomputed string prefixes, not by
@@ -1278,8 +1329,10 @@ def find_repos(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPO
     stop_at = budget.deadline if deadline is None else min(deadline, budget.deadline)
     repos: list[Path] = []
     stack: list[tuple[str, int]] = [(os.path.normpath(str(root)), 0)]
+    truncated = False
     while stack:
         if len(repos) >= limit or budget.dirs <= 0 or time.monotonic() >= stop_at:
+            truncated = True  # the walk stopped with directories left (R2-5)
             break
         directory, level = stack.pop()
         budget.dirs -= 1
@@ -1298,13 +1351,14 @@ def find_repos(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPO
         except OSError:
             continue
         stack.extend((child, level + 1) for child in reversed(children))
-    return repos
+    return repos, truncated
 
 
 @dataclass
 class RepoConfig:
     remotes: list[tuple[str, RedactedUrl, str]]
     helpers: list[HelperEntry]
+    skipped: bool = False  # not read: past the deadline or an irregular config file
 
 
 def parse_repo_config(out: str, repo_t: str, home: Path) -> RepoConfig:
@@ -1330,14 +1384,32 @@ def parse_repo_config(out: str, repo_t: str, home: Path) -> RepoConfig:
             remotes.append((label, redact_url(key[len("url."):-len(suffix)]), "insteadof"))
         elif lower.startswith("credential.") and lower.endswith(".helper"):
             middle = key[len("credential."):-len(".helper")]
-            context = redact_url(middle).url or "*" if middle else "*"
-            helpers.append(HelperEntry("local", repo_t, context, helper_name(value)))
+            context, masked = _helper_context(middle)
+            helpers.append(HelperEntry("local", repo_t, context, helper_name(value), masked))
     return RepoConfig(remotes, helpers)
 
 
-def _read_repo(ctx: ScanContext, git: str, repo: Path) -> RepoConfig:
+def _config_is_regular(repo: Path) -> bool:
+    """A ``.git`` directory's ``config`` must be a regular file (R2-6); a
+    ``.git`` file (worktree, submodule) is left to git to resolve."""
+    git_entry = repo / ".git"
+    try:
+        if stat.S_ISDIR(os.lstat(git_entry).st_mode):
+            return stat.S_ISREG(os.lstat(git_entry / "config").st_mode)
+        return stat.S_ISREG(os.lstat(git_entry).st_mode)
+    except OSError:
+        return False
+
+
+def _read_repo(ctx: ScanContext, git: str, repo: Path, deadline: float | None = None) -> RepoConfig:
+    remaining = 10.0 if deadline is None else min(10.0, deadline - time.monotonic())
+    if remaining <= 0 or not _config_is_regular(repo):
+        return RepoConfig([], [], skipped=True)
     result = ctx.run([git, "-C", str(repo), "config", "--local", "-z", "--get-regexp",
-                      r"^(remote\..*\.(url|pushurl)|credential\..*|url\..*\.(insteadof|pushinsteadof))$"], timeout=10)
+                      r"^(remote\..*\.(url|pushurl)|credential\..*|url\..*\.(insteadof|pushinsteadof))$"],
+                     timeout=remaining)
+    if result.code in (CODE_TIMEOUT, CODE_SPAWN_FAILED):
+        return RepoConfig([], [], skipped=True)
     if result.code != 0:
         return RepoConfig([], [])
     return parse_repo_config(result.out, _tilde(repo, ctx.home), ctx.home)
@@ -1436,29 +1508,44 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
 
     roots_out: list[dict[str, Any]] = []
     repo_list: list[Path] = []
+    repo_root: list[int] = []
     seen_repos: set[str] = set()
     budget = WalkBudget(MAX_WALK_DIRS, time.monotonic() + WALK_SECONDS)
     for root_path, source in ctx.roots:
         root = Path(root_path)
-        found = (find_repos(root, ctx.system_dirs, limit=MAX_REPOS, budget=budget,
-                            deadline=time.monotonic() + ROOT_WALK_SECONDS)
-                 if root.is_dir() and not budget.spent() else [])
-        roots_out.append({"path": _tilde(root, ctx.home), "source": source, "repo_count": len(found)})
+        if not root.is_dir():
+            found, truncated = [], False
+        elif budget.spent():
+            found, truncated = [], True
+        else:
+            found, truncated = find_repos_report(root, ctx.system_dirs, limit=MAX_REPOS, budget=budget,
+                                                 deadline=time.monotonic() + ROOT_WALK_SECONDS)
+        entry = {"path": _tilde(root, ctx.home), "source": source, "repo_count": len(found),
+                 "truncated": truncated}
+        roots_out.append(entry)
         for repo in found:
             key = os.path.realpath(repo)
-            if key in seen_repos or len(repo_list) >= MAX_REPOS:
+            if key in seen_repos:
+                continue
+            if len(repo_list) >= MAX_REPOS:
+                entry["truncated"] = True
                 continue
             seen_repos.add(key)
             repo_list.append(repo)
+            repo_root.append(len(roots_out) - 1)
 
     configs: list[RepoConfig] = []
     if git and repo_list:
+        read_deadline = time.monotonic() + REPO_READ_SECONDS
         if repo_executor is not None:
-            configs = list(repo_executor.map(lambda r: _read_repo(ctx, git, r), repo_list))
+            configs = list(repo_executor.map(lambda r: _read_repo(ctx, git, r, read_deadline), repo_list))
         else:
             with ThreadPoolExecutor(max_workers=max(1, ctx.repo_workers),
                                     thread_name_prefix="navide-credscan-git") as pool:
-                configs = list(pool.map(lambda r: _read_repo(ctx, git, r), repo_list))
+                configs = list(pool.map(lambda r: _read_repo(ctx, git, r, read_deadline), repo_list))
+    for index, config in zip(repo_root, configs):
+        if config.skipped:
+            roots_out[index]["truncated"] = True
 
     for repo, config in zip(repo_list, configs):
         repo_t = _tilde(repo, ctx.home)
@@ -1473,12 +1560,16 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
                       "token_present": redacted.token_present})
             if not redacted.token_present:
                 continue
+            manual = False
             if kind == "insteadof":
-                steps: list[list[str]] = [["git", "-C", str(repo), "config", "--local", "--get-regexp", "^url[.]"]]
+                # The real key still holds the token; no command could name it.
+                steps: list[list[str]] = []
                 actions = ["inspect-url-rewrite"]
+                manual = True
             else:
                 push = ["--push"] if kind == "pushurl" else []
-                steps = [["git", "-C", str(repo), "remote", "set-url", *push, remote, _clean_url(redacted)]]
+                steps = [["git", "-C", StepValue(str(repo)), "remote", "set-url", *push, "--",
+                          StepValue(remote), StepValue(_clean_url(redacted))]]
                 actions = ["remote-set-url"]
             out.finding(
                 "url-token", "high", "remote", location,
@@ -1487,6 +1578,7 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
                 links=_host_links(redacted.host, set(trusted), provider=trusted.get(redacted.host, "")),
                 steps=steps,
                 actions=actions,
+                manual=manual,
             )
 
     _scan_ssh(ctx, out)
@@ -1505,6 +1597,7 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
              len(repo_list), len(out.items), len(out.findings), duration_ms)
     return {
         "platform": ctx.platform,
+        "complete": not any(root["truncated"] for root in roots_out),
         "duration_ms": duration_ms,
         "keyring": keyring_out,
         "roots": roots_out,
@@ -1625,6 +1718,9 @@ class CredentialsService:
         self._clock = clock
         self._cache: tuple[float, dict[str, Any]] | None = None
         self._inflight: asyncio.Future[dict[str, Any]] | None = None
+        #: Bumped whenever the roots change; a scan that started under an
+        #: older generation is returned to its waiters but never cached (R2-7).
+        self._roots_generation = 0
 
     # KV ------------------------------------------------------------------
     def _kv_get(self, key: str, default: Any) -> Any:
@@ -1646,6 +1742,7 @@ class CredentialsService:
     def roots_set(self, raw: Any) -> list[str]:
         roots = validate_roots(raw, self._system_dirs())
         self._kv_set(ROOTS_KV_KEY, roots)
+        self._roots_generation += 1
         self._cache = None
         return roots
 
@@ -1713,6 +1810,7 @@ class CredentialsService:
         findings = apply_reminders(raw, self.reminders(), now)
         return {
             "ok": True,
+            "complete": raw.get("complete", True),
             "scanned_at": _now_iso(scanned_at),
             "duration_ms": raw["duration_ms"],
             "platform": raw["platform"],
@@ -1724,10 +1822,12 @@ class CredentialsService:
         }
 
     async def _refresh(self) -> dict[str, Any]:
+        generation = self._roots_generation
         try:
             raw = await asyncio.get_running_loop().run_in_executor(_SCAN_EXECUTOR, self._scan_blocking)
             raw = {**raw, "_scanned_at": self._clock()}
-            self._cache = (time.monotonic(), raw)
+            if generation == self._roots_generation:
+                self._cache = (time.monotonic(), raw)
             return raw
         finally:
             self._inflight = None

@@ -6729,10 +6729,11 @@ async def credentials_findings(ctx: Context) -> dict[str, Any]:
     """Risk findings from the read-only credentials and keys scan.
 
     Each finding is {id, code, severity (high/medium/low), kind, location,
-    params, links, actions, manual_fix, reminder}. `location` is already redacted (a URL
-    token shows as removed, never as a value); `steps` are commands the user
-    may run themselves; `reminder.state` is active, snoozed or dismissed as
-    the user set it in Navide. `actions` are fix action names
+    params, links, actions, manual_fix, reminder}. `location` is already
+    redacted (a URL token shows as removed, never as a value).
+    `reminder.state` is active, snoozed or dismissed as the user set it in
+    Navide. `manual_fix` true means no safe command exists and the user has
+    to fix it by hand. `actions` are fix action names
     (remote-set-url, ssh-add-passphrase, chmod-600, gh-auth-switch,
     gh-login-keyring, glab-login-keyring, inspect-helper-config,
     inspect-url-rewrite, manual-fix); no shell command is returned here.

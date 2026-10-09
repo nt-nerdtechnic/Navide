@@ -285,14 +285,15 @@ def test_scan_finds_each_problem_with_the_right_code_and_severity(home, work):
     assert url_findings[0]["links"] == [{"label": "GitHub tokens", "url": "https://github.com/settings/tokens"}]
     assert url_findings[1]["location"] == "~/work/proj · origin · https://oauth2@gitlab.com/grp/proj.git"
     assert url_findings[1]["links"][0]["url"] == "https://gitlab.com/-/user_settings/personal_access_tokens"
-    assert url_findings[1]["steps"][0].endswith("remote set-url origin https://gitlab.com/grp/proj.git")
+    assert url_findings[1]["steps"][0].endswith("remote set-url -- origin https://gitlab.com/grp/proj.git")
     for finding in result["findings"]:
         assert len(finding["id"]) == 16
         assert all(isinstance(v, str) for v in finding["params"].values())
         assert all(isinstance(s, str) for s in finding["steps"])
 
     # Roots: node_modules skipped, nested repo at depth 2 found.
-    assert result["roots"] == [{"path": "~/work", "source": "user", "repo_count": 2}]
+    assert result["roots"] == [{"path": "~/work", "source": "user", "repo_count": 2, "truncated": False}]
+    assert result["complete"] is True
     kinds = {i["kind"] for i in result["items"]}
     assert kinds == {"git-helper", "cli-account", "ssh-key", "keychain-item", "remote", "env-var",
                      "plaintext-file"}
@@ -572,7 +573,7 @@ async def test_ws_and_mcp_replies_and_kv_carry_no_secret(home, work, tmp_path, c
         reply = session.sent[-1]
         assert reply["ok"] is True and reply["payload"]["ok"] is True
         payload = reply["payload"]
-        assert set(payload) == {"ok", "scanned_at", "duration_ms", "platform", "keyring", "roots", "summary",
+        assert set(payload) == {"ok", "complete", "scanned_at", "duration_ms", "platform", "keyring", "roots", "summary",
                                 "items", "findings"}
         assert payload["roots"][0]["source"] == "workspace"
         assert payload["summary"]["high"] >= 4
