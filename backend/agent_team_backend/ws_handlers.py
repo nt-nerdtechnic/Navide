@@ -6588,6 +6588,9 @@ async def issues_public(session: "Session", msg_id: str, msg_type: str, payload:
 # - Frontend shows full command in confirm dialog before invoking.
 # - This is a local-only Electron app; the WebSocket server binds to
 #   localhost only, reducing (but not eliminating) external attack surface.
+_SHELL_RUN_TIMEOUT_S = 30
+
+
 @handler("shell.run")
 async def shell_run(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -6654,17 +6657,22 @@ async def shell_run(session: "Session", msg_id: str, msg_type: str, payload: dic
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     cwd=str(resolved_cwd) if resolved_cwd else None,
+                    # Own group, so a timeout reaches what sh started too.
+                    start_new_session=True,
                 )
                 try:
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_SHELL_RUN_TIMEOUT_S)
                     output = stdout.decode("utf-8", errors="replace")
                     await session.send_json(make_response(msg_id, msg_type, {
                         "ok": True, "output": output[:8000], "exit_code": proc.returncode,
                     }))
                 except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.communicate()
-                    await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout after 30s"}))
+                    from .ai_chat_cli_engine import _terminate_proc_tree
+
+                    # Killing only sh orphaned its children, and one still
+                    # holding the stdout pipe kept communicate() waiting.
+                    await _terminate_proc_tree(proc)
+                    await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": f"timeout after {_SHELL_RUN_TIMEOUT_S}s"}))
             except Exception as exc:
                 await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
 
