@@ -101,6 +101,14 @@ def _watch_stdin_for_shutdown(server: "uvicorn.Server", stream=None) -> None:
         return
 
 
+# How long uvicorn waits on in-flight requests after SIGTERM before the
+# lifespan teardown (and with it the PTY sweep) starts. See the call site.
+# Parked rewake long-polls always use all of it, and the sweep after it waits
+# out the largest vendor SIGTERM grace — both must fit inside main's SIGKILL
+# timer (tests/test_shutdown_budget.py), so this stays short.
+_GRACEFUL_SHUTDOWN_S = 0.5
+
+
 def _watch_parent_for_shutdown(
     server: "uvicorn.Server", pid: int, *, interval_s: float = 2.0, is_alive=None, identity=None
 ) -> None:
@@ -235,7 +243,7 @@ def main() -> int:
         # never respawns it. Bounded, the parked requests are cancelled (the
         # hook reads a dropped connection as "nothing to report") and the
         # lifespan teardown runs.
-        timeout_graceful_shutdown=3,
+        timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_S,
     )
     server = uvicorn.Server(config)
     threading.Thread(
