@@ -4,6 +4,35 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.18] — 2026-10-09 — signed release
+
+### Added
+
+- **Approve what other devices sync**: a synced MCP server, skill or prompt that is new on this machine, or changes what would run here, is held until you approve it in Settings → Sync. The card shows the whole record: command, args, url, env and header names, the skill's frontmatter apart from its body, every file and which would be executable, and what changed. A large skill is downloaded into a sealed holding area for review first and lands exactly the copies shown; one over 64 MiB, or whose download failed, says why and cannot be approved. A remote delete of the default (loop) prompt is held too. A rejection stands until a newer record arrives, and a local edit while waiting ends the hold. A settings-bundle import previews each MCP server, skill, prompt and memory row the same way, whole.
+- **Secret warnings**: Settings → Sync names prompts and MCP args or urls that look like they carry a credential, saying where, never what. Nothing is blocked; Dismiss holds until the item changes.
+- Channels: an `.html` file a pane attaches is sent as an A4 PDF, and every attachment goes with a report card (title and one-line summary); a reply to a card tells the pane which report you mean. A pane can send its workspace's plan documents.
+- Channels: a reply longer than three messages goes as one preview plus the whole text as a Markdown file, where the platform takes files.
+- Settings → Channels lists each bot's chats and the panes bound to each: jump to a pane, unbind one or several after one confirmation, and clear bindings whose pane is gone. In a group without topics each child pane's name carries a colour square, and the chat is told once that turning topics on gives each child its own.
+- MCP: `cli_reclaim_agent` releases a finished pane by the same targets `cli_close_agent` takes, and reports the guard's reason when it refuses.
+- Text cut off with an ellipsis shows in full on hover or focus across the app.
+
+### Changed
+
+- Memory (CLAUDE.md, AGENTS.md and other instruction files) is no longer synced; cloud sync covers prompts, skills and MCP. Local files and copies already on the server are left untouched, and settings bundles still export and import memory. A memory or credentials switch left on by an older build can only be turned off.
+- Saving a prompt, MCP server or skill now syncs it shortly afterwards instead of on the next connect.
+- A pane can attach hidden files and files outside its workspace, including files you dropped into Navide. Credential folders and files stay refused on every platform: `~/.ssh`, `~/.aws`, `~/.config/gh`, GnuPG, Kubernetes, Docker, keyrings, `.git-credentials`, the CLIs' `auth.json` and `.credentials*`, Navide's account slots, and Navide's own data folder apart from received attachments, PDFs and dropped files.
+- `workspace_open` waits up to 15 s for its window and reports `ready`; `cli_open_agent` aimed at a workspace whose window is not ready answers `window_not_ready` at once instead of waiting 40 s; a `~/…` path is expanded first. `workspace_list` includes workspaces opened this way.
+- The memory advisory shown when opening a pane counts only running CLI panes, not restore placeholders.
+
+### Fixed
+
+- Cloud sync: a replayed older record can no longer roll an item back or delete one re-created since; a different account starts every scope over (also when switched while Navide was closed) and a locked keychain is not mistaken for a sign-out; a record's origin is checked before it is applied; one item that cannot land no longer holds back its whole scope; skills keep their executable bit and new prompts get ids that cannot collide across devices.
+- Settings → Sync names the account it syncs with, lists each scope's outcome after Sync now, and in an MCP conflict says which hidden env and header values differ.
+- Unattended self-evolution runs no longer stop to ask a question; an idle run is nudged after 10 minutes and always reports back.
+- Windows: a synced skill can no longer place files outside itself through drive paths, alternate data streams or device names (including `COM¹` and `con .txt`); ordinary names such as `aux.c` still install on macOS and Linux. A `~` workspace path resolves the same way as an absolute one.
+- Saving an instruction file kept as a symlink (for example into a dotfiles repo) writes through the link instead of replacing it; a dangling link is refused.
+- The Plans view is no longer withdrawn when one of its calls fails while the view itself is closing.
+
 ## [0.2.17] — 2026-10-08 — signed release
 
 ### Fixed
