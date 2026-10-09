@@ -535,7 +535,11 @@ def test_r2_1_safe_step_ends_options_before_the_remote_name(home, tmp_path):
     repo = _repo(home, root / "r")
     _git(home, "-C", str(repo), "config", "remote.origin.url", f"https://{TOKEN}@github.com/a/b.git")
     finding = _url_token_steps(cs.run_scan(_ctx(home, [root])))[0]
-    assert finding["steps"] == [f"git -C {repo} remote set-url -- origin https://github.com/a/b.git"]
+    if cs.safe_command("x", cs.StepValue(str(repo))) is None:
+        # A Windows tmp path has backslashes: the allowlist refuses it on purpose.
+        assert finding["steps"] == [] and finding["manual_fix"]
+    else:
+        assert finding["steps"] == [f"git -C {repo} remote set-url -- origin https://github.com/a/b.git"]
 
 
 def test_r2_1_values_are_allowlisted_not_escaped():

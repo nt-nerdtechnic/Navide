@@ -225,6 +225,11 @@ def _codes(result: dict[str, Any]) -> list[tuple[str, str]]:
     return sorted((f["code"], f["severity"]) for f in result["findings"])
 
 
+def _step_path_ok(path: Path) -> bool:
+    """Whether ``path`` passes the copyable-step allowlist on this platform."""
+    return cs.safe_command("x", cs.StepValue(str(path))) is not None
+
+
 def _forbidden(argv: list[str]) -> bool:
     joined = " ".join(argv)
     tool = Path(argv[0]).name
@@ -277,7 +282,12 @@ def test_scan_finds_each_problem_with_the_right_code_and_severity(home, work):
     default_host = by_code["ssh-no-passphrase-default-host"]
     assert default_host["location"] == "~/.ssh/id_work · Host github.com"
     assert default_host["links"][0]["url"] == "https://github.com/settings/keys"
-    assert default_host["steps"][0].startswith("ssh-keygen -p -f ")
+    # A path outside the step allowlist (a Windows path has backslashes) gets no
+    # command, only the manual-fix note.
+    if _step_path_ok(home):
+        assert default_host["steps"][0].startswith("ssh-keygen -p -f ")
+    else:
+        assert default_host["steps"] == [] and default_host["manual_fix"]
 
     url_findings = sorted((f for f in result["findings"] if f["code"] == "url-token"),
                           key=lambda f: f["params"]["remote"])
@@ -285,7 +295,10 @@ def test_scan_finds_each_problem_with_the_right_code_and_severity(home, work):
     assert url_findings[0]["links"] == [{"label": "GitHub tokens", "url": "https://github.com/settings/tokens"}]
     assert url_findings[1]["location"] == "~/work/proj · origin · https://oauth2@gitlab.com/grp/proj.git"
     assert url_findings[1]["links"][0]["url"] == "https://gitlab.com/-/user_settings/personal_access_tokens"
-    assert url_findings[1]["steps"][0].endswith("remote set-url -- origin https://gitlab.com/grp/proj.git")
+    if _step_path_ok(work):
+        assert url_findings[1]["steps"][0].endswith("remote set-url -- origin https://gitlab.com/grp/proj.git")
+    else:
+        assert url_findings[1]["steps"] == [] and url_findings[1]["manual_fix"]
     for finding in result["findings"]:
         assert len(finding["id"]) == 16
         assert all(isinstance(v, str) for v in finding["params"].values())
