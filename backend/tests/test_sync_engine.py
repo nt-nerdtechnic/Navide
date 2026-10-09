@@ -422,7 +422,7 @@ def test_prompts_scope_reads_and_writes_the_settings_list(monkeypatch):
 
     fake = FakeSettings()
     monkeypatch.setattr(app, "ui_settings_store", fake)
-    scope = sync_scopes.PromptsScope()
+    scope = sync_scopes.PromptsScope(gate=False)  # the approval hold has its own tests
 
     scope.apply("p1", {"id": "p1", "prompt": "hello", "isDefault": True})
     assert scope.snapshot() == {"p1": {"id": "p1", "prompt": "hello", "isDefault": True}}

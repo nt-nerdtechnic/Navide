@@ -136,7 +136,7 @@ def _catalogue() -> dict[str, list[Candidate]]:
 
 def _collect_prompts() -> list[Candidate]:
     out: list[Candidate] = []
-    for item_id, raw in sorted(sync_scopes.PromptsScope().snapshot().items()):
+    for item_id, raw in sorted(sync_scopes.PromptsScope().local_snapshot().items()):
         if not isinstance(raw, dict):
             continue
         # isDefault is a property of *this* list, not of the skill: carrying it
@@ -420,7 +420,7 @@ def _import_summary(scope: str, item_id: str, payload: Any) -> tuple[dict[str, A
 def _local_state(scope: str) -> dict[str, Any]:
     """Whatever ``_plan_item`` needs to judge this scope. Read-only."""
     if scope == "prompts":
-        return sync_scopes.PromptsScope().snapshot()
+        return sync_scopes.PromptsScope().local_snapshot()
     if scope == "mcp":
         return sync_scopes.McpScope().local_snapshot()
     if scope == "skills":
@@ -553,8 +553,9 @@ class _Run:
 
 
 def _apply_prompts(items: dict[str, Any], deltas: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    before = sync_scopes.PromptsScope().snapshot()
-    adapter = sync_scopes.PromptsScope(broadcast=deltas.append)
+    before = sync_scopes.PromptsScope().local_snapshot()
+    # The user picked these records in the import dialog: nothing to hold.
+    adapter = sync_scopes.PromptsScope(broadcast=deltas.append, gate=False)
     run = _Run()
     for item_id, payload in items.items():
         action, reason = _plan_item("prompts", item_id, payload, before)
@@ -573,7 +574,7 @@ def _apply_prompts(items: dict[str, Any], deltas: list[dict[str, Any]]) -> list[
             continue
         run.wrote("prompts", item_id, action, reason, body)
 
-    after = sync_scopes.PromptsScope().snapshot()
+    after = sync_scopes.PromptsScope().local_snapshot()
 
     def landed(item_id: str, expect: Any) -> bool:
         stored = after.get(item_id)
@@ -676,7 +677,8 @@ def _apply_skills(items: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _apply_memory(items: dict[str, Any]) -> list[dict[str, Any]]:
-    adapter = sync_scopes.MemoryScope()
+    # The user picked these records in the import dialog: nothing to hold.
+    adapter = sync_scopes.MemoryScope(gate=False)
     before = adapter.snapshot_by_path()
     run = _Run()
     for relative, payload in items.items():

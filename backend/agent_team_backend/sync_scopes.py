@@ -206,11 +206,14 @@ class PromptsScope:
 
     scope = "prompts"
 
-    def __init__(self, broadcast: Callable[[dict[str, Any]], None] | None = None) -> None:
+    def __init__(self, broadcast: Callable[[dict[str, Any]], None] | None = None, *, gate: bool = True) -> None:
         #: Called with the settings delta after a write, so other windows
         #: converge instead of waiting for a reload.
         self._broadcast = broadcast
         self._loop: asyncio.AbstractEventLoop | None = None
+        #: False for a caller that already showed the user this very record
+        #: (a settings-bundle import): nothing is held for approval then.
+        self._gate = gate
 
     async def prepare(self, _request: Any, _kick: Callable[[], None]) -> bool:
         """Called by the engine at the start of each round, on the loop."""
@@ -225,24 +228,48 @@ class PromptsScope:
         return [s for s in raw if isinstance(s, dict) and isinstance(s.get("id"), str) and s["id"]]
 
     def snapshot(self) -> dict[str, Any]:
+        # A record waiting for approval stands in for the local one, so the
+        # engine pushes nothing over it (sync_approvals).
+        return sync_approvals.overlay(self.scope, self.local_snapshot())
+
+    def local_snapshot(self) -> dict[str, Any]:
+        """The prompts this machine actually has, approvals aside."""
         return {str(skill["id"]): skill for skill in self._list()}
 
     # ── writing ─────────────────────────────────────────────────────────
-    def apply(self, item_id: str, payload: Any | None) -> None:
+    def apply(self, item_id: str, payload: Any | None) -> bool:
+        """Take one record in. A prompt new here, or one that differs from
+        this machine's in any field — its text, its switch, being the default
+        and so the loop prompt — waits for the user's approval
+        (``sync_approvals``, decision S2): a prompt is what a looping pane
+        types on the user's behalf. A delete applies as before, the default
+        and loop prompt's too: it brings nothing in, and the loop falls back
+        on a prompt this machine already has."""
         skills = self._list()
         index = next((i for i, s in enumerate(skills) if s.get("id") == item_id), -1)
         if payload is None:
+            sync_approvals.drop(self.scope, item_id)
             if index < 0:
-                return
+                return True
             skills.pop(index)
         else:
             if not isinstance(payload, dict):
                 log.warning("prompt %s arrived as %s, not an object", item_id, type(payload).__name__)
-                return
+                return False
             incoming = dict(payload)
             incoming["id"] = item_id
             # A bundle strips the flag; a synced record always carries it.
             incoming["isDefault"] = incoming.get("isDefault") is True
+            local = skills[index] if index >= 0 else None
+            if self._gate and (local is None or sync_engine.digest(local) != sync_engine.digest(incoming)) \
+                    and not sync_approvals.is_approved(self.scope, item_id, payload):
+                if sync_approvals.is_rejected(self.scope, item_id, payload):
+                    return True
+                return sync_approvals.hold(
+                    self.scope, item_id, payload, local=local,
+                    kind=sync_approvals.KIND_NEW if local is None else sync_approvals.KIND_CHANGED,
+                    summary={"id": item_id, "name": str(incoming.get("name") or item_id)},
+                )
             if index < 0:
                 skills.append(incoming)
             else:
@@ -254,6 +281,7 @@ class PromptsScope:
                 # and picking a stand-in in between is what reverted it.
                 skills = [{**s, "isDefault": s.get("id") == item_id} for s in skills]
         self._write(skills)
+        return True
 
     def _write(self, skills: list[dict[str, Any]]) -> None:
         updates: dict[str, Any] = {PROMPT_SKILLS_KEY: skills}
@@ -1666,7 +1694,10 @@ class MemoryScope:
 
     scope = "memory"
 
-    def __init__(self) -> None:
+    def __init__(self, *, gate: bool = True) -> None:
+        #: False for a caller that already showed the user this very record
+        #: (a settings-bundle import): nothing is held for approval then.
+        self._gate = gate
         #: mtime of each file as the last snapshot read it, by absolute path:
         #: ``apply`` refuses to write over a file that has moved on since.
         self._read_mtimes: dict[str, float] = {}
@@ -1692,8 +1723,13 @@ class MemoryScope:
         }
 
     def snapshot(self) -> dict[str, Any]:
-        present = {memory_item_id(rel): payload for rel, payload in self.snapshot_by_path().items()}
-        return without_detached(self.scope, present)
+        # A record waiting for approval stands in for the local file
+        # (sync_approvals), so the engine pushes nothing over it.
+        return without_detached(self.scope, sync_approvals.overlay(self.scope, self.local_snapshot()))
+
+    def local_snapshot(self) -> dict[str, Any]:
+        """The files this machine actually has, by wire id, approvals aside."""
+        return {memory_item_id(rel): payload for rel, payload in self.snapshot_by_path().items()}
 
     def snapshot_by_path(self) -> dict[str, Any]:
         """``snapshot``, keyed by the path relative to the home."""
@@ -1754,6 +1790,22 @@ class MemoryScope:
             # writing would replace it unseen.
             log.warning("instruction file %s exists here but could not be read; not overwriting it", item_id)
             return False
+        if self._gate and not sync_approvals.is_approved(self.scope, item_id, payload):
+            local = self.local_snapshot().get(item_id)
+            if local is None or sync_engine.digest(local) != sync_engine.digest(payload):
+                # New here or different: an instruction file is what every
+                # agent reads before it starts, so it waits for the user
+                # (decision S2). Up to the memory scope's own size limit.
+                if len(payload["text"].encode("utf-8")) > native_memory.FILE_SIZE_LIMIT:
+                    log.warning("instruction file %s is over the size limit; refused", item_id)
+                    return False
+                if sync_approvals.is_rejected(self.scope, item_id, payload):
+                    return True
+                return sync_approvals.hold(
+                    self.scope, item_id, payload, local=local,
+                    kind=sync_approvals.KIND_NEW if local is None else sync_approvals.KIND_CHANGED,
+                    summary={"path": _home_relative(target), "bytes": len(payload["text"].encode("utf-8"))},
+                )
         try:
             # Against the mtime the snapshot read: an editor save in between
             # is refused rather than overwritten, and the next round sees it
@@ -1784,6 +1836,43 @@ class MemoryScope:
             if relative in (rel, memory_item_id(rel)):
                 return str(path)
         return None
+
+
+def _home_relative(path: str) -> str:
+    from pathlib import Path
+
+    home = str(Path.home())
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+
+def _present_memory(item_id: str, payload: Any, summary: dict[str, Any]) -> dict[str, Any]:
+    """A held instruction file, whole, with a diff against this machine's."""
+    import difflib
+
+    text = payload["text"]
+    local = MemoryScope().local_snapshot().get(item_id)
+    mine = local["text"] if isinstance(local, dict) and isinstance(local.get("text"), str) else ""
+    diff = "".join(difflib.unified_diff(
+        mine.splitlines(keepends=True), text.splitlines(keepends=True),
+        "this device", "incoming", n=3,
+    ))
+    return {**summary, "text": text, "diff": diff}
+
+
+def _present_prompt(item_id: str, payload: Any, summary: dict[str, Any]) -> dict[str, Any]:
+    """A held prompt, every field, with what differs from this machine's."""
+    record = {k: v for k, v in payload.items() if k != "id"} if isinstance(payload, dict) else {}
+    local = PromptsScope().local_snapshot().get(item_id)
+    changes = []
+    if isinstance(local, dict):
+        for field_name in sorted(set(record) | {k for k in local if k != "id"}):
+            if local.get(field_name) != record.get(field_name):
+                changes.append({"field": field_name, "from": local.get(field_name), "to": record.get(field_name)})
+    return {**summary, "record": record, "changes": changes}
+
+
+sync_approvals.register_presenter("memory", _present_memory)
+sync_approvals.register_presenter("prompts", _present_prompt)
 
 
 def _strict_utf8(path: Any) -> bool:
@@ -2489,7 +2578,7 @@ def secret_warnings() -> list[dict[str, Any]]:
         out.append({"scope": scope, "itemId": item_id, "label": label, "fields": fields, **extra})
 
     if enabled.get("prompts"):
-        for item_id, skill in sorted(PromptsScope().snapshot().items()):
+        for item_id, skill in sorted(PromptsScope().local_snapshot().items()):
             fields = [f for f in _PROMPT_TEXT_FIELDS if _looks_secret(skill.get(f))]
             add("prompts", item_id, str(skill.get("name") or item_id), skill, fields)
     if enabled.get("memory"):
@@ -2516,9 +2605,9 @@ def dismiss_secret_warning(scope: str, item_id: str) -> None:
     """The user saw the warning for this item as it is now and let it sync."""
     current: Any = None
     if scope == "prompts":
-        current = PromptsScope().snapshot().get(item_id)
+        current = PromptsScope().local_snapshot().get(item_id)
     elif scope == "memory":
-        current = MemoryScope().snapshot().get(item_id)
+        current = MemoryScope().local_snapshot().get(item_id)
     elif scope == "mcp":
         current = McpScope().local_snapshot().get(item_id)
     if current is None:

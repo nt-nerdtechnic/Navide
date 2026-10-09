@@ -52,7 +52,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import sync_engine, sync_keyring
 
@@ -222,6 +222,31 @@ def _displayable(summary: dict[str, Any] | None) -> bool:
     and not one whose content could not be fetched for review
     (``unavailable`` says why)."""
     return isinstance(summary, dict) and not (_STUB_KEYS & set(summary)) and "unavailable" not in summary
+
+
+#: Per scope, how a held record is shown in full when listed: built then
+#: from the sealed payload and this machine's copy, so the index stays small
+#: and a memory file can be shown up to the memory scope's own size limit.
+_presenters: dict[str, Callable[[str, Any, dict[str, Any]], dict[str, Any]]] = {}
+
+
+def register_presenter(scope: str, present: Callable[[str, Any, dict[str, Any]], dict[str, Any]]) -> None:
+    """``present(item_id, payload, summary) -> summary`` for *scope*'s holds."""
+    _presenters[scope] = present
+
+
+def _presented(scope: str, item_id: str, summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    present = _presenters.get(scope)
+    if present is None or summary is None:
+        return summary
+    payload = held_payload(scope, item_id)
+    if payload is None:
+        return summary
+    try:
+        return present(item_id, payload, summary)
+    except Exception as err:  # noqa: BLE001 - shown as not approvable, never as less
+        log.warning("held %s/%s could not be shown: %s", scope, item_id, err)
+        return {**summary, "unavailable": f"it could not be shown here: {err}"}
 
 
 def showable(summary: Any) -> bool:
@@ -529,7 +554,7 @@ def listing() -> list[dict[str, Any]]:
     out = []
     for scope, entries in sorted(_index().items()):
         for item_id, record in sorted(entries.items()):
-            summary = _open_summary(scope, item_id, record)
+            summary = _presented(scope, item_id, _open_summary(scope, item_id, record))
             out.append({
                 "scope": scope,
                 "itemId": item_id,
