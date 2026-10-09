@@ -528,7 +528,7 @@ def test_a_large_skill_waits_for_approval_then_downloads(tmp_path, monkeypatch, 
     assert not (b.store.root / "big").exists() and downloads == []   # nothing fetched before approval
     (held,) = sync_approvals.listing()
     assert held["scope"] == "skill-files" and held["kind"] == "new"
-    assert [e["path"] for e in held["summary"]["executable"]] == (["run.sh"] if os.name != "nt" else [])
+    assert held["summary"]["executable"] == (["run.sh"] if os.name != "nt" else [])
 
     monkeypatch.setattr(app, "skills_store", b.store, raising=False)
     monkeypatch.setattr(app, "app_data_dir", lambda: b.data_dir, raising=False)

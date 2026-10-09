@@ -3720,9 +3720,13 @@ async def sync_conflicts(session: "Session", msg_id: str, msg_type: str, payload
 
 @handler("sync.approvals")
 async def sync_approvals_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    """Synced skills and MCP servers waiting for approval (decision D1)."""
+    """Synced skills and MCP servers waiting for approval (decision D1), and
+    the scopes whose queue is full (new records there are being refused)."""
+    from . import sync_approvals
+
     rows = await asyncio.to_thread(server_link.sync_approvals)
-    await session.send_json(make_response(msg_id, msg_type, {"approvals": rows}))
+    full = await asyncio.to_thread(sync_approvals.full_scopes)
+    await session.send_json(make_response(msg_id, msg_type, {"approvals": rows, "full": full}))
 
 
 @handler("sync.approval.decide")

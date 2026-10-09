@@ -403,51 +403,61 @@ class McpScope:
 
 
 #: Env names whose value decides what a process loads or runs, whatever
-#: else the name says.
+#: else the name says. Matched as whole ``_``-separated parts anywhere in a
+#: name, so NODE_OPTIONS_TOKEN counts as NODE_OPTIONS.
 _EXEC_ENV_NAMES = frozenset({
     "PATH", "NODE_OPTIONS", "NODE_PATH", "RUBYOPT", "PERL5OPT", "JAVA_TOOL_OPTIONS",
     "_JAVA_OPTIONS", "CLASSPATH", "SHELL", "HOME",
 })
 _EXEC_ENV_PREFIXES = ("PYTHON", "DYLD_", "LD_", "NPM_CONFIG_", "UV_", "BUN_", "DENO_", "GIT_")
 _EXEC_ENV_SUFFIXES = ("_OPTIONS", "_OPTS", "_PATH", "_HOME")
-#: Longest string an approval summary keeps of one value, and most args.
-_SUMMARY_STR = 200
-_SUMMARY_LIST = 64
+#: Name endings that mark a value as a secret: masked in an approval, and
+#: the only names whose value may rotate without one (``_env_rotates``).
+_SECRET_ENV_SUFFIXES = ("_TOKEN", "_API_KEY", "_SECRET", "_PASSWORD")
+#: Characters a rotated token never holds: a value with any of them names a
+#: place (a URL, a path, a file) or carries options, and changing it is a
+#: change of behaviour, not of a credential.
+_NOT_OPAQUE = re.compile(r"://|[/\\\s=]|\.json", re.IGNORECASE)
+#: How many env entries and headers a synced MCP record may carry, and how
+#: long a name may be: what an approval can show whole.
+MAX_SYNCED_ENV = 64
+MAX_SYNCED_NAME = 128
 
 
 def _env_runs(name: str) -> bool:
     upper = name.upper()
-    return (
-        upper in _EXEC_ENV_NAMES
-        or upper.startswith(_EXEC_ENV_PREFIXES)
-        or upper.endswith(_EXEC_ENV_SUFFIXES)
-    )
+    if upper.startswith(_EXEC_ENV_PREFIXES) or upper.endswith(_EXEC_ENV_SUFFIXES):
+        return True
+    padded = f"_{upper}_"
+    return any(f"_{exec_name.strip('_')}_" in padded for exec_name in _EXEC_ENV_NAMES)
 
 
 def _env_secret(name: str) -> bool:
-    upper = name.upper()
-    return upper.endswith(("TOKEN", "KEY", "SECRET", "PASSWORD")) or "CREDENTIAL" in upper or "AUTH" in upper
+    """Whether a name marks its value as a secret: exact endings only."""
+    return name.upper().endswith(_SECRET_ENV_SUFFIXES)
 
 
-def _env_rotates(name: str) -> bool:
-    """Whether a value change of this env name is a secret rotation, which
-    needs no approval: a secret-like name that cannot change what runs."""
-    return _env_secret(name) and not _env_runs(name)
+def _opaque(value: Any) -> bool:
+    return isinstance(value, str) and not _NOT_OPAQUE.search(value)
+
+
+def _env_rotates(name: str, old: Any, new: Any) -> bool:
+    """Whether changing this env value from *old* to *new* is a secret
+    rotation, which needs no approval: a secret name that cannot change what
+    runs, with an opaque token on both sides."""
+    return _env_secret(name) and not _env_runs(name) and _opaque(old) and _opaque(new)
 
 
 def _mcp_runs(server: Any) -> Any:
-    """What of an MCP record decides what runs, for comparing two versions:
-    everything but the on/off switch, every env value except a rotated
-    secret's (``_env_rotates``), and the header names (a header value change
-    is a token rotation; a new header is a new request to some server)."""
+    """What of an MCP record decides what runs, apart from env values (see
+    ``_mcp_needs_approval``): everything but the on/off switch, with env and
+    header *names* (a header value change is a token rotation; a new header
+    is a new request to some server)."""
     if not isinstance(server, dict):
         return None
     out = {k: v for k, v in server.items() if k not in ("enabled", "env", "headers")}
     env = server.get("env")
-    out["env"] = (
-        {str(k): (None if _env_rotates(str(k)) else v) for k, v in env.items()}
-        if isinstance(env, dict) else env
-    )
+    out["env"] = sorted(str(k) for k in env) if isinstance(env, dict) else env
     headers = server.get("headers")
     out["headers"] = sorted(str(k) for k in headers) if isinstance(headers, dict) else headers
     return out
@@ -457,13 +467,26 @@ def _mcp_needs_approval(local: Any, incoming: dict[str, Any]) -> bool:
     if local is None or _mcp_runs(local) != _mcp_runs(incoming):
         return True
     # Switched off here and on elsewhere: turning it back on is asked too.
-    return local.get("enabled") is False and incoming.get("enabled", True) is not False
+    if local.get("enabled") is False and incoming.get("enabled", True) is not False:
+        return True
+    mine, theirs = local.get("env") or {}, incoming.get("env") or {}
+    return any(
+        mine.get(name) != theirs.get(name) and not _env_rotates(name, mine.get(name), theirs.get(name))
+        for name in theirs
+    )
 
 
 def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, Any]) -> bool:
-    """Whether the store would take the document with *incoming* in it."""
+    """Whether the store would take the document with *incoming* in it, and
+    an approval could show all of it (``MAX_SYNCED_ENV``, ``MAX_SYNCED_NAME``)."""
     from .mcp_settings import MCPServersDocument
 
+    for field_name in ("env", "headers"):
+        values = incoming.get(field_name)
+        if isinstance(values, dict) and (
+            len(values) > MAX_SYNCED_ENV or any(len(str(k)) > MAX_SYNCED_NAME for k in values)
+        ):
+            return False
     candidate = list(servers)
     if index < 0:
         candidate.append(incoming)
@@ -476,40 +499,24 @@ def _mcp_valid(servers: list[dict[str, Any]], index: int, incoming: dict[str, An
     return True
 
 
-def _clip(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > _SUMMARY_STR:
-        return value[:_SUMMARY_STR] + "…"
-    return value
-
-
-def _redact(value: Any) -> Any:
-    """A summary value as stored: clipped, and masked when it reads like a
-    credential (the stored summary carries no secret; the sealed payload
-    keeps the real one)."""
-    return MASKED_VALUE if _looks_secret(value) else _clip(value)
-
-
 def _mcp_summary(name: str, server: dict[str, Any]) -> dict[str, Any]:
-    """What the approval list shows: what would run, env values unless the
-    name or the value says secret, header names, never a secret value."""
+    """What the approval list shows: the whole record — transport, command,
+    every arg, url, cwd, every env entry and every header name — with only
+    the values of secret-named env entries and of headers masked. Never cut
+    and never masked by content: a value that decides what runs is shown as
+    it is (a record too large to show is refused, see ``sync_approvals``)."""
     out: dict[str, Any] = {"name": name}
     for key in ("transport", "command", "url", "cwd"):
-        if server.get(key) not in (None, "", []):
-            out[key] = _redact(server[key])
-    args = server.get("args")
-    if isinstance(args, list) and args:
-        out["args"] = [_redact(a) for a in args[:_SUMMARY_LIST]]
-        if len(args) > _SUMMARY_LIST:
-            out["argsTruncated"] = len(args)
+        if server.get(key) not in (None, ""):
+            out[key] = server[key]
+    if isinstance(server.get("args"), list):
+        out["args"] = list(server["args"])
     env = server.get("env")
     if isinstance(env, dict) and env:
-        out["env"] = {
-            str(k): MASKED_VALUE if _env_secret(str(k)) else _redact(v)
-            for k, v in sorted(env.items())[:_SUMMARY_LIST]
-        }
+        out["env"] = {str(k): MASKED_VALUE if _env_secret(str(k)) else v for k, v in sorted(env.items())}
     headers = server.get("headers")
     if isinstance(headers, dict) and headers:
-        out["headers"] = {str(k): MASKED_VALUE for k in sorted(headers)[:_SUMMARY_LIST]}
+        out["headers"] = {str(k): MASKED_VALUE for k in sorted(headers)}
     if server.get("enabled") is False:
         out["enabled"] = False
     return out
@@ -771,11 +778,12 @@ class SkillsStateScope:
         return "held" if held else "refused"
 
 
-#: Characters of SKILL.md, and of each executable file, an approval previews;
-#: and how many executables and file rows it lists.
+#: Characters of SKILL.md, and of each previewed file, an approval shows;
+#: past it the preview is cut and says so.
 SKILL_PREVIEW_CHARS = 2000
-_SKILL_PREVIEW_FILES = 3
-_SKILL_SUMMARY_FILES = 100
+#: Files an approval previews by kind, whatever their mode.
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl",
+                    ".ps1", ".bat", ".cmd", ".php", ".lua")
 
 
 def _skill_file_bytes(entry: Any) -> bytes | None:
@@ -796,36 +804,43 @@ def _preview(raw: bytes) -> tuple[str, bool]:
 
 def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
     """What the approval list shows of a held skill: SKILL.md (what the agent
-    will be told), each file with its size and SHA-256, the files that would
-    be executable with the start of each, and the routing it asks for."""
+    will be told) and whether its preview was cut, every file with its size
+    and SHA-256, and a preview — cut with a flag past ``SKILL_PREVIEW_CHARS``
+    — of every file SKILL.md names and every script (by mode, shebang or
+    extension), plus the routing it asks for."""
     import hashlib
 
+    decoded = {str(rel): _skill_file_bytes(entry) for rel, entry in files.items()}
+    skill_md_raw = decoded.get("SKILL.md") or b""
+    skill_md, skill_md_cut = _preview(skill_md_raw)
+    skill_md_text = skill_md_raw.decode("utf-8", errors="replace")
     rows: list[dict[str, Any]] = []
-    executable: list[dict[str, Any]] = []
-    skill_md = ""
-    for rel in sorted(files, key=str):
-        raw = _skill_file_bytes(files[rel])
+    previews: list[dict[str, Any]] = []
+    executable: list[str] = []
+    for rel in sorted(decoded):
+        raw = decoded[rel]
         if raw is None:
             continue
-        if len(rows) < _SKILL_SUMMARY_FILES:
-            rows.append({"path": _clip(str(rel)), "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
-        if str(rel) == "SKILL.md":
-            skill_md = _preview(raw)[0]
-        entry = files[rel]
-        if _EXEC_BITS and isinstance(entry, dict) and entry.get("x") and len(executable) < _SKILL_PREVIEW_FILES:
-            text, truncated = _preview(raw)
-            executable.append({"path": _clip(str(rel)), "preview": text, "truncated": truncated})
-    out: dict[str, Any] = {
+        rows.append({"path": rel, "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+        entry = files.get(rel)
+        marked = _EXEC_BITS and isinstance(entry, dict) and bool(entry.get("x"))
+        if marked:
+            executable.append(rel)
+        if rel == "SKILL.md":
+            continue
+        if marked or rel.lower().endswith(_SCRIPT_SUFFIXES) or raw[:2] == b"#!" or rel in skill_md_text:
+            text, cut = _preview(raw)
+            previews.append({"path": rel, "preview": text, "truncated": cut, "executable": marked})
+    return {
         "name": name,
         "files": rows,
         "skillMd": skill_md,
+        "skillMdTruncated": skill_md_cut,
+        "previews": previews,
         "executable": executable,
         "enabled": bool(payload.get("enabled", True)),
         "targets": payload.get("targets"),
     }
-    if len(files) > len(rows):
-        out["filesTruncated"] = len(files)
-    return out
 
 
 #: Manifest format of a ``skill-files`` record.
@@ -1151,18 +1166,17 @@ class SkillFilesScope:
             # the approval can name them and their sizes but not show them.
             if sync_approvals.is_rejected(self.scope, item_id, payload):
                 return True
-            rels = sorted(refs)
             summary: dict[str, Any] = {
                 "name": item_id,
-                "files": [{"path": _clip(rel), "size": refs[rel].size} for rel in rels[:_SKILL_SUMMARY_FILES]],
-                "executable": [
-                    {"path": _clip(rel)} for rel, e in sorted(payload["files"].items())
-                    if isinstance(e, dict) and e.get("x")
-                ][:_SKILL_SUMMARY_FILES] if _EXEC_BITS else [],
+                "files": [{"path": rel, "size": refs[rel].size} for rel in sorted(refs)],
+                "executable": sorted(
+                    rel for rel, e in payload["files"].items() if isinstance(e, dict) and e.get("x")
+                ) if _EXEC_BITS else [],
                 "bytes": sum(ref.size for ref in refs.values()),
+                # The files arrive only after approval: names and sizes are
+                # all that can be shown before.
+                "contentNotShown": True,
             }
-            if len(rels) > _SKILL_SUMMARY_FILES:
-                summary["filesTruncated"] = len(rels)
             return sync_approvals.hold(
                 self.scope, item_id, payload, local=local_manifest,
                 kind=sync_approvals.KIND_NEW if local_manifest is None else sync_approvals.KIND_CHANGED,

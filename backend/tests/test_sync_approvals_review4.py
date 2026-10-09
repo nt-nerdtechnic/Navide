@@ -62,8 +62,8 @@ async def test_an_env_value_that_can_change_what_runs_is_held(tmp_path, account_
     assert _held("api") and _held("api")[0]["kind"] == "changed"
 
 
-@pytest.mark.parametrize("name", ["GITHUB_TOKEN", "OPENAI_API_KEY", "CLIENT_SECRET", "DB_PASSWORD",
-                                  "MY_CREDENTIALS_JSON", "X_AUTH_HEADER"])
+# Round 5 (N4) narrowed rotation to exact secret endings; see review5.
+@pytest.mark.parametrize("name", ["GITHUB_TOKEN", "OPENAI_API_KEY", "CLIENT_SECRET", "DB_PASSWORD"])
 async def test_a_rotated_secret_value_still_lands_without_asking(tmp_path, account_key, monkeypatch, name):
     server, a, b, a_store, b_store = _mcp_pair(tmp_path, monkeypatch)
     base = {**_mcp("api"), "env": {name: "v1"}}
@@ -166,25 +166,23 @@ async def test_a_record_the_store_would_refuse_is_refused_not_held(tmp_path, acc
     assert _held("dos") == []
 
 
-def test_a_summary_is_capped(tmp_path, account_key, monkeypatch):
-    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+def test_a_summary_too_large_to_show_is_refused(tmp_path, account_key, monkeypatch):
+    # Round 5 (N2/N3): never clipped into something approvable; refused whole.
     summary = sync_scopes._mcp_summary("x", {**_mcp("x"), "args": ["A" * 5000] * 64, "command": "c" * 9000})
-    assert len(json.dumps(summary)) <= sync_approvals.MAX_SUMMARY_BYTES
+    assert summary["args"] == ["A" * 5000] * 64
+    assert sync_approvals.hold("mcp", "x", _mcp("x"), local=None, kind="new", summary=summary) is False
 
 
-def test_holds_per_scope_are_capped_oldest_rejected_first(tmp_path, account_key, monkeypatch):
-    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+def test_holds_per_scope_are_capped_and_rejections_are_kept(tmp_path, account_key, monkeypatch):
+    # Round 5 (N5): a full queue refuses; a rejection is never evicted.
     cap = sync_approvals.MAX_HOLDS_PER_SCOPE
-    assert sync_approvals.hold("mcp", "r0", _mcp("r0"), local=None, kind="new", summary={})
+    assert sync_approvals.hold("mcp", "r0", _mcp("r0"), local=None, kind="new", summary={"name": "r0"})
     sync_approvals.set_status("mcp", "r0", sync_approvals.REJECTED)
-    for i in range(1, cap):
-        assert sync_approvals.hold("mcp", f"s{i}", _mcp(f"s{i}"), local=None, kind="new", summary={})
-    assert sync_approvals.hold("mcp", "late", _mcp("late"), local=None, kind="new", summary={})
+    for i in range(cap):
+        assert sync_approvals.hold("mcp", f"s{i}", _mcp(f"s{i}"), local=None, kind="new", summary={"name": "s"})
+    assert sync_approvals.hold("mcp", "late", _mcp("late"), local=None, kind="new", summary={"name": "l"}) is False
     ids = {h["itemId"] for h in sync_approvals.listing()}
-    assert "r0" not in ids and "late" in ids and len(ids) == cap
-    # Full of pending ones: the next is refused, not squeezed in.
-    assert sync_approvals.hold("mcp", "later", _mcp("later"), local=None, kind="new", summary={}) is False
-    assert len(list((sync_approvals._stash_dir() / "mcp").glob("*.sealed"))) == cap
+    assert "r0" in ids and "late" not in ids and len(ids) == cap + 1
 
 
 async def test_a_hold_that_cannot_be_stored_is_a_refusal(tmp_path, account_key, monkeypatch):
@@ -213,10 +211,11 @@ async def test_a_skill_approval_previews_skill_md_and_scripts(tmp_path, account_
     assert files["go.sh"]["size"] == len(script)
     assert files["go.sh"]["sha256"] == hashlib.sha256(script).hexdigest()
     assert "does things" in held["summary"]["skillMd"]
+    (preview,) = held["summary"]["previews"]
+    assert preview["path"] == "go.sh" and preview["preview"].startswith("#!/bin/sh")
+    assert preview["truncated"] is True and len(preview["preview"]) <= sync_scopes.SKILL_PREVIEW_CHARS
     if sync_scopes._EXEC_BITS:
-        (preview,) = held["summary"]["executable"]
-        assert preview["path"] == "go.sh" and preview["preview"].startswith("#!/bin/sh")
-        assert preview["truncated"] is True and len(preview["preview"]) <= sync_scopes.SKILL_PREVIEW_CHARS
+        assert held["summary"]["executable"] == ["go.sh"]
 
 
 # ── D1-8 / D1-9: header names and a re-enable are held ──────────────────────
@@ -255,13 +254,15 @@ async def test_a_server_switched_off_here_is_not_switched_on_remotely_without_as
 
 
 # ── D1-11: the stored summary carries no secret ─────────────────────────────
-async def test_a_secret_in_args_or_url_is_masked_in_the_stored_summary(tmp_path, account_key, monkeypatch):
+async def test_a_secret_in_args_is_shown_whole_but_never_stored_in_the_clear(tmp_path, account_key, monkeypatch):
+    # Round 5 (N3): masked by name only, so args show whole to the user;
+    # the index seals the summary, so the file still holds no secret.
     server, a, b, a_store, b_store = _mcp_pair(tmp_path, monkeypatch)
     a.use(); a_store.replace_servers([{**_mcp("gh"), "args": ["--token", TOKEN, "--verbose"]}])
     await a.sync(); await b.sync()
     b.use()
     (held,) = _held("gh")
-    assert held["summary"]["args"] == ["--token", sync_scopes.MASKED_VALUE, "--verbose"]
+    assert held["summary"]["args"] == ["--token", TOKEN, "--verbose"]
     assert TOKEN not in sync_approvals._index_path().read_text()
 
 

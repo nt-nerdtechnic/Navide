@@ -21,14 +21,21 @@ the change on every other device. Hence:
 - the index is a store of its own, ``index.json`` beside the payloads under
   the app data directory — not a UI setting, which the window may write —
   as ``{scope: {item_id: {digest, base, status, kind, summary, at}}}``. The
-  summary is stored redacted (secret-looking values masked);
+  summary — everything the user is shown, whole — is sealed under the
+  account key like the payload, so the file keeps no secret in the clear;
 - each payload is sealed under the account key, the same way it travelled;
 - an approval is a token sealed under that key too (``_approval_token``),
   written only by ``decide``: a hand-edited ``status`` approves nothing.
 
-Bounded: at most ``MAX_HOLDS_PER_SCOPE`` records per scope (the oldest
-rejected one makes room first; when every slot is pending, a new record is
-refused rather than held) and ``MAX_SUMMARY_BYTES`` of summary each.
+What the user approves is exactly and completely what lands: a summary
+that cannot hold the whole record is refused (the adapter reports it), never
+held as a stub, and a stub found in the index is never approvable.
+
+Bounded: at most ``MAX_HOLDS_PER_SCOPE`` records per scope *waiting* — a
+full queue refuses the next record (``full_scopes`` says so) rather than
+making room. A rejection is never evicted to make room: dropping one would
+let this machine's own copy (or its absence, a delete) go up over the
+change it rejected.
 
 A rejection is kept: the cloud copy goes on standing in for the local item, so
 nothing is pushed back, until a newer record for the item arrives — which is
@@ -54,9 +61,9 @@ log = logging.getLogger("agent_team_backend.sync_approvals")
 #: The UI-settings key an earlier build of this branch kept the index under.
 #: Nothing reads it now; ws_handlers refuses it from the window all the same.
 APPROVALS_KEY = "sync-approvals"
-#: Records held per scope, and the summary bytes one may keep.
+#: Records waiting per scope, and the summary bytes one may keep.
 MAX_HOLDS_PER_SCOPE = 64
-MAX_SUMMARY_BYTES = 32 * 1024
+MAX_SUMMARY_BYTES = 192 * 1024
 #: One lock for every read-modify-write of the index: a sync worker filing a
 #: record and the window deciding one must not interleave.
 _lock = threading.RLock()
@@ -130,11 +137,40 @@ def _token_ok(scope: str, item_id: str, record: dict[str, Any]) -> bool:
     return opened == f"approved:{record.get('digest', '')}"
 
 
-def _fit(summary: dict[str, Any]) -> dict[str, Any]:
-    """*summary*, or a stub saying it was too large to keep."""
-    if len(json.dumps(summary)) <= MAX_SUMMARY_BYTES:
-        return summary
-    return {"name": summary.get("name"), "truncated": True}
+def _seal_summary(scope: str, item_id: str, summary: dict[str, Any]) -> str:
+    return sync_keyring.encrypt(json.dumps(summary), scope=f"summary:{scope}", item_id=item_id)
+
+
+def _open_summary(scope: str, item_id: str, record: dict[str, Any]) -> dict[str, Any] | None:
+    sealed = record.get("summary")
+    if not isinstance(sealed, str):
+        return None
+    try:
+        opened = json.loads(sync_keyring.decrypt(sealed, scope=f"summary:{scope}", item_id=item_id))
+    except Exception:  # noqa: BLE001 - a summary that does not open shows nothing
+        return None
+    return opened if isinstance(opened, dict) else None
+
+
+#: Summary keys that mark a stub or a cut list. A preview cut with its own
+#: visible flag (``skillMdTruncated``, a preview's ``truncated``) is not one:
+#: the list of what lands is still whole.
+_STUB_KEYS = frozenset({"truncated", "argsTruncated", "envTruncated", "headersTruncated", "filesTruncated"})
+
+
+def _displayable(summary: dict[str, Any] | None) -> bool:
+    """Whether a summary shows the whole record: never a stub or a cut list."""
+    return isinstance(summary, dict) and not (_STUB_KEYS & set(summary))
+
+
+def _waiting(entries: dict[str, dict[str, Any]]) -> int:
+    return sum(1 for e in entries.values() if e.get("status") != REJECTED)
+
+
+def full_scopes() -> list[str]:
+    """Scopes whose approval queue is full: new records there are refused
+    (and show as refused in the round's result) until some are decided."""
+    return sorted(s for s, entries in _index().items() if _waiting(entries) >= MAX_HOLDS_PER_SCOPE)
 
 
 def _round_is_stale() -> bool:
@@ -170,19 +206,17 @@ def hold(
     """
     if _round_is_stale():
         return False
+    if not _displayable(summary) or len(json.dumps(summary)) > MAX_SUMMARY_BYTES:
+        log.warning("synced %s/%s cannot be shown in full for approval; refused", scope, item_id)
+        return False
     with _lock:
         index = _index()
         entries = index.setdefault(scope, {})
-        if item_id not in entries and len(entries) >= MAX_HOLDS_PER_SCOPE:
-            rejected = sorted(
-                (e.get("at", 0), i) for i, e in entries.items() if e.get("status") == REJECTED
-            )
-            if not rejected:
-                log.warning("%s already holds %d records for approval; %s is refused", scope, len(entries), item_id)
-                return False
-            _, oldest = rejected[0]
-            entries.pop(oldest, None)
-            _stash_path(scope, oldest).unlink(missing_ok=True)
+        replacing = entries.get(item_id)
+        if (replacing is None or replacing.get("status") == REJECTED) and _waiting(entries) >= MAX_HOLDS_PER_SCOPE:
+            log.warning("%s already has %d records waiting for approval; %s is refused",
+                        scope, _waiting(entries), item_id)
+            return False
         try:
             path = _stash_path(scope, item_id)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,7 +229,7 @@ def hold(
                 "base": digest(local) if local is not None else "",
                 "status": PENDING,
                 "kind": kind,
-                "summary": _fit(summary),
+                "summary": _seal_summary(scope, item_id, summary),
                 "at": int(time.time()),
             }
             _write_index(index)
@@ -288,13 +322,17 @@ def listing() -> list[dict[str, Any]]:
     out = []
     for scope, entries in sorted(_index().items()):
         for item_id, record in sorted(entries.items()):
+            summary = _open_summary(scope, item_id, record)
             out.append({
                 "scope": scope,
                 "itemId": item_id,
                 "digest": record.get("digest", ""),
                 "status": record.get("status", PENDING),
                 "kind": record.get("kind", KIND_NEW),
-                "summary": record.get("summary") or {},
+                "summary": summary or {},
+                # False: the window shows "cannot be displayed — reject" and
+                # no Approve; decide() refuses an approval of it too.
+                "displayable": _displayable(summary),
                 "at": record.get("at", 0),
             })
     return out
@@ -322,6 +360,10 @@ def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict
         if not approve:
             set_status(scope, item_id, REJECTED)
             return {"scope": scope, "itemId": item_id, "status": REJECTED}
+        if not _displayable(_open_summary(scope, item_id, record)):
+            raise sync_engine.SyncError(
+                f"{scope}/{item_id} cannot be shown in full here, so it cannot be approved; reject it"
+            )
         payload = held_payload(scope, item_id)
         if payload is None or digest(payload) != shown_digest:
             drop(scope, item_id)

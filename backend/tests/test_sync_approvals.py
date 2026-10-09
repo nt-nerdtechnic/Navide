@@ -70,29 +70,29 @@ async def test_a_new_mcp_server_waits_for_approval(tmp_path, account_key, monkey
 
 async def test_a_changed_command_waits_but_a_rotated_env_value_does_not(tmp_path, account_key, monkeypatch):
     server, a, b, a_store, b_store = _mcp_pair(tmp_path, monkeypatch)
-    base = {**_mcp("api"), "env": {"TOKEN": "t1"}}
+    base = {**_mcp("api"), "env": {"API_TOKEN": "t1"}}
     a.use(); a_store.replace_servers([base])
     await a.sync(); await b.sync()
     _decide(b, "api", True)
     # A token rotation: what runs is the same.
-    a.use(); a_store.replace_servers([{**base, "env": {"TOKEN": "t2"}}])
+    a.use(); a_store.replace_servers([{**base, "env": {"API_TOKEN": "t2"}}])
     await a.sync(); await b.sync()
     b.use()
-    assert _server(b_store, "api")["env"] == {"TOKEN": "t2"}
+    assert _server(b_store, "api")["env"] == {"API_TOKEN": "t2"}
     assert sync_approvals.listing() == []
     # A new env name (NODE_OPTIONS, say) or a new command does change what runs.
-    a.use(); a_store.replace_servers([{**base, "env": {"TOKEN": "t2"}, "command": "/tmp/other"}])
+    a.use(); a_store.replace_servers([{**base, "env": {"API_TOKEN": "t2"}, "command": "/tmp/other"}])
     await a.sync(); await b.sync()
     b.use()
     assert _server(b_store, "api")["command"] == "npx"
     (held,) = sync_approvals.listing()
     assert held["kind"] == "changed" and held["summary"]["command"] == "/tmp/other"
     assert "t2" not in repr(held)                      # env values never in the summary
-    a.use(); a_store.replace_servers([{**base, "env": {"TOKEN": "t2", "NODE_OPTIONS": "--require x"}}])
+    a.use(); a_store.replace_servers([{**base, "env": {"API_TOKEN": "t2", "NODE_OPTIONS": "--require x"}}])
     await a.sync(); await b.sync()
     b.use()
     (held,) = sync_approvals.listing()
-    assert held["summary"]["env"] == {"NODE_OPTIONS": "--require x", "TOKEN": sync_scopes.MASKED_VALUE}
+    assert held["summary"]["env"] == {"API_TOKEN": sync_scopes.MASKED_VALUE, "NODE_OPTIONS": "--require x"}
     assert "NODE_OPTIONS" not in _server(b_store, "api")["env"]
 
 
@@ -180,7 +180,7 @@ async def test_a_new_skill_with_scripts_waits_and_lands_executable_on_approval(t
     (held,) = sync_approvals.listing()
     assert held["scope"] == "skills" and held["kind"] == "new"
     assert [f["path"] for f in held["summary"]["files"]] == ["SKILL.md", "go.sh"]
-    assert [e["path"] for e in held["summary"]["executable"]] == (["go.sh"] if os.name != "nt" else [])
+    assert held["summary"]["executable"] == (["go.sh"] if os.name != "nt" else [])
     pushes = server.pushes
     await b.sync(); await a.sync()
     assert server.pushes == pushes and (ra / "runner").is_dir()

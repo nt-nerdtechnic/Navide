@@ -28,6 +28,27 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _HEADER_KEY_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+#: Characters that print as nothing or as a blank though they are not a
+#: space: Hangul fillers, the braille blank, the combining grapheme joiner.
+_BLANK_LOOKING = frozenset("\u115f\u1160\u3164\uffa0\u2800\u034f")
+
+
+def _has_invisible(value: str) -> bool:
+    """Whether *value* holds a character that hides what it says: format
+    characters (bidi overrides, zero-width), separators other than the plain
+    space, private-use or surrogate code points, variation selectors and the
+    blank-looking letters above. A command, an argument or a URL is shown to
+    a person who approves it; what runs must read as what it is."""
+    import unicodedata
+
+    for ch in value:
+        cat = unicodedata.category(ch)
+        cp = ord(ch)
+        if cat in ("Cf", "Co", "Cs", "Zl", "Zp") or (cat == "Zs" and ch != " "):
+            return True
+        if ch in _BLANK_LOOKING or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF:
+            return True
+    return False
 _SECRET_TOKENS = {
     "KEY",
     "TOKEN",
@@ -97,8 +118,8 @@ class MCPStdioServerSetting(_MCPServerBase):
     @classmethod
     def validate_command(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized or _CONTROL_CHARS_RE.search(normalized):
-            raise ValueError("command must not contain control characters")
+        if not normalized or _CONTROL_CHARS_RE.search(normalized) or _has_invisible(normalized):
+            raise ValueError("command must not contain control or invisible characters")
         return normalized
 
     @field_validator("args")
@@ -108,8 +129,8 @@ class MCPStdioServerSetting(_MCPServerBase):
         for arg in values:
             if not isinstance(arg, str):
                 raise ValueError("args must be strings")
-            if len(arg) > 512 or _CONTROL_CHARS_RE.search(arg):
-                raise ValueError("args must not contain control characters")
+            if len(arg) > 512 or _CONTROL_CHARS_RE.search(arg) or _has_invisible(arg):
+                raise ValueError("args must not contain control or invisible characters")
             clean.append(arg)
         return clean
 
@@ -139,6 +160,7 @@ class _MCPRemoteServerSetting(_MCPServerBase):
         if (
             not normalized
             or _CONTROL_CHARS_RE.search(normalized)
+            or _has_invisible(normalized)
             or not normalized.startswith(("http://", "https://"))
         ):
             raise ValueError("url must use http or https and contain no control characters")
