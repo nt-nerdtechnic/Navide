@@ -4105,7 +4105,8 @@ def sync_approvals() -> list[dict[str, Any]]:
     (``sync_approvals``), readable whether or not the link is up."""
     from . import sync_approvals as approvals
 
-    return approvals.listing()
+    # Brief: long summaries collapsed; the card loads one whole on opening.
+    return approvals.listing(brief=True)
 
 
 def decide_sync_approval(scope: str, item_id: str, approve: bool, shown_digest: str) -> dict[str, Any]:

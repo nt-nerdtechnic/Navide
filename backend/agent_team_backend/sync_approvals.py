@@ -73,9 +73,20 @@ REJECTED = "rejected"
 #: Approved, but not landed yet (a large skill's files still downloading).
 APPROVED = "approved"
 
-#: Why a record waits: the item is not here at all, or what runs changed.
+#: Why a record waits: the item is not here at all, what runs changed, or a
+#: delete that would change what runs (the default prompt's: the loop
+#: prompt would become another).
 KIND_NEW = "new"
 KIND_CHANGED = "changed"
+KIND_DELETE = "delete"
+#: The payload a held delete is sealed as: a real record never has this key.
+DELETE_PAYLOAD: dict[str, Any] = {"$delete": True}
+#: A listing row whose summary is longer than this is sent collapsed: its
+#: small fields only, the rest loaded by ``detail`` when the card opens.
+BRIEF_BYTES = 2048
+#: Scopes whose full view is built only on ``detail`` (a memory file can be
+#: a megabyte, twice with its diff).
+_DETAIL_ONLY = frozenset({"memory"})
 
 
 def _stash_dir() -> Path:
@@ -519,6 +530,11 @@ def overlay(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
             # or its absence, a delete — over the change it held. A missing
             # payload is never a delete.
             continue
+        if payload == DELETE_PAYLOAD:
+            # A held delete stands in as the item's absence, which is what
+            # the engine already agreed on: nothing is pushed back.
+            out.pop(item_id, None)
+            continue
         out[item_id] = payload
     return out
 
@@ -547,27 +563,52 @@ def set_status(scope: str, item_id: str, status: str, *, token: str = "") -> Non
         _write_index(index)
 
 
-def listing() -> list[dict[str, Any]]:
+def _row(scope: str, item_id: str, record: dict[str, Any], *, brief: bool) -> dict[str, Any]:
+    stored = _open_summary(scope, item_id, record)
+    collapsed = False
+    if brief and scope in _DETAIL_ONLY:
+        summary, collapsed = stored, True
+    else:
+        summary = _presented(scope, item_id, stored)
+    displayable = _displayable(summary)
+    if brief and summary is not None and len(json.dumps(summary)) > BRIEF_BYTES:
+        summary = {k: v for k, v in summary.items() if len(json.dumps(v)) <= 256}
+        collapsed = True
+    return {
+        "scope": scope,
+        "itemId": item_id,
+        "digest": record.get("digest", ""),
+        "status": record.get("status", PENDING),
+        "kind": record.get("kind", KIND_NEW),
+        "summary": summary or {},
+        # False: the window shows "cannot be displayed — reject" and no
+        # Approve; decide() refuses an approval of it too.
+        "displayable": displayable,
+        # True: the summary holds only its small fields; ``detail`` gives the
+        # rest, and the window loads it before it offers Approve.
+        "collapsed": collapsed,
+        "at": record.get("at", 0),
+    }
+
+
+def listing(*, brief: bool = False) -> list[dict[str, Any]]:
     """Every held record, for the window: no payload, only its summary, and
     the digest of the exact payload — which ``decide`` must be handed back,
-    so what is approved is what was shown."""
+    so what is approved is what was shown. ``brief`` (what the window asks
+    for) collapses long summaries; ``detail`` gives one whole."""
     out = []
     for scope, entries in sorted(_index().items()):
         for item_id, record in sorted(entries.items()):
-            summary = _presented(scope, item_id, _open_summary(scope, item_id, record))
-            out.append({
-                "scope": scope,
-                "itemId": item_id,
-                "digest": record.get("digest", ""),
-                "status": record.get("status", PENDING),
-                "kind": record.get("kind", KIND_NEW),
-                "summary": summary or {},
-                # False: the window shows "cannot be displayed — reject" and
-                # no Approve; decide() refuses an approval of it too.
-                "displayable": _displayable(summary),
-                "at": record.get("at", 0),
-            })
+            out.append(_row(scope, item_id, record, brief=brief))
     return out
+
+
+def detail(scope: str, item_id: str) -> dict[str, Any]:
+    """One held record with its whole summary (the card, expanded)."""
+    record = entry(scope, item_id)
+    if record is None:
+        raise sync_engine.SyncError(f"nothing from {scope}/{item_id} is waiting for approval")
+    return _row(scope, item_id, record, brief=False)
 
 
 def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict[str, Any]:
@@ -594,7 +635,14 @@ def decide(adapter: Any, item_id: str, approve: bool, shown_digest: str) -> dict
             # Nothing reviewed is kept for a "no".
             drop_held_files(scope, item_id, shown_digest)
             return {"scope": scope, "itemId": item_id, "status": REJECTED}
-        if not _displayable(_open_summary(scope, item_id, record)):
+        local_snapshot = getattr(adapter, "local_snapshot", None)
+        if local_snapshot is not None:
+            local = local_snapshot().get(item_id)
+            if (digest(local) if local is not None else "") != record.get("base", ""):
+                raise sync_engine.SyncError(
+                    f"{scope}/{item_id} changed here since it was shown; review it again"
+                )
+        if not _displayable(_presented(scope, item_id, _open_summary(scope, item_id, record))):
             raise sync_engine.SyncError(
                 f"{scope}/{item_id} cannot be shown in full here, so it cannot be approved; reject it"
             )

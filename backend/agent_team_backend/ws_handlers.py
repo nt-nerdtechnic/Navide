@@ -3729,6 +3729,21 @@ async def sync_approvals_list(session: "Session", msg_id: str, msg_type: str, pa
     await session.send_json(make_response(msg_id, msg_type, {"approvals": rows, "full": full}))
 
 
+@handler("sync.approval.detail")
+async def sync_approval_detail(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """One held record whole, for a card the listing sent collapsed."""
+    from . import sync_approvals
+
+    scope = str(payload.get("scope") or "")
+    item_id = str(payload.get("itemId") or "")
+    try:
+        row = await asyncio.to_thread(sync_approvals.detail, scope, item_id)
+    except Exception as err:  # noqa: BLE001 - a hold that went away is a normal race
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_APPROVAL_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"approval": row}))
+
+
 @handler("sync.approval.decide")
 async def sync_approval_decide(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     scope = str(payload.get("scope") or "")

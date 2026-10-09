@@ -247,10 +247,34 @@ class PromptsScope:
         on a prompt this machine already has."""
         skills = self._list()
         index = next((i for i, s in enumerate(skills) if s.get("id") == item_id), -1)
+        if payload == sync_approvals.DELETE_PAYLOAD:
+            payload = None  # an approved held delete, landing
+            approved_delete = sync_approvals.is_approved(self.scope, item_id, sync_approvals.DELETE_PAYLOAD)
+        else:
+            approved_delete = False
         if payload is None:
-            sync_approvals.drop(self.scope, item_id)
             if index < 0:
+                sync_approvals.drop(self.scope, item_id)
                 return True
+            if self._gate and not approved_delete and _single_default(skills)[index].get("isDefault"):
+                # Deleting the default re-casts the loop prompt as another one
+                # this machine has: what a looping pane types changes, so it
+                # is asked too. Other deletes apply as before.
+                if sync_approvals.is_rejected(self.scope, item_id, sync_approvals.DELETE_PAYLOAD):
+                    return True
+                rest = _single_default([s for i, s in enumerate(skills) if i != index])
+                successor = next((s for s in rest if s.get("isDefault")), None)
+                return sync_approvals.hold(
+                    self.scope, item_id, sync_approvals.DELETE_PAYLOAD, local=skills[index],
+                    kind=sync_approvals.KIND_DELETE,
+                    summary={
+                        "id": item_id,
+                        "name": str(skills[index].get("name") or item_id),
+                        "deletes": True,
+                        "newLoopPrompt": str(successor.get("name") or successor.get("id")) if successor else None,
+                    },
+                )
+            sync_approvals.drop(self.scope, item_id)
             skills.pop(index)
         else:
             if not isinstance(payload, dict):
@@ -1886,7 +1910,11 @@ def _present_memory(item_id: str, payload: Any, summary: dict[str, Any]) -> dict
 
 
 def _present_prompt(item_id: str, payload: Any, summary: dict[str, Any]) -> dict[str, Any]:
-    """A held prompt, every field, with what differs from this machine's."""
+    """A held prompt, every field, with what differs from this machine's.
+    A held delete shows as itself (``deletes``, the prompt that would become
+    the loop prompt), which its summary already says."""
+    if payload == sync_approvals.DELETE_PAYLOAD:
+        return summary
     record = {k: v for k, v in payload.items() if k != "id"} if isinstance(payload, dict) else {}
     local = PromptsScope().local_snapshot().get(item_id)
     changes = []

@@ -400,11 +400,26 @@ def _import_summary(scope: str, item_id: str, payload: Any) -> tuple[dict[str, A
     """For an MCP server or a skill: the summary a sync approval would show
     (sync_scopes), and why the record cannot be shown whole and as it is —
     the checks a synced record goes through — or ""."""
-    from . import sync_approvals
+    from . import native_memory, sync_approvals
 
     if not isinstance(payload, dict):
         return None, ""
-    if scope == "mcp":
+    if scope == "memory":
+        text = payload.get("text")
+        if not isinstance(text, str):
+            return None, ""
+        size = len(text.encode("utf-8"))
+        if size > native_memory.FILE_SIZE_LIMIT:
+            return None, "the file is over the memory size limit"
+        # Shown whole up to the memory scope's own limit, as a sync approval
+        # shows it: the full text and a diff against this machine's file.
+        wire_id = item_id if ":" in item_id else sync_scopes.memory_item_id(item_id)
+        summary = sync_scopes._present_memory(wire_id, payload, {"path": item_id, "bytes": size})
+        return summary, "" if sync_approvals._displayable(summary) else "it cannot be shown in full here"
+    if scope == "prompts":
+        problem = ""
+        summary = sync_scopes._present_prompt(item_id, payload, {"id": item_id, "name": str(payload.get("name") or item_id)})
+    elif scope == "mcp":
         problem = sync_scopes.mcp_record_problem(payload)
         summary = sync_scopes._mcp_summary(item_id, payload)
     elif scope == "skills":
@@ -437,6 +452,9 @@ def _plan_item(
     if scope == "prompts":
         if not isinstance(payload, dict):
             return SKIP, "the item is not an object"
+        _summary, problem = _import_summary(scope, item_id, payload)
+        if problem:
+            return SKIP, f"not imported: {problem}"
         return (OVERWRITE if item_id in local else CREATE), ""
     if scope == "mcp":
         if not isinstance(payload, dict):
@@ -475,6 +493,9 @@ def _plan_item(
     # instruction file there at all.
     if sync_scopes.MemoryScope._resolve(item_id) is None:
         return SKIP, "no instruction file on this machine sits at that path"
+    _summary, problem = _import_summary(scope, item_id, payload)
+    if problem:
+        return SKIP, f"not imported: {problem}"
     return (OVERWRITE if item_id in local else CREATE), ""
 
 
@@ -558,7 +579,9 @@ class _Run:
 
 def _apply_prompts(items: dict[str, Any], deltas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     before = sync_scopes.PromptsScope().local_snapshot()
-    # The user picked these records in the import dialog: nothing to hold.
+    # Not held for approval: the import preview showed the user each of these
+    # records whole (the presenters a sync approval uses) and the user ticked
+    # them; the same checks refused what could not be shown (_import_summary).
     adapter = sync_scopes.PromptsScope(broadcast=deltas.append, gate=False)
     run = _Run()
     for item_id, payload in items.items():
@@ -590,7 +613,9 @@ def _apply_prompts(items: dict[str, Any], deltas: list[dict[str, Any]]) -> list[
 
 
 def _apply_mcp(items: dict[str, Any]) -> list[dict[str, Any]]:
-    # The user picked these records in the import dialog: nothing to hold.
+    # Not held for approval: the import preview showed the user each of these
+    # records whole (the presenters a sync approval uses) and the user ticked
+    # them; the same checks refused what could not be shown (_import_summary).
     adapter = sync_scopes.McpScope(gate=False)
     before = adapter.local_snapshot()
     run = _Run()
@@ -708,7 +733,9 @@ def _apply_skills(items: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _apply_memory(items: dict[str, Any]) -> list[dict[str, Any]]:
-    # The user picked these records in the import dialog: nothing to hold.
+    # Not held for approval: the import preview showed the user each of these
+    # records whole (the presenters a sync approval uses) and the user ticked
+    # them; the same checks refused what could not be shown (_import_summary).
     adapter = sync_scopes.MemoryScope(gate=False)
     before = adapter.snapshot_by_path()
     run = _Run()
