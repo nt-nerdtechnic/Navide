@@ -1,0 +1,1611 @@
+"""Read-only credentials and keys risk scan (Phase 1 of the credentials plan).
+
+What it looks at: git credential helper chains, gh / glab accounts, SSH keys
+and ``~/.ssh/config``, OS keyring item *metadata*, remote URLs of the repos
+under the scan roots, token-looking environment variable names, and plaintext
+credential files.
+
+The rules this module is built around:
+
+* **No value leaves this module, and none is kept.** Where a value has to pass
+  through memory to be noticed at all (a URL's password, a ``token:`` line in a
+  CLI config, an ``export GH_TOKEN=...`` line) only a boolean is derived from
+  it and the text is dropped. A URL token is reported as "token present"; no
+  prefix, length or hash of it is computed. Finding ids hash the *redacted*
+  location only.
+* **Nothing is written** except the two KV documents below (user scan roots and
+  reminder state) in the global ``navide.db``. No git config, keychain,
+  ``~/.ssh`` or remote is ever touched, and no command that prints a secret is
+  ever run (no ``gh auth token``, no ``security -w/-g/-d``, no
+  ``git credential fill``, no Secret Service GetSecret).
+* **No raw subprocess output is logged.** Logs carry counts and codes only.
+
+Neither KV key belongs to any sync scope or settings bundle (guarded by tests):
+credential state stays on this machine.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import re
+import stat
+import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+from urllib.parse import unquote, urlsplit, urlunsplit
+
+from . import osplat
+from .ipc import make_response
+
+if TYPE_CHECKING:
+    from .app import Session
+
+log = logging.getLogger("agent_team_backend.credentials_scan")
+
+#: KV keys (global navide.db). Never part of a sync scope or a bundle.
+ROOTS_KV_KEY = "credentials.scan_roots"
+REMINDERS_KV_KEY = "credentials.reminders"
+KV_KEYS: tuple[str, ...] = (ROOTS_KV_KEY, REMINDERS_KV_KEY)
+
+CACHE_SECONDS = 60.0
+MAX_ROOTS = 20
+MAX_REPOS = 500
+MAX_WALK_DIRS = 20000
+WALK_DEPTH = 3
+MAX_REMINDERS = 1000
+SNOOZE_DEFAULT_DAYS = 7
+SNOOZE_MAX_DAYS = 90
+
+_SKIP_DIR_NAMES = frozenset({
+    "node_modules", ".venv", "venv", "__pycache__", ".tox", ".git", "Library",
+    ".cache", ".Trash",
+})
+
+FINDING_CODES = (
+    "url-token", "ssh-no-passphrase-default-host", "ssh-no-passphrase", "ssh-key-unreferenced",
+    "ssh-key-mode", "cli-token-plaintext", "gh-active-account-only", "helper-duplicate",
+    "helper-shadowed", "env-token-in-shell-rc", "env-token-set", "plaintext-credential-file",
+    "keyring-unavailable",
+)
+_SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+_TOKEN_PREFIXES = (
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-", "glrt-", "gldt-",
+)
+#: Usernames that only stand in front of a token; a suggested clean URL drops them.
+_PSEUDO_USERS = frozenset({"oauth2", "x-access-token", "x-token-auth", "gitlab-ci-token", "token"})
+
+_FORGE_HOSTS = frozenset({
+    "github.com", "ssh.github.com", "gitlab.com", "altssh.gitlab.com", "bitbucket.org",
+    "dev.azure.com", "ssh.dev.azure.com",
+})
+
+_ENV_ALLOWLIST = frozenset({
+    "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GITLAB_TOKEN",
+    "GLAB_TOKEN", "CI_JOB_TOKEN", "BITBUCKET_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN", "NPM_TOKEN", "HF_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY",
+})
+_ENV_SUFFIXES = ("_TOKEN", "_API_KEY", "_SECRET", "_PASSWORD")
+#: Navide's own plumbing (pane/hook tokens) is not a user credential.
+_ENV_OWN_PREFIXES = ("NAVIDE_", "AGENT_TEAM_")
+
+_SHELL_RC_FILES = (
+    ".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile",
+    ".config/fish/config.fish",
+)
+_RC_EXPORT_RE = re.compile(
+    r"^\s*(?:export\s+|set\s+-[A-Za-z]*x[A-Za-z]*\s+)([A-Za-z_][A-Za-z0-9_]*)(?:=|\s+)(.*)$"
+)
+
+_DEFAULT_IDENTITIES = frozenset({
+    "id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk", "id_dsa", "id_xmss",
+})
+_SSH_NOT_KEYS = frozenset({"config", "known_hosts", "known_hosts.old", "authorized_keys",
+                           "authorized_keys2", "environment", "rc"})
+_PKCS8_ENCRYPTED = "pkcs8-encrypted"
+_KEY_HEADERS = (
+    ("-----BEGIN " + "OPENSSH PRIVATE KEY-----", "openssh"),
+    ("-----BEGIN " + "RSA PRIVATE KEY-----", "rsa-pem"),
+    ("-----BEGIN " + "EC PRIVATE KEY-----", "ec-pem"),
+    ("-----BEGIN " + "DSA PRIVATE KEY-----", "dsa-pem"),
+    ("-----BEGIN " + "PRIVATE KEY-----", "pkcs8"),
+    ("-----BEGIN " + "ENCRYPTED PRIVATE KEY-----", _PKCS8_ENCRYPTED),
+    ("PuTTY-User-Key-File-", "putty"),
+)
+
+_YAML_TOKEN_KEYS = frozenset({
+    "token", "oauth_token", "refresh_token", "oauth2_refresh_token", "access_token",
+})
+_YAML_EMPTY = frozenset({"", '""', "''", "null", "~", "!!null"})
+
+_LINKS = {
+    "github-tokens": {"label": "GitHub tokens", "url": "https://github.com/settings/tokens"},
+    "github-ssh": {"label": "GitHub SSH keys", "url": "https://github.com/settings/keys"},
+}
+
+
+def _gitlab_pat_link(host: str) -> dict[str, str]:
+    return {
+        "label": "GitLab personal access tokens",
+        "url": f"https://{host}/-/user_settings/personal_access_tokens",
+    }
+
+
+def _gitlab_ssh_link(host: str) -> dict[str, str]:
+    return {"label": "GitLab SSH keys", "url": f"https://{host}/-/user_settings/ssh_keys"}
+
+
+# ── Process plumbing ────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RunResult:
+    code: int
+    out: str = ""
+    err: str = ""
+
+
+#: ``run(argv, timeout=..., capture=...)``. ``capture=False`` discards stdout and
+#: stderr (the ssh-keygen probe never keeps what it prints).
+Runner = Callable[..., RunResult]
+
+#: Missing-tool / timeout / spawn-failure sentinel codes.
+CODE_TIMEOUT = -2
+CODE_SPAWN_FAILED = -3
+
+
+def child_env(base: Mapping[str, str]) -> dict[str, str]:
+    """An environment in which no tool this scan runs can prompt anyone."""
+    env = dict(base)
+    for name in ("SSH_ASKPASS", "DISPLAY", "GIT_ASKPASS", "WAYLAND_DISPLAY"):
+        env.pop(name, None)
+    env.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GH_PROMPT_DISABLED": "1",
+        "GCM_INTERACTIVE": "never",
+        "GH_NO_UPDATE_NOTIFIER": "1",
+        "GLAB_CHECK_UPDATE": "false",
+        "NO_PROMPT": "1",
+        "SSH_ASKPASS_REQUIRE": "never",
+        "NO_COLOR": "1",
+        "CLICOLOR": "0",
+    })
+    return env
+
+
+def make_runner(env: Mapping[str, str]) -> Runner:
+    """The real runner: no shell, stdin closed, a timeout on every call."""
+    prepared = child_env(env)
+
+    def run(argv: Sequence[str], *, timeout: float = 15.0, capture: bool = True) -> RunResult:
+        target = subprocess.PIPE if capture else subprocess.DEVNULL
+        try:
+            proc = subprocess.run(
+                list(argv),
+                stdin=subprocess.DEVNULL,
+                stdout=target,
+                stderr=target,
+                timeout=timeout,
+                env=prepared,
+                start_new_session=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except subprocess.TimeoutExpired:
+            return RunResult(CODE_TIMEOUT)
+        except OSError:
+            return RunResult(CODE_SPAWN_FAILED)
+        if not capture:
+            return RunResult(proc.returncode)
+        return RunResult(
+            proc.returncode,
+            (proc.stdout or b"").decode("utf-8", "replace"),
+            (proc.stderr or b"").decode("utf-8", "replace"),
+        )
+
+    return run
+
+
+# ── Small helpers ───────────────────────────────────────────────────────────
+
+
+def _fingerprint(*parts: str) -> str:
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _tilde(path: str | Path, home: Path) -> str:
+    text = str(path)
+    root = str(home)
+    if text == root:
+        return "~"
+    if text.startswith(root + os.sep):
+        return "~" + text[len(root):].replace(os.sep, "/")
+    return text
+
+
+def _mode_text(mode: int) -> str:
+    return format(stat.S_IMODE(mode), "04o")
+
+
+def _now_iso(now: datetime) -> str:
+    return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso(text: Any) -> datetime | None:
+    if not isinstance(text, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def looks_like_token(text: str) -> bool:
+    """Whether a URL *username* is really a token (judged, never kept)."""
+    if not text:
+        return False
+    if text.startswith(_TOKEN_PREFIXES):
+        return True
+    if re.fullmatch(r"[0-9a-fA-F]{40}", text):
+        return True
+    return (
+        len(text) >= 32
+        and re.fullmatch(r"[A-Za-z0-9_\-]+", text) is not None
+        and re.search(r"\d", text) is not None
+        and re.search(r"[A-Za-z]", text) is not None
+    )
+
+
+@dataclass(frozen=True)
+class RedactedUrl:
+    url: str            # userinfo password and any token user removed; no query/fragment
+    token_present: bool
+    user: str           # the remaining (non-token) user, or ""
+    host: str
+    scheme: str
+    path: str
+    has_userinfo: bool
+
+
+def redact_url(raw: str) -> RedactedUrl:
+    """Split ``raw`` into what may be shown; the secret parts are dropped here."""
+    try:
+        parts = urlsplit(raw.strip())
+    except ValueError:
+        return RedactedUrl("", False, "", "", "", "", False)
+    scheme = parts.scheme.lower()
+    if not scheme or "://" not in raw:
+        # scp-like ``git@host:path`` (or a local path): no password can live here.
+        match = re.match(r"^(?:([^@/\s]+)@)?([^:/\s]+):(.*)$", raw.strip())
+        if match and not re.match(r"^[A-Za-z]:[\\/]", raw.strip()):
+            user = match.group(1) or ""
+            host = match.group(2).lower()
+            if looks_like_token(user):
+                return RedactedUrl(f"{host}:{match.group(3)}", True, "", host, "ssh", match.group(3), True)
+            prefix = f"{user}@" if user else ""
+            return RedactedUrl(f"{prefix}{host}:{match.group(3)}", False, user, host, "ssh",
+                               match.group(3), bool(user))
+        return RedactedUrl(raw.strip(), False, "", "", "", raw.strip(), False)
+    netloc = parts.netloc
+    has_userinfo = "@" in netloc
+    user = ""
+    token = False
+    hostport = netloc
+    if has_userinfo:
+        userinfo, _, hostport = netloc.rpartition("@")
+        name, sep, secret = userinfo.partition(":")
+        token = bool(sep and secret)
+        del secret, userinfo
+        name = unquote(name)
+        if looks_like_token(name):
+            token = True
+            name = ""
+        user = name
+    host = (parts.hostname or hostport.split(":")[0]).lower()
+    shown_netloc = (f"{user}@" if user else "") + hostport
+    shown = urlunsplit((scheme, shown_netloc, parts.path, "", ""))
+    return RedactedUrl(shown, token, user, host, scheme, parts.path, has_userinfo)
+
+
+def _host_links(host: str, *, ssh: bool = False) -> list[dict[str, str]]:
+    host = host.lower()
+    if host == "github.com" or host.endswith(".github.com") or host.endswith(".ghe.com"):
+        return [dict(_LINKS["github-ssh" if ssh else "github-tokens"])]
+    if "gitlab" in host:
+        return [_gitlab_ssh_link(host) if ssh else _gitlab_pat_link(host)]
+    return []
+
+
+# ── Scan inputs and result building ─────────────────────────────────────────
+
+
+@dataclass
+class ScanContext:
+    home: Path
+    env: Mapping[str, str]
+    roots: list[tuple[str, str]]          # (absolute path, "workspace"|"user")
+    run: Runner
+    which: Callable[[str], str | None]
+    platform: str = osplat.platform_id
+    system_dirs: list[Path] = field(default_factory=list)
+    enforces_modes: bool = True
+    config_home: Path | None = None        # os.UserConfigDir() equivalent (glab)
+    roaming_app_data: Path | None = None   # %APPDATA% on Windows (gh)
+    repo_workers: int = 6
+
+
+def default_context(roots: list[tuple[str, str]]) -> ScanContext:
+    home = Path.home()
+    env = dict(os.environ)
+    path_value = env.get("PATH")
+    return ScanContext(
+        home=home,
+        env=env,
+        roots=roots,
+        run=make_runner(env),
+        which=lambda name: osplat.paths.resolve_program(name, path=path_value),
+        platform=osplat.platform_id,
+        system_dirs=list(osplat.paths.system_dirs()),
+        enforces_modes=osplat.paths.enforces_posix_modes(),
+        config_home=osplat.paths.config_home(home),
+        roaming_app_data=osplat.paths.roaming_app_data(),
+    )
+
+
+class _Collector:
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
+        self.findings: list[dict[str, Any]] = []
+        self._item_ids: set[str] = set()
+        self._finding_ids: set[str] = set()
+
+    def item(self, kind: str, label: str, key: str, detail: dict[str, Any]) -> None:
+        item_id = _fingerprint("item", kind, key)
+        if item_id in self._item_ids:
+            return
+        self._item_ids.add(item_id)
+        self.items.append({"id": item_id, "kind": kind, "label": label, "detail": detail})
+
+    def finding(
+        self,
+        code: str,
+        severity: str,
+        kind: str,
+        location: str,
+        params: dict[str, str] | None = None,
+        links: list[dict[str, str]] | None = None,
+        steps: list[str] | None = None,
+    ) -> None:
+        assert code in FINDING_CODES, code
+        finding_id = _fingerprint(code, location)
+        if finding_id in self._finding_ids:
+            return
+        self._finding_ids.add(finding_id)
+        self.findings.append({
+            "id": finding_id,
+            "code": code,
+            "severity": severity,
+            "kind": kind,
+            "location": location,
+            "params": {k: str(v) for k, v in (params or {}).items()},
+            "links": list(links or []),
+            "steps": list(steps or []),
+        })
+
+
+# ── 1. git credential helpers ───────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class HelperEntry:
+    scope: str      # system | global | local
+    origin: str     # file the entry came from (tilde form)
+    context: str    # "*" or a redacted URL
+    name: str       # helper name; "" is a reset
+
+
+def helper_name(value: str) -> str:
+    """The helper's name only. An inline ``!`` helper reports its program's
+    basename: its body may carry a secret and is never returned."""
+    text = value.strip()
+    if not text:
+        return ""
+    inline = text.startswith("!")
+    if inline:
+        text = text[1:].strip()
+    first = text.split()[0] if text.split() else ""
+    if not first or "(" in first or "{" in first:
+        return "inline-shell"
+    base = re.split(r"[\\/]", first.strip("'\""))[-1]
+    if base.lower().endswith(".exe"):
+        base = base[:-4]
+    if not inline and base.startswith("git-credential-"):
+        base = base[len("git-credential-"):]
+    return base or "inline-shell"
+
+
+def parse_helper_config(out: str, scope: str, home: Path, *, with_origin: bool) -> list[HelperEntry]:
+    """Parse ``git config [--show-origin] -z --get-regexp ^credential\\.`` output."""
+    entries: list[HelperEntry] = []
+    fields = out.split("\0")
+    index = 0
+    while index < len(fields):
+        origin = ""
+        if with_origin:
+            origin_field = fields[index]
+            index += 1
+            if index >= len(fields):
+                break
+            origin = origin_field.split(":", 1)[1] if ":" in origin_field else origin_field
+        record = fields[index]
+        index += 1
+        if not record:
+            continue
+        key, _, value = record.partition("\n")
+        lower = key.lower()
+        if not lower.startswith("credential.") or not lower.endswith(".helper"):
+            continue
+        middle = key[len("credential."):-len(".helper")]
+        context = "*"
+        if middle:
+            context = redact_url(middle).url or "*"
+        entries.append(HelperEntry(scope, _tilde(origin, home) if origin else "", context,
+                                   helper_name(value)))
+    return entries
+
+
+def effective_chains(entries: Sequence[HelperEntry]) -> dict[str, list[HelperEntry]]:
+    chains: dict[str, list[HelperEntry]] = {}
+    for entry in entries:
+        chain = chains.setdefault(entry.context, [])
+        if entry.name == "":
+            chain.clear()
+            chain.append(entry)  # keep the reset as a marker
+        else:
+            chain.append(entry)
+    return chains
+
+
+def _chain_names(chain: Sequence[HelperEntry]) -> list[str]:
+    return [e.name for e in chain if e.name]
+
+
+def _scan_global_helpers(ctx: ScanContext, git: str, out: _Collector) -> tuple[list[HelperEntry], set[str]]:
+    entries: list[HelperEntry] = []
+    for scope in ("system", "global"):
+        result = ctx.run([git, "config", f"--{scope}", "--show-origin", "-z", "--get-regexp",
+                          r"^credential\..*"], timeout=10)
+        if result.code == 0:
+            entries.extend(parse_helper_config(result.out, scope, ctx.home, with_origin=True))
+    for entry in entries:
+        if entry.name:
+            out.item("git-helper", entry.name, f"{entry.scope}|{entry.origin}|{entry.context}|{entry.name}",
+                     {"scope": entry.scope, "context": entry.context, "origin": entry.origin})
+    gh_only: set[str] = set()
+    for context, chain in effective_chains(entries).items():
+        names = _chain_names(chain)
+        _report_duplicates(context, chain, out, location_prefix=chain[-1].origin or chain[-1].scope)
+        if names == ["gh"] and chain[0].name == "":
+            gh_only.add(context)
+    return entries, gh_only
+
+
+def _report_duplicates(context: str, chain: Sequence[HelperEntry], out: _Collector, *, location_prefix: str) -> None:
+    seen: set[str] = set()
+    key = "credential.helper" if context == "*" else f"credential.{context}.helper"
+    for name in _chain_names(chain):
+        if name in seen:
+            out.finding(
+                "helper-duplicate", "low", "git-helper",
+                f"{location_prefix} · {key} · {name}",
+                params={"helper": name, "context": context},
+                steps=[f"git config --show-origin --get-all {key}"],
+            )
+        seen.add(name)
+
+
+def _local_helper_findings(repo: str, repo_t: str, local: list[HelperEntry],
+                           global_entries: list[HelperEntry], out: _Collector) -> None:
+    if not local:
+        return
+    for entry in local:
+        if entry.name:
+            out.item("git-helper", entry.name, f"local|{repo}|{entry.context}|{entry.name}",
+                     {"scope": "local", "context": entry.context, "origin": repo_t})
+    global_chains = effective_chains(global_entries)
+    combined = effective_chains([*global_entries, *local])
+    by_context: dict[str, list[HelperEntry]] = {}
+    for entry in local:
+        by_context.setdefault(entry.context, []).append(entry)
+    for context, entries in by_context.items():
+        key = "credential.helper" if context == "*" else f"credential.{context}.helper"
+        _report_duplicates(context, combined.get(context, []), out, location_prefix=repo_t)
+        before = _chain_names(global_chains.get(context, []))
+        if before and entries[0].name != "":
+            out.finding(
+                "helper-shadowed", "low", "git-helper",
+                f"{repo_t} · {key}",
+                params={"repo": repo_t, "context": context, "helper": entries[0].name,
+                        "answered_by": before[0]},
+                steps=[f"git -C {osplat.paths.quote_arg(repo)} config --show-origin --get-all {key}"],
+            )
+
+
+# ── 2. gh / glab accounts ───────────────────────────────────────────────────
+
+
+@dataclass
+class CliAccount:
+    tool: str
+    host: str
+    account: str
+    active: bool
+    storage: str  # keyring | config-file | env | unknown
+
+
+def _storage_kind(text: str) -> str:
+    lowered = text.lower()
+    if "keyring" in lowered or "keychain" in lowered:
+        return "keyring"
+    if "oauth_token" in lowered:
+        return "config-file"
+    if lowered.endswith("_token") or lowered in {"gh_token", "github_token", "gitlab_token"}:
+        return "env"
+    if "/" in text or "\\" in text or "hosts.yml" in lowered or "config.yml" in lowered or "oauth_token" in lowered:
+        return "config-file"
+    return "unknown"
+
+
+def parse_gh_json(out: str) -> list[CliAccount] | None:
+    try:
+        doc = json.loads(out)
+    except (ValueError, TypeError):
+        return None
+    hosts = doc.get("hosts") if isinstance(doc, dict) else None
+    if not isinstance(hosts, dict):
+        return None
+    accounts: list[CliAccount] = []
+    for host, rows in hosts.items():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            login = row.get("login")
+            if not isinstance(login, str) or not login:
+                continue
+            source = row.get("tokenSource")
+            accounts.append(CliAccount("gh", str(host), login, row.get("active") is True,
+                                       _storage_kind(source if isinstance(source, str) else "")))
+    return accounts
+
+
+_GH_LOGIN_RE = re.compile(r"Logged in to (\S+) (?:account|as) (\S+?)(?: \(([^)]*)\))?\s*$")
+_ACTIVE_RE = re.compile(r"Active account:\s*(true|false)", re.IGNORECASE)
+
+
+def parse_auth_status_text(tool: str, text: str) -> list[CliAccount]:
+    """Account lines only; token and scope lines are never kept."""
+    accounts: list[CliAccount] = []
+    for line in text.splitlines():
+        match = _GH_LOGIN_RE.search(line)
+        if match:
+            accounts.append(CliAccount(tool, match.group(1).lower(), match.group(2), tool == "glab",
+                                       _storage_kind(match.group(3) or "")))
+            continue
+        active = _ACTIVE_RE.search(line)
+        if active and accounts:
+            accounts[-1].active = active.group(1).lower() == "true"
+    if tool == "gh":
+        # Older gh lists one account per host, which is the active one.
+        hosts: dict[str, list[CliAccount]] = {}
+        for account in accounts:
+            hosts.setdefault(account.host, []).append(account)
+        for rows in hosts.values():
+            if len(rows) == 1 and not any(_ACTIVE_RE.search(l) for l in text.splitlines()):
+                rows[0].active = True
+    return accounts
+
+
+def yaml_token_hosts(text: str) -> dict[str, bool]:
+    """Which hosts carry a non-empty token key. Values are looked at only to
+    tell empty from non-empty; nothing of them is returned."""
+    found: dict[str, bool] = {}
+    stack: list[tuple[int, str]] = []
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^(\s*)([^:#\s][^:]*?)\s*:(?:\s+(.*))?$", raw)
+        if not match:
+            continue
+        indent = len(match.group(1).expandtabs(4))
+        key = match.group(2).strip().strip("'\"")
+        value_present = (match.group(3) or "").strip().split(" #")[0].strip() not in _YAML_EMPTY
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        if key.lower() in _YAML_TOKEN_KEYS and stack:
+            # glab nests hosts under `hosts:`; gh's hosts.yml has them at the top.
+            if stack[0][1] == "hosts":
+                host = stack[1][1] if len(stack) > 1 else ""
+            else:
+                host = stack[0][1]
+            if host:
+                found[host.lower()] = found.get(host.lower(), False) or value_present
+        if not (match.group(3) or "").strip():
+            stack.append((indent, key))
+    return {host: present for host, present in found.items() if present}
+
+
+def _cli_config_files(ctx: ScanContext) -> list[tuple[str, Path]]:
+    files: list[tuple[str, Path]] = []
+    gh_dir = ctx.env.get("GH_CONFIG_DIR")
+    if gh_dir:
+        files.append(("gh", Path(gh_dir) / "hosts.yml"))
+    else:
+        xdg = ctx.env.get("XDG_CONFIG_HOME")
+        if xdg:
+            files.append(("gh", Path(xdg) / "gh" / "hosts.yml"))
+        if ctx.roaming_app_data is not None:
+            files.append(("gh", ctx.roaming_app_data / "GitHub CLI" / "hosts.yml"))
+        files.append(("gh", ctx.home / ".config" / "gh" / "hosts.yml"))
+    glab_dir = ctx.env.get("GLAB_CONFIG_DIR")
+    if glab_dir:
+        files.append(("glab", Path(glab_dir) / "config.yml"))
+    if ctx.config_home is not None:
+        files.append(("glab", ctx.config_home / "glab-cli" / "config.yml"))
+    files.append(("glab", ctx.home / ".config" / "glab-cli" / "config.yml"))
+    unique: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for tool, path in files:
+        if str(path) not in seen:
+            seen.add(str(path))
+            unique.append((tool, path))
+    return unique
+
+
+def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[str]) -> None:
+    accounts: list[CliAccount] = []
+    gh = ctx.which("gh")
+    if gh:
+        result = ctx.run([gh, "auth", "status", "--json", "hosts"], timeout=20)
+        parsed = parse_gh_json(result.out) if result.code in (0, 1) else None
+        if parsed is None:
+            result = ctx.run([gh, "auth", "status"], timeout=20)
+            parsed = parse_auth_status_text("gh", result.out + "\n" + result.err)
+        accounts.extend(parsed)
+    glab = ctx.which("glab")
+    if glab:
+        result = ctx.run([glab, "auth", "status"], timeout=20)
+        accounts.extend(parse_auth_status_text("glab", result.out + "\n" + result.err))
+    for account in accounts:
+        out.item("cli-account", f"{account.tool} · {account.host} · {account.account}",
+                 f"{account.tool}|{account.host}|{account.account}",
+                 {"tool": account.tool, "host": account.host, "account": account.account,
+                  "active": account.active, "storage": account.storage})
+
+    by_host: dict[str, list[CliAccount]] = {}
+    for account in accounts:
+        if account.tool == "gh":
+            by_host.setdefault(account.host, []).append(account)
+    for host, rows in by_host.items():
+        logins = sorted({row.account for row in rows})
+        if len(logins) < 2:
+            continue
+        active = next((row.account for row in rows if row.active), "")
+        gh_only = any(host in context for context in gh_only_contexts)
+        out.finding(
+            "gh-active-account-only", "medium", "cli-account", f"gh · {host}",
+            params={"host": host, "accounts": ", ".join(logins), "active": active,
+                    "helper_chain_gh_only": "true" if gh_only else "false"},
+            links=_host_links(host),
+            steps=[f"gh auth switch --hostname {host} --user {login}" for login in logins if login != active],
+        )
+
+    for tool, path in _cli_config_files(ctx):
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        hosts = yaml_token_hosts(text)
+        del text
+        shown = _tilde(path, ctx.home)
+        out.item("plaintext-file", shown, f"{tool}-config|{path}",
+                 {"path": shown, "tool": tool, "mode": _mode_text(info.st_mode),
+                  "token_present": bool(hosts)})
+        for host in sorted(hosts):
+            step = (f"glab auth login --hostname {host} --use-keyring" if tool == "glab"
+                    else f"gh auth login --hostname {host}")
+            out.finding(
+                "cli-token-plaintext", "medium", "cli-account", f"{shown} · {host}",
+                params={"tool": tool, "host": host, "path": shown, "mode": _mode_text(info.st_mode)},
+                links=_host_links(host),
+                steps=[step],
+            )
+
+
+# ── 3. SSH ──────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class SshHost:
+    patterns: list[str]
+    identity_files: list[str] = field(default_factory=list)
+    user: str = ""
+    identities_only: str = ""
+    use_keychain: str = ""
+
+
+def _expand_identity(value: str, home: Path) -> str:
+    text = value.strip().strip('"')
+    text = text.replace("%d", str(home))
+    if text.startswith("~"):
+        text = str(home) + text[1:]
+    path = Path(text)
+    if not path.is_absolute():
+        path = home / ".ssh" / path
+    return os.path.normpath(str(path))
+
+
+def parse_ssh_config(text: str, home: Path, *, base: Path | None = None, depth: int = 0) -> list[SshHost]:
+    blocks: list[SshHost] = [SshHost(["*"])]
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.match(r"^(\S+?)\s*(?:=\s*|\s+)(.*)$", line)
+        if not match:
+            continue
+        key, value = match.group(1).lower(), match.group(2).strip()
+        if key == "host":
+            blocks.append(SshHost([p for p in value.split() if p]))
+        elif key == "match":
+            blocks.append(SshHost(["match:" + value]))
+        elif key == "include" and depth < 2:
+            ssh_dir = base or home / ".ssh"
+            for pattern in value.split():
+                pattern = pattern.strip('"')
+                if pattern.startswith("~"):
+                    pattern = str(home) + pattern[1:]
+                target = Path(pattern) if Path(pattern).is_absolute() else ssh_dir / pattern
+                for match_path in sorted(target.parent.glob(target.name)):
+                    try:
+                        included = match_path.read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        continue
+                    blocks.extend(parse_ssh_config(included, home, base=ssh_dir, depth=depth + 1)[1:])
+        elif key == "identityfile":
+            blocks[-1].identity_files.append(_expand_identity(value, home))
+        elif key == "user":
+            blocks[-1].user = value
+        elif key == "identitiesonly":
+            blocks[-1].identities_only = value.lower()
+        elif key == "usekeychain":
+            blocks[-1].use_keychain = value.lower()
+    return blocks
+
+
+def _read_key_header(path: Path) -> str | None:
+    """The private-key format from the first line only; nothing past the first
+    newline is kept (and at most 64 bytes are read)."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        head = b""
+        while len(head) < 64:
+            chunk = os.read(fd, 1)
+            if not chunk or chunk == b"\n":
+                break
+            head += chunk
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    line = head.decode("ascii", "replace").strip()
+    for prefix, kind in _KEY_HEADERS:
+        if line.startswith(prefix):
+            return kind
+    return None
+
+
+def _pub_algorithm(path: Path) -> str:
+    pub = Path(str(path) + ".pub")
+    try:
+        with pub.open("r", encoding="utf-8", errors="replace") as handle:
+            first = handle.readline(256).split()
+    except OSError:
+        return ""
+    return first[0] if first else ""
+
+
+def passphrase_state(ctx: ScanContext, keygen: str | None, path: Path) -> bool | None:
+    """True = has a passphrase, False = none, None = could not tell.
+
+    ``ssh-keygen -y -P "" -f key``: success means the empty passphrase opens
+    it. Its stdout (the public key) is discarded, stdin is closed, and the
+    environment has no askpass or display, so it cannot prompt.
+    """
+    if not keygen:
+        return None
+    result = ctx.run([keygen, "-y", "-P", "", "-f", str(path)], timeout=10, capture=False)
+    if result.code == 0:
+        return False
+    if result.code in (CODE_TIMEOUT, CODE_SPAWN_FAILED):
+        return None
+    return True
+
+
+def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
+    ssh_dir = ctx.home / ".ssh"
+    config_path = ssh_dir / "config"
+    blocks: list[SshHost] = []
+    try:
+        blocks = parse_ssh_config(config_path.read_text(encoding="utf-8", errors="replace"), ctx.home)
+    except OSError:
+        blocks = []
+    referenced: dict[str, list[str]] = {}
+    for block in blocks:
+        for identity in block.identity_files:
+            referenced.setdefault(identity, []).extend(block.patterns)
+    try:
+        entries = sorted(ssh_dir.iterdir())
+    except OSError:
+        return
+    keygen = ctx.which("ssh-keygen")
+    for path in entries:
+        name = path.name
+        if name in _SSH_NOT_KEYS or name.endswith(".pub") or name.startswith("known_hosts"):
+            continue
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        header = _read_key_header(path)
+        if header is None:
+            continue
+        shown = _tilde(path, ctx.home)
+        norm = os.path.normpath(str(path))
+        hosts = [h for h in referenced.get(norm, []) if not h.startswith("match:")]
+        has_passphrase = passphrase_state(ctx, keygen, path)
+        detail: dict[str, Any] = {
+            "path": shown, "format": header, "algorithm": _pub_algorithm(path),
+            "mode": _mode_text(info.st_mode), "hosts": ", ".join(hosts),
+            "default_name": name in _DEFAULT_IDENTITIES,
+            "passphrase_checked": has_passphrase is not None,
+        }
+        if has_passphrase is not None:
+            detail["has_passphrase"] = has_passphrase
+        out.item("ssh-key", name, f"ssh|{norm}", detail)
+        command_path = osplat.paths.quote_arg(str(path))
+        if ctx.enforces_modes and stat.S_IMODE(info.st_mode) & 0o077:
+            out.finding("ssh-key-mode", "high", "ssh-key", shown,
+                        params={"path": shown, "mode": _mode_text(info.st_mode)},
+                        steps=[f"chmod 600 {command_path}"])
+        if has_passphrase is False:
+            forge = sorted({h.lower() for h in hosts if h.lower() in _FORGE_HOSTS})
+            if forge:
+                for host in forge:
+                    out.finding("ssh-no-passphrase-default-host", "high", "ssh-key",
+                                f"{shown} · Host {host}",
+                                params={"path": shown, "host": host},
+                                links=_host_links(host, ssh=True),
+                                steps=[f"ssh-keygen -p -f {command_path}"])
+            else:
+                out.finding("ssh-no-passphrase", "medium", "ssh-key", shown,
+                            params={"path": shown, "hosts": ", ".join(hosts)},
+                            steps=[f"ssh-keygen -p -f {command_path}"])
+        if not hosts and name not in _DEFAULT_IDENTITIES and norm not in referenced:
+            out.finding("ssh-key-unreferenced", "low", "ssh-key", shown, params={"path": shown})
+
+
+# ── 4. Keyring metadata ─────────────────────────────────────────────────────
+
+
+@dataclass
+class KeyringReport:
+    available: bool
+    backend: str | None
+    reason: str = ""
+    items: list[dict[str, str]] = field(default_factory=list)
+
+
+_KC_ATTR_RE = re.compile(r'^\s+"(\w{4})"<\w+>=(.*)$')
+
+
+def _kc_value(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("<NULL>"):
+        return ""
+    quoted = re.search(r'"((?:[^"\\]|\\.)*)"', raw)
+    if quoted is None:
+        return ""
+    return quoted.group(1).replace("\\000", "")
+
+
+def parse_dump_keychain(text: str) -> list[dict[str, str]]:
+    """Metadata of each item: class, svce, srvr, acct, ptcl, mdat — nothing else."""
+    items: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in text.splitlines():
+        if line.startswith("class:"):
+            value = line.split(":", 1)[1].strip().strip('"')
+            current = {"class": value}
+            items.append(current)
+            continue
+        if current is None:
+            continue
+        match = _KC_ATTR_RE.match(line)
+        if match and match.group(1) in {"svce", "srvr", "acct", "ptcl", "mdat"}:
+            current[match.group(1)] = _kc_value(match.group(2))
+    return items
+
+
+def _kc_modified(text: str) -> str:
+    match = re.match(r"^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z", text)
+    if not match:
+        return ""
+    y, mo, d, h, mi, s = match.groups()
+    return f"{y}-{mo}-{d}T{h}:{mi}:{s}Z"
+
+
+_GENERIC_PREFIXES = ("gh:", "glab", "git:", "navide", "sourcetree")
+
+
+def _keyring_darwin(ctx: ScanContext, git_hosts: set[str]) -> KeyringReport:
+    security = ctx.which("security")
+    if not security:
+        return KeyringReport(False, "macos-keychain", "security-tool-not-found")
+    result = ctx.run([security, "dump-keychain"], timeout=30)
+    if result.code != 0:
+        return KeyringReport(False, "macos-keychain", "dump-keychain-failed")
+    report = KeyringReport(True, "macos-keychain")
+    for item in parse_dump_keychain(result.out):
+        cls = item.get("class", "")
+        service = item.get("svce", "")
+        server = item.get("srvr", "").lower()
+        relevant = (cls == "inet" and server in git_hosts) or (
+            cls == "genp" and service.lower().startswith(_GENERIC_PREFIXES))
+        if relevant:
+            report.items.append({
+                "class": "internet-password" if cls == "inet" else "generic-password",
+                "service": service, "server": server, "account": item.get("acct", ""),
+                "protocol": item.get("ptcl", ""), "modified": _kc_modified(item.get("mdat", "")),
+            })
+    return report
+
+
+def parse_cmdkey(text: str) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("target:"):
+            current = {"target": stripped.split(":", 1)[1].strip()}
+            items.append(current)
+        elif current is not None and lowered.startswith("type:"):
+            current["type"] = stripped.split(":", 1)[1].strip()
+        elif current is not None and lowered.startswith("user:"):
+            current["user"] = stripped.split(":", 1)[1].strip()
+    return items
+
+
+def _keyring_windows(ctx: ScanContext, git_hosts: set[str]) -> KeyringReport:
+    cmdkey = ctx.which("cmdkey")
+    if not cmdkey:
+        return KeyringReport(False, "windows-credential-manager", "cmdkey-not-found")
+    result = ctx.run([cmdkey, "/list"], timeout=20)
+    if result.code != 0:
+        return KeyringReport(False, "windows-credential-manager", "cmdkey-failed")
+    report = KeyringReport(True, "windows-credential-manager")
+    for item in parse_cmdkey(result.out):
+        target = item.get("target", "")
+        lowered = target.lower()
+        if "git:" in lowered or "github" in lowered or "gitlab" in lowered or any(h in lowered for h in git_hosts):
+            report.items.append({
+                "class": "generic-credential", "service": re.sub(r"//[^/@\s]*@", "//", target),
+                "server": "", "account": item.get("user", ""), "protocol": item.get("type", ""), "modified": "",
+            })
+    return report
+
+
+_GVARIANT_PAIR_RE = re.compile(r"'((?:[^'\\]|\\.)*)':\s*'((?:[^'\\]|\\.)*)'")
+_SECRET_ATTR_KEYS = frozenset({"server", "user", "protocol", "service", "xdg:schema", "host", "account"})
+
+
+def _keyring_linux(ctx: ScanContext, git_hosts: set[str]) -> KeyringReport:
+    """Secret Service through D-Bus: SearchItems and item Attributes only —
+    never GetSecret(s). Without it the keyring is reported unavailable; no
+    plaintext store is read instead."""
+    gdbus = ctx.which("gdbus")
+    if not gdbus:
+        return KeyringReport(False, "secret-service", "gdbus-not-found")
+    base = [gdbus, "call", "--session", "--dest", "org.freedesktop.secrets"]
+    result = ctx.run([*base, "--object-path", "/org/freedesktop/secrets", "--method",
+                      "org.freedesktop.Secret.Service.SearchItems", "{}"], timeout=10)
+    if result.code != 0:
+        return KeyringReport(False, "secret-service", "secret-service-unavailable")
+    report = KeyringReport(True, "secret-service")
+    paths = re.findall(r"'(/org/freedesktop/secrets/collection/[^']+)'", result.out)[:200]
+    for item_path in paths:
+        attrs = ctx.run([*base, "--object-path", item_path, "--method",
+                         "org.freedesktop.DBus.Properties.Get", "org.freedesktop.Secret.Item",
+                         "Attributes"], timeout=5)
+        if attrs.code != 0:
+            continue
+        pairs = {k: v for k, v in _GVARIANT_PAIR_RE.findall(attrs.out) if k in _SECRET_ATTR_KEYS}
+        server = (pairs.get("server") or pairs.get("host") or "").lower()
+        schema = pairs.get("xdg:schema", "")
+        service = pairs.get("service", "")
+        if server in git_hosts or schema == "org.git.Password" or service.lower().startswith(_GENERIC_PREFIXES):
+            report.items.append({
+                "class": schema or "secret-item", "service": service, "server": server,
+                "account": pairs.get("user") or pairs.get("account", ""),
+                "protocol": pairs.get("protocol", ""), "modified": "",
+            })
+    return report
+
+
+#: Keyed by platform identity (osplat.platform_id), not a behaviour branch.
+_KEYRING_READERS: dict[str, Callable[[ScanContext, set[str]], KeyringReport]] = {
+    "darwin": _keyring_darwin,
+    "win32": _keyring_windows,
+    "linux": _keyring_linux,
+}
+
+
+def _scan_keyring(ctx: ScanContext, out: _Collector, git_hosts: set[str]) -> KeyringReport:
+    reader = _KEYRING_READERS.get(ctx.platform, _keyring_linux)
+    report = reader(ctx, git_hosts)
+    for item in report.items:
+        label = item.get("service") or item.get("server") or item.get("class", "")
+        out.item("keychain-item", label,
+                 "|".join(item.get(k, "") for k in ("class", "service", "server", "account", "protocol")),
+                 dict(item))
+    if not report.available:
+        out.finding("keyring-unavailable", "low", "keychain-item", f"keyring · {ctx.platform}",
+                    params={"reason": report.reason, "platform": ctx.platform})
+    return report
+
+
+# ── 5. Repos and remotes ────────────────────────────────────────────────────
+
+
+def _under(path: Path, roots: Sequence[Path]) -> bool:
+    for root in roots:
+        if path == root or root in path.parents:
+            return True
+    return False
+
+
+def find_repos(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPOS,
+               depth: int = WALK_DEPTH) -> list[Path]:
+    repos: list[Path] = []
+    budget = [MAX_WALK_DIRS]
+
+    def walk(directory: Path, level: int) -> None:
+        if len(repos) >= limit or budget[0] <= 0:
+            return
+        budget[0] -= 1
+        if _under(directory, system_dirs):
+            return
+        git_entry = directory / ".git"
+        if os.path.lexists(git_entry):
+            repos.append(directory)
+        if level >= depth:
+            return
+        try:
+            with os.scandir(directory) as entries:
+                children = sorted(
+                    (e for e in entries if e.is_dir(follow_symlinks=False)
+                     and e.name not in _SKIP_DIR_NAMES and not e.name.startswith(".")),
+                    key=lambda e: e.name,
+                )
+        except OSError:
+            return
+        for child in children:
+            walk(Path(child.path), level + 1)
+
+    walk(root, 0)
+    return repos
+
+
+@dataclass
+class RepoConfig:
+    remotes: list[tuple[str, RedactedUrl]]
+    helpers: list[HelperEntry]
+
+
+def parse_repo_config(out: str, repo_t: str, home: Path) -> RepoConfig:
+    remotes: list[tuple[str, RedactedUrl]] = []
+    helpers: list[HelperEntry] = []
+    for record in out.split("\0"):
+        if not record:
+            continue
+        key, _, value = record.partition("\n")
+        lower = key.lower()
+        if lower.startswith("remote.") and lower.endswith(".url"):
+            remotes.append((key[len("remote."):-len(".url")], redact_url(value)))
+            del value
+        elif lower.startswith("credential.") and lower.endswith(".helper"):
+            middle = key[len("credential."):-len(".helper")]
+            context = redact_url(middle).url or "*" if middle else "*"
+            helpers.append(HelperEntry("local", repo_t, context, helper_name(value)))
+    return RepoConfig(remotes, helpers)
+
+
+def _read_repo(ctx: ScanContext, git: str, repo: Path) -> RepoConfig:
+    result = ctx.run([git, "-C", str(repo), "config", "--local", "-z", "--get-regexp",
+                      r"^(remote\..*\.url|credential\..*)$"], timeout=10)
+    if result.code != 0:
+        return RepoConfig([], [])
+    return parse_repo_config(result.out, _tilde(repo, ctx.home), ctx.home)
+
+
+def _clean_url(r: RedactedUrl) -> str:
+    if r.scheme in {"http", "https"}:
+        user = "" if r.user.lower() in _PSEUDO_USERS else r.user
+        netloc = (f"{user}@" if user else "") + r.host
+        return urlunsplit((r.scheme, netloc, r.path, "", ""))
+    return r.url
+
+
+# ── 6. Environment and shell rc ─────────────────────────────────────────────
+
+
+def env_name_matches(name: str) -> bool:
+    upper = name.upper()
+    if upper.startswith(_ENV_OWN_PREFIXES):
+        return False
+    return upper in _ENV_ALLOWLIST or upper.endswith(_ENV_SUFFIXES)
+
+
+def _literal_value(value: str) -> bool:
+    text = value.strip().split(" #")[0].strip().rstrip(";").strip()
+    text = text.strip("'\"")
+    return bool(text) and not text.startswith(("$", "`", "("))
+
+
+def _scan_env(ctx: ScanContext, out: _Collector) -> None:
+    for name in sorted(ctx.env):
+        if env_name_matches(name) and ctx.env.get(name):
+            out.item("env-var", name, f"process|{name}", {"source": "process", "set": True})
+            out.finding("env-token-set", "low", "env-var", f"env · {name}", params={"name": name})
+    for rel in _SHELL_RC_FILES:
+        path = ctx.home / rel
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        shown = _tilde(path, ctx.home)
+        for number, line in enumerate(text.splitlines(), start=1):
+            match = _RC_EXPORT_RE.match(line)
+            if not match or not env_name_matches(match.group(1)):
+                continue
+            literal = _literal_value(match.group(2))
+            name = match.group(1)
+            if not literal:
+                continue
+            out.item("env-var", name, f"rc|{path}|{number}|{name}",
+                     {"source": "shell-rc", "file": shown, "line": number, "set": True})
+            out.finding("env-token-in-shell-rc", "medium", "env-var", f"{shown}:{number} · {name}",
+                        params={"name": name, "file": shown, "line": str(number)})
+        del text
+
+
+# ── 7. Plaintext credential files ───────────────────────────────────────────
+
+
+def _scan_plaintext_files(ctx: ScanContext, out: _Collector) -> None:
+    xdg = ctx.env.get("XDG_CONFIG_HOME")
+    candidates = [ctx.home / ".git-credentials",
+                  (Path(xdg) if xdg else ctx.home / ".config") / "git" / "credentials",
+                  ctx.home / ".netrc", ctx.home / "_netrc"]
+    seen: set[str] = set()
+    for path in candidates:
+        if str(path) in seen:
+            continue
+        seen.add(str(path))
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        shown = _tilde(path, ctx.home)
+        out.item("plaintext-file", shown, f"plain|{path}",
+                 {"path": shown, "mode": _mode_text(info.st_mode), "exists": True})
+        out.finding("plaintext-credential-file", "medium", "plaintext-file", shown,
+                    params={"path": shown, "mode": _mode_text(info.st_mode)})
+
+
+# ── The scan ────────────────────────────────────────────────────────────────
+
+
+def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = None) -> dict[str, Any]:
+    """One full read-only scan. Returns the result without reminder state."""
+    started = time.monotonic()
+    out = _Collector()
+    git = ctx.which("git")
+    global_entries: list[HelperEntry] = []
+    gh_only: set[str] = set()
+    if git:
+        global_entries, gh_only = _scan_global_helpers(ctx, git, out)
+
+    roots_out: list[dict[str, Any]] = []
+    repo_list: list[Path] = []
+    seen_repos: set[str] = set()
+    for root_path, source in ctx.roots:
+        root = Path(root_path)
+        found = find_repos(root, ctx.system_dirs, limit=MAX_REPOS) if root.is_dir() else []
+        roots_out.append({"path": _tilde(root, ctx.home), "source": source, "repo_count": len(found)})
+        for repo in found:
+            key = os.path.realpath(repo)
+            if key in seen_repos or len(repo_list) >= MAX_REPOS:
+                continue
+            seen_repos.add(key)
+            repo_list.append(repo)
+
+    configs: list[RepoConfig] = []
+    if git and repo_list:
+        if repo_executor is not None:
+            configs = list(repo_executor.map(lambda r: _read_repo(ctx, git, r), repo_list))
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, ctx.repo_workers),
+                                    thread_name_prefix="navide-credscan-git") as pool:
+                configs = list(pool.map(lambda r: _read_repo(ctx, git, r), repo_list))
+
+    git_hosts = set(_FORGE_HOSTS)
+    for repo, config in zip(repo_list, configs):
+        repo_t = _tilde(repo, ctx.home)
+        _local_helper_findings(str(repo), repo_t, config.helpers, global_entries, out)
+        for remote, redacted in config.remotes:
+            if redacted.host:
+                git_hosts.add(redacted.host)
+            if redacted.scheme not in {"http", "https"} or not redacted.has_userinfo:
+                continue
+            location = f"{repo_t} · {remote} · {redacted.url}"
+            out.item("remote", f"{repo_t} · {remote}", f"remote|{repo}|{remote}",
+                     {"repo": repo_t, "remote": remote, "host": redacted.host, "url": redacted.url,
+                      "token_present": redacted.token_present})
+            if redacted.token_present:
+                out.finding(
+                    "url-token", "high", "remote", location,
+                    params={"repo": repo_t, "remote": remote, "host": redacted.host,
+                            "url": redacted.url, "token": "present (redacted)"},
+                    links=_host_links(redacted.host),
+                    steps=[f"git -C {osplat.paths.quote_arg(str(repo))} remote set-url "
+                           f"{osplat.paths.quote_arg(remote)} {_clean_url(redacted)}"],
+                )
+
+    _scan_cli_accounts(ctx, out, gh_only)
+    _scan_ssh(ctx, out)
+    keyring = _scan_keyring(ctx, out, git_hosts)
+    _scan_env(ctx, out)
+    _scan_plaintext_files(ctx, out)
+
+    out.findings.sort(key=lambda f: (_SEVERITY_ORDER.get(f["severity"], 9), f["code"], f["location"]))
+    keyring_out: dict[str, Any] = {"available": keyring.available, "backend": keyring.backend}
+    if keyring.reason:
+        keyring_out["reason"] = keyring.reason
+    duration_ms = int((time.monotonic() - started) * 1000)
+    log.info("credentials scan: %d repos, %d items, %d findings in %d ms",
+             len(repo_list), len(out.items), len(out.findings), duration_ms)
+    return {
+        "platform": ctx.platform,
+        "duration_ms": duration_ms,
+        "keyring": keyring_out,
+        "roots": roots_out,
+        "items": out.items,
+        "findings": out.findings,
+    }
+
+
+# ── Reminders ───────────────────────────────────────────────────────────────
+
+
+def reminder_for(finding_id: str, reminders: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    entry = reminders.get(finding_id)
+    if not isinstance(entry, dict):
+        return {"state": "active"}
+    state = entry.get("state")
+    if state == "dismissed":
+        return {"state": "dismissed"}
+    if state == "snoozed":
+        until = _parse_iso(entry.get("until"))
+        if until is not None and until > now:
+            return {"state": "snoozed", "until": _now_iso(until)}
+    return {"state": "active"}
+
+
+def apply_reminders(raw: Mapping[str, Any], reminders: Mapping[str, Any], now: datetime) -> list[dict[str, Any]]:
+    return [{**f, "reminder": reminder_for(f["id"], reminders, now)} for f in raw["findings"]]
+
+
+def summarize(findings: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    summary = {"high": 0, "medium": 0, "low": 0, "active_reminders": 0}
+    for finding in findings:
+        if finding["severity"] in summary:
+            summary[finding["severity"]] += 1
+        if finding["reminder"]["state"] == "active":
+            summary["active_reminders"] += 1
+    return summary
+
+
+class RequestError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def validate_roots(raw: Any, system_dirs: Sequence[Path]) -> list[str]:
+    if not isinstance(raw, list):
+        raise RequestError("invalid-roots", "roots must be a list of absolute paths")
+    if len(raw) > MAX_ROOTS:
+        raise RequestError("too-many-roots", f"at most {MAX_ROOTS} roots")
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise RequestError("invalid-root", "each root must be a non-empty string")
+        text = item.strip()
+        if not os.path.isabs(text):
+            raise RequestError("invalid-root", f"not an absolute path: {text}")
+        path = Path(os.path.normpath(text))
+        if path.parent == path:
+            raise RequestError("invalid-root", f"a filesystem root cannot be scanned: {text}")
+        if not path.is_dir():
+            raise RequestError("invalid-root", f"not an existing folder: {text}")
+        if _under(path, system_dirs) or _under(Path(os.path.realpath(path)), system_dirs):
+            raise RequestError("forbidden-root", f"a system or credential folder cannot be a scan root: {text}")
+        if str(path) not in out:
+            out.append(str(path))
+    return out
+
+
+# ── Service ─────────────────────────────────────────────────────────────────
+
+#: Dedicated threads: the scan never waits on (or starves) the shared pool.
+_SCAN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="navide-credscan")
+_KV_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="navide-credscan-kv")
+_REPO_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="navide-credscan-git")
+
+
+def _default_db() -> Any:
+    from . import app
+
+    return app.database
+
+
+def _default_workspace_roots() -> list[str]:
+    from . import app
+
+    paths: list[str] = []
+    for entry in app.recent_workspaces_store.list():
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if isinstance(path, str) and path and entry.get("exists", True):
+            paths.append(path)
+    return paths
+
+
+class CredentialsService:
+    def __init__(
+        self,
+        *,
+        db_getter: Callable[[], Any] = _default_db,
+        workspace_roots: Callable[[], list[str]] = _default_workspace_roots,
+        context_factory: Callable[[list[tuple[str, str]]], ScanContext] = default_context,
+        system_dirs: Callable[[], list[Path]] = lambda: list(osplat.paths.system_dirs()),
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
+        self._db_getter = db_getter
+        self._workspace_roots = workspace_roots
+        self._context_factory = context_factory
+        self._system_dirs = system_dirs
+        self._clock = clock
+        self._cache: tuple[float, dict[str, Any]] | None = None
+        self._lock = asyncio.Lock()
+
+    # KV ------------------------------------------------------------------
+    def _kv_get(self, key: str, default: Any) -> Any:
+        value = self._db_getter().kv_get(key, default)
+        return value
+
+    def _kv_set(self, key: str, value: Any) -> None:
+        self._db_getter().kv_set(key, value, now=int(time.time()))
+
+    def user_roots(self) -> list[str]:
+        raw = self._kv_get(ROOTS_KV_KEY, [])
+        return [r for r in raw if isinstance(r, str)] if isinstance(raw, list) else []
+
+    def reminders(self) -> dict[str, Any]:
+        raw = self._kv_get(REMINDERS_KV_KEY, {})
+        return raw if isinstance(raw, dict) else {}
+
+    # Roots -----------------------------------------------------------------
+    def roots_set(self, raw: Any) -> list[str]:
+        roots = validate_roots(raw, self._system_dirs())
+        self._kv_set(ROOTS_KV_KEY, roots)
+        self._cache = None
+        return roots
+
+    # Reminders -------------------------------------------------------------
+    def reminder_set(self, finding_id: Any, state: Any, days: Any = None) -> dict[str, Any]:
+        if not isinstance(finding_id, str) or not re.fullmatch(r"[0-9a-f]{16}", finding_id):
+            raise RequestError("invalid-id", "id must be a finding id")
+        if state not in {"active", "snoozed", "dismissed"}:
+            raise RequestError("invalid-state", "state must be active, snoozed or dismissed")
+        now = self._clock()
+        reminders = dict(self.reminders())
+        # Expired snoozes are dropped whenever the document is written.
+        for key, entry in list(reminders.items()):
+            if isinstance(entry, dict) and entry.get("state") == "snoozed":
+                until = _parse_iso(entry.get("until"))
+                if until is None or until <= now:
+                    reminders.pop(key)
+        if state == "active":
+            reminders.pop(finding_id, None)
+            result: dict[str, Any] = {"state": "active"}
+        elif state == "dismissed":
+            reminders[finding_id] = {"state": "dismissed"}
+            result = {"state": "dismissed"}
+        else:
+            if days is None:
+                days = SNOOZE_DEFAULT_DAYS
+            if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= SNOOZE_MAX_DAYS:
+                raise RequestError("invalid-days", f"days must be an integer from 1 to {SNOOZE_MAX_DAYS}")
+            until = _now_iso(now + timedelta(days=days))
+            reminders[finding_id] = {"state": "snoozed", "until": until}
+            result = {"state": "snoozed", "until": until}
+        if len(reminders) > MAX_REMINDERS:
+            for key in list(reminders)[: len(reminders) - MAX_REMINDERS]:
+                reminders.pop(key)
+        self._kv_set(REMINDERS_KV_KEY, reminders)
+        return result
+
+    # Scan ------------------------------------------------------------------
+    def _roots(self) -> list[tuple[str, str]]:
+        roots: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        try:
+            workspace = self._workspace_roots()
+        except Exception:  # noqa: BLE001 - an unreadable recent list scans nothing from it
+            log.warning("credentials scan: workspace list unavailable")
+            workspace = []
+        for path, source in [*((p, "workspace") for p in workspace), *((p, "user") for p in self.user_roots())]:
+            norm = os.path.normpath(path)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            roots.append((norm, source))
+        return roots
+
+    def _scan_blocking(self) -> dict[str, Any]:
+        ctx = self._context_factory(self._roots())
+        return run_scan(ctx, repo_executor=_REPO_EXECUTOR)
+
+    def _compose(self, raw: dict[str, Any], scanned_at: datetime) -> dict[str, Any]:
+        now = self._clock()
+        findings = apply_reminders(raw, self.reminders(), now)
+        return {
+            "ok": True,
+            "scanned_at": _now_iso(scanned_at),
+            "duration_ms": raw["duration_ms"],
+            "platform": raw["platform"],
+            "keyring": raw["keyring"],
+            "roots": raw["roots"],
+            "summary": summarize(findings),
+            "items": raw["items"],
+            "findings": findings,
+        }
+
+    async def scan(self, *, force: bool = False) -> dict[str, Any]:
+        async with self._lock:
+            cached = self._cache
+            if not force and cached is not None and time.monotonic() - cached[0] < CACHE_SECONDS:
+                raw = cached[1]
+            else:
+                loop = asyncio.get_running_loop()
+                raw = await loop.run_in_executor(_SCAN_EXECUTOR, self._scan_blocking)
+                raw = {**raw, "_scanned_at": self._clock()}
+                self._cache = (time.monotonic(), raw)
+        return await asyncio.get_running_loop().run_in_executor(
+            _KV_EXECUTOR, self._compose, raw, raw["_scanned_at"])
+
+
+_service: CredentialsService | None = None
+
+
+def service() -> CredentialsService:
+    global _service
+    if _service is None:
+        _service = CredentialsService()
+    return _service
+
+
+def set_service(svc: CredentialsService | None) -> None:
+    """Tests swap in a service built on fakes."""
+    global _service
+    _service = svc
+
+
+# ── WS handlers (registered at the end of ws_handlers.py) ───────────────────
+
+
+def _error(code: str, message: str) -> dict[str, Any]:
+    return {"ok": False, "error": message, "error_code": code}
+
+
+async def _answer(session: "Session", msg_id: str, msg_type: str, work: Callable[[], Any]) -> None:
+    try:
+        result = await work()
+    except RequestError as err:
+        result = _error(err.code, err.message)
+    except Exception as err:  # noqa: BLE001 - answer instead of dropping; never log details
+        log.warning("%s failed (%s)", msg_type, type(err).__name__)
+        result = _error("internal-error", f"{msg_type} failed")
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+async def ws_scan(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    force = isinstance(payload, dict) and payload.get("force") is True
+
+    async def work() -> dict[str, Any]:
+        return await service().scan(force=force)
+
+    await _answer(session, msg_id, msg_type, work)
+
+
+async def ws_roots_get(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    async def work() -> dict[str, Any]:
+        roots = await asyncio.get_running_loop().run_in_executor(_KV_EXECUTOR, service().user_roots)
+        return {"ok": True, "roots": roots}
+
+    await _answer(session, msg_id, msg_type, work)
+
+
+async def ws_roots_set(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    raw = payload.get("roots") if isinstance(payload, dict) else None
+
+    async def work() -> dict[str, Any]:
+        roots = await asyncio.get_running_loop().run_in_executor(_KV_EXECUTOR, service().roots_set, raw)
+        return {"ok": True, "roots": roots}
+
+    await _answer(session, msg_id, msg_type, work)
+
+
+async def ws_reminder_set(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    body = payload if isinstance(payload, dict) else {}
+
+    async def work() -> dict[str, Any]:
+        reminder = await asyncio.get_running_loop().run_in_executor(
+            _KV_EXECUTOR, service().reminder_set, body.get("id"), body.get("state"), body.get("days"))
+        return {"ok": True, "reminder": reminder}
+
+    await _answer(session, msg_id, msg_type, work)
+
+
+MESSAGE_HANDLERS: dict[str, Callable[..., Any]] = {
+    "credentials.scan": ws_scan,
+    "credentials.roots.get": ws_roots_get,
+    "credentials.roots.set": ws_roots_set,
+    "credentials.reminder.set": ws_reminder_set,
+}
