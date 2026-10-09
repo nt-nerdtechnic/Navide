@@ -3116,8 +3116,9 @@ function standaloneSpawnGateContext() {
     parentDepth: 0,
     parentChildCount: 0,
     // Agent panes only: the advisory is about CLI agents' cost (tokens, memory,
-    // quota), which a plain shell does not carry.
-    cliPaneCount: panes.value.filter((p) => p.agentKey !== 'terminal').length,
+    // quota), which a plain shell does not carry — nor a cold-restore
+    // placeholder, which has no process behind it.
+    cliPaneCount: panes.value.filter((p) => p.realized && p.agentKey !== 'terminal').length,
     modelCapabilityFor: (agentKey: string) => agentSpecs.find((s) => s.agentKey === agentKey),
     launchCommandOverridden: storedLaunchCommandApplies,
   }
@@ -3445,8 +3446,9 @@ function spawnGateContextFor(parentPaneId: string) {
     ),
     parentChildCount: panes.value.filter((p) => p.spawnedBy === parentPaneId).length,
     // Agent panes only: the advisory is about CLI agents' cost (tokens, memory,
-    // quota), which a plain shell does not carry.
-    cliPaneCount: panes.value.filter((p) => p.agentKey !== 'terminal').length,
+    // quota), which a plain shell does not carry — nor a cold-restore
+    // placeholder, which has no process behind it.
+    cliPaneCount: panes.value.filter((p) => p.realized && p.agentKey !== 'terminal').length,
     modelCapabilityFor: (agentKey: string) => agentSpecs.find((s) => s.agentKey === agentKey),
     launchCommandOverridden: storedLaunchCommandApplies,
   }
