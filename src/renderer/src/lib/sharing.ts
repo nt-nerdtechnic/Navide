@@ -74,6 +74,8 @@ export interface ImportPreviewRow {
   id: string
   action: ImportAction
   reason: string
+  /** The whole record, as a sync approval shows it (MCP servers and skills). */
+  summary?: Record<string, unknown>
 }
 
 function readAction(value: unknown): ImportAction {
@@ -89,6 +91,7 @@ export function readPreviewRows(payload: unknown): ImportPreviewRow[] {
       id: str(row.id),
       action: readAction(row.action),
       reason: str(row.reason),
+      ...(isRecord(row.summary) ? { summary: row.summary } : {}),
     }))
     .filter((row) => row.scope !== '' && row.id !== '')
 }

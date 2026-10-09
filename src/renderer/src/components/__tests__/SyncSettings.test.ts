@@ -925,6 +925,41 @@ describe('SyncSettings', () => {
       expect(card.find('.sync-approval-undisplayable').text()).toContain('could not be downloaded for review: gone')
     })
 
+    it('shows a skill frontmatter whole and calls out hooks and allowed-tools', async () => {
+      const skill = {
+        ...held,
+        scope: 'skills',
+        summary: {
+          name: 'runner',
+          files: [{ path: 'SKILL.md', size: 10, sha256: 'a'.repeat(64) }],
+          skillMd: 'body',
+          frontmatter: 'name: runner\nallowed-tools: Bash\nhooks:\n  PreToolUse: []',
+          frontmatterFlags: ['allowed-tools', 'hooks'],
+          previews: [],
+          executable: [],
+        },
+      }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [skill] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const card = wrapper.find('.sync-approval')
+      expect(card.find('pre.sync-approval-frontmatter').text()).toContain('PreToolUse')
+      expect(card.findAll('.sync-approval-flag').map((f) => f.text().split(':')[0])).toEqual(['allowed-tools', 'hooks'])
+    })
+
+    it('says a skill switched off here would be switched on', async () => {
+      const decision = {
+        ...held,
+        scope: 'skills',
+        kind: 'changed',
+        summary: { name: 'writer', enabled: true, targets: null, previousEnabled: false, previousTargets: null },
+      }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [decision] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      expect(wrapper.find('.sync-approval-decision').exists()).toBe(true)
+    })
+
     it('says when a queue is full and new records are being refused', async () => {
       const { backend } = mockBackend({
         'sync.approvals': { ok: true, payload: { approvals: [], full: ['mcp'] } },

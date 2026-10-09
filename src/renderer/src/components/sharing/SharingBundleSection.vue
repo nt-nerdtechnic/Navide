@@ -17,6 +17,7 @@ import { useI18n } from 'vue-i18n'
 import { vTruncate } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../../composables/useBackend'
 import { formatBytes } from '../../lib/formatBytes'
+import SyncRecordSummary from '../SyncRecordSummary.vue'
 import {
   SHARE_SCOPES,
   bundleItemCount,
@@ -440,6 +441,9 @@ onMounted(load)
             <span v-if="needsCredentials(row)" class="sh-item-reason">
               {{ t('settings.sharing.bundle.needs-credentials-hint', { fields: missingFields(row) }) }}
             </span>
+            <!-- What this row would write, whole: the same view a sync
+                 approval gives, so ticking it is a decision about it. -->
+            <SyncRecordSummary v-if="row.summary" :summary="row.summary" />
           </label>
         </li>
       </ul>
