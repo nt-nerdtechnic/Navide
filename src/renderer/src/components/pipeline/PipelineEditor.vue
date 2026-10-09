@@ -351,6 +351,8 @@ const entering = ref(false)
 const MORPH_MS = 620
 let canvasReady: (() => void) | null = null
 function onCanvasReady(): void { canvasReady?.(); canvasReady = null }
+let unmounted = false
+onBeforeUnmount(() => { unmounted = true })
 
 function rects(): Map<string, DOMRect> {
   const out = new Map<string, DOMRect>()
@@ -373,6 +375,8 @@ async function switchView(next: 'swimlane' | 'canvas'): Promise<void> {
   entering.value = true
   await nextTick()
   await ready
+  // The canvas may take its 600ms fallback; the editor can be gone by then.
+  if (unmounted) return
   await new Promise((r) => requestAnimationFrame(() => r(null)))
   const els = Array.from(root.value?.querySelectorAll<HTMLElement>('.pe-view [data-node-id]') ?? [])
     .filter((el) => before.has(el.dataset.nodeId!))

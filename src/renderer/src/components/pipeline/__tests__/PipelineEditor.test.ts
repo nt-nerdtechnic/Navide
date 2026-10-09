@@ -2,7 +2,7 @@
 // Pipeline editor UI: the gestures each view offers must become the right
 // graph ops, the inspector must generate its form from Role properties, and
 // run control must reach the host's UI commands.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { effectScope, type EffectScope } from 'vue'
 import { i18n, useNotify } from '@navide/plugin-ui/foundation'
@@ -180,6 +180,18 @@ describe('PipelineEditor', () => {
     await flushPromises()
     expect(w.find('.canvas-stub').exists()).toBe(true)
     expect(localStorage.getItem('pipeline-editor-view')).toBe('canvas')
+  })
+
+  it('stops the view morph when it is unmounted mid-switch', async () => {
+    const { w } = await mountEditor()
+    await w.find('.lane-card[data-node-id="review"] .pnc-badge').trigger('click')
+    w.unmount()
+    wrapper = undefined
+    const raf = vi.spyOn(window, 'requestAnimationFrame')
+    // The stubbed canvas never reports ready, so the switch waits out its 600ms fallback.
+    await new Promise((r) => setTimeout(r, 700))
+    expect(raf).not.toHaveBeenCalled()
+    raf.mockRestore()
   })
 
   it('changes a reject loop\'s retry limit as one undoable command', async () => {
