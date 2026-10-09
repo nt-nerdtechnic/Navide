@@ -6306,7 +6306,8 @@
         "results-title": "What was written",
         "applied": "{count} of {total} items were written.",
         "needs-credentials": "Needs credentials",
-        "needs-credentials-hint": "Its secret values were left out of the bundle and have to be filled in here: {fields}"
+        "needs-credentials-hint": "Its secret values were left out of the bundle: {fields}. They keep this machine's values only if the server runs the same command or URL as this machine's; otherwise they stay empty and must be filled in.",
+        "replaces-here": "Replaces here: {what}"
       },
       "cloud": {
         "title": "What is in the cloud",

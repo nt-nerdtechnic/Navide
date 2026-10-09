@@ -1436,6 +1436,17 @@ def _valid_installation_receipt(receipt: Any) -> bool:
     return False
 
 
+def _alias_key(path: str) -> str:
+    """One key for every spelling a case-insensitive, normalising volume
+    opens as the same file: the canonical caseless match
+    NFD(casefold(NFD(p))) — a full casefold decomposes, so composing first
+    and folding after misses pairs APFS treats as one (U+0390 and its
+    decomposed uppercase) — with simple uppercase folded in as well, so
+    pairs such as dotless ı and I, one file on NTFS, share it too."""
+    folded = unicodedata.normalize("NFD", path).casefold()
+    return unicodedata.normalize("NFD", folded.upper().casefold())
+
+
 def _validate_bundle_paths(
     paths: Any, *, directories: Any = (), allow_hidden: bool = False, portable_names: bool = True
 ) -> None:
@@ -1460,7 +1471,7 @@ def _validate_bundle_paths(
             if refused:
                 raise SkillValidationError(f"nonportable skill path: {relative}")
             prefix = "/".join(parts[:index + 1])
-            key = unicodedata.normalize("NFC", prefix).casefold()
+            key = _alias_key(prefix)
             if key in spellings and spellings[key] != prefix:
                 raise SkillValidationError(f"skill paths alias on some filesystems: {relative}")
             spellings[key] = prefix

@@ -384,6 +384,9 @@ def preview_import(raw: Any) -> list[dict[str, Any]]:
         for item_id, payload in parsed[scope].items():
             action, reason = _plan_item(scope, item_id, payload, local)
             row = {"scope": scope, "id": item_id, "action": action, "reason": reason}
+            if scope == "mcp" and action == OVERWRITE and isinstance(local.get(item_id), dict):
+                # What it would replace, beside what comes in.
+                row["local"] = {f: local[item_id][f] for f in _ENDPOINT_FIELDS if local[item_id].get(f)}
             summary, _problem = _import_summary(scope, item_id, payload)
             if summary is not None and action != SKIP:
                 # The whole record, as the sync approval card shows one: what
@@ -445,8 +448,9 @@ def _plan_item(
         reason = ""
         if blanks:
             reason = (
-                f"{len(blanks)} value(s) were left out of the bundle and "
-                f"must be filled in here: {', '.join(blanks)}"
+                f"{len(blanks)} value(s) were left out of the bundle ({', '.join(blanks)}): "
+                "they keep this machine's values only if the server runs the same command "
+                "or URL as this machine's; otherwise they stay empty"
             )
         return (OVERWRITE if item_id in local else CREATE), reason
     if scope == "skills":
@@ -622,6 +626,17 @@ def _apply_mcp(items: dict[str, Any]) -> list[dict[str, Any]]:
     return run.verify(landed)
 
 
+#: What an MCP record runs or calls: a secret kept here may only be filled
+#: back into a record that names the same ones.
+_ENDPOINT_FIELDS = ("url", "command", "args")
+
+
+def _same_endpoint(incoming: Any, existing: Any) -> bool:
+    return isinstance(incoming, dict) and isinstance(existing, dict) and all(
+        incoming.get(f) == existing.get(f) for f in _ENDPOINT_FIELDS
+    )
+
+
 def restore_secrets(incoming: dict[str, Any], existing: Any) -> dict[str, Any]:
     """Fill the blanks a bundle left with what this machine already had.
 
@@ -631,6 +646,10 @@ def restore_secrets(incoming: dict[str, Any], existing: Any) -> dict[str, Any]:
     reason.
     """
     record = copy.deepcopy(incoming)
+    if not _same_endpoint(incoming, existing):
+        # Another URL or command under the same name: this machine's token
+        # would go wherever the bundle points. The blanks stay blank.
+        return record
     for field_name in SECRET_FIELDS:
         values = record.get(field_name)
         if not isinstance(values, dict):

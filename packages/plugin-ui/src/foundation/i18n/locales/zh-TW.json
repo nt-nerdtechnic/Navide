@@ -6306,7 +6306,8 @@
         "results-title": "實際寫入的結果",
         "applied": "{total} 項中寫入了 {count} 項。",
         "needs-credentials": "需要補上憑證",
-        "needs-credentials-hint": "它的秘密值沒有放進設定包，必須在這台機器補上：{fields}"
+        "needs-credentials-hint": "它的秘密值沒有放進設定包：{fields}。只有在 server 執行的指令或 URL 與這台相同時，才會沿用這台的值；否則會留空，需要自行填入。",
+        "replaces-here": "會取代這台的：{what}"
       },
       "cloud": {
         "title": "雲端盤點",

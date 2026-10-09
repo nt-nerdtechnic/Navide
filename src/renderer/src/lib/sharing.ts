@@ -76,6 +76,8 @@ export interface ImportPreviewRow {
   reason: string
   /** The whole record, as a sync approval shows it (MCP servers and skills). */
   summary?: Record<string, unknown>
+  /** For an MCP overwrite: the url / command / args it would replace here. */
+  local?: Record<string, unknown>
 }
 
 function readAction(value: unknown): ImportAction {
@@ -92,6 +94,7 @@ export function readPreviewRows(payload: unknown): ImportPreviewRow[] {
       action: readAction(row.action),
       reason: str(row.reason),
       ...(isRecord(row.summary) ? { summary: row.summary } : {}),
+      ...(isRecord(row.local) ? { local: row.local } : {}),
     }))
     .filter((row) => row.scope !== '' && row.id !== '')
 }
