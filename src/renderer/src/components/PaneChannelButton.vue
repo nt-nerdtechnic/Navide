@@ -23,7 +23,8 @@ import ChannelLinkGuide from './ChannelLinkGuide.vue'
  * bot (one group per platform unless it runs several bots); picking one opens a confirmation step that asks what the chat
  * receives, and only Connect binds (or Settings → Channels opens when no
  * platform is configured). Bound: a chip naming the platform and chat, with ✕
- * to unbind.
+ * to unbind. The chip never names the pane: `binding.title` is the pane's own
+ * name (or its topic's), already on the header the chip sits in.
  */
 const props = defineProps<{
   paneId: string
@@ -272,6 +273,43 @@ async function bind(platform: ChannelPlatform, account: string, loc: ChannelLoca
   else error.value = res.error ?? t('channels.error.generic')
 }
 
+// The bound chat's title, from the chats the bot knows; '' until known.
+const chatTitle = ref('')
+let chatSeq = 0
+async function loadChatTitle(): Promise<void> {
+  const b = binding.value
+  const seq = ++chatSeq
+  if (!b || !store) {
+    chatTitle.value = ''
+    return
+  }
+  const res = await store.locations(b.platform, b.account || DEFAULT_ACCOUNT)
+  if (seq !== chatSeq) return
+  chatTitle.value = (res.ok && res.data?.locations?.find((l) => l.chat_id === b.chat_id)?.title) || ''
+}
+// A refresh (channels.changed: a chat renamed or first seen) may bring the title.
+watch(() => [binding.value, store?.platforms.value], () => void loadChatTitle(), { immediate: true })
+
+/** The bot a binding talks through: its given name, else the identity the platform reports. */
+function botName(platform: ChannelPlatform, account: string): string {
+  const a = store?.accountState(platform, account || DEFAULT_ACCOUNT)
+  return a?.name || a?.status.identity || ''
+}
+
+// Chat title, else the bot, else nothing after the platform.
+const chipLabel = computed(() => {
+  const b = binding.value
+  if (!b) return ''
+  const where = chatTitle.value || botName(b.platform, b.account)
+  return where ? `${platformName(b.platform)} · ${where}` : platformName(b.platform)
+})
+const chipTip = computed(() => {
+  const b = binding.value
+  if (!b) return ''
+  return [platformName(b.platform), botName(b.platform, b.account), chatTitle.value || b.chat_id,
+    t(`channels.pane.verbosity-${verbosity.value}`)].filter(Boolean).join(' · ')
+})
+
 const VERBOSITIES: ChannelVerbosity[] = ['replies', 'minimal', 'standard', 'full']
 const menuOpen = ref(false)
 const chipRef = ref<HTMLElement | null>(null)
@@ -359,7 +397,7 @@ function openSettings(): void {
 
 <template>
   <span v-if="store" class="pane-channel">
-    <span v-if="binding" ref="chipRef" class="pch-chip" data-testid="channel-chip" :title="`${platformName(binding.platform)} · ${binding.title || binding.chat_id} · ${t(`channels.pane.verbosity-${verbosity}`)}`">
+    <span v-if="binding" ref="chipRef" class="pch-chip" data-testid="channel-chip" :title="chipTip">
       <button
         type="button"
         class="pch-chip-main"
@@ -371,7 +409,7 @@ function openSettings(): void {
         @dblclick.stop
       >
         <svg class="pch-icon pch-chip-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z" /><path d="M5.4 6.2h5.2M5.4 8.2h3.2" /></svg>
-        <span class="pch-chip-label" v-truncate>{{ platformName(binding.platform) }} · {{ binding.title || binding.chat_id }}</span>
+        <span class="pch-chip-label" v-truncate data-testid="channel-chip-label">{{ chipLabel }}</span>
         <span class="pch-chip-level" data-testid="channel-chip-level">{{ t(`channels.pane.verbosity-${verbosity}`) }}</span>
       </button>
       <button

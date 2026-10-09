@@ -672,11 +672,50 @@ describe('PaneChannelButton', () => {
     })
   })
 
+  describe('chip label', () => {
+    // The pane's name is already on the pane header; the chip names where it talks to.
+    const label = (w: VueWrapper) => w.get('[data-testid="channel-chip-label"]').text()
+
+    it('names the bound chat, never the pane', async () => {
+      seed({ configured: true, bound: true })
+      const w = await render()
+      expect(label(w)).toBe('Telegram · Navide')
+      const tip = w.get('[data-testid="channel-chip"]').attributes('title')
+      expect(tip).toContain('Telegram')
+      expect(tip).toContain('@navide_bot')
+      expect(tip).toContain('Navide')
+      expect(tip).toContain('Chat replies only')
+      expect(tip).not.toContain('api-refactor')
+    })
+
+    it('falls back to the bot when the chat is not among the known chats', async () => {
+      seed({ configured: true, bound: true, locations: [] })
+      const w = await render()
+      expect(label(w)).toBe('Telegram · @navide_bot')
+    })
+
+    it('shows the platform alone when neither chat nor bot has a name', async () => {
+      seed({
+        configured: true,
+        bindings: [{ pane_id: 'p1', platform: 'discord', account: 'default', chat_id: '9', thread_id: '', title: 'api-refactor' }],
+        extra: [{
+          platform: 'discord', configured: true, enabled: true,
+          status: { lifecycle: 'ready', connected: true, identity: '' }, config: {},
+          capabilities: { threads: true, create_location: false, edit: true, typing: true, buttons: true, text_limit: 2000 },
+        }],
+        locations: [],
+      })
+      const w = await render()
+      expect(label(w)).toBe('Discord')
+      expect(w.get('[data-testid="channel-chip"]').text()).not.toContain('api-refactor')
+    })
+  })
+
   it('shows a chip for a bound pane and unbinds from it', async () => {
     seed({ configured: true, bound: true })
     const w = await render()
     expect(w.find('[data-testid="channel-connect"]').exists()).toBe(false)
-    expect(w.get('[data-testid="channel-chip"]').text()).toContain('Telegram · api-refactor')
+    expect(w.get('[data-testid="channel-chip"]').text()).toContain('Telegram · Navide')
     await w.get('[data-testid="channel-unbind"]').trigger('click')
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.unbind')?.payload).toEqual({ pane_id: 'p1', pane_name: 'api-refactor' })
