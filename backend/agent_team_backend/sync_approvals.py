@@ -110,10 +110,24 @@ def clean_leftover_temps(staging: Path | None = None) -> None:
     """Remove plaintext temporaries a crash left behind: review downloads in
     the hold area (fetch-*), and landing copies (review-*) here or in an
     older build's *staging* directory."""
+    from . import app
+
     root = _stash_dir() / "files"
     patterns = ("fetch-*", "review-*")
+    try:
+        data_dir = Path(app.app_data_dir()).resolve()
+    except OSError:
+        return
     for base in (root, staging):
-        if base is None or not base.is_dir():
+        if base is None or base.is_symlink() or not base.is_dir():
+            continue
+        # Never anywhere but under the data dir, whatever a link on the way
+        # points at.
+        try:
+            resolved = base.resolve()
+        except OSError:
+            continue
+        if data_dir not in resolved.parents:
             continue
         for pattern in patterns:
             for leftover in base.rglob(pattern):
@@ -588,7 +602,10 @@ def land_approved(adapter: Any) -> None:
         if record.get("status") != APPROVED or not _token_ok(adapter.scope, item_id, record):
             continue
         payload = held_payload(adapter.scope, item_id)
-        if payload is None or digest(payload) != record.get("digest"):
+        if payload is None:
+            # Fails closed, as in overlay/withheld: kept, never a delete.
+            continue
+        if digest(payload) != record.get("digest"):
             drop(adapter.scope, item_id)
             continue
         try:
