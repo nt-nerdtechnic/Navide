@@ -848,7 +848,6 @@ onBeforeUnmount(() => offResult?.())
   margin: 2px 0 6px;
   padding: 6px 8px;
   font-size: var(--font-row-desc);
-  background: var(--bg-default);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
   white-space: pre-wrap;
