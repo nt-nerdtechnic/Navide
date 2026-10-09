@@ -60,6 +60,9 @@ MAX_ROOTS = 20
 MAX_REPOS = 500
 MAX_WALK_DIRS = 20000
 WALK_DEPTH = 3
+#: Whole-scan wall-clock limit for walking roots, and the share one root gets.
+WALK_SECONDS = 20.0
+ROOT_WALK_SECONDS = 10.0
 MAX_REMINDERS = 1000
 SNOOZE_DEFAULT_DAYS = 7
 SNOOZE_MAX_DAYS = 90
@@ -249,6 +252,80 @@ def _parse_iso(text: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+#: Characters a pasted step must never carry, quoted or not (CR-1).
+_SHELL_META_RE = re.compile(r"[$`;|&\n\r\x00<>]")
+MAX_READ_BYTES = 1024 * 1024
+
+
+def safe_command(*parts: str) -> str | None:
+    """A copyable command with every part quoted for this platform's shell, or
+    None when any part carries a shell metacharacter (the finding then asks
+    for a manual fix rather than offering a command)."""
+    if any(_SHELL_META_RE.search(part) for part in parts):
+        return None
+    return " ".join(osplat.paths.quote_arg(part) for part in parts)
+
+
+def read_text_capped(path: Path, limit: int = MAX_READ_BYTES) -> str | None:
+    """A regular file's text, at most ``limit`` bytes; None for anything else.
+
+    Checked with stat first and opened non-blocking, so a FIFO or device a
+    config points at can neither hang the scan nor fill memory (CR-7). A file
+    longer than the cap is not read at all.
+    """
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        return None
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > limit:
+        return None
+    return data.decode("utf-8", "replace")
+
+
+_LOGIN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,38}")
+
+
+def plain_login(name: str) -> bool:
+    """Whether a URL username can be shown: a known pseudo-user or something
+    shaped like a login. Anything else is treated as a token (CR-6)."""
+    if not name:
+        return False
+    if name.lower() in _PSEUDO_USERS:
+        return True
+    if not _LOGIN_RE.fullmatch(name) or looks_like_token(name):
+        return False
+    has_upper = re.search(r"[A-Z]", name) is not None
+    has_lower = re.search(r"[a-z]", name) is not None
+    has_digit = re.search(r"\d", name) is not None
+    if len(name) >= 16 and has_upper and has_lower:
+        return False
+    if len(name) >= 20 and has_digit and not re.search(r"[._-]", name):
+        return False
+    return True
+
+
 def looks_like_token(text: str) -> bool:
     """Whether a URL *username* is really a token (judged, never kept)."""
     if not text:
@@ -274,53 +351,91 @@ class RedactedUrl:
     scheme: str
     path: str
     has_userinfo: bool
+    hostport: str = ""  # host[:port] as written (IPv6 brackets kept); never userinfo
+
+
+def _split_userinfo(rest: str) -> tuple[str | None, str]:
+    """``rest`` is what follows ``scheme://``. Returns (userinfo or None, the
+    remainder). The authority runs to the *last* ``@`` before the first
+    whitespace, so a password with an unencoded ``/``, ``?`` or ``#`` is still
+    userinfo (CR-5); an ``@`` that only appears after the path started (no
+    ``:`` before the first ``/``, or a ``:port``) is part of the path."""
+    segment = rest.split()[0] if rest.split() else ""
+    at = segment.rfind("@")
+    if at < 0:
+        return None, rest
+    candidate = segment[:at]
+    slash = candidate.find("/")
+    colon = candidate.find(":")
+    if slash != -1:
+        if colon == -1 or colon > slash:
+            return None, rest
+        if re.fullmatch(r"\d+", candidate[colon + 1:slash]):
+            return None, rest  # host:port/path@...
+    return candidate, rest[at + 1:]
 
 
 def redact_url(raw: str) -> RedactedUrl:
     """Split ``raw`` into what may be shown; the secret parts are dropped here."""
-    try:
-        parts = urlsplit(raw.strip())
-    except ValueError:
-        return RedactedUrl("", False, "", "", "", "", False)
-    scheme = parts.scheme.lower()
-    if not scheme or "://" not in raw:
-        # scp-like ``git@host:path`` (or a local path): no password can live here.
-        match = re.match(r"^(?:([^@/\s]+)@)?([^:/\s]+):(.*)$", raw.strip())
-        if match and not re.match(r"^[A-Za-z]:[\\/]", raw.strip()):
-            user = match.group(1) or ""
+    text = raw.strip()
+    if "://" not in text:
+        # scp-like ``user@host:path`` (or a local path).
+        match = re.match(r"^(?:(.+)@)?([^:/\s@\[\]]+):(.*)$", text)
+        if match and not re.match(r"^[A-Za-z]:[\\/]", text):
+            userinfo = match.group(1) or ""
             host = match.group(2).lower()
-            if looks_like_token(user):
-                return RedactedUrl(f"{host}:{match.group(3)}", True, "", host, "ssh", match.group(3), True)
-            prefix = f"{user}@" if user else ""
-            return RedactedUrl(f"{prefix}{host}:{match.group(3)}", False, user, host, "ssh",
-                               match.group(3), bool(user))
-        return RedactedUrl(raw.strip(), False, "", "", "", raw.strip(), False)
-    netloc = parts.netloc
-    has_userinfo = "@" in netloc
+            path = match.group(3)
+            if userinfo and (":" in userinfo or not plain_login(userinfo)):
+                return RedactedUrl(f"{host}:{path}", True, "", host, "ssh", path, True)
+            prefix = f"{userinfo}@" if userinfo else ""
+            return RedactedUrl(f"{prefix}{host}:{path}", False, userinfo, host, "ssh", path, bool(userinfo))
+        return RedactedUrl(text, False, "", "", "", text, False)
+    scheme_part, _, rest = text.partition("://")
+    scheme = scheme_part.lower()
+    userinfo, remainder = _split_userinfo(rest)
+    has_userinfo = userinfo is not None
     user = ""
     token = False
-    hostport = netloc
-    if has_userinfo:
-        userinfo, _, hostport = netloc.rpartition("@")
+    if userinfo is not None:
         name, sep, secret = userinfo.partition(":")
         token = bool(sep and secret)
-        del secret, userinfo
+        del secret
         name = unquote(name)
-        if looks_like_token(name):
+        if plain_login(name):
+            user = name
+        elif name:
             token = True
-            name = ""
-        user = name
-    host = (parts.hostname or hostport.split(":")[0]).lower()
+    del userinfo
+    try:
+        parts = urlsplit(f"{scheme}://{remainder}")
+        hostport = parts.netloc
+        host = (parts.hostname or "").lower()
+        path = parts.path
+    except ValueError:
+        return RedactedUrl("", token, "", "", scheme, "", has_userinfo)
     shown_netloc = (f"{user}@" if user else "") + hostport
-    shown = urlunsplit((scheme, shown_netloc, parts.path, "", ""))
-    return RedactedUrl(shown, token, user, host, scheme, parts.path, has_userinfo)
+    shown = urlunsplit((scheme, shown_netloc, path, "", ""))
+    return RedactedUrl(shown, token, user, host, scheme, path, has_userinfo, hostport)
 
 
-def _host_links(host: str, *, ssh: bool = False) -> list[dict[str, str]]:
+#: Hosts whose provider pages are linked without asking anyone (CR-9). Others
+#: are linked only when the user's own gh / glab configuration names them.
+_TRUSTED_LINK_HOSTS = frozenset({"github.com", "gitlab.com"})
+
+
+def _host_links(host: str, trusted: frozenset[str] | set[str], *, ssh: bool = False,
+                provider: str = "") -> list[dict[str, str]]:
+    """Provider links for ``host`` — only github.com, gitlab.com, or a host
+    the user's own gh / glab setup lists (``trusted``); a host taken from a
+    repository's config never gets a link of its own (CR-9)."""
     host = host.lower()
-    if host == "github.com" or host.endswith(".github.com") or host.endswith(".ghe.com"):
+    if host == "github.com":
         return [dict(_LINKS["github-ssh" if ssh else "github-tokens"])]
-    if "gitlab" in host:
+    if host == "gitlab.com":
+        return [_gitlab_ssh_link(host) if ssh else _gitlab_pat_link(host)]
+    if host in trusted:
+        if provider == "gh":
+            return [{"label": "GitHub tokens", "url": f"https://{host}/settings/tokens"}]
         return [_gitlab_ssh_link(host) if ssh else _gitlab_pat_link(host)]
     return []
 
@@ -383,13 +498,30 @@ class _Collector:
         location: str,
         params: dict[str, str] | None = None,
         links: list[dict[str, str]] | None = None,
-        steps: list[str] | None = None,
+        steps: list[Sequence[str]] | None = None,
+        actions: list[str] | None = None,
     ) -> None:
+        """``steps`` are argv lists. Each is rendered with every part quoted; a
+        step any part of which carries a shell metacharacter is withheld and
+        the finding is marked ``manual_fix`` instead (CR-1)."""
         assert code in FINDING_CODES, code
         finding_id = _fingerprint(code, location)
         if finding_id in self._finding_ids:
             return
         self._finding_ids.add(finding_id)
+        rendered: list[str] = []
+        manual = False
+        for argv in steps or []:
+            command = safe_command(*argv)
+            if command is None:
+                manual = True
+            else:
+                rendered.append(command)
+        if manual:
+            rendered = []
+        action_list = list(actions or [])
+        if manual:
+            action_list.append("manual-fix")
         self.findings.append({
             "id": finding_id,
             "code": code,
@@ -398,11 +530,16 @@ class _Collector:
             "location": location,
             "params": {k: str(v) for k, v in (params or {}).items()},
             "links": list(links or []),
-            "steps": list(steps or []),
+            "steps": rendered,
+            "actions": action_list,
+            "manual_fix": manual,
         })
 
 
 # ── 1. git credential helpers ───────────────────────────────────────────────
+
+
+_HELPER_NAME_RE = re.compile(r"[\w.+-]+")
 
 
 @dataclass(frozen=True)
@@ -423,14 +560,18 @@ def helper_name(value: str) -> str:
     if inline:
         text = text[1:].strip()
     first = text.split()[0] if text.split() else ""
-    if not first or "(" in first or "{" in first:
+    # An assignment (``GH_TOKEN=... gh``) or anything that is not a plain
+    # program name is never echoed: it may be the secret itself (CR-2).
+    if not first or "=" in first:
         return "inline-shell"
-    base = re.split(r"[\\/]", first.strip("'\""))[-1]
+    base = re.split(r"[\\/]", first)[-1]
     if base.lower().endswith(".exe"):
         base = base[:-4]
     if not inline and base.startswith("git-credential-"):
         base = base[len("git-credential-"):]
-    return base or "inline-shell"
+    if not _HELPER_NAME_RE.fullmatch(base):
+        return "inline-shell"
+    return base
 
 
 def parse_helper_config(out: str, scope: str, home: Path, *, with_origin: bool) -> list[HelperEntry]:
@@ -499,16 +640,19 @@ def _scan_global_helpers(ctx: ScanContext, git: str, out: _Collector) -> tuple[l
     return entries, gh_only
 
 
-def _report_duplicates(context: str, chain: Sequence[HelperEntry], out: _Collector, *, location_prefix: str) -> None:
+def _report_duplicates(context: str, chain: Sequence[HelperEntry], out: _Collector, *, location_prefix: str,
+                       repo: str | None = None) -> None:
     seen: set[str] = set()
     key = "credential.helper" if context == "*" else f"credential.{context}.helper"
+    git_prefix = ["git", "-C", repo] if repo else ["git"]
     for name in _chain_names(chain):
         if name in seen:
             out.finding(
                 "helper-duplicate", "low", "git-helper",
                 f"{location_prefix} · {key} · {name}",
                 params={"helper": name, "context": context},
-                steps=[f"git config --show-origin --get-all {key}"],
+                steps=[[*git_prefix, "config", "--show-origin", "--get-all", key]],
+                actions=["inspect-helper-config"],
             )
         seen.add(name)
 
@@ -528,7 +672,7 @@ def _local_helper_findings(repo: str, repo_t: str, local: list[HelperEntry],
         by_context.setdefault(entry.context, []).append(entry)
     for context, entries in by_context.items():
         key = "credential.helper" if context == "*" else f"credential.{context}.helper"
-        _report_duplicates(context, combined.get(context, []), out, location_prefix=repo_t)
+        _report_duplicates(context, combined.get(context, []), out, location_prefix=repo_t, repo=repo)
         before = _chain_names(global_chains.get(context, []))
         if before and entries[0].name != "":
             out.finding(
@@ -536,7 +680,8 @@ def _local_helper_findings(repo: str, repo_t: str, local: list[HelperEntry],
                 f"{repo_t} · {key}",
                 params={"repo": repo_t, "context": context, "helper": entries[0].name,
                         "answered_by": before[0]},
-                steps=[f"git -C {osplat.paths.quote_arg(repo)} config --show-origin --get-all {key}"],
+                steps=[["git", "-C", repo, "config", "--show-origin", "--get-all", key]],
+                actions=["inspect-helper-config"],
             )
 
 
@@ -672,7 +817,10 @@ def _cli_config_files(ctx: ScanContext) -> list[tuple[str, Path]]:
     return unique
 
 
-def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[str]) -> None:
+def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[str]) -> dict[str, str]:
+    """Report gh / glab accounts; return the hosts the user's own CLI setup
+    names (host -> tool), the only non-default hosts that get links or widen
+    the keychain filter (CR-9)."""
     accounts: list[CliAccount] = []
     gh = ctx.which("gh")
     if gh:
@@ -686,6 +834,7 @@ def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[
     if glab:
         result = ctx.run([glab, "auth", "status"], timeout=20)
         accounts.extend(parse_auth_status_text("glab", result.out + "\n" + result.err))
+    trusted: dict[str, str] = {account.host: account.tool for account in accounts if account.host}
     for account in accounts:
         out.item("cli-account", f"{account.tool} · {account.host} · {account.account}",
                  f"{account.tool}|{account.host}|{account.account}",
@@ -706,8 +855,10 @@ def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[
             "gh-active-account-only", "medium", "cli-account", f"gh · {host}",
             params={"host": host, "accounts": ", ".join(logins), "active": active,
                     "helper_chain_gh_only": "true" if gh_only else "false"},
-            links=_host_links(host),
-            steps=[f"gh auth switch --hostname {host} --user {login}" for login in logins if login != active],
+            links=_host_links(host, set(trusted), provider="gh"),
+            steps=[["gh", "auth", "switch", "--hostname", host, "--user", login]
+                   for login in logins if login != active],
+            actions=["gh-auth-switch"],
         )
 
     for tool, path in _cli_config_files(ctx):
@@ -717,25 +868,28 @@ def _scan_cli_accounts(ctx: ScanContext, out: _Collector, gh_only_contexts: set[
             continue
         if not stat.S_ISREG(info.st_mode):
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = read_text_capped(path)
+        if text is None:
             continue
         hosts = yaml_token_hosts(text)
         del text
+        for host in hosts:
+            trusted.setdefault(host, tool)
         shown = _tilde(path, ctx.home)
         out.item("plaintext-file", shown, f"{tool}-config|{path}",
                  {"path": shown, "tool": tool, "mode": _mode_text(info.st_mode),
                   "token_present": bool(hosts)})
         for host in sorted(hosts):
-            step = (f"glab auth login --hostname {host} --use-keyring" if tool == "glab"
-                    else f"gh auth login --hostname {host}")
+            step = (["glab", "auth", "login", "--hostname", host, "--use-keyring"] if tool == "glab"
+                    else ["gh", "auth", "login", "--hostname", host])
             out.finding(
                 "cli-token-plaintext", "medium", "cli-account", f"{shown} · {host}",
                 params={"tool": tool, "host": host, "path": shown, "mode": _mode_text(info.st_mode)},
-                links=_host_links(host),
+                links=_host_links(host, set(trusted), provider=tool),
                 steps=[step],
+                actions=["glab-login-keyring" if tool == "glab" else "gh-login-keyring"],
             )
+    return trusted
 
 
 # ── 3. SSH ──────────────────────────────────────────────────────────────────
@@ -783,9 +937,8 @@ def parse_ssh_config(text: str, home: Path, *, base: Path | None = None, depth: 
                     pattern = str(home) + pattern[1:]
                 target = Path(pattern) if Path(pattern).is_absolute() else ssh_dir / pattern
                 for match_path in sorted(target.parent.glob(target.name)):
-                    try:
-                        included = match_path.read_text(encoding="utf-8", errors="replace")
-                    except OSError:
+                    included = read_text_capped(match_path)
+                    if included is None:
                         continue
                     blocks.extend(parse_ssh_config(included, home, base=ssh_dir, depth=depth + 1)[1:])
         elif key == "identityfile":
@@ -803,10 +956,12 @@ def _read_key_header(path: Path) -> str | None:
     """The private-key format from the first line only; nothing past the first
     newline is kept (and at most 64 bytes are read)."""
     try:
-        fd = os.open(str(path), os.O_RDONLY)
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
         head = b""
         while len(head) < 64:
             chunk = os.read(fd, 1)
@@ -825,23 +980,20 @@ def _read_key_header(path: Path) -> str | None:
 
 
 def _pub_algorithm(path: Path) -> str:
-    pub = Path(str(path) + ".pub")
-    try:
-        with pub.open("r", encoding="utf-8", errors="replace") as handle:
-            first = handle.readline(256).split()
-    except OSError:
-        return ""
+    text = read_text_capped(Path(str(path) + ".pub"), limit=64 * 1024)
+    first = text.splitlines()[0].split() if text and text.splitlines() else []
     return first[0] if first else ""
 
 
-def passphrase_state(ctx: ScanContext, keygen: str | None, path: Path) -> bool | None:
+def passphrase_state(ctx: ScanContext, keygen: str | None, path: Path, header: str = "") -> bool | None:
     """True = has a passphrase, False = none, None = could not tell.
 
     ``ssh-keygen -y -P "" -f key``: success means the empty passphrase opens
     it. Its stdout (the public key) is discarded, stdin is closed, and the
     environment has no askpass or display, so it cannot prompt.
     """
-    if not keygen:
+    if not keygen or header == "putty":
+        # ssh-keygen cannot open a PuTTY key: a failure there says nothing.
         return None
     result = ctx.run([keygen, "-y", "-P", "", "-f", str(path)], timeout=10, capture=False)
     if result.code == 0:
@@ -854,11 +1006,8 @@ def passphrase_state(ctx: ScanContext, keygen: str | None, path: Path) -> bool |
 def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
     ssh_dir = ctx.home / ".ssh"
     config_path = ssh_dir / "config"
-    blocks: list[SshHost] = []
-    try:
-        blocks = parse_ssh_config(config_path.read_text(encoding="utf-8", errors="replace"), ctx.home)
-    except OSError:
-        blocks = []
+    config_text = read_text_capped(config_path)
+    blocks: list[SshHost] = parse_ssh_config(config_text, ctx.home) if config_text is not None else []
     referenced: dict[str, list[str]] = {}
     for block in blocks:
         for identity in block.identity_files:
@@ -884,7 +1033,7 @@ def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
         shown = _tilde(path, ctx.home)
         norm = os.path.normpath(str(path))
         hosts = [h for h in referenced.get(norm, []) if not h.startswith("match:")]
-        has_passphrase = passphrase_state(ctx, keygen, path)
+        has_passphrase = passphrase_state(ctx, keygen, path, header)
         detail: dict[str, Any] = {
             "path": shown, "format": header, "algorithm": _pub_algorithm(path),
             "mode": _mode_text(info.st_mode), "hosts": ", ".join(hosts),
@@ -894,11 +1043,10 @@ def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
         if has_passphrase is not None:
             detail["has_passphrase"] = has_passphrase
         out.item("ssh-key", name, f"ssh|{norm}", detail)
-        command_path = osplat.paths.quote_arg(str(path))
         if ctx.enforces_modes and stat.S_IMODE(info.st_mode) & 0o077:
             out.finding("ssh-key-mode", "high", "ssh-key", shown,
                         params={"path": shown, "mode": _mode_text(info.st_mode)},
-                        steps=[f"chmod 600 {command_path}"])
+                        steps=[["chmod", "600", str(path)]], actions=["chmod-600"])
         if has_passphrase is False:
             forge = sorted({h.lower() for h in hosts if h.lower() in _FORGE_HOSTS})
             if forge:
@@ -906,12 +1054,14 @@ def _scan_ssh(ctx: ScanContext, out: _Collector) -> None:
                     out.finding("ssh-no-passphrase-default-host", "high", "ssh-key",
                                 f"{shown} · Host {host}",
                                 params={"path": shown, "host": host},
-                                links=_host_links(host, ssh=True),
-                                steps=[f"ssh-keygen -p -f {command_path}"])
+                                links=_host_links(host, frozenset(), ssh=True),
+                                steps=[["ssh-keygen", "-p", "-f", str(path)]],
+                                actions=["ssh-add-passphrase"])
             else:
                 out.finding("ssh-no-passphrase", "medium", "ssh-key", shown,
                             params={"path": shown, "hosts": ", ".join(hosts)},
-                            steps=[f"ssh-keygen -p -f {command_path}"])
+                            steps=[["ssh-keygen", "-p", "-f", str(path)]],
+                            actions=["ssh-add-passphrase"])
         if not hosts and name not in _DEFAULT_IDENTITIES and norm not in referenced:
             out.finding("ssh-key-unreferenced", "low", "ssh-key", shown, params={"path": shown})
 
@@ -1096,46 +1246,72 @@ def _under(path: Path, roots: Sequence[Path]) -> bool:
     return False
 
 
-def find_repos(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPOS,
-               depth: int = WALK_DEPTH) -> list[Path]:
-    repos: list[Path] = []
-    budget = [MAX_WALK_DIRS]
+@dataclass
+class WalkBudget:
+    """Shared by every root of one scan (CR-3): a directory count and a
+    wall-clock deadline (``time.monotonic()``)."""
 
-    def walk(directory: Path, level: int) -> None:
-        if len(repos) >= limit or budget[0] <= 0:
-            return
-        budget[0] -= 1
-        if _under(directory, system_dirs):
-            return
-        git_entry = directory / ".git"
-        if os.path.lexists(git_entry):
-            repos.append(directory)
+    dirs: int
+    deadline: float
+
+    def spent(self) -> bool:
+        return self.dirs <= 0 or time.monotonic() >= self.deadline
+
+
+def _dir_prefixes(dirs: Sequence[Path]) -> tuple[tuple[str, ...], frozenset[str]]:
+    exact = frozenset(p for d in dirs for p in (os.path.normpath(str(d)), os.path.realpath(d)))
+    return tuple(d.rstrip(os.sep) + os.sep for d in exact), exact
+
+
+def find_repos(root: Path, system_dirs: Sequence[Path], *, limit: int = MAX_REPOS,
+               depth: int = WALK_DEPTH, budget: WalkBudget | None = None,
+               deadline: float | None = None) -> list[Path]:
+    """Repos (a ``.git`` dir or file) under ``root`` to ``depth``.
+
+    System directories are matched as precomputed string prefixes, not by
+    walking each path's parents (CR-3). ``budget`` is shared across roots;
+    ``deadline`` additionally bounds this root.
+    """
+    if budget is None:
+        budget = WalkBudget(MAX_WALK_DIRS, time.monotonic() + WALK_SECONDS)
+    prefixes, exact = _dir_prefixes(system_dirs)
+    stop_at = budget.deadline if deadline is None else min(deadline, budget.deadline)
+    repos: list[Path] = []
+    stack: list[tuple[str, int]] = [(os.path.normpath(str(root)), 0)]
+    while stack:
+        if len(repos) >= limit or budget.dirs <= 0 or time.monotonic() >= stop_at:
+            break
+        directory, level = stack.pop()
+        budget.dirs -= 1
+        if directory in exact or directory.startswith(prefixes):
+            continue
+        if os.path.lexists(os.path.join(directory, ".git")):
+            repos.append(Path(directory))
         if level >= depth:
-            return
+            continue
         try:
             with os.scandir(directory) as entries:
                 children = sorted(
-                    (e for e in entries if e.is_dir(follow_symlinks=False)
-                     and e.name not in _SKIP_DIR_NAMES and not e.name.startswith(".")),
-                    key=lambda e: e.name,
+                    e.path for e in entries if e.is_dir(follow_symlinks=False)
+                    and e.name not in _SKIP_DIR_NAMES and not e.name.startswith(".")
                 )
         except OSError:
-            return
-        for child in children:
-            walk(Path(child.path), level + 1)
-
-    walk(root, 0)
+            continue
+        stack.extend((child, level + 1) for child in reversed(children))
     return repos
 
 
 @dataclass
 class RepoConfig:
-    remotes: list[tuple[str, RedactedUrl]]
+    remotes: list[tuple[str, RedactedUrl, str]]
     helpers: list[HelperEntry]
 
 
 def parse_repo_config(out: str, repo_t: str, home: Path) -> RepoConfig:
-    remotes: list[tuple[str, RedactedUrl]] = []
+    """``remotes`` holds (name, redacted URL, kind) with kind ``url``,
+    ``pushurl`` or ``insteadof`` (a ``url.<base>.insteadOf`` /
+    ``pushInsteadOf`` key, whose *base* is where a token would sit)."""
+    remotes: list[tuple[str, RedactedUrl, str]] = []
     helpers: list[HelperEntry] = []
     for record in out.split("\0"):
         if not record:
@@ -1143,8 +1319,15 @@ def parse_repo_config(out: str, repo_t: str, home: Path) -> RepoConfig:
         key, _, value = record.partition("\n")
         lower = key.lower()
         if lower.startswith("remote.") and lower.endswith(".url"):
-            remotes.append((key[len("remote."):-len(".url")], redact_url(value)))
+            remotes.append((key[len("remote."):-len(".url")], redact_url(value), "url"))
             del value
+        elif lower.startswith("remote.") and lower.endswith(".pushurl"):
+            remotes.append((key[len("remote."):-len(".pushurl")], redact_url(value), "pushurl"))
+            del value
+        elif lower.startswith("url.") and (lower.endswith(".insteadof") or lower.endswith(".pushinsteadof")):
+            suffix = ".pushinsteadof" if lower.endswith(".pushinsteadof") else ".insteadof"
+            label = "url.pushInsteadOf" if suffix == ".pushinsteadof" else "url.insteadOf"
+            remotes.append((label, redact_url(key[len("url."):-len(suffix)]), "insteadof"))
         elif lower.startswith("credential.") and lower.endswith(".helper"):
             middle = key[len("credential."):-len(".helper")]
             context = redact_url(middle).url or "*" if middle else "*"
@@ -1154,16 +1337,16 @@ def parse_repo_config(out: str, repo_t: str, home: Path) -> RepoConfig:
 
 def _read_repo(ctx: ScanContext, git: str, repo: Path) -> RepoConfig:
     result = ctx.run([git, "-C", str(repo), "config", "--local", "-z", "--get-regexp",
-                      r"^(remote\..*\.url|credential\..*)$"], timeout=10)
+                      r"^(remote\..*\.(url|pushurl)|credential\..*|url\..*\.(insteadof|pushinsteadof))$"], timeout=10)
     if result.code != 0:
         return RepoConfig([], [])
     return parse_repo_config(result.out, _tilde(repo, ctx.home), ctx.home)
 
 
 def _clean_url(r: RedactedUrl) -> str:
-    if r.scheme in {"http", "https"}:
+    if "http" in r.scheme:
         user = "" if r.user.lower() in _PSEUDO_USERS else r.user
-        netloc = (f"{user}@" if user else "") + r.host
+        netloc = (f"{user}@" if user else "") + (r.hostport or r.host)
         return urlunsplit((r.scheme, netloc, r.path, "", ""))
     return r.url
 
@@ -1191,9 +1374,8 @@ def _scan_env(ctx: ScanContext, out: _Collector) -> None:
             out.finding("env-token-set", "low", "env-var", f"env · {name}", params={"name": name})
     for rel in _SHELL_RC_FILES:
         path = ctx.home / rel
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = read_text_capped(path)
+        if text is None:
             continue
         shown = _tilde(path, ctx.home)
         for number, line in enumerate(text.splitlines(), start=1):
@@ -1250,12 +1432,17 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
     if git:
         global_entries, gh_only = _scan_global_helpers(ctx, git, out)
 
+    trusted = _scan_cli_accounts(ctx, out, gh_only)
+
     roots_out: list[dict[str, Any]] = []
     repo_list: list[Path] = []
     seen_repos: set[str] = set()
+    budget = WalkBudget(MAX_WALK_DIRS, time.monotonic() + WALK_SECONDS)
     for root_path, source in ctx.roots:
         root = Path(root_path)
-        found = find_repos(root, ctx.system_dirs, limit=MAX_REPOS) if root.is_dir() else []
+        found = (find_repos(root, ctx.system_dirs, limit=MAX_REPOS, budget=budget,
+                            deadline=time.monotonic() + ROOT_WALK_SECONDS)
+                 if root.is_dir() and not budget.spent() else [])
         roots_out.append({"path": _tilde(root, ctx.home), "source": source, "repo_count": len(found)})
         for repo in found:
             key = os.path.realpath(repo)
@@ -1273,32 +1460,39 @@ def run_scan(ctx: ScanContext, *, repo_executor: ThreadPoolExecutor | None = Non
                                     thread_name_prefix="navide-credscan-git") as pool:
                 configs = list(pool.map(lambda r: _read_repo(ctx, git, r), repo_list))
 
-    git_hosts = set(_FORGE_HOSTS)
     for repo, config in zip(repo_list, configs):
         repo_t = _tilde(repo, ctx.home)
         _local_helper_findings(str(repo), repo_t, config.helpers, global_entries, out)
-        for remote, redacted in config.remotes:
-            if redacted.host:
-                git_hosts.add(redacted.host)
-            if redacted.scheme not in {"http", "https"} or not redacted.has_userinfo:
+        for remote, redacted, kind in config.remotes:
+            if "http" not in redacted.scheme or not redacted.has_userinfo:
                 continue
-            location = f"{repo_t} · {remote} · {redacted.url}"
-            out.item("remote", f"{repo_t} · {remote}", f"remote|{repo}|{remote}",
-                     {"repo": repo_t, "remote": remote, "host": redacted.host, "url": redacted.url,
+            label = f"{remote} (push)" if kind == "pushurl" else remote
+            location = f"{repo_t} · {label} · {redacted.url}"
+            out.item("remote", f"{repo_t} · {label}", f"remote|{repo}|{kind}|{remote}|{redacted.url}",
+                     {"repo": repo_t, "remote": label, "host": redacted.host, "url": redacted.url,
                       "token_present": redacted.token_present})
-            if redacted.token_present:
-                out.finding(
-                    "url-token", "high", "remote", location,
-                    params={"repo": repo_t, "remote": remote, "host": redacted.host,
-                            "url": redacted.url, "token": "present (redacted)"},
-                    links=_host_links(redacted.host),
-                    steps=[f"git -C {osplat.paths.quote_arg(str(repo))} remote set-url "
-                           f"{osplat.paths.quote_arg(remote)} {_clean_url(redacted)}"],
-                )
+            if not redacted.token_present:
+                continue
+            if kind == "insteadof":
+                steps: list[list[str]] = [["git", "-C", str(repo), "config", "--local", "--get-regexp", "^url[.]"]]
+                actions = ["inspect-url-rewrite"]
+            else:
+                push = ["--push"] if kind == "pushurl" else []
+                steps = [["git", "-C", str(repo), "remote", "set-url", *push, remote, _clean_url(redacted)]]
+                actions = ["remote-set-url"]
+            out.finding(
+                "url-token", "high", "remote", location,
+                params={"repo": repo_t, "remote": label, "host": redacted.host,
+                        "url": redacted.url, "token": "present (redacted)"},
+                links=_host_links(redacted.host, set(trusted), provider=trusted.get(redacted.host, "")),
+                steps=steps,
+                actions=actions,
+            )
 
-    _scan_cli_accounts(ctx, out, gh_only)
     _scan_ssh(ctx, out)
-    keyring = _scan_keyring(ctx, out, git_hosts)
+    # Only hosts the user's own setup names widen the keychain filter, never a
+    # host read from some repository's config (CR-9).
+    keyring = _scan_keyring(ctx, out, set(_FORGE_HOSTS) | set(trusted))
     _scan_env(ctx, out)
     _scan_plaintext_files(ctx, out)
 
@@ -1364,21 +1558,29 @@ def validate_roots(raw: Any, system_dirs: Sequence[Path]) -> list[str]:
         raise RequestError("too-many-roots", f"at most {MAX_ROOTS} roots")
     out: list[str] = []
     for item in raw:
-        if not isinstance(item, str) or not item.strip():
-            raise RequestError("invalid-root", "each root must be a non-empty string")
-        text = item.strip()
-        if not os.path.isabs(text):
-            raise RequestError("invalid-root", f"not an absolute path: {text}")
-        path = Path(os.path.normpath(text))
-        if path.parent == path:
-            raise RequestError("invalid-root", f"a filesystem root cannot be scanned: {text}")
-        if not path.is_dir():
-            raise RequestError("invalid-root", f"not an existing folder: {text}")
-        if _under(path, system_dirs) or _under(Path(os.path.realpath(path)), system_dirs):
-            raise RequestError("forbidden-root", f"a system or credential folder cannot be a scan root: {text}")
-        if str(path) not in out:
-            out.append(str(path))
+        path = check_root(item, system_dirs)
+        if path not in out:
+            out.append(path)
     return out
+
+
+def check_root(item: Any, system_dirs: Sequence[Path]) -> str:
+    """One scan root, symlinks resolved *before* it is judged (CR-8); the
+    resolved path is what gets stored and walked."""
+    if not isinstance(item, str) or not item.strip():
+        raise RequestError("invalid-root", "each root must be a non-empty string")
+    text = item.strip()
+    if not os.path.isabs(text):
+        raise RequestError("invalid-root", f"not an absolute path: {text}")
+    path = Path(os.path.realpath(text))
+    if path.parent == path:
+        raise RequestError("invalid-root", f"a filesystem root cannot be scanned: {text}")
+    if not path.is_dir():
+        raise RequestError("invalid-root", f"not an existing folder: {text}")
+    resolved_system = [Path(os.path.realpath(d)) for d in system_dirs]
+    if _under(path, system_dirs) or _under(path, resolved_system):
+        raise RequestError("forbidden-root", f"a system or credential folder cannot be a scan root: {text}")
+    return str(path)
 
 
 # ── Service ─────────────────────────────────────────────────────────────────
@@ -1422,7 +1624,7 @@ class CredentialsService:
         self._system_dirs = system_dirs
         self._clock = clock
         self._cache: tuple[float, dict[str, Any]] | None = None
-        self._lock = asyncio.Lock()
+        self._inflight: asyncio.Future[dict[str, Any]] | None = None
 
     # KV ------------------------------------------------------------------
     def _kv_get(self, key: str, default: Any) -> Any:
@@ -1490,8 +1692,12 @@ class CredentialsService:
         except Exception:  # noqa: BLE001 - an unreadable recent list scans nothing from it
             log.warning("credentials scan: workspace list unavailable")
             workspace = []
+        system_dirs = self._system_dirs()
         for path, source in [*((p, "workspace") for p in workspace), *((p, "user") for p in self.user_roots())]:
-            norm = os.path.normpath(path)
+            try:
+                norm = check_root(path, system_dirs)
+            except RequestError:
+                continue  # workspace roots get the same validation as user roots
             if norm in seen:
                 continue
             seen.add(norm)
@@ -1517,16 +1723,30 @@ class CredentialsService:
             "findings": findings,
         }
 
+    async def _refresh(self) -> dict[str, Any]:
+        try:
+            raw = await asyncio.get_running_loop().run_in_executor(_SCAN_EXECUTOR, self._scan_blocking)
+            raw = {**raw, "_scanned_at": self._clock()}
+            self._cache = (time.monotonic(), raw)
+            return raw
+        finally:
+            self._inflight = None
+
     async def scan(self, *, force: bool = False) -> dict[str, Any]:
-        async with self._lock:
-            cached = self._cache
-            if not force and cached is not None and time.monotonic() - cached[0] < CACHE_SECONDS:
-                raw = cached[1]
-            else:
-                loop = asyncio.get_running_loop()
-                raw = await loop.run_in_executor(_SCAN_EXECUTOR, self._scan_blocking)
-                raw = {**raw, "_scanned_at": self._clock()}
-                self._cache = (time.monotonic(), raw)
+        """At most one scan runs; nobody waits on it who need not (CR-3).
+
+        A fresh cached result is served as is. While a refresh is running,
+        a non-forced caller gets the previous result instead of queueing; a
+        forced caller (or one with nothing cached) joins the running scan.
+        """
+        cached = self._cache
+        fresh = cached is not None and time.monotonic() - cached[0] < CACHE_SECONDS
+        if not force and cached is not None and (fresh or self._inflight is not None):
+            raw = cached[1]
+        else:
+            if self._inflight is None:
+                self._inflight = asyncio.ensure_future(self._refresh())
+            raw = await asyncio.shield(self._inflight)
         return await asyncio.get_running_loop().run_in_executor(
             _KV_EXECUTOR, self._compose, raw, raw["_scanned_at"])
 

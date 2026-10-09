@@ -6704,13 +6704,24 @@ async def credentials_list(ctx: Context) -> dict[str, Any]:
     runs no command that prints a secret. Results are cached for 60 seconds.
 
     Returns {ok, scanned_at, platform, keyring: {available, backend,
-    reason?}, items: [{id, kind, label, detail}]}.
+    reason?}, items: [{id, kind, label, detail}]}. Keyring items carry only
+    their class and dates: no service, server or account (the lookup keys of
+    a keychain query).
     """
-    _resolve_caller(ctx)
+    caller = _resolve_caller(ctx)
+    _log.info("credentials_list called by %s", getattr(caller, "kind", "unknown"))
     result = await _credentials_scan_result()
     if not result.get("ok"):
         return result
-    return {key: result[key] for key in ("ok", "scanned_at", "platform", "keyring", "items")}
+    items = []
+    for item in result["items"]:
+        if item.get("kind") == "keychain-item":
+            detail = {k: v for k, v in item.get("detail", {}).items()
+                      if k not in {"service", "server", "account"}}
+            item = {**item, "label": str(detail.get("class", "keychain-item")), "detail": detail}
+        items.append(item)
+    return {"ok": True, "scanned_at": result["scanned_at"], "platform": result["platform"],
+            "keyring": result["keyring"], "items": items}
 
 
 @server.tool()
@@ -6718,10 +6729,14 @@ async def credentials_findings(ctx: Context) -> dict[str, Any]:
     """Risk findings from the read-only credentials and keys scan.
 
     Each finding is {id, code, severity (high/medium/low), kind, location,
-    params, links, steps, reminder}. `location` is already redacted (a URL
+    params, links, actions, manual_fix, reminder}. `location` is already redacted (a URL
     token shows as removed, never as a value); `steps` are commands the user
     may run themselves; `reminder.state` is active, snoozed or dismissed as
-    the user set it in Navide. Codes include url-token,
+    the user set it in Navide. `actions` are fix action names
+    (remote-set-url, ssh-add-passphrase, chmod-600, gh-auth-switch,
+    gh-login-keyring, glab-login-keyring, inspect-helper-config,
+    inspect-url-rewrite, manual-fix); no shell command is returned here.
+    Codes include url-token,
     ssh-no-passphrase-default-host, ssh-no-passphrase, ssh-key-unreferenced,
     ssh-key-mode, cli-token-plaintext, gh-active-account-only,
     helper-duplicate, helper-shadowed, env-token-in-shell-rc, env-token-set,
@@ -6732,11 +6747,14 @@ async def credentials_findings(ctx: Context) -> dict[str, Any]:
     user's decision, made in Navide. Returns {ok, scanned_at, summary:
     {high, medium, low, active_reminders}, findings}.
     """
-    _resolve_caller(ctx)
+    caller = _resolve_caller(ctx)
+    _log.info("credentials_findings called by %s", getattr(caller, "kind", "unknown"))
     result = await _credentials_scan_result()
     if not result.get("ok"):
         return result
-    return {key: result[key] for key in ("ok", "scanned_at", "summary", "findings")}
+    findings = [{k: v for k, v in finding.items() if k != "steps"} for finding in result["findings"]]
+    return {"ok": True, "scanned_at": result["scanned_at"], "summary": result["summary"],
+            "findings": findings}
 
 
 def _prompt_skills_inventory(skill_id: str) -> dict[str, Any]:
