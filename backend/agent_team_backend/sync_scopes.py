@@ -1918,6 +1918,11 @@ def on_account_changed() -> None:
     for scope in sync_engine.SCOPES + sync_engine.INTERNAL_SCOPES:
         attempt(f"forget {scope}", lambda scope=scope: app.sync_store.forget(scope))
     attempt("forget detached marks", forget_detached)
+    # Items waiting for the user's approval (D1) arrived under the previous
+    # account too. Looked up by name: defined where that queue lives.
+    forget_approvals = globals().get("forget_approvals")
+    if forget_approvals is not None:
+        attempt("forget pending approvals", forget_approvals)
     reset = getattr(_skill_files, "reset", None)
     if reset is not None:
         attempt("reset the skill files transfers", reset)

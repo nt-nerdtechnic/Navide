@@ -514,3 +514,14 @@ async def test_an_ordinary_drop_stays_a_connection_error_for_the_engine(monkeypa
 def test_the_sync_engine_is_handed_the_sync_request():
     link = server_link.ServerLink()
     assert link.sync_engine()._request == link._sync_request
+
+
+def test_an_account_change_drops_pending_approvals_when_the_scopes_offer_it(tmp_path, monkeypatch):
+    # D1's approval queue holds items of the account they arrived under.
+    from agent_team_backend import sync_scopes
+
+    _seeded(tmp_path, monkeypatch, _Settings({}))
+    calls: list[object] = []
+    monkeypatch.setattr(sync_scopes, "forget_approvals", lambda scope=None: calls.append(scope), raising=False)
+    sync_scopes.on_account_changed()
+    assert calls == [None]
