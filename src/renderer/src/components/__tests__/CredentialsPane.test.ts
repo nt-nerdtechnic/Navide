@@ -85,6 +85,20 @@ describe('CredentialsPane', () => {
     expect(send).toHaveBeenLastCalledWith('credentials.scan', { force: true })
   })
 
+  it('shows a manual-fix note instead of steps when the backend withheld them', async () => {
+    const manual = {
+      ...scan,
+      findings: [{ id: 'f9', code: 'url-token', severity: 'high', kind: 'remote', location: '~/evil · origin · https://github.com/a/b;x', params: {}, links: [], steps: [], actions: ['remote-set-url', 'manual-fix'], manual_fix: true, reminder: { state: 'active' } }],
+    }
+    await mountPane({ 'credentials.scan': { ok: true, payload: manual } })
+    await wrapper!.findAll('.cred-card')[0]!.trigger('click')
+    await flushPromises()
+    const note = wrapper!.find('.cred-manual-fix')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toBe(i18n.global.t('settings.credentials.drawer.manual-fix'))
+    expect(wrapper!.find('.cred-copy').exists()).toBe(false)
+  })
+
   it('snoozes from the drawer with the right params and shows steps as copy-only', async () => {
     const { send } = await mountPane()
     await wrapper!.findAll('.cred-card')[0]!.trigger('click')

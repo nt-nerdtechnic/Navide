@@ -6159,6 +6159,7 @@
         "todo": "What to do",
         "steps": "Commands you can run yourself",
         "steps-note": "Copy only. Navide never runs these for you.",
+        "manual-fix": "This value contains shell characters, so no command is offered. Fix it by hand in the config file shown above.",
         "links": "Provider pages",
         "copy": "Copy",
         "copied": "Copied",

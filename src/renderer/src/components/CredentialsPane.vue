@@ -16,6 +16,7 @@ interface Finding {
   kind: string
   location: string
   steps: string[]
+  manualFix: boolean
   links: Array<{ label: string; url: string }>
   reminder: Reminder
 }
@@ -103,6 +104,7 @@ function normalizeScan(p: Record<string, unknown>): Scan {
         kind: str(f.kind),
         location: str(f.location),
         steps: arr(f.steps).filter((s): s is string => typeof s === 'string'),
+        manualFix: f.manual_fix === true,
         links: arr(f.links).flatMap((l) => (isRecord(l) && str(l.url) ? [{ label: str(l.label) || str(l.url), url: str(l.url) }] : [])),
         reminder: normalizeReminder(f.reminder),
       }]
@@ -458,7 +460,11 @@ async function saveRoots(): Promise<void> {
         <code class="cred-loc">{{ selectedFinding.location }}</code>
         <h4>{{ t('settings.credentials.drawer.why') }}</h4>
         <p>{{ findingBody(selectedFinding) }}</p>
-        <template v-if="selectedFinding.steps.length">
+        <template v-if="selectedFinding.manualFix">
+          <h4>{{ t('settings.credentials.drawer.steps') }}</h4>
+          <p class="cred-warn cred-manual-fix">{{ t('settings.credentials.drawer.manual-fix') }}</p>
+        </template>
+        <template v-else-if="selectedFinding.steps.length">
           <h4>{{ t('settings.credentials.drawer.steps') }}</h4>
           <p class="cred-muted">{{ t('settings.credentials.drawer.steps-note') }}</p>
           <div v-for="step in selectedFinding.steps" :key="step" class="cred-step">
