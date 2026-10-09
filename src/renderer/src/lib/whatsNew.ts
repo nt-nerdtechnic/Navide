@@ -129,6 +129,11 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': '同期がより安全に：古い記録が再送されても項目が古い版に戻らなくなりました。プロンプトや MCP の引数に秘密情報らしきものがあると、場所だけを知らせます（内容は表示せず、ブロックもしません）。同期セクションには同期先のアカウントが表示され、「今すぐ同期」の後に種類ごとの結果が並び、保存した変更も自動でアップロードされます。メモリ（CLAUDE.md などの指示ファイル）はクラウド同期の対象外になりました。ローカルのファイルとクラウド上の既存のコピーはそのまま残ります。',
       },
       {
+        'zh-TW': '新增「設定 → 憑證與金鑰」：掃描這台電腦的 git 憑證來源、gh／glab 帳號、SSH 金鑰與鑰匙圈項目，標出 remote URL 內含 token、金鑰沒有 passphrase、token 以明文存放這類風險。它不顯示任何值，也不修改任何東西；在安全的情況下會附上可複製的修正指令。agent 也能透過 MCP 查詢名稱與發現項目。',
+        'en-US': 'New Settings → Credentials & keys scans this computer’s git credential sources, gh and glab accounts, SSH keys and keychain items, and flags risks such as a token inside a remote URL, a key without a passphrase, or a token kept in plain text. It never shows a value and never changes anything; where it is safe, a finding comes with a fix command you can copy. Agents can query the names and findings over MCP.',
+        'ja-JP': '「設定 → 認証情報とキー」を追加しました。このコンピューターの git 認証情報の取得元、gh／glab のアカウント、SSH キー、キーチェーンの項目をスキャンし、remote URL に含まれたトークン、パスフレーズのないキー、平文で保存されたトークンといったリスクを示します。値は一切表示せず、何も変更しません。安全な場合は、コピーして使える修正コマンドを添えます。エージェントも MCP で名前と検出項目を照会できます。',
+      },
+      {
         'zh-TW': '聊天室：pane 傳出的 HTML 檔會轉成 A4 PDF，每個附件都附上一張報告卡（標題與一句摘要），你回覆報告卡時 pane 會知道你指的是哪份報告；很長的回覆改成一則預覽加上完整內容的 Markdown 檔。「設定 → Channels」會列出每個 bot 的聊天室與綁定的 pane，可以跳過去、多選解除綁定、清掉 pane 已不存在的綁定。',
         'en-US': 'Chats: an HTML file a pane sends arrives as an A4 PDF, every attachment comes with a report card (a title and a one-line summary), and replying to a card tells the pane which report you mean. A very long reply arrives as one preview plus the whole text as a Markdown file. Settings → Channels lists each bot’s chats and bound panes, so you can jump to a pane, unbind several at once, and clear bindings whose pane is gone.',
         'ja-JP': 'チャット：ペインが送る HTML ファイルは A4 の PDF になり、すべての添付にレポートカード（タイトルと一行の要約）が付きます。カードに返信すると、どのレポートの話かがペインに伝わります。長い返信は 1 件のプレビューと全文の Markdown ファイルで届きます。「設定 → Channels」では bot ごとにチャットと紐づいたペインが一覧でき、ペインへの移動、まとめての紐づけ解除、ペインがなくなった紐づけの削除ができます。',

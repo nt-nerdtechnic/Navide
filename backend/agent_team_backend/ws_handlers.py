@@ -11683,3 +11683,11 @@ handler(channels_pdf.RESULT_TYPE)(channels_pdf.handle_result)
 from .guard import ws_api as guard_ws_api  # noqa: E402
 
 handler(*guard_ws_api.MESSAGE_TYPES)(guard_ws_api.handle)
+
+# ── Credentials & keys (credentials.*) ──
+# Read-only risk scan plus reminder state; logic in credentials_scan. No
+# handler here returns or accepts a secret value.
+from . import credentials_scan  # noqa: E402
+
+for _credentials_type, _credentials_fn in credentials_scan.MESSAGE_HANDLERS.items():
+    handler(_credentials_type)(_credentials_fn)

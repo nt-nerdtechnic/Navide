@@ -1021,6 +1021,10 @@
           "title": "Every CLI's MCP",
           "summary": "Read-only view of the MCP servers each CLI keeps in its own config, and where each server is set up."
         },
+        "credentials": {
+          "title": "Credentials & keys",
+          "summary": "Read-only scan of where credentials and keys live on this machine, with reminders."
+        },
         "skills": {
           "title": "Skills",
           "summary": "Create, edit, enable, disable, and inspect app-managed agent skills."
@@ -1814,6 +1818,7 @@
       "roles": "Roles",
       "pipelines": "Pipelines",
       "mcp": "MCP",
+      "credentials": "Credentials & keys",
       "skills": "Skills",
       "prompts": "Prompts",
       "memory": "Memory",
@@ -4579,7 +4584,7 @@
         },
         "s1": {
           "title": "Direction 1: the tools Navide gives CLI agents",
-          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>59</strong> of them today (53 core, plus the 6 the plans plugin registers), alongside 3 read-only resources and 3 prompt templates.",
+          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>61</strong> of them today (55 core, plus the 6 the plans plugin registers), alongside 3 read-only resources and 3 prompt templates.",
           "h1": "Plan documents",
           "planTools": {
             "plan_list": "List every plan in this workspace, with its stage and todo progress",
@@ -4619,7 +4624,9 @@
             "workspace_open": "Open a project as a workspace in Navide; whether that is a new window or one that already has the project open is Navide's decision",
             "workspace_switch": "Switch my own window to another project it already holds; panes of the project being left keep running. Refused while a pipeline is running in that window, because switching would abort it",
             "prompt_list": "The prompt skills the user keeps in Settings → Prompts; read-only, since creating and editing them is the user's job",
-            "mcp_list": "Which MCP servers Navide connects to and which each CLI keeps in its own config, with live state and tool counts; read-only, and the same list Settings → MCP shows"
+            "mcp_list": "Which MCP servers Navide connects to and which each CLI keeps in its own config, with live state and tool counts; read-only, and the same list Settings → MCP shows",
+            "credentials_list": "Credentials the scan inventoried, with kind and label only; never a value",
+            "credentials_findings": "Credential risk findings with severity and reminder state; read-only"
           },
           "note2": "These are the things an agent cannot do with its own tools — quota, pipeline state and skill delivery are known only to Navide. Git, file access and the shell are deliberately <strong>not</strong> wrapped as MCP tools: the agent already has those abilities, a wrapper only makes them harder to use, and every pane would pay the context cost of a longer tool list.",
           "h3": "Working with other CLIs",
@@ -6090,6 +6097,153 @@
       "catalog-hint": "This catalog lists only <strong>\"Orchestrator context-reading\"</strong> MCPs — tools that read workspace / docs / external service data and inject it into kickoff prompts to ground agent knowledge. Execution actions (tests, browser automation, etc.) are handled by the CLI agents themselves.",
       "catalog-requires-env": "Requires env vars: {vars}",
       "catalog-empty": "No matching MCP servers found"
+    },
+    "credentials": {
+      "title": "Credentials & keys",
+      "intro": "A read-only scan of where credentials and keys live on this machine. Nothing is changed, moved or sent anywhere.",
+      "meta": "Local only · values never shown · sync off",
+      "keyring-ok": "Keyring available: {backend}",
+      "keyring-ok-plain": "Keyring available",
+      "keyring-bad": "Keyring unavailable",
+      "keyring-bad-hint": "Without a system keyring, credentials tend to end up in plain files.",
+      "incomplete": "This scan is incomplete: it hit a time or folder limit, or skipped a repository it could not read safely, so findings in the folders below may be missing.",
+      "keyring-reason-unknown": "No reason was reported.",
+      "scan": "Scan",
+      "scanning": "Scanning…",
+      "scan-roots": "Scan roots…",
+      "scanned-at": "Scanned {time} · {ms} ms",
+      "banner-high": "{count} high-risk finding(s) need attention",
+      "banner-high-hint": "Open a card for plain advice. Nothing here changes anything for you.",
+      "filter-label": "Filter by kind",
+      "search": "Search label, location, host…",
+      "view-label": "View",
+      "view-findings": "Findings",
+      "view-inventory": "Inventory",
+      "all": "All",
+      "loading": "Scanning this machine…",
+      "error-load": "The scan failed.",
+      "empty-findings-title": "No findings",
+      "empty-findings-body": "Nothing risky matched the current filter.",
+      "empty-inventory-title": "Nothing inventoried",
+      "empty-inventory-body": "No credentials matched the current filter.",
+      "not-scanned": "Press Scan to look for credentials on this machine.",
+      "severity": {
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low"
+      },
+      "kind": {
+        "git-helper": "Git helper",
+        "cli-account": "CLI account",
+        "ssh-key": "SSH key",
+        "keychain-item": "Keychain item",
+        "remote": "Git remote",
+        "env-var": "Environment",
+        "plaintext-file": "Plain file",
+        "keyring": "Keyring"
+      },
+      "reminder": {
+        "title": "Reminder",
+        "active": "Active",
+        "snoozed": "Snoozed",
+        "dismissed": "Dismissed",
+        "until": "until {date}",
+        "snooze": "Snooze 7 days",
+        "dismiss": "Dismiss",
+        "reactivate": "Reactivate",
+        "error": "Could not update the reminder."
+      },
+      "drawer": {
+        "close": "Close details",
+        "location": "Where",
+        "why": "What this means",
+        "todo": "What to do",
+        "steps": "Commands you can run yourself",
+        "steps-note": "Copy only. Navide never runs these for you.",
+        "manual-fix": "This value contains shell characters, so no command is offered. Fix it by hand in the config file shown above.",
+        "links": "Provider pages",
+        "copy": "Copy",
+        "copied": "Copied",
+        "details": "Details",
+        "no-reveal": "Values are never shown here, and there is no reveal button. To see a value, open your system keychain app."
+      },
+      "roots": {
+        "title": "Scan roots",
+        "intro": "Folders searched for git repositories. Workspace roots come from your open workspaces; add more if you keep repos elsewhere.",
+        "placeholder": "/path/to/folder",
+        "add": "Add",
+        "browse": "Browse…",
+        "remove": "Remove",
+        "save": "Save and rescan",
+        "empty": "No extra roots yet.",
+        "scanned": "Searched in the last scan",
+        "source": {
+          "workspace": "workspace",
+          "user": "user"
+        },
+        "repos": "{count} repos",
+        "truncated": "partial",
+        "error": "Could not save the scan roots.",
+        "error-load": "Could not load the scan roots."
+      },
+      "code-unknown": {
+        "title": "Credential finding",
+        "body": "This finding type is not described in this version."
+      },
+      "code": {
+        "url-token": {
+          "title": "Token embedded in a remote URL",
+          "body": "Anyone who can read the repo config, a shell history or a log can see the token. Revoke the token at the provider first, then remove it from the remote URL so git uses the keychain."
+        },
+        "ssh-no-passphrase-default-host": {
+          "title": "Default SSH key has no passphrase",
+          "body": "This key is used for a host by default and anyone who copies the file can use it. Add a passphrase (ssh-keygen -p) and load it into the ssh-agent or keychain."
+        },
+        "ssh-no-passphrase": {
+          "title": "SSH key has no passphrase",
+          "body": "Anyone who copies this private key file can use it. Add a passphrase with ssh-keygen -p, or delete the key if you no longer use it."
+        },
+        "ssh-key-unreferenced": {
+          "title": "SSH key not referenced anywhere",
+          "body": "No ssh config entry or known host points at this key, so it may be left over. If you no longer need it, remove it from the provider account and delete the file."
+        },
+        "ssh-key-mode": {
+          "title": "SSH key file is readable by others",
+          "body": "Other users on this machine can read the private key. Run chmod 600 on the file so only you can access it."
+        },
+        "cli-token-plaintext": {
+          "title": "CLI token stored in a plain file",
+          "body": "The CLI keeps its login token in a readable file instead of the keychain. Log out and back in with the keychain option if the CLI has one, or restrict the file to your user."
+        },
+        "gh-active-account-only": {
+          "title": "Only the active gh account is usable",
+          "body": "The GitHub CLI serves one active account at a time, so repos tied to another account silently use the wrong identity. Run gh auth switch before pushing, or give each repo its own credential helper."
+        },
+        "helper-duplicate": {
+          "title": "Duplicate git credential helpers",
+          "body": "The same helper is configured more than once, so git may prompt or store a credential twice. Remove the extra credential.helper lines from your git config."
+        },
+        "helper-shadowed": {
+          "title": "A git credential helper is never reached",
+          "body": "An earlier helper answers first, so this one is never used. Check the order of credential.helper entries and keep only the one you want."
+        },
+        "env-token-in-shell-rc": {
+          "title": "Token exported in a shell startup file",
+          "body": "Every program you start inherits this token, and the file is easy to leak or commit. Revoke it at the provider, remove the export line, and load the secret from the keychain when needed."
+        },
+        "env-token-set": {
+          "title": "Token set in the environment",
+          "body": "A credential is present in this app's environment and is passed to every child process. Unset it where it is defined if you do not need it everywhere."
+        },
+        "plaintext-credential-file": {
+          "title": "Credentials in a plain file",
+          "body": "A file on disk holds credentials in readable text. Move them into the system keychain, restrict the file to your user, and rotate the credential if the file was ever shared or backed up."
+        },
+        "keyring-unavailable": {
+          "title": "No system keyring available",
+          "body": "Without a keyring, tools fall back to plain files. Install and unlock one (macOS Keychain, Windows Credential Manager or a Secret Service such as GNOME Keyring) and sign in again."
+        }
+      }
     },
     "skills": {
       "title": "Managed Skills",

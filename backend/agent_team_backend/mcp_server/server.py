@@ -6678,6 +6678,86 @@ async def mcp_list(ctx: Context) -> dict[str, Any]:
     return {"servers": servers, **reflected}
 
 
+async def _credentials_scan_result() -> dict[str, Any]:
+    from agent_team_backend import credentials_scan
+
+    try:
+        return await credentials_scan.service().scan(force=False)
+    except Exception as err:  # noqa: BLE001 - report, never log details
+        _log.warning("credentials scan failed (%s)", type(err).__name__)
+        return {"ok": False, "error": "credentials scan failed", "error_code": "internal-error"}
+
+
+@server.tool()
+async def credentials_list(ctx: Context) -> dict[str, Any]:
+    """List this machine's credentials and keys by name and metadata only.
+
+    What the user sees in Settings → Credentials & keys: git credential
+    helpers, gh / glab accounts, SSH private keys, OS keyring item metadata,
+    remotes whose URL carries userinfo, token-looking environment variable
+    names, and plaintext credential files. Read it to tell the user which
+    identity or key exists before suggesting a push or a fix.
+
+    Values are never returned — no token, password, private key or
+    passphrase, and no prefix, length or hash of one. The scan is read-only:
+    it never writes git config, the keychain, ~/.ssh or a remote, and it
+    runs no command that prints a secret. Results are cached for 60 seconds.
+
+    Returns {ok, scanned_at, platform, keyring: {available, backend,
+    reason?}, items: [{id, kind, label, detail}]}. Keyring items carry only
+    their class and dates: no service, server or account (the lookup keys of
+    a keychain query).
+    """
+    caller = _resolve_caller(ctx)
+    _log.info("credentials_list called by %s", getattr(caller, "kind", "unknown"))
+    result = await _credentials_scan_result()
+    if not result.get("ok"):
+        return result
+    items = []
+    for item in result["items"]:
+        if item.get("kind") == "keychain-item":
+            detail = {k: v for k, v in item.get("detail", {}).items()
+                      if k not in {"service", "server", "account"}}
+            item = {**item, "label": str(detail.get("class", "keychain-item")), "detail": detail}
+        items.append(item)
+    return {"ok": True, "scanned_at": result["scanned_at"], "platform": result["platform"],
+            "keyring": result["keyring"], "items": items}
+
+
+@server.tool()
+async def credentials_findings(ctx: Context) -> dict[str, Any]:
+    """Risk findings from the read-only credentials and keys scan.
+
+    Each finding is {id, code, severity (high/medium/low), kind, location,
+    params, links, actions, manual_fix, reminder}. `location` is already
+    redacted (a URL token shows as removed, never as a value).
+    `reminder.state` is active, snoozed or dismissed as the user set it in
+    Navide. `manual_fix` true means no safe command exists and the user has
+    to fix it by hand. `actions` are fix action names
+    (remote-set-url, ssh-add-passphrase, chmod-600, gh-auth-switch,
+    gh-login-keyring, glab-login-keyring, inspect-helper-config,
+    inspect-url-rewrite, manual-fix); no shell command is returned here.
+    Codes include url-token,
+    ssh-no-passphrase-default-host, ssh-no-passphrase, ssh-key-unreferenced,
+    ssh-key-mode, cli-token-plaintext, gh-active-account-only,
+    helper-duplicate, helper-shadowed, env-token-in-shell-rc, env-token-set,
+    plaintext-credential-file and keyring-unavailable.
+
+    Values are never returned, and nothing here changes anything: report a
+    finding to the user; fixing it (and snoozing or dismissing it) is the
+    user's decision, made in Navide. Returns {ok, scanned_at, summary:
+    {high, medium, low, active_reminders}, findings}.
+    """
+    caller = _resolve_caller(ctx)
+    _log.info("credentials_findings called by %s", getattr(caller, "kind", "unknown"))
+    result = await _credentials_scan_result()
+    if not result.get("ok"):
+        return result
+    findings = [{k: v for k, v in finding.items() if k != "steps"} for finding in result["findings"]]
+    return {"ok": True, "scanned_at": result["scanned_at"], "summary": result["summary"],
+            "findings": findings}
+
+
 def _prompt_skills_inventory(skill_id: str) -> dict[str, Any]:
     """The Prompts page's saved skills, as a summary or one of them in full."""
     from agent_team_backend import app as _app

@@ -60,6 +60,8 @@ const workspaceTools = [
   'prompt_list',
   'memory_list',
   'mcp_list',
+  'credentials_list',
+  'credentials_findings',
   'pipeline_list',
   'pipeline_status',
   'pipeline_start',
