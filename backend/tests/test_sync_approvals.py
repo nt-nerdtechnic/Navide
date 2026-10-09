@@ -229,3 +229,16 @@ async def test_the_window_lists_and_decides_through_the_link(tmp_path, account_k
     result = server_link.decide_sync_approval("mcp", "x", True)
     assert result["status"] == "applied" and "x" in _names(b_store)
     assert server_link.sync_approvals() == []
+
+
+def test_an_account_change_drops_every_hold(tmp_path, account_key, monkeypatch):
+    from agent_team_backend import sync_engine
+    from agent_team_backend.db import Database
+    from tests.test_sync_engine import FakeSettingsStore
+
+    monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore())
+    monkeypatch.setattr(app, "sync_store", sync_engine.SyncStore(Database(tmp_path / "s.db")))
+    sync_approvals.hold("mcp", "x", _mcp("x"), local=None, kind="new", summary={"name": "x"})
+    path = sync_approvals._stash_path("mcp", "x")
+    sync_scopes.on_account_changed()
+    assert sync_approvals.listing() == [] and not path.exists()
