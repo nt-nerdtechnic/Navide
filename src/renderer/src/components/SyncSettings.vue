@@ -660,6 +660,7 @@ onBeforeUnmount(() => offResult?.())
         </div>
         <p v-if="a.displayable === false" class="sync-note sync-result-error sync-approval-undisplayable">
           {{ t('settings.sync.approval-undisplayable') }}
+          <template v-if="typeof a.summary.unavailable === 'string'"> {{ visible(a.summary.unavailable) }}</template>
         </p>
         <template v-else>
           <code v-for="(line, i) in approvalLines(a)" :key="i" class="sync-approval-line">{{ line }}</code>
@@ -668,7 +669,6 @@ onBeforeUnmount(() => offResult?.())
               <code>{{ row }}</code>
             </li>
           </ul>
-          <p v-if="a.summary.contentNotShown" class="sync-hint">{{ t('settings.sync.approval-content-not-shown') }}</p>
           <ul v-if="approvalFiles(a).length" class="sync-approval-files">
             <li v-for="f in approvalFiles(a)" :key="f.path" class="sync-approval-file">
               <code>{{ fileLine(f) }}</code>

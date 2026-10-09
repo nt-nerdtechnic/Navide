@@ -6208,7 +6208,6 @@
       "approval-downloading": "approved — files downloading",
       "approval-cwd": "runs in: {path}",
       "approval-undisplayable": "This record cannot be displayed in full here, so it cannot be approved. Reject it.",
-      "approval-content-not-shown": "These files arrive only after approval; their names and sizes are all that can be shown first.",
       "approval-cut": "… preview cut here; the file goes on",
       "approvals-full": "Too many records are waiting in {scopes}: new ones are refused until you decide some.",
       "approval-headers": "header names: {names}",

@@ -910,6 +910,21 @@ describe('SyncSettings', () => {
       expect(text).toContain('a\\u{00A0}b\\u{3164}c\\u{0301}d e')
     })
 
+    it('says why a held large skill cannot be approved', async () => {
+      const stuck = {
+        ...held,
+        scope: 'skill-files',
+        displayable: false,
+        summary: { name: 'big', files: [], unavailable: 'its files could not be downloaded for review: gone' },
+      }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [stuck] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const card = wrapper.find('.sync-approval')
+      expect(card.find('button.sync-approve').exists()).toBe(false)
+      expect(card.find('.sync-approval-undisplayable').text()).toContain('could not be downloaded for review: gone')
+    })
+
     it('says when a queue is full and new records are being refused', async () => {
       const { backend } = mockBackend({
         'sync.approvals': { ok: true, payload: { approvals: [], full: ['mcp'] } },

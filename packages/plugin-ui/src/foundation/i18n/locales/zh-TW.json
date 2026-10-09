@@ -6208,7 +6208,6 @@
       "approval-downloading": "已核准——檔案下載中",
       "approval-cwd": "執行位置：{path}",
       "approval-undisplayable": "這筆無法在此完整顯示，因此不能核准，請拒絕。",
-      "approval-content-not-shown": "這些檔案要核准後才會下載；核准前只能顯示檔名與大小。",
       "approval-cut": "……預覽到此為止，檔案還有後續內容",
       "approvals-full": "{scopes} 等待核准的項目已滿：在你處理一些之前，新的會被拒收。",
       "approval-headers": "Header 名稱：{names}",
