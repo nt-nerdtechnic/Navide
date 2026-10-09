@@ -75,6 +75,34 @@ const decision = computed(() => {
   return out
 })
 
+/** A unified diff, one line at a time, marked as added or removed. */
+const diffLines = computed(() => {
+  const diff = props.summary.diff
+  if (typeof diff !== 'string' || !diff) return []
+  return diff.split('\n').filter((line, i, all) => line !== '' || i < all.length - 1).map((line) => ({
+    text: visible(line),
+    kind:
+      line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : '',
+  }))
+})
+
+/** Every field of a prompt record, as JSON values (so "true" and true differ). */
+const fields = computed(() =>
+  isRecord(props.summary.record)
+    ? Object.entries(props.summary.record).map(([k, v]) => visible(k) + ': ' + visible(JSON.stringify(v)))
+    : [],
+)
+
+const changes = computed(() =>
+  records<{ field: string; from: unknown; to: unknown }>(props.summary.changes).map((c) =>
+    t('settings.sync.approval-change', {
+      field: visible(c.field),
+      from: visible(JSON.stringify(c.from ?? null)),
+      to: visible(JSON.stringify(c.to ?? null)),
+    }),
+  ),
+)
+
 function fileLine(f: SummaryFile): string {
   const parts = [visible(f.path)]
   if (typeof f.size === 'number') parts.push(t('settings.sync.approval-size', { bytes: f.size }))
@@ -88,7 +116,30 @@ function fileLine(f: SummaryFile): string {
     <p v-for="(line, i) in decision" :key="'d:' + i" class="sync-note sync-result-error sync-approval-decision">
       {{ line }}
     </p>
+    <code v-if="typeof summary.path === 'string'" class="sync-approval-line">{{ visible(summary.path) }}</code>
     <code v-for="(line, i) in lines" :key="i" class="sync-approval-line">{{ line }}</code>
+    <ul v-if="fields.length" class="sync-approval-files">
+      <li v-for="(row, i) in fields" :key="'f:' + i" class="sync-approval-field"><code>{{ row }}</code></li>
+    </ul>
+    <template v-if="changes.length">
+      <span class="sync-hint">{{ t('settings.sync.approval-changes') }}</span>
+      <ul class="sync-approval-files">
+        <li v-for="(row, i) in changes" :key="'c:' + i" class="sync-approval-change"><code>{{ row }}</code></li>
+      </ul>
+    </template>
+    <template v-if="diffLines.length">
+      <span class="sync-hint">{{ t('settings.sync.approval-diff') }}</span>
+      <pre class="sync-approval-preview sync-approval-diff"><span
+        v-for="(line, i) in diffLines"
+        :key="'d:' + i"
+        :class="line.kind ? 'sync-diff-' + line.kind : ''"
+        class="sync-diff-line"
+      >{{ line.text }}</span></pre>
+    </template>
+    <template v-if="typeof summary.text === 'string'">
+      <span class="sync-hint">{{ t('settings.sync.approval-text') }}</span>
+      <pre class="sync-approval-preview sync-approval-text">{{ visible(summary.text) }}</pre>
+    </template>
     <ul v-if="env.length" class="sync-approval-files">
       <li v-for="(row, i) in env" :key="'env:' + i" class="sync-approval-env">
         <code>{{ row }}</code>
@@ -156,6 +207,15 @@ function fileLine(f: SummaryFile): string {
 .sync-approval-file code,
 .sync-approval-env code {
   overflow-wrap: anywhere;
+}
+.sync-diff-line {
+  display: block;
+}
+.sync-diff-add {
+  color: var(--text-success, #3fb950);
+}
+.sync-diff-del {
+  color: var(--text-danger, #e07060);
 }
 .sync-approval-preview {
   max-height: 12em;
