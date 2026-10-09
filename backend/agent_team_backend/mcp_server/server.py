@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -1219,6 +1220,21 @@ async def cli_open_agent(
         )
         if refused:
             return refused
+    # The spawn request is a broadcast only the window holding the workspace
+    # answers, and it is not replayed: sent before that window is up (a
+    # workspace_open a moment ago) or with no such window at all, nobody would
+    # answer and the call would sit out the whole verdict deadline. Make sure
+    # someone is listening first, and say so plainly when nobody is.
+    if target_workspace and not await _wait_window_ready(target_workspace):
+        return {
+            "ok": False,
+            "error": (
+                f"no Navide window holds {target_workspace} (none answered within "
+                f"{_WINDOW_READY_TIMEOUT_S:.0f}s). Open it with workspace_open and "
+                "retry once workspace_list shows window_ready for it; no pane was opened"
+            ),
+            "error_code": "window_not_ready",
+        }
     request_id = f"{me or caller.kind}:spawn:{secrets.token_hex(8)}"
     loop = asyncio.get_running_loop()
     future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -5217,6 +5233,60 @@ async def _ui_request(
     return result
 
 
+#: How long workspace_open and cli_open_agent wait for a window to hold a
+#: workspace. A new window loads its renderer and connects to the backend
+#: before it answers anything; until then a broadcast for its workspace is
+#: answered by nobody and is never replayed.
+_WINDOW_READY_TIMEOUT_S = 15.0
+#: One probe's wait. Short, because a probe sent before the window subscribed
+#: is simply lost — the next one is what reaches it.
+_WINDOW_PROBE_TIMEOUT_S = 1.0
+#: Paths workspace_open has opened in this backend's lifetime, oldest first,
+#: with when. workspace_list lists the ones Recent does not already hold.
+_mcp_opened_workspaces: dict[str, str] = {}
+
+
+async def _probe_window(workspace_path: str, timeout: float) -> bool:
+    """Is a window holding *workspace_path* up and answering right now?
+
+    A broadcast list_actions: the renderer answers it under the same ownership
+    test (isLocalWorkspace) that agent_spawn.request uses, so an answer means
+    a spawn request for that workspace would be picked up too.
+    """
+    from agent_team_backend import app
+    from agent_team_backend.ipc import make_event
+
+    request_id = secrets.token_hex(16)
+    fut = _ui_invoke_pending.register(request_id)
+    payload: dict[str, Any] = {
+        "request_id": request_id,
+        "workspace_path": workspace_path,
+        "op": "list_actions",
+        "action": None,
+        "args": None,
+        "global": False,
+        "addressed": False,
+        "caller_pane_id": "",
+    }
+    try:
+        await app.broadcast(make_event("ui.invoke.request", payload))
+    except BaseException:
+        _ui_invoke_pending.discard(request_id)
+        raise
+    return await _ui_invoke_pending.wait(request_id, fut, timeout=timeout) is not TIMEOUT
+
+
+async def _wait_window_ready(workspace_path: str) -> bool:
+    """Probe until a window holds *workspace_path*, for at most
+    _WINDOW_READY_TIMEOUT_S. False means no window answered in that time."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _WINDOW_READY_TIMEOUT_S
+    while (remaining := deadline - loop.time()) > 0:
+        if await _probe_window(workspace_path, min(_WINDOW_PROBE_TIMEOUT_S, remaining)):
+            return True
+    return False
+
+
 @server.tool()
 async def ui_list_actions(workspace_path: str, ctx: Context) -> dict[str, Any]:
     """List the UI actions registered by the Navide window for workspace_path.
@@ -5816,6 +5886,28 @@ def _recent_workspace_rows() -> dict[str, Any]:
         }
         for entry in _app.recent_workspaces_store.list()
     ]
+    # Opened through workspace_open but never recorded in Recent: such a
+    # window boots with duplicate=1, which (on purpose, for cloned windows)
+    # keeps it out of Recent. Listed here instead, so the path a caller just
+    # opened is one it can find again, without the MCP call reordering the
+    # user's Recent list.
+    listed = {_norm_workspace(str(entry.get("path") or "")) for entry in workspaces}
+    for path, opened_at in reversed(list(_mcp_opened_workspaces.items())):
+        norm = _norm_workspace(path)
+        if norm in listed:
+            continue
+        listed.add(norm)
+        workspaces.append(
+            {
+                "path": path,
+                "name": Path(path).name or path,
+                "last_opened_at": opened_at,
+                "pinned": False,
+                "exists": Path(path).is_dir(),
+                "has_live_panes": norm in live,
+                "opened_by_mcp": True,
+            }
+        )
     return {"workspaces": workspaces, "live_pane_workspaces": sorted(live)}
 
 
@@ -5838,9 +5930,22 @@ async def workspace_list(ctx: Context) -> dict[str, Any]:
     `live_pane_workspaces` is that live set on its own, resolved. A pane can be
     running in a project the user never opened from the welcome screen, which
     is a perfectly legal workspace_path that the recent list does not mention.
+
+    Each workspace also carries window_ready: true when a Navide window holds
+    it right now and would take a cli_open_agent for it — the readiness
+    workspace_open reports, asked again. `window_ready_workspaces` lists those
+    paths. Asking costs up to about a second.
     """
     _resolve_caller(ctx)
-    return await asyncio.to_thread(_recent_workspace_rows)
+    rows = await asyncio.to_thread(_recent_workspace_rows)
+    paths = [str(entry.get("path") or "") for entry in rows["workspaces"]]
+    ready = await asyncio.gather(
+        *(_probe_window(path, _WINDOW_PROBE_TIMEOUT_S) for path in paths)
+    )
+    for entry, is_ready in zip(rows["workspaces"], ready):
+        entry["window_ready"] = is_ready
+    rows["window_ready_workspaces"] = [path for path, is_ready in zip(paths, ready) if is_ready]
+    return rows
 
 
 @server.tool()
@@ -5855,12 +5960,24 @@ async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
     workspace may not have a window yet), so it errors only when no Navide
     window is open at all.
 
-    Returns {ok: true, path} once the window has handled the request, or the
-    error the window (or the routing) reported.
+    A leading "~" is expanded; the `path` returned is the expanded one.
+
+    Returns {ok: true, path, ready} once the window has handled the request,
+    or the error the window (or the routing) reported. A new window takes a
+    moment to load, so this waits (up to about 15s) for the window holding
+    `path` to answer: ready true means cli_open_agent(workspace_path=path)
+    will be picked up now. ready false comes with a hint — the window may
+    still be loading; workspace_list reports window_ready for it later. The
+    workspace is in workspace_list as soon as this returns either way.
     """
     caller = _resolve_caller(ctx)
     if not path:
         return {"ok": False, "result": None, "error": "workspace_open requires path"}
+    # Expanded here, once: the window keeps whatever string it is handed as its
+    # workspace and never expands "~", so an unexpanded path would be held
+    # under a key that the probe, workspace_list (Recent stores expanded paths)
+    # and a later cli_open_agent with the absolute path all fail to match.
+    path = os.path.expanduser(path)
     result = await _ui_request(
         "",
         "invoke",
@@ -5871,7 +5988,21 @@ async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
     )
     if not result.get("ok"):
         return result
-    return {"ok": True, "path": path}
+    # The window opens with duplicate=1 and so stays out of Recent; this is
+    # what puts the path in workspace_list (see _recent_workspace_rows).
+    _mcp_opened_workspaces.pop(path, None)
+    _mcp_opened_workspaces[path] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+    ready = await _wait_window_ready(path)
+    reply: dict[str, Any] = {"ok": True, "path": path, "ready": ready}
+    if not ready:
+        reply["hint"] = (
+            f"no Navide window answered for {path} within {_WINDOW_READY_TIMEOUT_S:.0f}s — "
+            "it may still be loading. Check window_ready in workspace_list before "
+            "cli_open_agent; do not open the workspace again"
+        )
+    return reply
 
 
 @server.tool()

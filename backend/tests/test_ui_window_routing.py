@@ -133,8 +133,12 @@ async def test_no_window_with_the_ui_bus_is_reported_without_waiting(
 
 @pytest.mark.asyncio
 async def test_workspace_open_reaches_the_main_window_and_succeeds(
-    sessions: set[app.Session],
+    sessions: set[app.Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The readiness wait after the open is covered in test_workspace_open_ready.
+    monkeypatch.setattr(plan_mcp, "_WINDOW_READY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(plan_mcp, "_WINDOW_PROBE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(plan_mcp, "_mcp_opened_workspaces", {})
     plugin_window, main_window = _session(), _session()
     sessions.update({plugin_window, main_window})
     await _ready(main_window)
@@ -154,7 +158,8 @@ async def test_workspace_open_reaches_the_main_window_and_succeeds(
     result = await plan_mcp.workspace_open("/Users/me/project", _ctx())
     await task
 
-    assert result == {"ok": True, "path": "/Users/me/project"}
+    assert result["ok"] is True
+    assert result["path"] == "/Users/me/project"
     payload = _requests(main_window)[0]["payload"]
     assert payload["global"] is True and payload["args"] == {"path": "/Users/me/project"}
 
