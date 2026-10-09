@@ -253,6 +253,27 @@ class ItemState:
     synced_hash: str
     deleted: bool
     sealed_kid: str = ""
+    #: The ``updatedAt`` of the agreed copy, normalised by ``_stamp`` ("" when
+    #: unknown). Only ever moves forward; a record older than it is a replay.
+    synced_updated_at: str = ""
+
+
+def _stamp(updated_at: Any) -> str:
+    """*updated_at* as one comparable UTC string, or "" when it is not a time.
+
+    Every release writes ``now_iso()``, but the value arrives from the server
+    and is compared as text in SQL, so it is normalised first: an offset, a
+    fraction or a malformed value must not make an old record look new.
+    """
+    if not isinstance(updated_at, str) or not updated_at:
+        return ""
+    try:
+        when = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return ""
+    if when.tzinfo is None:
+        return ""
+    return when.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 def _create_schema(cur: Any) -> None:
@@ -302,6 +323,16 @@ def _schema_v2(cur: Any) -> None:
     cur.execute("ALTER TABLE sync_state ADD COLUMN sealed_kid TEXT NOT NULL DEFAULT ''")
 
 
+def _schema_v3(cur: Any) -> None:
+    # ``synced_updated_at``: see ItemState. Additive, with a default, so a
+    # build that predates it reads and writes the table unchanged; checked
+    # first so a database that already has the column (a downgrade and
+    # upgrade, a hand repair) takes the step without a second ALTER.
+    columns = {str(row[1]) for row in cur.execute("PRAGMA table_info(sync_state)").fetchall()}
+    if "synced_updated_at" not in columns:
+        cur.execute("ALTER TABLE sync_state ADD COLUMN synced_updated_at TEXT NOT NULL DEFAULT ''")
+
+
 #: Stands in for the two payloads of a sealed conflict row when the account
 #: key that would open them is not here. A row the user can neither read nor
 #: resolve still has to be listed, or the item stays silently blocked.
@@ -322,6 +353,7 @@ class SyncStore:
         self._db = db
         self._db.migrate(_COMPONENT, 1, _create_schema)
         self._db.migrate(_COMPONENT, 2, _schema_v2)
+        self._db.migrate(_COMPONENT, 3, _schema_v3)
         self._redactors: dict[str, Callable[[Any], dict[str, Any] | None]] = {}
         #: Bumped when the account changes. A round records the generation it
         #: began under, and a write from a round of an older one is refused:
@@ -347,21 +379,25 @@ class SyncStore:
     def state(self, scope: str, item_id: str) -> ItemState | None:
         with self._db.transaction() as cur:
             row = cur.execute(
-                "SELECT rev, synced_hash, deleted, sealed_kid FROM sync_state"
+                "SELECT rev, synced_hash, deleted, sealed_kid, synced_updated_at FROM sync_state"
                 " WHERE scope = ? AND item_id = ?",
                 (scope, item_id),
             ).fetchone()
-        return ItemState(int(row[0]), str(row[1]), bool(row[2]), str(row[3] or "")) if row else None
+        return (
+            ItemState(int(row[0]), str(row[1]), bool(row[2]), str(row[3] or ""), str(row[4] or ""))
+            if row
+            else None
+        )
 
     def states(self, scope: str) -> dict[str, ItemState]:
         with self._db.transaction() as cur:
             rows = cur.execute(
-                "SELECT item_id, rev, synced_hash, deleted, sealed_kid FROM sync_state"
-                " WHERE scope = ?",
+                "SELECT item_id, rev, synced_hash, deleted, sealed_kid, synced_updated_at"
+                " FROM sync_state WHERE scope = ?",
                 (scope,),
             ).fetchall()
         return {
-            str(r[0]): ItemState(int(r[1]), str(r[2]), bool(r[3]), str(r[4] or ""))
+            str(r[0]): ItemState(int(r[1]), str(r[2]), bool(r[3]), str(r[4] or ""), str(r[5] or ""))
             for r in rows
         }
 
@@ -374,20 +410,34 @@ class SyncStore:
         synced_hash: str,
         deleted: bool,
         sealed_kid: str = "",
+        synced_updated_at: str = "",
     ) -> None:
+        """Record what was agreed. ``synced_updated_at`` only moves forward:
+        a later write with an older (or no) stamp keeps the newer one, which
+        is what lets a replayed old record be told apart from a new one."""
         self._check_round()
+        stamp = _stamp(synced_updated_at)
         with self._db.transaction() as cur:
             cur.execute(
                 """
-                INSERT INTO sync_state (scope, item_id, rev, synced_hash, deleted, sealed_kid)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO sync_state
+                    (scope, item_id, rev, synced_hash, deleted, sealed_kid, synced_updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(scope, item_id) DO UPDATE SET
                     rev = excluded.rev,
                     synced_hash = excluded.synced_hash,
                     deleted = excluded.deleted,
-                    sealed_kid = excluded.sealed_kid
+                    sealed_kid = excluded.sealed_kid,
+                    synced_updated_at = CASE
+                        WHEN excluded.synced_updated_at > sync_state.synced_updated_at
+                        THEN excluded.synced_updated_at
+                        ELSE sync_state.synced_updated_at
+                    END
                 """,
-                (scope, item_id, int(rev), synced_hash, 1 if deleted else 0, sealed_kid or ""),
+                (
+                    scope, item_id, int(rev), synced_hash, 1 if deleted else 0,
+                    sealed_kid or "", stamp,
+                ),
             )
 
     # ── cursor ──────────────────────────────────────────────────────────
@@ -1041,6 +1091,20 @@ class SyncEngine:
             # apply; reported, and the cursor moves past it as usual.
             self._note(scope, "tooLarge", item_id)
             return False
+        # SEC-4: the server hands out revs, so it can serve any stored row again
+        # under a new one — an old body, or an old tombstone. A record whose
+        # updatedAt is older than the copy this machine last agreed on is such a
+        # replay: never applied and never a delete, but asked about below. One
+        # that names this machine is our own old write and is simply ignored.
+        stamp = _stamp(updated_at)
+        prior = self._store.state(scope, item_id)
+        replayed = bool(
+            stamp and prior is not None and prior.synced_updated_at
+            and stamp < prior.synced_updated_at
+        )
+        if replayed and device == self._device_id() and not explicit:
+            log.warning("ignoring %s/%s: an older copy of this machine's own write came back", scope, item_id)
+            return False
         if device == self._device_id() and not explicit:
             # Our own write coming back. Record the rev so the next push edits
             # from the right base, but there is nothing to apply. The key it
@@ -1055,6 +1119,7 @@ class SyncEngine:
                     synced_hash=state.synced_hash,
                     deleted=deleted,
                     sealed_kid="" if deleted else (_kid_of(body) or state.sealed_kid),
+                    synced_updated_at=stamp,
                 )
             return False
         try:
@@ -1099,7 +1164,7 @@ class SyncEngine:
             remote is None and origin == _ORIGIN_UNKNOWN and item_id in snapshot
             and not _sensitive(adapter)
         )
-        if unproven_delete or (
+        if unproven_delete or (replayed and local_hash != remote_hash) or (
             local_hash != agreed_hash and local_hash != remote_hash and not absent_ok
         ):
             self._store.record_conflict(
@@ -1150,6 +1215,7 @@ class SyncEngine:
             synced_hash=remote_hash if held else "",
             deleted=remote is None,
             sealed_kid=_kid_of(body) if (held and not deleted) else "",
+            synced_updated_at=stamp,
         )
         return held
 
@@ -1421,10 +1487,15 @@ class SyncEngine:
     ) -> int:
         by_id = {item_id: (payload, item_hash) for item_id, payload, item_hash in pending}
         reply = _payload(await self._call("sync.push", {"scope": scope, "items": wire}))
-        return await asyncio.to_thread(self._record_reply, scope, reply, by_id)
+        stamps = {str(item.get("itemId") or ""): str(item.get("updatedAt") or "") for item in wire}
+        return await asyncio.to_thread(self._record_reply, scope, reply, by_id, stamps)
 
     def _record_reply(
-        self, scope: str, reply: dict[str, Any], by_id: dict[str, tuple[Any, str]]
+        self,
+        scope: str,
+        reply: dict[str, Any],
+        by_id: dict[str, tuple[Any, str]],
+        stamps: dict[str, str] | None = None,
     ) -> int:
         """Write what the server said into the local record. Off the loop."""
         self._store._check_round()
@@ -1443,6 +1514,8 @@ class SyncEngine:
                 synced_hash=item_hash,
                 deleted=payload is None,
                 sealed_kid=(sync_keyring.active_key_id() or "") if payload is not None else "",
+                # The updatedAt this push carried: what the server now holds.
+                synced_updated_at=(stamps or {}).get(item_id, ""),
             )
         for entry in reply.get("rejected") or []:
             # Not recorded, so the next round offers it again.
@@ -1516,6 +1589,7 @@ class SyncEngine:
                 synced_hash=local_hash,
                 deleted=False,
                 sealed_kid=_kid_of(body),
+                synced_updated_at=str(entry.get("updatedAt") or ""),
             )
             return
         self._store.record_conflict(
