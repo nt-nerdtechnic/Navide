@@ -60,6 +60,15 @@ WATCH_INTERVAL_S = 30.0
 RECLAIM_IDLE_WAIT_S = 600.0
 RECLAIM_RETRY_S = 60.0
 RECLAIM_TRIES = 10
+#: An unreported run whose pane has sat idle this long gets a nudge to finish.
+IDLE_NUDGE_AFTER_S = 600
+#: At most this many nudges per run.
+IDLE_NUDGE_MAX = 2
+IDLE_NUDGE_TEXT = (
+    "[Navide self-evolution run {run_id}] This run is unattended: nobody will answer a "
+    "question. Finish now and call evolve_report (status=\"error\" if needed), listing "
+    "the work done and any branches or worktrees left behind."
+)
 #: How long the scheduler may spend handing a run over (opening a pane).
 SCHEDULER_TIMEOUT_S = 600
 PANE_PREFIX = "evolve-"
@@ -568,6 +577,9 @@ class EvolveService:
         #: Workspaces this process has touched; the watchdog looks at these
         #: and at every workspace that has a system evolve job.
         self._known: set[str] = set()
+        #: run id → (ms the run's pane was first seen idle, nudges sent). In
+        #: memory only: a restart at worst grants a run another round of nudges.
+        self._idle: dict[str, tuple[int | None, int]] = {}
 
     def now_ms(self) -> int:
         return int(self._clock())
@@ -1006,8 +1018,12 @@ class EvolveService:
             settings = await asyncio.to_thread(self.store.settings, workspace)
             if settings is None:
                 continue
-            for run in await asyncio.to_thread(self.store.running, workspace):
+            running = await asyncio.to_thread(self.store.running, workspace)
+            for run in running:
                 await self._watch_run(workspace, settings, run, now)
+            live = {workspace + "\0" + r["id"] for r in running}
+            for key in [k for k in self._idle if k not in live and k.startswith(workspace + "\0")]:
+                del self._idle[key]
             if settings.get("pending_catch_up") and self.host.workspace_has_panes(workspace):
                 await asyncio.to_thread(
                     self.store.save_settings, workspace, {**settings, "pending_catch_up": False}
@@ -1030,9 +1046,28 @@ class EvolveService:
         if now - int(run["started_at"]) > int(settings["max_minutes"]) * 60_000:
             fields.update(status="timeout", reason="timeout", ended_at=now)
             await self._notice(workspace, "timeout", {**run, **fields})
+        else:
+            await self._nudge_if_idle(workspace, run, now)
         if fields:
             await asyncio.to_thread(self.store.update, workspace, run["id"], fields)
             await self._changed(workspace)
+
+    async def _nudge_if_idle(self, workspace: str, run: dict[str, Any], now: int) -> None:
+        """Tell a run's pane that sat idle without reporting to finish (bounded)."""
+        key = workspace + "\0" + run["id"]
+        entry = self.host.pane(run["pane_id"]) if run["pane_id"] else None
+        since, sent = self._idle.get(key, (None, 0))
+        if entry is None or getattr(entry, "busy", False) or getattr(entry, "offline", False):
+            self._idle[key] = (None, sent)
+            return
+        if since is None:
+            since = now
+        self._idle[key] = (since, sent)
+        if sent >= IDLE_NUDGE_MAX or now - since < IDLE_NUDGE_AFTER_S * 1000:
+            return
+        answer = await self.host.send(entry.pane_id, IDLE_NUDGE_TEXT.format(run_id=run["id"]))
+        self._idle[key] = (now, sent + 1)
+        await self._notice(workspace, "nudged", {**run, "nudges": sent + 1, "delivered": bool(answer.get("ok"))})
 
     # ── events ───────────────────────────────────────────────────────────
 
