@@ -76,6 +76,8 @@ interface Approval {
   status: string
   kind: string
   summary: Record<string, unknown>
+  /** False when the summary cannot show the whole record: no Approve. */
+  displayable?: boolean
 }
 
 interface ApprovalFile {
@@ -84,10 +86,11 @@ interface ApprovalFile {
   sha256?: string
 }
 
-interface ApprovalScript {
+interface ApprovalPreview {
   path: string
   preview?: string
   truncated?: boolean
+  executable?: boolean
 }
 
 /** An item that reads like it carries a secret (D2): where, never what. */
@@ -120,6 +123,8 @@ const conflicts = ref<Conflict[]>([])
 const busy = ref('')
 const error = ref('')
 const approvals = ref<Approval[]>([])
+/** Scopes whose approval queue is full: new records there are refused. */
+const approvalsFull = ref<string[]>([])
 const secretWarnings = ref<SecretWarning[]>([])
 /** Held records still asking; a rejected one is not asked about again. */
 const waiting = computed(() => approvals.value.filter((a) => a.status !== 'rejected'))
@@ -279,16 +284,22 @@ async function loadApprovals(): Promise<void> {
   ])
   const rows = held?.ok ? held.payload?.approvals : null
   approvals.value = Array.isArray(rows) ? (rows as Approval[]) : []
+  approvalsFull.value = held?.ok ? strings((held.payload as { full?: unknown } | undefined)?.full) : []
   const found = warned?.ok ? warned.payload?.warnings : null
   secretWarnings.value = Array.isArray(found) ? (found as SecretWarning[]) : []
 }
 
-/** Characters that print as nothing or turn the text around them (control,
- *  format such as bidi overrides and zero-width, line/paragraph separators)
- *  are shown as \u{XXXX}: an approval must read as what it is. */
+/** Characters that do not read as what they are — control and format
+ *  (bidi overrides, zero-width), every separator but the plain space,
+ *  combining marks, and letters that render blank — are shown as \u{XXXX}:
+ *  an approval must read as what lands. */
+const HIDDEN_CHARS = /[\p{C}\p{Z}\p{M}\u115f\u1160\u3164\uffa0\u2800]/gu
+
 function visible(value: unknown): string {
-  return String(value ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (ch) =>
-    '\\u{' + ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0') + '}',
+  return String(value ?? '').replace(HIDDEN_CHARS, (ch) =>
+    ch === ' '
+      ? ch
+      : '\\u{' + ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0') + '}',
   )
 }
 
@@ -296,22 +307,27 @@ function asRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
 }
 
-/** What an MCP approval runs: the command, the args as a JSON array (so
- *  ["a b"] and ["a", "b"] look different), the url, then each env entry
- *  (secret values arrive masked) and each header name. */
+/** What an MCP approval runs, whole: the transport and command, the args as
+ *  a JSON array (so ["a b"] and ["a", "b"] look different), the url and
+ *  cwd, and each header name. Env entries are rows of their own. */
 function approvalLines(a: Approval): string[] {
   const s = a.summary ?? {}
   const lines: string[] = []
-  if (typeof s.command === 'string' && s.command) lines.push(visible(s.command))
+  const command = typeof s.command === 'string' && s.command ? visible(s.command) : ''
+  if (command) lines.push(typeof s.transport === 'string' ? visible(s.transport) + ': ' + command : command)
   if (Array.isArray(s.args) && s.args.length) lines.push(visible(JSON.stringify(s.args)))
-  if (typeof s.url === 'string' && s.url) lines.push(visible(s.url))
-  const env = Object.entries(asRecord(s.env))
-  if (env.length) {
-    lines.push(t('settings.sync.approval-env', { names: env.map(([k, v]) => visible(k) + '=' + visible(v)).join('  ') }))
+  if (typeof s.url === 'string' && s.url) {
+    lines.push(typeof s.transport === 'string' ? visible(s.transport) + ': ' + visible(s.url) : visible(s.url))
   }
+  if (typeof s.cwd === 'string' && s.cwd) lines.push(t('settings.sync.approval-cwd', { path: visible(s.cwd) }))
   const headers = Object.keys(asRecord(s.headers))
   if (headers.length) lines.push(t('settings.sync.approval-headers', { names: headers.map(visible).join(', ') }))
   return lines
+}
+
+/** One row per env entry: NAME=value (secret-named values arrive masked). */
+function approvalEnv(a: Approval): string[] {
+  return Object.entries(asRecord(a.summary?.env)).map(([k, v]) => visible(k) + '=' + visible(v))
 }
 
 function approvalFiles(a: Approval): ApprovalFile[] {
@@ -319,9 +335,9 @@ function approvalFiles(a: Approval): ApprovalFile[] {
   return Array.isArray(files) ? files.filter(isRecord).map((f) => f as unknown as ApprovalFile) : []
 }
 
-function approvalScripts(a: Approval): ApprovalScript[] {
-  const files = a.summary?.executable
-  return Array.isArray(files) ? files.filter(isRecord).map((f) => f as unknown as ApprovalScript) : []
+function approvalPreviews(a: Approval): ApprovalPreview[] {
+  const files = a.summary?.previews
+  return Array.isArray(files) ? files.filter(isRecord).map((f) => f as unknown as ApprovalPreview) : []
 }
 
 function fileLine(f: ApprovalFile): string {
@@ -630,6 +646,9 @@ onBeforeUnmount(() => offResult?.())
       <p v-if="hasKey" class="sync-hint">{{ t('settings.sync.rotate-hint') }}</p>
     </div>
 
+    <p v-if="approvalsFull.length" class="sync-note sync-result-error sync-approvals-full">
+      {{ t('settings.sync.approvals-full', { scopes: approvalsFull.map(scopeLabel).join(', ') }) }}
+    </p>
     <div v-if="waiting.length" class="sync-conflicts">
       <h3>{{ t('settings.sync.approvals-title', { count: waiting.length }) }}</h3>
       <p class="sync-hint">{{ t('settings.sync.approvals-hint') }}</p>
@@ -639,22 +658,40 @@ onBeforeUnmount(() => offResult?.())
           <code>{{ visible(a.itemId) }}</code>
           <span class="sync-hint">{{ approvalKind(a) }}</span>
         </div>
-        <code v-for="(line, i) in approvalLines(a)" :key="i" class="sync-approval-line">{{ line }}</code>
-        <ul v-if="approvalFiles(a).length" class="sync-approval-files">
-          <li v-for="f in approvalFiles(a)" :key="f.path" class="sync-approval-file">
-            <code>{{ fileLine(f) }}</code>
-          </li>
-        </ul>
-        <template v-if="typeof a.summary.skillMd === 'string' && a.summary.skillMd">
-          <span class="sync-hint">SKILL.md</span>
-          <pre class="sync-approval-preview sync-approval-skillmd">{{ visible(a.summary.skillMd) }}</pre>
-        </template>
-        <template v-for="x in approvalScripts(a)" :key="'x:' + x.path">
-          <span class="sync-hint">{{ t('settings.sync.approval-executable', { files: visible(x.path) }) }}</span>
-          <pre v-if="x.preview" class="sync-approval-preview sync-approval-script">{{ visible(x.preview) }}{{ x.truncated ? '\n…' : '' }}</pre>
+        <p v-if="a.displayable === false" class="sync-note sync-result-error sync-approval-undisplayable">
+          {{ t('settings.sync.approval-undisplayable') }}
+        </p>
+        <template v-else>
+          <code v-for="(line, i) in approvalLines(a)" :key="i" class="sync-approval-line">{{ line }}</code>
+          <ul v-if="approvalEnv(a).length" class="sync-approval-files">
+            <li v-for="(row, i) in approvalEnv(a)" :key="'env:' + i" class="sync-approval-env">
+              <code>{{ row }}</code>
+            </li>
+          </ul>
+          <p v-if="a.summary.contentNotShown" class="sync-hint">{{ t('settings.sync.approval-content-not-shown') }}</p>
+          <ul v-if="approvalFiles(a).length" class="sync-approval-files">
+            <li v-for="f in approvalFiles(a)" :key="f.path" class="sync-approval-file">
+              <code>{{ fileLine(f) }}</code>
+            </li>
+          </ul>
+          <template v-if="typeof a.summary.skillMd === 'string' && a.summary.skillMd">
+            <span class="sync-hint">SKILL.md</span>
+            <pre class="sync-approval-preview sync-approval-skillmd">{{ visible(a.summary.skillMd) }}</pre>
+            <span v-if="a.summary.skillMdTruncated" class="sync-hint sync-approval-cut">{{
+              t('settings.sync.approval-cut')
+            }}</span>
+          </template>
+          <template v-for="x in approvalPreviews(a)" :key="'p:' + x.path">
+            <span class="sync-hint">{{
+              x.executable ? t('settings.sync.approval-executable', { files: visible(x.path) }) : visible(x.path)
+            }}</span>
+            <pre class="sync-approval-preview sync-approval-script">{{ visible(x.preview) }}</pre>
+            <span v-if="x.truncated" class="sync-hint sync-approval-cut">{{ t('settings.sync.approval-cut') }}</span>
+          </template>
         </template>
         <div v-if="a.status !== 'approved'" class="sync-approval-actions">
           <button
+            v-if="a.displayable !== false"
             type="button"
             class="sync-approve"
             :disabled="busy === a.scope + '/' + a.itemId"

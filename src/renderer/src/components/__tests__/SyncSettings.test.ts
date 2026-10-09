@@ -772,6 +772,7 @@ describe('SyncSettings', () => {
       digest: 'd1',
       status: 'pending',
       kind: 'new',
+      displayable: true,
       summary: {
         name: 'runner',
         command: '/tmp/evil',
@@ -854,6 +855,7 @@ describe('SyncSettings', () => {
         digest: 'd2',
         status: 'pending',
         kind: 'new',
+        displayable: true,
         summary: {
           name: 'runner',
           files: [
@@ -861,7 +863,9 @@ describe('SyncSettings', () => {
             { path: 'a, b.sh', size: 10, sha256: 'b'.repeat(64) },
           ],
           skillMd: '---\nname: runner\n---\nrun the thing',
-          executable: [{ path: 'a, b.sh', preview: '#!/bin/sh\necho hi', truncated: true }],
+          skillMdTruncated: true,
+          executable: ['a, b.sh'],
+          previews: [{ path: 'a, b.sh', preview: '#!/bin/sh\necho hi', truncated: true, executable: true }],
         },
       }
       const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [skill] } } })
@@ -873,7 +877,46 @@ describe('SyncSettings', () => {
       expect(rows[1].text()).toContain('a, b.sh')
       expect(rows[1].text()).toContain('bbbbbbbbbbbb')
       expect(card.find('pre.sync-approval-skillmd').text()).toContain('run the thing')
+      // A cut preview says so, SKILL.md included.
+      expect(card.findAll('.sync-approval-cut')).toHaveLength(2)
       expect(card.find('pre.sync-approval-script').text()).toContain('echo hi')
+    })
+
+    it('shows every env entry on its own row', async () => {
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [held] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const rows = wrapper.findAll('li.sync-approval-env')
+      expect(rows.map((r) => r.text())).toEqual(['NODE_OPTIONS=--require /tmp/x.js', 'TOKEN=••••••'])
+    })
+
+    it('offers no Approve for a record it cannot show in full', async () => {
+      const stub = { ...held, displayable: false, summary: { name: 'runner', truncated: true } }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [stub] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const card = wrapper.find('.sync-approval')
+      expect(card.find('button.sync-approve').exists()).toBe(false)
+      expect(card.find('button.sync-reject').exists()).toBe(true)
+      expect(card.find('.sync-approval-undisplayable').exists()).toBe(true)
+    })
+
+    it('escapes blank-looking, separator and combining characters too', async () => {
+      const sneaky = { ...held, summary: { name: 'runner', command: 'a\u00a0b\u3164c\u0301d e' } }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [sneaky] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const text = wrapper.find('.sync-approval').text()
+      expect(text).toContain('a\\u{00A0}b\\u{3164}c\\u{0301}d e')
+    })
+
+    it('says when a queue is full and new records are being refused', async () => {
+      const { backend } = mockBackend({
+        'sync.approvals': { ok: true, payload: { approvals: [], full: ['mcp'] } },
+      })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      expect(wrapper.find('.sync-approvals-full').exists()).toBe(true)
     })
 
     it('names an item that may carry a secret, and dismisses it', async () => {
