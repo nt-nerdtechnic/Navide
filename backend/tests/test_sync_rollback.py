@@ -12,7 +12,6 @@ F2, F3 and B-4), turned around to assert the safe outcome.
 
 from __future__ import annotations
 
-import sqlite3
 
 from agent_team_backend import sync_engine
 from agent_team_backend.db import Database
@@ -199,10 +198,13 @@ def test_a_v2_database_upgrades_in_place_and_keeps_its_rows(tmp_path):
 def test_the_v3_step_tolerates_a_column_that_is_already_there(tmp_path):
     path = tmp_path / "v2plus.db"
     _v2_database(path)
-    raw = sqlite3.connect(path)
-    raw.execute("ALTER TABLE sync_state ADD COLUMN synced_updated_at TEXT NOT NULL DEFAULT ''")
-    raw.commit()
-    raw.close()
+    # Through Database, not a raw sqlite3 connection: a raw one runs in DELETE
+    # journal mode, and on Windows deleting -journal fails with "disk I/O error"
+    # while a scanner holds it (the reason Database uses TRUNCATE).
+    db = Database(path)
+    with db.transaction() as cur:
+        cur.execute("ALTER TABLE sync_state ADD COLUMN synced_updated_at TEXT NOT NULL DEFAULT ''")
+    db.close()
     store = sync_engine.SyncStore(Database(path))
     assert store.state("prompts", "x").synced_updated_at == ""
 
