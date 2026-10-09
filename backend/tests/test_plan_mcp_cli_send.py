@@ -852,6 +852,9 @@ async def test_open_agent_from_an_external_caller_sends_target_workspace_with_no
 ) -> None:
     async def answer() -> None:
         for _ in range(200):
+            # The window holding /ws/ext answers the readiness probe first.
+            for probe in list(plan_mcp._ui_invoke_pending.pending):
+                plan_mcp.resolve_ui_invoke(probe, {"ok": True, "result": [], "error": None})
             keys = list(plan_mcp._pending_spawns)
             if keys:
                 agent_messaging.register("new-pane", "worker", "/ws/ext")
@@ -873,7 +876,7 @@ async def test_open_agent_from_an_external_caller_sends_target_workspace_with_no
         "pane_id": "new-pane",
         "kickoff": "sent",
     }
-    payload = captured[0]["payload"]
+    payload = next(e for e in captured if e["type"] == "agent_spawn.request")["payload"]
     assert payload["requester_pane_id"] == ""
     assert payload["target_workspace"] == "/ws/ext"
 
