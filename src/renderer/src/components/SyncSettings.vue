@@ -70,9 +70,24 @@ interface ScopeResult {
 interface Approval {
   scope: string
   itemId: string
+  /** Digest of the exact held payload; handed back with the decision so
+   *  what is approved is what was shown. */
+  digest: string
   status: string
   kind: string
   summary: Record<string, unknown>
+}
+
+interface ApprovalFile {
+  path: string
+  size?: number
+  sha256?: string
+}
+
+interface ApprovalScript {
+  path: string
+  preview?: string
+  truncated?: boolean
 }
 
 /** An item that reads like it carries a secret (D2): where, never what. */
@@ -268,23 +283,52 @@ async function loadApprovals(): Promise<void> {
   secretWarnings.value = Array.isArray(found) ? (found as SecretWarning[]) : []
 }
 
-/** One line per thing the user is approving: what runs, then the names of
- *  what it would be handed, then the files. */
+/** Characters that print as nothing or turn the text around them (control,
+ *  format such as bidi overrides and zero-width, line/paragraph separators)
+ *  are shown as \u{XXXX}: an approval must read as what it is. */
+function visible(value: unknown): string {
+  return String(value ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (ch) =>
+    '\\u{' + ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0') + '}',
+  )
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
+}
+
+/** What an MCP approval runs: the command, the args as a JSON array (so
+ *  ["a b"] and ["a", "b"] look different), the url, then each env entry
+ *  (secret values arrive masked) and each header name. */
 function approvalLines(a: Approval): string[] {
   const s = a.summary ?? {}
   const lines: string[] = []
-  const command = [typeof s.command === 'string' ? s.command : '', ...strings(s.args)].filter(Boolean).join(' ')
-  if (command) lines.push(command)
-  if (typeof s.url === 'string' && s.url) lines.push(s.url)
-  if (strings(s.env).length) lines.push(t('settings.sync.approval-env', { names: strings(s.env).join(', ') }))
-  if (strings(s.headers).length) {
-    lines.push(t('settings.sync.approval-headers', { names: strings(s.headers).join(', ') }))
+  if (typeof s.command === 'string' && s.command) lines.push(visible(s.command))
+  if (Array.isArray(s.args) && s.args.length) lines.push(visible(JSON.stringify(s.args)))
+  if (typeof s.url === 'string' && s.url) lines.push(visible(s.url))
+  const env = Object.entries(asRecord(s.env))
+  if (env.length) {
+    lines.push(t('settings.sync.approval-env', { names: env.map(([k, v]) => visible(k) + '=' + visible(v)).join('  ') }))
   }
-  if (strings(s.files).length) lines.push(t('settings.sync.approval-files', { files: strings(s.files).join(', ') }))
-  if (strings(s.executable).length) {
-    lines.push(t('settings.sync.approval-executable', { files: strings(s.executable).join(', ') }))
-  }
+  const headers = Object.keys(asRecord(s.headers))
+  if (headers.length) lines.push(t('settings.sync.approval-headers', { names: headers.map(visible).join(', ') }))
   return lines
+}
+
+function approvalFiles(a: Approval): ApprovalFile[] {
+  const files = a.summary?.files
+  return Array.isArray(files) ? files.filter(isRecord).map((f) => f as unknown as ApprovalFile) : []
+}
+
+function approvalScripts(a: Approval): ApprovalScript[] {
+  const files = a.summary?.executable
+  return Array.isArray(files) ? files.filter(isRecord).map((f) => f as unknown as ApprovalScript) : []
+}
+
+function fileLine(f: ApprovalFile): string {
+  const parts = [visible(f.path)]
+  if (typeof f.size === 'number') parts.push(t('settings.sync.approval-size', { bytes: f.size }))
+  if (typeof f.sha256 === 'string') parts.push('sha256 ' + f.sha256.slice(0, 12))
+  return parts.join(' · ')
 }
 
 function approvalKind(a: Approval): string {
@@ -300,6 +344,7 @@ async function decide(a: Approval, approve: boolean): Promise<void> {
       scope: a.scope,
       itemId: a.itemId,
       approve,
+      digest: a.digest,
     })
     if (!resp?.ok) {
       error.value = resp?.error?.message ?? t('settings.sync.error-load')
@@ -591,10 +636,23 @@ onBeforeUnmount(() => offResult?.())
       <div v-for="a in waiting" :key="a.scope + '/' + a.itemId" class="sync-conflict sync-approval">
         <div class="sync-conflict-head">
           <strong>{{ t('settings.sync.scope-' + a.scope) }}</strong>
-          <code>{{ a.itemId }}</code>
+          <code>{{ visible(a.itemId) }}</code>
           <span class="sync-hint">{{ approvalKind(a) }}</span>
         </div>
         <code v-for="(line, i) in approvalLines(a)" :key="i" class="sync-approval-line">{{ line }}</code>
+        <ul v-if="approvalFiles(a).length" class="sync-approval-files">
+          <li v-for="f in approvalFiles(a)" :key="f.path" class="sync-approval-file">
+            <code>{{ fileLine(f) }}</code>
+          </li>
+        </ul>
+        <template v-if="typeof a.summary.skillMd === 'string' && a.summary.skillMd">
+          <span class="sync-hint">SKILL.md</span>
+          <pre class="sync-approval-preview sync-approval-skillmd">{{ visible(a.summary.skillMd) }}</pre>
+        </template>
+        <template v-for="x in approvalScripts(a)" :key="'x:' + x.path">
+          <span class="sync-hint">{{ t('settings.sync.approval-executable', { files: visible(x.path) }) }}</span>
+          <pre v-if="x.preview" class="sync-approval-preview sync-approval-script">{{ visible(x.preview) }}{{ x.truncated ? '\n…' : '' }}</pre>
+        </template>
         <div v-if="a.status !== 'approved'" class="sync-approval-actions">
           <button
             type="button"
@@ -774,6 +832,27 @@ onBeforeUnmount(() => offResult?.())
   font-size: var(--font-row-desc);
   overflow-wrap: anywhere;
   padding: 1px 0;
+}
+.sync-approval-files {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  font-size: var(--font-row-desc);
+}
+.sync-approval-file code {
+  overflow-wrap: anywhere;
+}
+.sync-approval-preview {
+  max-height: 12em;
+  overflow: auto;
+  margin: 2px 0 6px;
+  padding: 6px 8px;
+  font-size: var(--font-row-desc);
+  background: var(--bg-default);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .sync-approval-actions {
   display: flex;

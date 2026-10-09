@@ -6208,7 +6208,7 @@
       "approval-downloading": "approved — files downloading",
       "approval-env": "env names: {names}",
       "approval-headers": "header names: {names}",
-      "approval-files": "files: {files}",
+      "approval-size": "{bytes} bytes",
       "approval-executable": "executable: {files}",
       "approve": "Approve",
       "reject": "Reject",

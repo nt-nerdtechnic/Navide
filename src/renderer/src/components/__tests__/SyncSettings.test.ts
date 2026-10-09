@@ -769,9 +769,15 @@ describe('SyncSettings', () => {
     const held = {
       scope: 'mcp',
       itemId: 'runner',
+      digest: 'd1',
       status: 'pending',
       kind: 'new',
-      summary: { name: 'runner', command: '/tmp/evil', args: ['--x'], env: ['TOKEN'] },
+      summary: {
+        name: 'runner',
+        command: '/tmp/evil',
+        args: ['--x', 'a b'],
+        env: { NODE_OPTIONS: '--require /tmp/x.js', TOKEN: '••••••' },
+      },
       at: 1,
     }
 
@@ -786,11 +792,21 @@ describe('SyncSettings', () => {
       const card = wrapper.find('.sync-approval')
       expect(card.exists()).toBe(true)
       expect(card.text()).toContain('runner')
-      expect(card.text()).toContain('/tmp/evil --x')
-      expect(card.text()).toContain('TOKEN')
+      expect(card.text()).toContain('/tmp/evil')
+      // Args as a JSON array: ["a b"] and ["a", "b"] must not look alike.
+      expect(card.text()).toContain('["--x","a b"]')
+      // Non-secret env values are shown; secret ones arrive masked.
+      expect(card.text()).toContain('NODE_OPTIONS=--require /tmp/x.js')
+      expect(card.text()).toContain('TOKEN=••••••')
       await card.find('button.sync-approve').trigger('click')
       await flushPromises()
-      expect(send).toHaveBeenCalledWith('sync.approval.decide', { scope: 'mcp', itemId: 'runner', approve: true })
+      // The decision names the exact version shown.
+      expect(send).toHaveBeenCalledWith('sync.approval.decide', {
+        scope: 'mcp',
+        itemId: 'runner',
+        approve: true,
+        digest: 'd1',
+      })
       expect(wrapper.find('.sync-approval').exists()).toBe(false)
     })
 
@@ -806,9 +822,58 @@ describe('SyncSettings', () => {
       await flushPromises()
       await wrapper.find('button.sync-reject').trigger('click')
       await flushPromises()
-      expect(send).toHaveBeenCalledWith('sync.approval.decide', { scope: 'mcp', itemId: 'runner', approve: false })
+      expect(send).toHaveBeenCalledWith('sync.approval.decide', {
+        scope: 'mcp',
+        itemId: 'runner',
+        approve: false,
+        digest: 'd1',
+      })
       // A rejected record is no longer asked about.
       expect(wrapper.find('.sync-approval').exists()).toBe(false)
+    })
+
+    it('shows invisible and direction-changing characters escaped', async () => {
+      const sneaky = {
+        ...held,
+        summary: { name: 'runner', command: 'np\u200bx', args: ['safe\u202e.js', 'x\u2028y'] },
+      }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [sneaky] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const text = wrapper.find('.sync-approval').text()
+      expect(text).toContain('np\\u{200B}x')
+      expect(text).toContain('safe\\u{202E}.js')
+      expect(text).toContain('x\\u{2028}y')
+      expect(text).not.toMatch(/[\u200b\u202e\u2028]/)
+    })
+
+    it('lists a skill file by file with size and hash, and previews SKILL.md and scripts', async () => {
+      const skill = {
+        scope: 'skills',
+        itemId: 'runner',
+        digest: 'd2',
+        status: 'pending',
+        kind: 'new',
+        summary: {
+          name: 'runner',
+          files: [
+            { path: 'SKILL.md', size: 36, sha256: 'a'.repeat(64) },
+            { path: 'a, b.sh', size: 10, sha256: 'b'.repeat(64) },
+          ],
+          skillMd: '---\nname: runner\n---\nrun the thing',
+          executable: [{ path: 'a, b.sh', preview: '#!/bin/sh\necho hi', truncated: true }],
+        },
+      }
+      const { backend } = mockBackend({ 'sync.approvals': { ok: true, payload: { approvals: [skill] } } })
+      wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+      await flushPromises()
+      const card = wrapper.find('.sync-approval')
+      const rows = card.findAll('li.sync-approval-file')
+      expect(rows).toHaveLength(2)
+      expect(rows[1].text()).toContain('a, b.sh')
+      expect(rows[1].text()).toContain('bbbbbbbbbbbb')
+      expect(card.find('pre.sync-approval-skillmd').text()).toContain('run the thing')
+      expect(card.find('pre.sync-approval-script').text()).toContain('echo hi')
     })
 
     it('names an item that may carry a secret, and dismisses it', async () => {

@@ -6208,7 +6208,7 @@
       "approval-downloading": "已核准——檔案下載中",
       "approval-env": "環境變數名稱：{names}",
       "approval-headers": "Header 名稱：{names}",
-      "approval-files": "檔案：{files}",
+      "approval-size": "{bytes} 位元組",
       "approval-executable": "可執行：{files}",
       "approve": "核准",
       "reject": "拒絕",
