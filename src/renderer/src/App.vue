@@ -13687,15 +13687,20 @@ backend.on('agent.activity', (raw) => {
       }
     }
   } else if (ev.event_type === 'agent_active') {
-    // First activity after the last turn end = this turn's start. The quota
-    // failover's settle needs it: a turn that began under the old account and
-    // finished under the new one is the old account's work.
-    if ((paneLastActiveAt.get(ev.pane_id) ?? 0) <= (paneTurnCompleteAt.get(ev.pane_id) ?? 0)) {
-      paneTurnStartedAt.set(ev.pane_id, Date.now())
+    // idle_prompt fires about a minute after EVERY finished turn: the pane is
+    // waiting, not working. Stamping the clocks with it made isTurnInFlight
+    // read a finished pane as mid-turn and hold its queued messages.
+    if (ev.notification_type !== 'idle_prompt') {
+      // First activity after the last turn end = this turn's start. The quota
+      // failover's settle needs it: a turn that began under the old account and
+      // finished under the new one is the old account's work.
+      if ((paneLastActiveAt.get(ev.pane_id) ?? 0) <= (paneTurnCompleteAt.get(ev.pane_id) ?? 0)) {
+        paneTurnStartedAt.set(ev.pane_id, Date.now())
+      }
+      paneLastActiveAt.set(ev.pane_id, Date.now())
+      // The loop reads a stricter clock; see activityMeansWorking for why.
+      if (activityMeansWorking(ev.detail ?? '')) paneLastWorkingAt.set(ev.pane_id, Date.now())
     }
-    paneLastActiveAt.set(ev.pane_id, Date.now())
-    // The loop reads a stricter clock; see activityMeansWorking for why.
-    if (activityMeansWorking(ev.detail ?? '')) paneLastWorkingAt.set(ev.pane_id, Date.now())
     // The pane is working again, so it is no longer parked where a restore left
     // it — retire the continue affordance even if the user never clicked it.
     const activePane = panes.value.find((p) => p.id === ev.pane_id)
