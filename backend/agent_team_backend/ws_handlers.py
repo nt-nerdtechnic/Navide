@@ -3744,6 +3744,27 @@ async def sync_approval_decide(session: "Session", msg_id: str, msg_type: str, p
     await session.send_json(make_response(msg_id, msg_type, {"approval": result, "approvals": rows}))
 
 
+@handler("sync.secret_warnings")
+async def sync_secret_warnings(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Items that look like they carry a secret, before they sync (decision
+    D2): a warning, never a block. Names where, never what."""
+    from . import sync_scopes
+
+    rows = await asyncio.to_thread(sync_scopes.secret_warnings)
+    await session.send_json(make_response(msg_id, msg_type, {"warnings": rows}))
+
+
+@handler("sync.secret_warning.dismiss")
+async def sync_secret_warning_dismiss(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import sync_scopes
+
+    scope = str(payload.get("scope") or "")
+    item_id = str(payload.get("itemId") or "")
+    await asyncio.to_thread(sync_scopes.dismiss_secret_warning, scope, item_id)
+    rows = await asyncio.to_thread(sync_scopes.secret_warnings)
+    await session.send_json(make_response(msg_id, msg_type, {"warnings": rows}))
+
+
 @handler("sync.resolve")
 async def sync_resolve(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import sync_engine

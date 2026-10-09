@@ -1943,6 +1943,87 @@ def forget_detached(scope: str | None = None) -> None:
     _settings().set({DETACHED_KEY: rest or None})
 
 
+#: Secret warnings the user dismissed, as ``{scope: {item_id: digest}}``: a
+#: dismissal holds until the item changes.
+SECRET_DISMISSED_KEY = "sync-secret-dismissed"
+#: Prompt fields scanned for something that reads like a credential.
+_PROMPT_TEXT_FIELDS = ("prompt", "resumePrompt", "description")
+_MAX_WARNING_LINES = 5
+
+
+def _looks_secret(value: Any) -> bool:
+    from .settings_bundle import _SECRET_HINT_RE
+
+    return isinstance(value, str) and bool(_SECRET_HINT_RE.search(value))
+
+
+def secret_warnings() -> list[dict[str, Any]]:
+    """Items of an enabled prompts, memory or MCP scope that look like they
+    carry a secret (decision D2): a warning to show before they sync, never a
+    block and never a strip. Reuses the settings bundle's heuristic.
+
+    Each is ``{scope, itemId, label, fields, lines?}``: where, never what.
+    MCP env and header values are not scanned: they are expected secrets and
+    travel sealed. A warning the user dismissed stays away until the item
+    changes."""
+    from .settings_bundle import CARRIED_FIELDS
+
+    enabled = enabled_scopes()
+    raw = _settings().get().get(SECRET_DISMISSED_KEY)
+    dismissed = raw if isinstance(raw, dict) else {}
+    out: list[dict[str, Any]] = []
+
+    def add(scope: str, item_id: str, label: str, payload: Any, fields: list[str], **extra: Any) -> None:
+        if not fields:
+            return
+        seen = dismissed.get(scope) if isinstance(dismissed.get(scope), dict) else {}
+        if seen.get(item_id) == sync_engine.digest(payload):
+            return
+        out.append({"scope": scope, "itemId": item_id, "label": label, "fields": fields, **extra})
+
+    if enabled.get("prompts"):
+        for item_id, skill in sorted(PromptsScope().snapshot().items()):
+            fields = [f for f in _PROMPT_TEXT_FIELDS if _looks_secret(skill.get(f))]
+            add("prompts", item_id, str(skill.get("name") or item_id), skill, fields)
+    if enabled.get("memory"):
+        for relative, doc in sorted(MemoryScope().snapshot_by_path().items()):
+            text = doc.get("text") if isinstance(doc, dict) else None
+            if not _looks_secret(text):
+                continue
+            lines = [n for n, line in enumerate(str(text).splitlines(), 1) if _looks_secret(line)]
+            add("memory", memory_item_id(relative), relative, doc, ["text"],
+                lines=lines[:_MAX_WARNING_LINES])
+    if enabled.get("mcp"):
+        for name, server in sorted(McpScope().local_snapshot().items()):
+            fields = []
+            for field_name in CARRIED_FIELDS:
+                value = server.get(field_name)
+                parts = value if isinstance(value, list) else [value]
+                if any(_looks_secret(part) for part in parts):
+                    fields.append(field_name)
+            add("mcp", name, name, server, fields)
+    return out
+
+
+def dismiss_secret_warning(scope: str, item_id: str) -> None:
+    """The user saw the warning for this item as it is now and let it sync."""
+    current: Any = None
+    if scope == "prompts":
+        current = PromptsScope().snapshot().get(item_id)
+    elif scope == "memory":
+        current = MemoryScope().snapshot().get(item_id)
+    elif scope == "mcp":
+        current = McpScope().local_snapshot().get(item_id)
+    if current is None:
+        return
+    raw = _settings().get().get(SECRET_DISMISSED_KEY)
+    doc = dict(raw) if isinstance(raw, dict) else {}
+    entries = dict(doc.get(scope) or {}) if isinstance(doc.get(scope), dict) else {}
+    entries[item_id] = sync_engine.digest(current)
+    doc[scope] = entries
+    _settings().set({SECRET_DISMISSED_KEY: doc})
+
+
 def forget_approvals(scope: str | None = None) -> None:
     """Drop the records waiting for approval (``sync_approvals``) of *scope*,
     or of every scope; on_account_changed calls it, since they are sealed
