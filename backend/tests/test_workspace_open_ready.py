@@ -249,7 +249,9 @@ async def test_workspace_open_then_cli_open_agent_opens_the_pane(windows: _Windo
 async def test_workspace_open_expands_a_tilde_path_for_the_window_probe_and_list(
     windows: _Windows, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # expanduser reads HOME on POSIX and USERPROFILE on Windows.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     project = tmp_path / "Desktop" / "James-AI 工廠導入專案"
     project.mkdir(parents=True)
     absolute = str(project)
@@ -269,3 +271,26 @@ async def test_workspace_open_expands_a_tilde_path_for_the_window_probe_and_list
     assert rows[absolute]["window_ready"] is True
     assert not any(p.startswith("~") for p in rows)
     assert spawned["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_tilde_path_is_normalised_to_the_platforms_separators(
+    windows: _Windows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows expanduser joins "C:\\Users\\me" with "/Desktop/..." and leaves
+    the separators mixed, while Recent stores the abspath (all backslashes)
+    form; the window compares paths as plain strings, so both must agree.
+    Run here under ntpath's rules so the case is covered on every runner."""
+    import ntpath
+
+    monkeypatch.setattr(plan_mcp, "os", SimpleNamespace(path=ntpath))
+    monkeypatch.setenv("USERPROFILE", "C:\\Users\\me")
+    expected = "C:\\Users\\me\\Desktop\\proj"
+    windows.owned.add(expected)
+
+    opened = await plan_mcp.workspace_open("~/Desktop/proj", _ctx())
+
+    open_request = next(e for e in windows.events if e["payload"].get("action") == "ui.workspace.open")
+    assert open_request["payload"]["args"] == {"path": expected}
+    assert opened["path"] == expected
+    assert opened["ready"] is True
