@@ -1369,6 +1369,12 @@ class SyncEngine:
         # which is what the answer describes. Neither sent nor — present in
         # the snapshot or not — ever taken for a delete.
         oversized = set(_adapter_ids(adapter, "oversized"))
+        # Items the adapter must not send anything for right now — a rejected
+        # approval whose held copy no longer opens: neither an edit nor a
+        # delete goes up, and the round lists them as held.
+        withheld = set(_adapter_ids(adapter, "withheld"))
+        for item_id in sorted(withheld):
+            self._note(scope, "held", item_id)
         pending: list[tuple[str, Any, str]] = []  # (item_id, payload|None, hash)
 
         active_kid = sync_keyring.active_key_id() or ""
@@ -1380,7 +1386,7 @@ class SyncEngine:
         # the whole point of the rotation is that it goes up again.
         rotated = held_ring is not None and len(held_ring.get("keys") or {}) > 1
         for item_id, payload in snapshot.items():
-            if item_id in blocked:
+            if item_id in blocked or item_id in withheld:
                 continue
             if item_id in oversized:
                 self._note(scope, "tooLarge", item_id)
@@ -1417,7 +1423,8 @@ class SyncEngine:
             # never delete by absence; the cloud copy outlives the local one.
             waiting = self._reset_deletes.get(scope, set())
             for item_id, state in states.items():
-                if item_id in snapshot or item_id in blocked or state.deleted or item_id in oversized:
+                if item_id in snapshot or item_id in blocked or state.deleted or item_id in oversized \
+                        or item_id in withheld:
                     continue
                 if item_id in waiting and state.rev == 0:
                     # A delete carried across a reset whose row the re-read

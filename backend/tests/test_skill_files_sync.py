@@ -23,15 +23,17 @@ from .test_sync_engine import FakeServer, account_key  # noqa: F401 - a fixture
 from agent_team_backend import sync_approvals as _sync_approvals  # noqa: E402
 
 _REAL_IS_APPROVED = _sync_approvals.is_approved
+_REAL_NEEDS_REVIEW = sync_scopes.SkillFilesScope.__dict__["_needs_review"]
 
 @pytest.fixture(autouse=True)
 def _approve_everything(monkeypatch):
-    """What these tests check is not the approval hold (test_sync_approvals
-    is): every synced record counts as approved here."""
+    """What these tests check is the transfer, not the approval hold
+    (test_sync_approvals*): every manifest counts as one this machine
+    already reviewed, so it takes the plain download-and-land path."""
     from agent_team_backend import sync_approvals
 
-    monkeypatch.setattr(sync_approvals, "is_approved", lambda *_a: True)
-
+    monkeypatch.setattr(sync_approvals, "is_approved", lambda *_a: False)
+    monkeypatch.setattr(sync_scopes.SkillFilesScope, "_needs_review", staticmethod(lambda *_a: False))
 
 def _run(coro):
     return asyncio.run(coro)
@@ -505,43 +507,28 @@ def test_reset_forgets_everything_the_last_account_left(tmp_path, monkeypatch, b
     _run(flow())
 
 
-def test_a_large_skill_waits_for_approval_then_downloads(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
+def test_a_large_skill_waits_for_approval_then_lands(tmp_path, monkeypatch, blobs, account_key) -> None:  # noqa: F811
     from agent_team_backend import sync_approvals
     from tests.test_sync_engine import FakeSettingsStore
 
-    monkeypatch.setattr(sync_approvals, "is_approved", _REAL_IS_APPROVED)  # the hold is the subject here
+    # The hold is the subject here (the review itself: test_sync_approvals_large_skills).
+    monkeypatch.setattr(sync_approvals, "is_approved", _REAL_IS_APPROVED)
+    monkeypatch.setattr(sync_scopes.SkillFilesScope, "_needs_review", _REAL_NEEDS_REVIEW)
     monkeypatch.setattr(app, "ui_settings_store", FakeSettingsStore(), raising=False)
     server = FakeServer()
     a = Device(tmp_path, "a", server, blobs)
     b = Device(tmp_path, "b", server, blobs)
     files = _big_skill(a.store)
-    downloads = []
-    real = skill_blobs.download
-
-    async def counting(*args, **kwargs):
-        downloads.append(args[1].blob_id)
-        return await real(*args, **kwargs)
-
-    monkeypatch.setattr(skill_blobs, "download", counting)
     _run(a.settle(monkeypatch))
     _run(b.settle(monkeypatch))
-    assert not (b.store.root / "big").exists() and downloads == []   # nothing fetched before approval
+    assert not (b.store.root / "big").exists()   # reviewed, not landed
     (held,) = sync_approvals.listing()
-    assert held["scope"] == "skill-files" and held["kind"] == "new"
+    assert held["scope"] == "skill-files" and held["kind"] == "new" and held["displayable"] is True
     assert held["summary"]["executable"] == (["run.sh"] if os.name != "nt" else [])
 
     monkeypatch.setattr(app, "skills_store", b.store, raising=False)
     monkeypatch.setattr(app, "app_data_dir", lambda: b.data_dir, raising=False)
-
-    async def approve_and_settle() -> None:
-        # As the WS handler does it: off the loop, with the loop running.
-        b.adapter._loop = asyncio.get_running_loop()
-        decided = await asyncio.to_thread(sync_approvals.decide, b.adapter, "big", True, held["digest"])
-        assert decided["status"] == "approved"  # files still to come
-        for _ in range(3):
-            await b.settle(monkeypatch)
-
-    _run(approve_and_settle())
+    assert sync_approvals.decide(b.adapter, "big", True, held["digest"])["status"] == "applied"
     for rel, data in files.items():
         assert (b.store.root / "big" / rel).read_bytes() == data
     assert sync_approvals.listing() == []

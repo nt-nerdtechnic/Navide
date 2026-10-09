@@ -348,6 +348,11 @@ class McpScope:
         # engine pushes nothing over it (see ``sync_approvals``).
         return sync_approvals.overlay(self.scope, self.local_snapshot())
 
+    def withheld(self) -> list[str]:
+        """Rejected records whose held copy no longer opens: nothing goes up
+        for them (``sync_approvals.withheld``)."""
+        return sync_approvals.withheld(self.scope)
+
     def local_snapshot(self) -> dict[str, Any]:
         """The servers this machine actually has, approvals aside."""
         servers = self._store().list_servers()
@@ -696,6 +701,11 @@ class SkillsStateScope:
         # waiting for approval stands in for the local one (sync_approvals).
         return without_detached(self.scope, sync_approvals.overlay(self.scope, self._local()))
 
+    def withheld(self) -> list[str]:
+        """Rejected records whose held copy no longer opens: nothing goes up
+        for them (``sync_approvals.withheld``)."""
+        return sync_approvals.withheld(self.scope)
+
     def local_snapshot(self) -> dict[str, Any]:
         """The skills this machine actually has (and remembers), approvals
         aside — what a settings bundle may offer."""
@@ -847,6 +857,11 @@ def _skill_summary(name: str, payload: dict[str, Any], files: dict[str, Any]) ->
 _MANIFEST_VERSION = 1
 #: How often a running transfer tells the windows how far it got.
 _PROGRESS_INTERVAL_S = 0.5
+#: Most bytes a large skill may download to be reviewed before approval;
+#: past it the record is held but cannot be approved.
+MAX_REVIEW_BYTES = 64 * 1024 * 1024
+#: The ``unavailable`` of a held large skill whose review download is due.
+REVIEW_PENDING = "downloading its files for review"
 #: Failed downloads of one manifest before its record is given up on. Until
 #: then the record holds the scope's cursor; after, it is declined (reported
 #: by ``SkillFilesScope.failed``) so the records behind it can land.
@@ -919,6 +934,11 @@ class SkillFilesScope:
         self._oversized.clear()
         self._layout = None
 
+    def withheld(self) -> list[str]:
+        """Rejected records whose held copy no longer opens: nothing goes up
+        for them (``sync_approvals.withheld``)."""
+        return sync_approvals.withheld(self.scope)
+
     def failed(self) -> list[str]:
         """Skills whose files were given up on after repeated failed downloads."""
         return sorted(
@@ -944,9 +964,22 @@ class SkillFilesScope:
             log.warning("the server's blob storage could not be asked about: %s", err)
             self._layout = None
         if self._layout is not None:
-            # Approved skills whose files had to download first land now.
+            # Approved skills whose files had to download first land now, and
+            # held ones whose review download has not run yet start it.
             await asyncio.to_thread(sync_approvals.land_approved, self)
+            for item_id in await asyncio.to_thread(self._reviews_due):
+                payload = await asyncio.to_thread(sync_approvals.held_payload, self.scope, item_id)
+                if payload is not None:
+                    self._start_review(item_id, payload)
         return self._layout is not None
+
+    def _reviews_due(self) -> list[str]:
+        out = []
+        for row in sync_approvals.listing():
+            if row["scope"] == self.scope and row["status"] == sync_approvals.PENDING \
+                    and row["summary"].get("unavailable") == REVIEW_PENDING:
+                out.append(row["itemId"])
+        return out
 
     def _store(self):
         from . import app
@@ -1160,28 +1193,31 @@ class SkillFilesScope:
             log.warning("skill %s exists here and is not Navide's; its synced files are not fetched", item_id)
             return False
         local_manifest = self._manifests().get(item_id) if self._layout is not None else None
-        if (local_manifest is None or sync_engine.digest(local_manifest) != sync_engine.digest(payload)) \
-                and not sync_approvals.is_approved(self.scope, item_id, payload):
-            # New or changed files: nothing is downloaded until approved, so
-            # the approval can name them and their sizes but not show them.
+        if sync_approvals.is_approved(self.scope, item_id, payload):
+            return self._land_reviewed(item_id, payload, refs)
+        if self._needs_review(local_manifest, payload):
+            # New or changed files. They are downloaded into the hold area,
+            # sealed, to be shown before approval (``_review``); nothing lands
+            # until then, and only what was shown lands after.
             if sync_approvals.is_rejected(self.scope, item_id, payload):
                 return True
+            total = sum(ref.size for ref in refs.values())
             summary: dict[str, Any] = {
                 "name": item_id,
                 "files": [{"path": rel, "size": refs[rel].size} for rel in sorted(refs)],
-                "executable": sorted(
-                    rel for rel, e in payload["files"].items() if isinstance(e, dict) and e.get("x")
-                ) if _EXEC_BITS else [],
-                "bytes": sum(ref.size for ref in refs.values()),
-                # The files arrive only after approval: names and sizes are
-                # all that can be shown before.
-                "contentNotShown": True,
+                "bytes": total,
+                "unavailable": REVIEW_PENDING if total <= MAX_REVIEW_BYTES else (
+                    f"too large to review here: {total} bytes, the limit is {MAX_REVIEW_BYTES}"
+                ),
             }
-            return sync_approvals.hold(
+            held = sync_approvals.hold(
                 self.scope, item_id, payload, local=local_manifest,
                 kind=sync_approvals.KIND_NEW if local_manifest is None else sync_approvals.KIND_CHANGED,
                 summary=summary,
             )
+            if held and total <= MAX_REVIEW_BYTES and self._loop is not None and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._start_review, item_id, payload)
+            return held
         manifest_digest = sync_engine.digest(payload)
         failure = self._download_failures.get(item_id)
         if failure is not None and failure[0] != manifest_digest:
@@ -1255,6 +1291,155 @@ class SkillFilesScope:
         # The settings arrived through ``skills`` and may have been waiting in
         # the intent map for these files; without applying them now, the next
         # ``skills`` snapshot would read the defaults off the fresh copy.
+        decision = SkillsStateScope()._intent().get(item_id)
+        if isinstance(decision, dict):
+            try:
+                store.set_enabled(item_id, bool(decision.get("enabled", True)))
+                store.set_targets(item_id, decision.get("targets"))
+            except Exception as err:  # noqa: BLE001 - a decision that will not apply is not fatal
+                log.warning("the synced decision for %s could not be applied: %s", item_id, err)
+        return True
+
+
+    # ── review before approval ──────────────────────────────────────────
+
+    @staticmethod
+    def _needs_review(local_manifest: Any, payload: Any) -> bool:
+        """Whether a manifest brings files this machine does not have as-is."""
+        return local_manifest is None or sync_engine.digest(local_manifest) != sync_engine.digest(payload)
+
+    def _start_review(self, item_id: str, payload: Any) -> None:
+        """Start downloading a held record's files for review. Loop only."""
+        if self._layout is None or self._request is None:
+            return
+        layout, request = self._layout, self._request
+        payload_digest = sync_engine.digest(payload)
+
+        async def review() -> None:
+            try:
+                refs = self._refs_of(payload)
+                await self._fetch_for_review(item_id, payload_digest, refs, layout, request)
+                summary = await asyncio.to_thread(self._review_summary, item_id, payload, payload_digest, refs)
+            except Exception as err:  # noqa: BLE001 - said on the card, not raised
+                log.warning("the files of %s could not be fetched for review: %s", item_id, err)
+                sync_approvals.drop_held_files(self.scope, item_id, payload_digest)
+                summary = {
+                    "name": item_id,
+                    "files": [],
+                    "unavailable": f"its files could not be downloaded for review: {err}",
+                }
+            await asyncio.to_thread(sync_approvals.update_summary, self.scope, item_id, payload_digest, summary)
+
+        self._start(f"review:{item_id}", review)
+
+    async def _fetch_for_review(
+        self, item_id: str, payload_digest: str, refs: dict[str, Any], layout: Any, request: Any
+    ) -> None:
+        """Download every file of a held record, verify it, and seal it into
+        the hold area under its path. The plaintext exists only as a
+        temporary file beside the sealed ones while it is sealed."""
+        from . import skill_blobs
+
+        directory = sync_approvals._held_files_dir(self.scope, item_id, payload_digest)
+        directory.mkdir(parents=True, exist_ok=True)
+        fetched: dict[str, Any] = {}
+        try:
+            for rel, ref in sorted(refs.items()):
+                temp = fetched.get(ref.blob_id)
+                if temp is None:
+                    temp = directory / f"fetch-{ref.blob_id}.tmp"
+                    await skill_blobs.download(request, ref, temp, layout)
+                    fetched[ref.blob_id] = temp
+                await asyncio.to_thread(
+                    sync_approvals.seal_held_file, self.scope, item_id, payload_digest, rel, temp
+                )
+        finally:
+            for temp in fetched.values():
+                temp.unlink(missing_ok=True)
+            for leftover in directory.glob("fetch-*"):
+                leftover.unlink(missing_ok=True)
+
+    def _review_summary(
+        self, item_id: str, payload: Any, payload_digest: str, refs: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The summary of a reviewed large skill, read back from the sealed
+        copies: what ``_skill_summary`` shows of a small one."""
+        import hashlib
+
+        rows: list[dict[str, Any]] = []
+        previews: list[dict[str, Any]] = []
+        shas: dict[str, str] = {}
+        for rel in sorted(refs):
+            sha = hashlib.sha256()
+            size = 0
+            for segment in sync_approvals._held_file_segments(self.scope, item_id, payload_digest, rel):
+                sha.update(segment)
+                size += len(segment)
+            shas[rel] = sha.hexdigest()
+            rows.append({"path": rel, "size": size, "sha256": shas[rel]})
+        skill_md_raw, _ = sync_approvals.held_file_head(
+            self.scope, item_id, payload_digest, "SKILL.md", 1024 * 1024
+        ) if "SKILL.md" in refs else (b"", False)
+        skill_md, skill_md_cut = _preview(skill_md_raw)
+        skill_md_text = skill_md_raw.decode("utf-8", errors="replace")
+        files = payload.get("files") if isinstance(payload, dict) else {}
+        executable = sorted(
+            rel for rel, e in (files or {}).items() if _EXEC_BITS and isinstance(e, dict) and e.get("x")
+        )
+        for rel in sorted(refs):
+            if rel == "SKILL.md":
+                continue
+            head, more = sync_approvals.held_file_head(
+                self.scope, item_id, payload_digest, rel, SKILL_PREVIEW_CHARS * 4
+            )
+            marked = rel in executable
+            if marked or rel.lower().endswith(_SCRIPT_SUFFIXES) or head[:2] == b"#!" or rel in skill_md_text:
+                text, cut = _preview(head)
+                previews.append({"path": rel, "preview": text, "truncated": cut or more, "executable": marked})
+        return {
+            "name": item_id,
+            "files": rows,
+            "skillMd": skill_md,
+            "skillMdTruncated": skill_md_cut,
+            "previews": previews,
+            "executable": executable,
+            "bytes": sum(r["size"] for r in rows),
+        }
+
+    def _land_reviewed(self, item_id: str, payload: Any, refs: dict[str, Any]) -> bool:
+        """Land an approved record from the copies that were reviewed, each
+        checked against the SHA-256 the approval showed. Worker thread. False
+        (nothing written) when any is missing, does not open, or differs."""
+        store = self._store()
+        payload_digest = sync_engine.digest(payload)
+        summary = sync_approvals.held_summary(self.scope, item_id) or {}
+        shown = {f.get("path"): f.get("sha256") for f in summary.get("files") or [] if isinstance(f, dict)}
+        staging = self._staging()
+        sources: dict[str, Any] = {}
+        try:
+            for rel in sorted(refs):
+                dest = staging / ("review-" + sync_approvals._file_label(self.scope, item_id, payload_digest, rel))
+                sources[rel] = dest
+                sha = sync_approvals.open_held_file(self.scope, item_id, payload_digest, rel, dest)
+                if not shown.get(rel) or sha != shown[rel]:
+                    log.warning("skill %s: %s is not the file that was reviewed; nothing lands", item_id, rel)
+                    return False
+            executable = {
+                rel for rel, entry in payload["files"].items() if isinstance(entry, dict) and entry.get("x")
+            }
+            landed = store.import_files(item_id, sources, executable=executable)
+        except Exception as err:  # noqa: BLE001 - a reviewed copy that will not open lands nothing
+            log.warning("skill %s: the reviewed files could not be landed: %s", item_id, err)
+            return False
+        finally:
+            for source in sources.values():
+                source.unlink(missing_ok=True)
+        if not landed:
+            return False
+        sync_approvals.drop_held_files(self.scope, item_id, payload_digest)
+        if not _EXEC_BITS:
+            for rel, path in (store.list_files(item_id) or {}).items():
+                self._digest_cache().set_executable(path, rel in executable)
         decision = SkillsStateScope()._intent().get(item_id)
         if isinstance(decision, dict):
             try:

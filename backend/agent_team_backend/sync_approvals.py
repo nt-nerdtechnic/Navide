@@ -159,8 +159,10 @@ _STUB_KEYS = frozenset({"truncated", "argsTruncated", "envTruncated", "headersTr
 
 
 def _displayable(summary: dict[str, Any] | None) -> bool:
-    """Whether a summary shows the whole record: never a stub or a cut list."""
-    return isinstance(summary, dict) and not (_STUB_KEYS & set(summary))
+    """Whether a summary shows the whole record: never a stub or a cut list,
+    and not one whose content could not be fetched for review
+    (``unavailable`` says why)."""
+    return isinstance(summary, dict) and not (_STUB_KEYS & set(summary)) and "unavailable" not in summary
 
 
 def _waiting(entries: dict[str, dict[str, Any]]) -> int:
@@ -206,7 +208,7 @@ def hold(
     """
     if _round_is_stale():
         return False
-    if not _displayable(summary) or len(json.dumps(summary)) > MAX_SUMMARY_BYTES:
+    if not isinstance(summary, dict) or _STUB_KEYS & set(summary) or len(json.dumps(summary)) > MAX_SUMMARY_BYTES:
         log.warning("synced %s/%s cannot be shown in full for approval; refused", scope, item_id)
         return False
     with _lock:
@@ -233,10 +235,123 @@ def hold(
                 "at": int(time.time()),
             }
             _write_index(index)
+            _prune_held_files(scope, index)
         except (OSError, sync_keyring.KeyringError) as err:
             log.warning("synced %s/%s could not be held for approval: %s", scope, item_id, err)
             return False
     log.info("synced %s/%s is waiting for approval (%s)", scope, item_id, kind)
+    return True
+
+
+# ── files downloaded for review (large skills) ──────────────────────────────
+#
+# A large skill's files travel as blobs, after its record. To be shown before
+# approval they are downloaded into the hold area and sealed there under the
+# account key, segment by segment, each bound to scope, item, the record's
+# digest and the file's path: never in a skills directory, never executable,
+# and a file swapped for another one of the hold does not open.
+
+_SEGMENT = 1024 * 1024
+_HELD_FILE_MAGIC = b"NVHF1\n"
+
+
+def _held_files_dir(scope: str, item_id: str, payload_digest: str) -> Path:
+    name = hashlib.sha256(f"{scope}\0{item_id}\0{payload_digest}".encode("utf-8")).hexdigest()
+    return _stash_dir() / "files" / scope / name
+
+
+def _file_label(scope: str, item_id: str, payload_digest: str, rel: str) -> str:
+    return hashlib.sha256(f"{scope}\0{item_id}\0{payload_digest}\0{rel}".encode("utf-8")).hexdigest()
+
+
+def seal_held_file(scope: str, item_id: str, payload_digest: str, rel: str, source: Path) -> None:
+    """Seal *source* (plaintext) into the hold area as *rel* of this record."""
+    kid = sync_keyring.active_key_id()
+    if not kid:
+        raise sync_keyring.KeyringError("no account key to seal a held file under")
+    label = _file_label(scope, item_id, payload_digest, rel)
+    size = source.stat().st_size
+    count = max(1, -(-size // _SEGMENT))
+    directory = _held_files_dir(scope, item_id, payload_digest)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / label
+    temp = target.with_suffix(".tmp")
+    with open(source, "rb") as src, open(temp, "wb") as out:
+        out.write(_HELD_FILE_MAGIC + kid.encode("ascii") + b"\n" + str(count).encode() + b"\n")
+        for index in range(count):
+            sealed = sync_keyring.seal_segment(
+                src.read(_SEGMENT), kid=kid, blob_id=label, index=index, count=count
+            )
+            out.write(len(sealed).to_bytes(4, "big") + sealed)
+    os.chmod(temp, 0o600)
+    temp.replace(target)
+
+
+def _held_file_segments(scope: str, item_id: str, payload_digest: str, rel: str):
+    """Yield the plaintext segments of a held file; raises when it does not open."""
+    label = _file_label(scope, item_id, payload_digest, rel)
+    path = _held_files_dir(scope, item_id, payload_digest) / label
+    with open(path, "rb") as fh:
+        if fh.read(len(_HELD_FILE_MAGIC)) != _HELD_FILE_MAGIC:
+            raise sync_keyring.KeyringError(f"held file {rel} is not sealed")
+        kid = fh.readline().strip().decode("ascii")
+        count = int(fh.readline().strip())
+        for index in range(count):
+            length = int.from_bytes(fh.read(4), "big")
+            yield sync_keyring.open_segment(fh.read(length), kid=kid, blob_id=label, index=index, count=count)
+        if fh.read(1):
+            raise sync_keyring.KeyringError(f"held file {rel} has trailing data")
+
+
+def held_file_head(scope: str, item_id: str, payload_digest: str, rel: str, limit: int) -> tuple[bytes, bool]:
+    """The first *limit* bytes of a held file, and whether there is more."""
+    out = b""
+    for segment in _held_file_segments(scope, item_id, payload_digest, rel):
+        out += segment
+        if len(out) > limit:
+            return out[:limit], True
+    return out, False
+
+
+def open_held_file(scope: str, item_id: str, payload_digest: str, rel: str, dest: Path) -> str:
+    """Write a held file's plaintext to *dest*; returns its SHA-256."""
+    sha = hashlib.sha256()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as out:
+        for segment in _held_file_segments(scope, item_id, payload_digest, rel):
+            sha.update(segment)
+            out.write(segment)
+    return sha.hexdigest()
+
+
+def drop_held_files(scope: str, item_id: str, payload_digest: str | None = None) -> None:
+    import shutil
+
+    if payload_digest is not None:
+        shutil.rmtree(_held_files_dir(scope, item_id, payload_digest), ignore_errors=True)
+        return
+    record = entry(scope, item_id)
+    if record is not None:
+        shutil.rmtree(_held_files_dir(scope, item_id, str(record.get("digest", ""))), ignore_errors=True)
+
+
+def held_summary(scope: str, item_id: str) -> dict[str, Any] | None:
+    record = entry(scope, item_id)
+    return _open_summary(scope, item_id, record) if record is not None else None
+
+
+def update_summary(scope: str, item_id: str, payload_digest: str, summary: dict[str, Any]) -> bool:
+    """Replace the summary of a hold still at *payload_digest* (a review that
+    finished, or failed). False when the hold moved on or the summary is cut."""
+    if _STUB_KEYS & set(summary) or len(json.dumps(summary)) > MAX_SUMMARY_BYTES:
+        summary = {"name": summary.get("name"), "unavailable": "the review is too large to show"}
+    with _lock:
+        index = _index()
+        record = index.get(scope, {}).get(item_id)
+        if record is None or record.get("digest") != payload_digest:
+            return False
+        record["summary"] = _seal_summary(scope, item_id, summary)
+        _write_index(index)
     return True
 
 
@@ -259,6 +374,21 @@ def drop(scope: str, item_id: str) -> None:
         if index.get(scope, {}).pop(item_id, None) is not None:
             _write_index(index)
         _stash_path(scope, item_id).unlink(missing_ok=True)
+        _prune_held_files(scope, index)
+
+
+def _prune_held_files(scope: str, index: dict[str, dict[str, dict[str, Any]]]) -> None:
+    """Remove files downloaded for review of any hold *index* no longer has
+    (or has at another digest): they go with the hold."""
+    import shutil
+
+    root = _stash_dir() / "files" / scope
+    if not root.is_dir():
+        return
+    keep = {_held_files_dir(scope, i, str(e.get("digest", ""))).name for i, e in index.get(scope, {}).items()}
+    for directory in root.iterdir():
+        if directory.name not in keep:
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 def is_approved(scope: str, item_id: str, payload: Any) -> bool:
@@ -295,10 +425,24 @@ def overlay(scope: str, snapshot: dict[str, Any]) -> dict[str, Any]:
             continue
         payload = held_payload(scope, item_id)
         if payload is None:
+            if record.get("status") == REJECTED:
+                # Fails closed: the "no" stays, and ``withheld`` keeps the
+                # engine from pushing this machine's copy (or its absence, a
+                # delete) over the change it rejected.
+                continue
             drop(scope, item_id)
             continue
         out[item_id] = payload
     return out
+
+
+def withheld(scope: str) -> list[str]:
+    """Rejected holds whose payload no longer opens here: the engine sends
+    nothing for them — no edit, no delete — and reports them as held."""
+    return sorted(
+        item_id for item_id, record in _index().get(scope, {}).items()
+        if record.get("status") == REJECTED and held_payload(scope, item_id) is None
+    )
 
 
 def set_status(scope: str, item_id: str, status: str, *, token: str = "") -> None:
@@ -410,8 +554,11 @@ def forget_approvals(scope: str | None = None) -> None:
     with _lock:
         index = _index()
         scopes = list(index) if scope is None else [scope]
+        import shutil
+
         for name in scopes:
             for item_id in list(index.get(name, {})):
                 _stash_path(name, item_id).unlink(missing_ok=True)
             index.pop(name, None)
+            shutil.rmtree(_stash_dir() / "files" / name, ignore_errors=True)
         _write_index(index)
