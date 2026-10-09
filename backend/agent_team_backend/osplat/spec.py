@@ -780,7 +780,18 @@ class Scripts(Protocol):
 _WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$")
 
 
-_SHORT_NAME = re.compile(r"~\d")
+#: An 8.3 short name: up to six characters, ~ and a number, an extension of
+#: up to three ("REFERE~1.MD"). Only that shape — "v1~2.md" is a long name.
+_SHORT_NAME = re.compile(r"^[^.]{1,6}~\d+(\.[^.]{1,3})?$", re.IGNORECASE)
+
+
+def windows_short_name(name: str) -> bool:
+    """Whether *name* has the shape of an 8.3 short name ("REFERE~1.MD"):
+    on Windows it may open the long-named file it stands for, another
+    spelling of a path already there. Asked by the Windows file-name seam
+    only, not by the portability rule every install applies, since a name
+    like "v1~2.md" is an ordinary file everywhere else."""
+    return bool(_SHORT_NAME.match(name))
 
 
 def windows_refused_file_name(name: str) -> bool:
@@ -791,8 +802,4 @@ def windows_refused_file_name(name: str) -> bool:
     spaces dropped, which is how Windows reads ``con .txt``."""
     if not name:
         return False
-    if _SHORT_NAME.search(name):
-        # An 8.3 short name ("REFERE~1.MD") opens the long-named file it
-        # stands for, so it is another spelling of a path already there.
-        return True
     return name[-1] in ". " or bool(_WINDOWS_RESERVED.match(name.split(".", 1)[0].rstrip(" ")))

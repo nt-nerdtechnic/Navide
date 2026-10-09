@@ -906,8 +906,6 @@ def _preview(raw: bytes) -> tuple[str, bool]:
 #: Most characters of SKILL.md frontmatter an approval shows; it is shown
 #: whole or the record is refused, since the CLIs act on it (hooks, tools).
 MAX_FRONTMATTER_CHARS = 16 * 1024
-#: Frontmatter keys an approval calls out: they make a CLI run or allow more.
-_RISKY_FRONTMATTER = re.compile(r"^([\"']?)(allowed[-_]tools|hooks)\1\s*:", re.IGNORECASE | re.MULTILINE)
 
 
 def _skill_md_name(paths: Any) -> str | None:
@@ -939,22 +937,28 @@ def _frontmatter(skill_md_text: str) -> dict[str, Any]:
     block = match.group("yaml")
     if len(block) > MAX_FRONTMATTER_CHARS:
         return {"truncated": "the SKILL.md frontmatter is too long to show whole"}
-    return {"frontmatter": block, "frontmatterFlags": _risky_keys(block)}
+    flags = _risky_keys(block)
+    if flags is None:
+        # Not YAML as a parser reads it: what a CLI makes of it cannot be said.
+        return {"truncated": "the SKILL.md frontmatter does not parse as YAML"}
+    return {"frontmatter": block, "frontmatterFlags": flags}
 
 
-def _risky_keys(block: str) -> list[str]:
+def _risky_keys(block: str) -> list[str] | None:
     """hooks / allowed-tools among the frontmatter's keys, as the YAML
-    parses them (quoted forms included); by pattern if it does not parse."""
+    parses them (quoted forms included); None when it is not a YAML mapping
+    (an empty frontmatter has no keys)."""
     import yaml
 
     try:
         parsed = yaml.safe_load(block)
     except yaml.YAMLError:
-        parsed = None
-    if isinstance(parsed, dict):
-        keys = {str(k).strip().lower().replace("_", "-") for k in parsed}
-    else:
-        keys = {m.group(2).lower().replace("_", "-") for m in _RISKY_FRONTMATTER.finditer(block)}
+        return None
+    if parsed is None:
+        return []
+    if not isinstance(parsed, dict):
+        return None
+    keys = {str(k).strip().lower().replace("_", "-") for k in parsed}
     return sorted(keys & {"hooks", "allowed-tools"})
 
 

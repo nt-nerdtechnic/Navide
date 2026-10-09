@@ -8,7 +8,7 @@ import unicodedata
 import pytest
 
 from agent_team_backend import app, settings_bundle, sync_approvals, sync_scopes
-from agent_team_backend.osplat.spec import windows_refused_file_name
+from agent_team_backend.osplat.spec import windows_refused_file_name, windows_short_name
 from agent_team_backend.skills_store import SkillValidationError, _validate_bundle_paths
 from tests.test_settings_bundle import mcp_store, settings, skills  # noqa: F401
 from tests.test_sync_approvals import _decide
@@ -68,7 +68,8 @@ def test_a_dotless_i_aliases_its_uppercase():
 
 @pytest.mark.parametrize("name", ["REFERE~1.MD", "a~2", "PROGRA~1"])
 def test_windows_refuses_short_name_segments(name):
-    assert windows_refused_file_name(name)
+    # Round 10 (R10-1): asked by the Windows seam only (windows_short_name).
+    assert windows_short_name(name)
 
 
 @pytest.mark.parametrize("name", ["notes~draft.md", "a~b", "~tmp"])

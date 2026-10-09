@@ -630,12 +630,24 @@ def _apply_mcp(items: dict[str, Any]) -> list[dict[str, Any]]:
 #: What an MCP record runs or calls: a secret kept here may only be filled
 #: back into a record that names the same ones.
 _ENDPOINT_FIELDS = ("url", "command", "args")
+#: ... and runs it the same way.
+_SAME_SERVER_FIELDS = (*_ENDPOINT_FIELDS, "cwd", "transport")
 
 
 def _same_endpoint(incoming: Any, existing: Any) -> bool:
-    return isinstance(incoming, dict) and isinstance(existing, dict) and all(
-        incoming.get(f) == existing.get(f) for f in _ENDPOINT_FIELDS
-    )
+    """Whether *incoming* is this machine's server as it is: the same url,
+    command, args, cwd and transport, and the same env — the same names,
+    and every value the bundle carries (a blank one is the bundle's stripped
+    secret) equal to this machine's."""
+    if not (isinstance(incoming, dict) and isinstance(existing, dict)):
+        return False
+    if any(incoming.get(f) != existing.get(f) for f in _SAME_SERVER_FIELDS):
+        return False
+    mine = existing.get("env") if isinstance(existing.get("env"), dict) else {}
+    theirs = incoming.get("env") if isinstance(incoming.get("env"), dict) else {}
+    if set(mine) != set(theirs):
+        return False
+    return all(value == "" or value == mine.get(key) for key, value in theirs.items())
 
 
 def restore_secrets(incoming: dict[str, Any], existing: Any) -> dict[str, Any]:

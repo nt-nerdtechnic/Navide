@@ -170,10 +170,10 @@ def test_importing_the_same_server_keeps_the_key_this_machine_already_had(settin
         [{"name": "keyed", "transport": "stdio", "command": "npx", "args": ["--x"], "env": {"API_KEY": "mine"}}]
     )
     bundle = _bundle({"mcp": {"keyed": {"name": "keyed", "transport": "stdio", "command": "npx",
-                                         "args": ["--x"], "env": {"API_KEY": "", "NEW_ONE": ""}, "enabled": False}}})
+                                         "args": ["--x"], "env": {"API_KEY": ""}, "enabled": False}}})
     settings_bundle.apply_import(bundle, {"mcp": ["keyed"]})
     stored = {s["name"]: s for s in mcp_store.list_servers()}["keyed"]
-    assert stored["env"] == {"API_KEY": "mine", "NEW_ONE": ""} and stored["enabled"] is False
+    assert stored["env"] == {"API_KEY": "mine"} and stored["enabled"] is False
 
 
 def test_the_preview_names_the_values_the_importer_has_to_supply(settings, mcp_store, skills):
