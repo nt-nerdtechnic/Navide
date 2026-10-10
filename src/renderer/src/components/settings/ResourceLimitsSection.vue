@@ -6,6 +6,10 @@ import {
   EVOLVE_RECLAIM_DEFAULT_MINUTES,
   EVOLVE_RECLAIM_MAX_MINUTES,
   EVOLVE_RECLAIM_MIN_MINUTES,
+  FOCUSED_RECLAIM_MAX_HOURS,
+  FOCUSED_RECLAIM_MIN_HOURS,
+  FOCUSED_RECLAIM_ON_DEFAULT,
+  setFocusedReclaimHours,
   setEvolveReclaimMinutes,
   setTestMaxWorkers,
   setTrackDetached,
@@ -29,7 +33,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const { testMaxWorkers, evolveReclaimMinutes, trackDetached } = useResourceLimits()
+const { testMaxWorkers, evolveReclaimMinutes, focusedReclaimHours, trackDetached } = useResourceLimits()
 
 function onTestWorkersToggle(on: boolean): void {
   setTestMaxWorkers(on ? TEST_MAX_WORKERS_ON_DEFAULT : 0)
@@ -90,6 +94,19 @@ function leftoverMeta(item: Leftover): string {
   })
 }
 
+function onFocusedReclaimToggle(on: boolean): void {
+  setFocusedReclaimHours(on ? FOCUSED_RECLAIM_ON_DEFAULT : 0)
+}
+
+function onFocusedReclaimValue(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const next = Number(input.value)
+  // 0 means never, which the switch expresses; the field only takes hours.
+  if (next < FOCUSED_RECLAIM_MIN_HOURS || !setFocusedReclaimHours(next)) {
+    input.value = String(focusedReclaimHours.value)
+  }
+}
+
 function onEvolveReclaimToggle(on: boolean): void {
   setEvolveReclaimMinutes(on ? EVOLVE_RECLAIM_DEFAULT_MINUTES : 0)
 }
@@ -135,6 +152,36 @@ function onEvolveReclaimValue(event: Event): void {
             :value="testMaxWorkers"
             data-testid="limit-test-workers-value"
             @change="onTestWorkersValue"
+          />
+        </template>
+      </SettingRow>
+      <SettingRow
+        data-settings-section="limits-focused-reclaim"
+        :title="t('settings.limits.focused-reclaim')"
+        :description="t('settings.limits.focused-reclaim-hint')"
+      >
+        <template #control>
+          <ToggleSwitch
+            :model-value="focusedReclaimHours > 0"
+            :aria-label="t('settings.limits.focused-reclaim')"
+            data-testid="limit-focused-reclaim-toggle"
+            @update:model-value="onFocusedReclaimToggle"
+          />
+        </template>
+      </SettingRow>
+      <SettingRow
+        v-if="focusedReclaimHours > 0"
+        data-settings-section="limits-focused-reclaim-value"
+        :title="t('settings.limits.focused-reclaim-value')"
+      >
+        <template #control>
+          <input
+            type="number"
+            :min="FOCUSED_RECLAIM_MIN_HOURS"
+            :max="FOCUSED_RECLAIM_MAX_HOURS"
+            :value="focusedReclaimHours"
+            data-testid="limit-focused-reclaim-value"
+            @change="onFocusedReclaimValue"
           />
         </template>
       </SettingRow>

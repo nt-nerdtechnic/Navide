@@ -293,3 +293,14 @@ describe('reclaim a whole workspace from the sidebar', () => {
     expect(controlPane).toContain('wsReclaimableCount(wsMoreMenuPath) === 0')
   })
 })
+
+// Settings → Resource limits: the timed sweep honors "also reclaim the focused
+// pane after N hours" (focusedReclaimBlockedBy), read from the shared limits
+// composable so a change in Settings takes effect on the next sweep.
+describe('the timed sweep and the focused-pane option', () => {
+  it('judges panes with the focused-pane threshold from Settings', () => {
+    const fn = block('function paneReclaimable(', '/** The saved record a placeholder needs')
+    expect(fn).toContain('focusedReclaimBlockedBy(')
+    expect(fn).toContain('focusedReclaimHours.value * 3_600_000')
+  })
+})

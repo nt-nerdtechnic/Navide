@@ -26,6 +26,14 @@ export const EVOLVE_RECLAIM_DEFAULT_MINUTES = 30
 export const EVOLVE_RECLAIM_MIN_MINUTES = 1
 export const EVOLVE_RECLAIM_MAX_MINUTES = 24 * 60
 
+/** Hours a focused pane may sit untouched before the idle sweep may reclaim it
+ *  too; 0 (the default) keeps today's rule that the focused pane is never
+ *  reclaimed. Renderer-only: the sweep runs in App.vue (lib/idleReclaim.ts). */
+export const FOCUSED_RECLAIM_KEY = 'agentTeam.limits.focusedReclaimHours'
+export const FOCUSED_RECLAIM_MIN_HOURS = 1
+export const FOCUSED_RECLAIM_MAX_HOURS = 48
+export const FOCUSED_RECLAIM_ON_DEFAULT = 4
+
 /** Mark new panes so servers they leave behind can be listed; on unless
  *  explicitly off. See resource_limits.TRACK_DETACHED_KEY. */
 export const TRACK_DETACHED_KEY = 'agentTeam.limits.trackDetachedServers'
@@ -55,6 +63,7 @@ function intLimit(key: string, fallback: number, low: number, high: number): Int
 
 // 0 = off is inside the accepted range so "off" round-trips as a stored value.
 const testMaxWorkers = intLimit(TEST_MAX_WORKERS_KEY, 0, 0, TEST_MAX_WORKERS_MAX)
+const focusedReclaimHours = intLimit(FOCUSED_RECLAIM_KEY, 0, 0, FOCUSED_RECLAIM_MAX_HOURS)
 const evolveReclaimMinutes = intLimit(EVOLVE_RECLAIM_KEY, EVOLVE_RECLAIM_DEFAULT_MINUTES, 0, EVOLVE_RECLAIM_MAX_MINUTES)
 
 function readTrackDetached(): boolean {
@@ -87,13 +96,22 @@ export function setEvolveReclaimMinutes(next: number): boolean {
   return setIntLimit(evolveReclaimMinutes, next)
 }
 
+export function setFocusedReclaimHours(next: number): boolean {
+  return setIntLimit(focusedReclaimHours, next)
+}
+
 export function setTrackDetached(on: boolean): void {
   trackDetached.value = on
   settingsSet(TRACK_DETACHED_KEY, on)
 }
 
 export function useResourceLimits() {
-  return { testMaxWorkers: testMaxWorkers.value, evolveReclaimMinutes: evolveReclaimMinutes.value, trackDetached }
+  return {
+    testMaxWorkers: testMaxWorkers.value,
+    evolveReclaimMinutes: evolveReclaimMinutes.value,
+    focusedReclaimHours: focusedReclaimHours.value,
+    trackDetached,
+  }
 }
 
 /** Test hook: re-read every limit from the (reset) settings cache. */

@@ -17,6 +17,7 @@ import ResourceLimitsSection from '../ResourceLimitsSection.vue'
 import { createMockBackend } from '../../../composables/__tests__/mockBackend'
 import {
   EVOLVE_RECLAIM_KEY,
+  FOCUSED_RECLAIM_KEY,
   TRACK_DETACHED_KEY,
   TEST_MAX_WORKERS_KEY,
   _resetResourceLimitsForTest,
@@ -167,6 +168,38 @@ describe('Resource limits — servers left behind by closed panes', () => {
   })
 })
 
+describe('Resource limits — reclaim the focused pane too', () => {
+  beforeEach(() => {
+    __resetSettingsForTest()
+    _resetResourceLimitsForTest()
+  })
+
+  it('is off by default (the focused pane is never reclaimed) and writes nothing', () => {
+    const w = mountSection()
+    expect(w.get('[data-testid="limit-focused-reclaim-toggle"]').attributes('aria-checked')).toBe('false')
+    expect(w.find('[data-testid="limit-focused-reclaim-value"]').exists()).toBe(false)
+    expect(settingsGet(FOCUSED_RECLAIM_KEY, 'unset')).toBe('unset')
+  })
+
+  it('turning it on stores hours the sweep reads, and they are adjustable', async () => {
+    const w = mountSection()
+    await w.get('[data-testid="limit-focused-reclaim-toggle"]').trigger('click')
+    expect(settingsGet(FOCUSED_RECLAIM_KEY, 0)).toBe(4)
+    const input = w.get('[data-testid="limit-focused-reclaim-value"]')
+    await input.setValue('12')
+    await input.trigger('change')
+    expect(settingsGet(FOCUSED_RECLAIM_KEY, 0)).toBe(12)
+  })
+
+  it('turning it off stores 0', async () => {
+    const w = mountSection()
+    const toggle = w.get('[data-testid="limit-focused-reclaim-toggle"]')
+    await toggle.trigger('click')
+    await toggle.trigger('click')
+    expect(settingsGet(FOCUSED_RECLAIM_KEY, -1)).toBe(0)
+  })
+})
+
 describe('Resource limits — placement', () => {
   it('sits in Settings → General', () => {
     const modal = readFileSync(resolve(here, '../../SettingsModal.vue'), 'utf8')
@@ -184,6 +217,9 @@ describe('Resource limits — placement', () => {
       'settings.limits.evolve-reclaim',
       'settings.limits.evolve-reclaim-hint',
       'settings.limits.evolve-reclaim-value',
+      'settings.limits.focused-reclaim',
+      'settings.limits.focused-reclaim-hint',
+      'settings.limits.focused-reclaim-value',
       'settings.limits.detached',
       'settings.limits.detached-hint',
       'settings.limits.detached-find',

@@ -1000,7 +1000,10 @@
       "detached-empty": "No servers left behind by closed panes.",
       "detached-stop": "Stop",
       "detached-meta": "{cwd} · {size} · since {since}",
-      "detached-failed": "Could not complete the request."
+      "detached-failed": "Could not complete the request.",
+      "focused-reclaim": "Also reclaim the focused pane when it sits untouched",
+      "focused-reclaim-hint": "Idle reclaim (above) never takes the pane each window has in focus, so that pane keeps its CLI running however long it sits. With this on, a focused pane nobody has typed in or received output in for this long is reclaimed too — turned into a card you can resume with one click, never closed. A pane waiting for an answer or holding unsent text is still kept.",
+      "focused-reclaim-value": "Hours untouched"
     },
     "search": {
       "placeholder": "Search settings…",

@@ -1000,7 +1000,10 @@
       "detached-empty": "沒有已關閉 pane 遺留的伺服器。",
       "detached-stop": "停止",
       "detached-meta": "{cwd} · {size} · 自 {since} 起",
-      "detached-failed": "無法完成這個請求。"
+      "detached-failed": "無法完成這個請求。",
+      "focused-reclaim": "被聚焦的 pane 久未動也一併回收",
+      "focused-reclaim-hint": "閒置回收（上方）從不回收每個視窗目前聚焦的 pane，所以那個 pane 不管放多久 CLI 都一直開著。開啟後，聚焦中的 pane 若這麼久都沒人輸入、也沒有輸出，也會被回收——變成點一下就能接續的卡片，不會關閉。在等你回答或有未送出文字的 pane 仍會保留。",
+      "focused-reclaim-value": "多久未動（小時）"
     },
     "search": {
       "placeholder": "搜尋設定…",
