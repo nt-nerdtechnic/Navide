@@ -986,6 +986,12 @@
       "open-diff-in-editor": "在編輯器開啟這個差異"
   },
   "settings": {
+    "limits": {
+      "hint": "選用的限制，避免 Navide 與它啟動的 agent 把這台電腦壓垮。每一項在你調整之前都是關閉，或維持 Navide 原本的行為。",
+      "test-workers": "限制新 pane 的測試 worker 數",
+      "test-workers-hint": "新開的 pane 會帶 NAVIDE_TEST_MAX_WORKERS。有讀這個變數的 repo（本 repo 的 vitest 設定有讀）跑測試時最多只用這麼多 worker，多個 pane 同時跑測試也不會把 CPU 吃滿。已開的 pane 維持原本的環境。",
+      "test-workers-value": "每次測試最多 worker 數"
+    },
     "search": {
       "placeholder": "搜尋設定…",
       "item": {
@@ -6581,6 +6587,7 @@
     },
     "section": {
       "general-behavior": "一般行為",
+      "resource-limits": "資源限制",
       "notifications": "通知",
       "settings-management": "設定管理",
       "theme": "主題",

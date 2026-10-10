@@ -986,6 +986,12 @@
     "open-diff-in-editor": "差分をエディターで開く"
   },
   "settings": {
+    "limits": {
+      "hint": "Navide と、Navide が起動するエージェントがこのマシンに過負荷をかけないための任意の制限です。変更するまで、どの項目もオフ、または Navide の従来の動作のままです。",
+      "test-workers": "新しいペインのテストワーカー数を制限",
+      "test-workers-hint": "新しいペインに NAVIDE_TEST_MAX_WORKERS が渡されます。この変数を読むリポジトリ（このリポジトリの vitest 設定は読みます）は、テストを最大その数のワーカーで実行するため、複数のペインが同時にテストしても CPU を使い切りません。既に開いているペインは元の環境のままです。",
+      "test-workers-value": "テスト実行あたりの最大ワーカー数"
+    },
     "search": {
       "placeholder": "設定を検索…",
       "item": {
@@ -6581,6 +6587,7 @@
     },
     "section": {
       "general-behavior": "一般的な動作",
+      "resource-limits": "リソース制限",
       "notifications": "通知",
       "settings-management": "設定の管理",
       "theme": "テーマ",

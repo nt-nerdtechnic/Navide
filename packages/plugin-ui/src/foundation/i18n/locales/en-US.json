@@ -986,6 +986,12 @@
       "open-diff-in-editor": "Open diff in editor"
   },
   "settings": {
+    "limits": {
+      "hint": "Optional limits that keep Navide and the agents it runs from overloading this machine. Each one is off, or at Navide's previous behavior, until you change it.",
+      "test-workers": "Cap test-runner workers in new panes",
+      "test-workers-hint": "New panes get NAVIDE_TEST_MAX_WORKERS. Repos that read it (this repo's vitest config does) run tests with at most that many workers, so several panes testing at once don't saturate the CPU. Panes already open keep their environment.",
+      "test-workers-value": "Maximum workers per test run"
+    },
     "search": {
       "placeholder": "Search settings…",
       "item": {
@@ -6581,6 +6587,7 @@
     },
     "section": {
       "general-behavior": "General behavior",
+      "resource-limits": "Resource limits",
       "notifications": "Notifications",
       "settings-management": "Settings management",
       "theme": "Theme",

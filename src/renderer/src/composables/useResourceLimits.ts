@@ -1,0 +1,73 @@
+// Settings → General → Resource limits.
+//
+// Every limit here defaults to what Navide did before the limit existed, so
+// nothing changes until the user turns one on, and every reader fails open: a
+// missing or malformed value means "no limit". The keys are shared with the
+// backend (backend/agent_team_backend/resource_limits.py), which applies them.
+//
+// Module-scoped refs, like usePushChannelPrefs: another window editing the
+// same value has to repaint this one.
+
+import { ref, type Ref } from 'vue'
+
+import { onSettingsChanged, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+
+/** Test-runner worker cap; 0 is off. See resource_limits.TEST_WORKERS_KEY. */
+export const TEST_MAX_WORKERS_KEY = 'agentTeam.limits.testMaxWorkers'
+export const TEST_MAX_WORKERS_MIN = 1
+export const TEST_MAX_WORKERS_MAX = 64
+/** What switching the cap on starts from. */
+export const TEST_MAX_WORKERS_ON_DEFAULT = 4
+
+/** An integer in [low, high] read from settings; anything else is `fallback`. */
+function readInt(key: string, fallback: number, low: number, high: number): number {
+  const raw = settingsGet<unknown>(key, fallback)
+  const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw
+  return typeof n === 'number' && Number.isInteger(n) && n >= low && n <= high ? n : fallback
+}
+
+interface IntLimit {
+  key: string
+  fallback: number
+  low: number
+  high: number
+  value: Ref<number>
+}
+
+const limits: IntLimit[] = []
+
+function intLimit(key: string, fallback: number, low: number, high: number): IntLimit {
+  const limit: IntLimit = { key, fallback, low, high, value: ref(readInt(key, fallback, low, high)) }
+  limits.push(limit)
+  return limit
+}
+
+// 0 = off is inside the accepted range so "off" round-trips as a stored value.
+const testMaxWorkers = intLimit(TEST_MAX_WORKERS_KEY, 0, 0, TEST_MAX_WORKERS_MAX)
+
+onSettingsChanged((keys) => {
+  for (const limit of limits) {
+    if (keys.includes(limit.key)) limit.value.value = readInt(limit.key, limit.fallback, limit.low, limit.high)
+  }
+})
+
+/** Store a value if it is in range; returns whether it was accepted. */
+function setIntLimit(limit: IntLimit, next: number): boolean {
+  if (!Number.isInteger(next) || next < limit.low || next > limit.high) return false
+  limit.value.value = next
+  settingsSet(limit.key, next)
+  return true
+}
+
+export function setTestMaxWorkers(next: number): boolean {
+  return setIntLimit(testMaxWorkers, next)
+}
+
+export function useResourceLimits() {
+  return { testMaxWorkers: testMaxWorkers.value }
+}
+
+/** Test hook: re-read every limit from the (reset) settings cache. */
+export function _resetResourceLimitsForTest(): void {
+  for (const limit of limits) limit.value.value = readInt(limit.key, limit.fallback, limit.low, limit.high)
+}

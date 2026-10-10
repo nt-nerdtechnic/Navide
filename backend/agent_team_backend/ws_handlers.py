@@ -7635,6 +7635,14 @@ async def _terminal_create_impl(
         guard_token = secrets.token_urlsafe(24)
         metadata["guard_pane_token"] = guard_token
         env[guard_hooks.PANE_TOKEN_ENV] = guard_token
+    # Settings → Resource limits. Empty unless the user turned a limit on, and
+    # an unreadable store reads as "none" — the spawn never depends on it.
+    from . import resource_limits
+
+    for key, value in resource_limits.spawn_env(
+        resource_limits.read_settings(app.ui_settings_store.get)
+    ).items():
+        env.setdefault(key, value)
     # Lines the pane prints at startup when this machine cannot wire it (see
     # wire_command): the only other trace is a backend log the user never sees.
     wiring_warnings: list[str] = []

@@ -139,6 +139,7 @@ import SettingsSection from './settings/SettingsSection.vue'
 import SettingsCard from './settings/SettingsCard.vue'
 import SettingRow from './settings/SettingRow.vue'
 import ToggleSwitch from './settings/ToggleSwitch.vue'
+import ResourceLimitsSection from './settings/ResourceLimitsSection.vue'
 import VoiceSettingsSection from './settings/VoiceSettingsSection.vue'
 import { formatBytes } from '../lib/formatBytes'
 import { UI_SCALE_STEPS, formatUiScale, getUiScale, setUiScale } from '../lib/uiScale'
@@ -3745,6 +3746,8 @@ watch(activeTab, (tab) => {
               </SettingRow>
             </SettingsCard>
           </SettingsSection>
+
+          <ResourceLimitsSection />
 
           <SettingsSection :label="$t('settings.section.settings-management')">
             <SettingsCard data-settings-section="settings-management">
