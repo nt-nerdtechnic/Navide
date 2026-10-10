@@ -111,6 +111,26 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.19',
+    title: {
+      'zh-TW': 'CLI 擴充一覽，以及更清楚的名稱',
+      'en-US': 'CLI Extensions at a Glance, and Clearer Names',
+      'ja-JP': 'CLI 拡張の一覧と、わかりやすくなった名称',
+    },
+    highlights: [
+      {
+        'zh-TW': '新增「設定 → CLI 擴充」：列出每個 AI CLI 自己安裝的 CLI 擴充——Claude plugin 與 Claude mod、Codex plugin 與 hook，還有 Copilot、Droid、Cursor、Qwen、opencode、Kilo、Pi 等——以及每一項的執行等級（文字資產、子程序，或在 CLI 程序內執行的程式碼）、能碰到什麼（執行指令、連網、攔截工具呼叫……），還有 CLI 執行前會不會先詢問。Navide 自己裝的 hook 會特別標出。這一頁只讀，不會安裝、啟用或修改任何東西；agent 也能用 cli_extensions_list 查詢名稱與中繼資料。',
+        'en-US': 'New Settings → CLI Extensions lists the CLI extensions each AI CLI installed for itself — Claude plugins and mods, Codex plugins and hooks, plus Copilot, Droid, Cursor, Qwen, opencode, Kilo, Pi and more — with each one’s execution tier (text assets, a subprocess, or code running inside the CLI’s own process), what it can reach (running commands, the network, intercepting tool calls…), and whether the CLI asks before running it. Hooks Navide installed are marked. The page only reads: it never installs, enables or changes anything. Agents can query the names and metadata with cli_extensions_list.',
+        'ja-JP': '「設定 → CLI 拡張」を追加しました。各 AI CLI が自分でインストールした CLI 拡張（Claude の plugin と mod、Codex の plugin と hook、さらに Copilot、Droid、Cursor、Qwen、opencode、Kilo、Pi など）を一覧にし、それぞれの実行レベル（テキスト資産、サブプロセス、CLI のプロセス内で動くコード）、触れられる範囲（コマンド実行、ネットワーク、ツール呼び出しへの介入など）、CLI が実行前に確認するかどうかを示します。Navide がインストールした hook には印が付きます。このページは読み取るだけで、インストール・有効化・変更は行いません。エージェントも cli_extensions_list で名前とメタデータを照会できます。',
+      },
+      {
+        'zh-TW': '名稱整理：Navide 自己的外掛一律叫「Navide 外掛」，上架的地方叫「Navide 市集」，跟各家 CLI 自己的 CLI 擴充分開。設定側欄的「整合」改名為「Agent 資產」（MCP、技能、Prompt 技能、記憶），「憑證與金鑰」移到「帳號與代理」，「Navide 外掛」與「Navide 市集」移到「系統」。用舊名稱搜尋設定也找得到。',
+        'en-US': 'Clearer names: Navide’s own plugins are now always “Navide plugins”, published in the “Navide Marketplace”, and kept apart from each AI CLI’s own CLI extensions. In the Settings sidebar, Integrations is now Agent Assets (MCP, skills, prompts, memory), Credentials & keys moved to Accounts & Agents, and Navide Plugins and Navide Marketplace moved to System. Searching Settings by the old names still finds them.',
+        'ja-JP': '名称を整理しました。Navide 自身のプラグインは「Navide プラグイン」、公開の場は「Navide マーケットプレイス」に統一し、各 AI CLI の CLI 拡張と区別します。設定のサイドバーでは「連携」が「エージェント資産」（MCP、スキル、プロンプト、メモリ）になり、「認証情報とキー」は「アカウントとエージェント」へ、「Navide プラグイン」と「Navide マーケットプレイス」は「システム」へ移りました。旧名称で設定を検索しても見つかります。',
+      },
+    ],
+  },
+  {
     version: '0.2.18',
     title: {
       'zh-TW': '雲端同步先經你核准、聊天室報告卡與 PDF、Windows 修正',

@@ -4,6 +4,14 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Added
+
+- **CLI extensions inventory**: Settings → CLI Extensions lists the CLI extensions each AI CLI installed for itself (Claude plugins and mods, Codex plugins and hooks, Copilot, Droid, Cursor, Grok, MiniMax Code, Muse, Qwen, opencode, Kilo and Pi plugins, extensions and hooks), with each one's execution tier (L1 text assets, L2 subprocess, L3 code inside the CLI's own process), the capabilities it can reach, whether the CLI asks before running it, and which hooks Navide installed. Read-only: it parses each CLI's files or runs a declared listing command with a timeout, and never installs, enables or changes anything. Agents get names and metadata through the new MCP tool `cli_extensions_list`.
+
+### Changed
+
+- Naming follows the new glossary (docs/en-US/glossary.md): Navide's own packages are "Navide plugins" in the "Navide Marketplace", an AI CLI's own add-ons are "CLI extensions". Settings: Integrations is now Agent Assets (MCP, skills, prompts, memory), Credentials & keys moved to Accounts & Agents, and Navide Plugins and Navide Marketplace moved to System; the old names still find them in Settings search.
+
 ## [0.2.18] — 2026-10-09 — signed release
 
 ### Added
