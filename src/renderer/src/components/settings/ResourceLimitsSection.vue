@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vTruncate } from '@navide/plugin-ui/foundation'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import type { useBackend } from '../../composables/useBackend'
 import {
@@ -263,7 +264,7 @@ function onEvolveReclaimValue(event: Event): void {
         </p>
         <div v-for="item in leftovers" :key="item.pid" class="rl-row" data-testid="limit-detached-row">
           <div class="rl-row-text">
-            <code class="rl-cmd">{{ item.command }}</code>
+            <code v-truncate class="rl-cmd">{{ item.command }}</code>
             <span class="rl-meta">PID {{ item.pid }} · {{ leftoverMeta(item) }}</span>
           </div>
           <button type="button" :disabled="detachedBusy" data-testid="limit-detached-stop" @click="stopLeftover(item)">
