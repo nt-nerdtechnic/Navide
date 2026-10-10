@@ -1229,7 +1229,12 @@ class CodexHomeManager:
         target = config.resolve()
         tmp = target.with_name(target.name + ".navide-tmp")
         try:
-            tmp.write_text(kept, encoding="utf-8")
+            # Private from the first byte, then the original's mode: the file
+            # can carry secrets, and a default-umask rewrite would widen it.
+            tmp.unlink(missing_ok=True)
+            with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as f:
+                f.write(kept)
+            shutil.copymode(target, tmp)
             os.replace(tmp, target)
         except OSError as err:
             tmp.unlink(missing_ok=True)

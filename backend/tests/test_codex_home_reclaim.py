@@ -407,3 +407,23 @@ def test_reclaim_drops_the_hook_trust_it_seeded_for_that_home(tmp_path: Path) ->
     ])
     assert manager.reclaim(PANE_B) is True
     assert (real / "config.toml").read_text(encoding="utf-8").rstrip("\n") == original.rstrip("\n")
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "geteuid"), reason="POSIX modes")
+def test_dropping_hook_trust_keeps_the_config_files_permissions(tmp_path: Path) -> None:
+    """config.toml can carry secrets; rewriting it must not widen its mode."""
+    import os
+    import stat
+
+    manager, real, _ = _manager(tmp_path)
+    real_key = codex_vendor._toml_escape(str(real / "hooks.json"))
+    (real / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
+    config = real / "config.toml"
+    config.write_text(f'[hooks.state."{real_key}:stop:0:0"]\ntrusted_hash = "sha256:aaaa"\n', encoding="utf-8")
+    config.chmod(0o600)
+    home = manager.prepare(PANE_A)
+    assert manager.seed_hook_trust(home) == 1
+
+    assert manager.reclaim(PANE_A) is True
+
+    assert stat.S_IMODE(os.stat(config).st_mode) == 0o600
