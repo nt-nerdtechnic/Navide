@@ -1003,7 +1003,10 @@
       "detached-failed": "Could not complete the request.",
       "focused-reclaim": "Also reclaim the focused pane when it sits untouched",
       "focused-reclaim-hint": "Idle reclaim (above) never takes the pane each window has in focus, so that pane keeps its CLI running however long it sits. With this on, a focused pane nobody has typed in or received output in for this long is reclaimed too — turned into a card you can resume with one click, never closed. A pane waiting for an answer or holding unsent text is still kept.",
-      "focused-reclaim-value": "Hours untouched"
+      "focused-reclaim-value": "Hours untouched",
+      "spotlight": "Spotlight indexing",
+      "spotlight-hint": "Spotlight already skips node_modules and Navide's own hidden folders, but it indexes build output (dist, out, build) and extra worktrees in your repos, which can keep it busy while agents build and test. Navide does not change this for you: add those folders under Spotlight's search privacy list yourself.",
+      "spotlight-open": "Open Spotlight settings"
     },
     "search": {
       "placeholder": "Search settings…",

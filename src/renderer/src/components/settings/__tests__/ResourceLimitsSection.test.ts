@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { i18n } from '@navide/plugin-ui/foundation'
@@ -200,6 +200,34 @@ describe('Resource limits — reclaim the focused pane too', () => {
   })
 })
 
+describe('Resource limits — Spotlight indexing', () => {
+  const api = window as unknown as { agentTeam?: { openSpotlightSettings?: () => Promise<{ ok: boolean }> } }
+  let open: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    open = vi.fn(async () => ({ ok: true }))
+    api.agentTeam = { openSpotlightSettings: open }
+  })
+  afterEach(() => {
+    delete api.agentTeam
+    vi.unstubAllGlobals()
+  })
+
+  it('changes nothing on its own: the system settings open only on a click', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel', userAgent: 'Macintosh' })
+    const w = mountSection()
+    expect(open).not.toHaveBeenCalled()
+    await w.get('[data-testid="limit-spotlight-open"]').trigger('click')
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('is not offered off macOS', () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'Win32', userAgent: 'Windows NT 10.0' })
+    const w = mountSection()
+    expect(w.find('[data-testid="limit-spotlight-open"]').exists()).toBe(false)
+  })
+})
+
 describe('Resource limits — placement', () => {
   it('sits in Settings → General', () => {
     const modal = readFileSync(resolve(here, '../../SettingsModal.vue'), 'utf8')
@@ -220,6 +248,9 @@ describe('Resource limits — placement', () => {
       'settings.limits.focused-reclaim',
       'settings.limits.focused-reclaim-hint',
       'settings.limits.focused-reclaim-value',
+      'settings.limits.spotlight',
+      'settings.limits.spotlight-hint',
+      'settings.limits.spotlight-open',
       'settings.limits.detached',
       'settings.limits.detached-hint',
       'settings.limits.detached-find',

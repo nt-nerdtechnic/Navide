@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { isMacPlatform } from '@navide/plugin-ui/shared'
 import type { useBackend } from '../../composables/useBackend'
 import {
   EVOLVE_RECLAIM_DEFAULT_MINUTES,
@@ -105,6 +106,16 @@ function onFocusedReclaimValue(event: Event): void {
   if (next < FOCUSED_RECLAIM_MIN_HOURS || !setFocusedReclaimHours(next)) {
     input.value = String(focusedReclaimHours.value)
   }
+}
+
+// Spotlight: an opt-in hand-off, never a change Navide makes to the system.
+const onMac = isMacPlatform()
+const spotlightError = ref('')
+
+async function openSpotlightSettings(): Promise<void> {
+  spotlightError.value = ''
+  const res = await window.agentTeam?.openSpotlightSettings?.()
+  if (res && !res.ok) spotlightError.value = res.error ?? t('settings.limits.detached-failed')
 }
 
 function onEvolveReclaimToggle(on: boolean): void {
@@ -215,6 +226,19 @@ function onEvolveReclaimValue(event: Event): void {
           />
         </template>
       </SettingRow>
+      <SettingRow
+        v-if="onMac"
+        data-settings-section="limits-spotlight"
+        :title="t('settings.limits.spotlight')"
+        :description="t('settings.limits.spotlight-hint')"
+      >
+        <template #control>
+          <button type="button" data-testid="limit-spotlight-open" @click="openSpotlightSettings">
+            {{ t('settings.limits.spotlight-open') }}
+          </button>
+        </template>
+      </SettingRow>
+      <p v-if="spotlightError" class="rl-error" role="alert">{{ spotlightError }}</p>
       <SettingRow
         data-settings-section="limits-detached"
         :title="t('settings.limits.detached')"

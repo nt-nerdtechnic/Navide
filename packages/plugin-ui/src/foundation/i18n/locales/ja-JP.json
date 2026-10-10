@@ -1003,7 +1003,10 @@
       "detached-failed": "リクエストを完了できませんでした。",
       "focused-reclaim": "フォーカス中のペインも、操作がなければ回収",
       "focused-reclaim-hint": "アイドル回収（上記）は各ウィンドウでフォーカス中のペインを回収しないため、そのペインの CLI はどれだけ放置しても動き続けます。オンにすると、この時間入力も出力もないフォーカス中のペインも回収します（ワンクリックで再開できるカードになり、閉じられはしません）。回答待ちや未送信のテキストがあるペインは引き続き保持されます。",
-      "focused-reclaim-value": "操作がない時間（時間）"
+      "focused-reclaim-value": "操作がない時間（時間）",
+      "spotlight": "Spotlight のインデックス",
+      "spotlight-hint": "Spotlight は node_modules と Navide 自身の隠しフォルダをもともとスキップしますが、リポジトリ内のビルド出力（dist、out、build）や追加の worktree はインデックスするため、エージェントがビルドやテストをしている間ずっと負荷がかかることがあります。Navide はこの設定を変更しません。これらのフォルダは、Spotlight の検索プライバシーリストにご自身で追加してください。",
+      "spotlight-open": "Spotlight 設定を開く"
     },
     "search": {
       "placeholder": "設定を検索…",
