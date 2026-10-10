@@ -52,8 +52,9 @@ _DETAIL_MAX = 200
 _CODE_SUFFIXES = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".jsx")
 
 #: Markers on every hook Navide installs (claude_hooks, qwen_hooks,
-#: copilot_hooks): the comment line, the event header, the port file.
-_NAVIDE_HOOK_RE = re.compile(r"agent-team-hook|X-Agent-Team-Event|Agent-Team[/\\]backend-port|/hooks/copilot")
+#: copilot_hooks): the comment line, the event header, the port file, and the
+#: Windows exec-form Guard script named in ``args``.
+_NAVIDE_HOOK_RE = re.compile(r"agent-team-hook|X-Agent-Team-Event|Agent-Team[/\\]backend-port|/hooks/copilot|navide-guard\.cmd")
 
 #: Hook events whose handler sees, and may veto or rewrite, a tool call.
 _TOOL_EVENT_RE = re.compile(r"pre_?tool|beforeshell|beforemcp|permission|tool\.check", re.I)
@@ -528,6 +529,10 @@ def _walk_hooks(container: Any) -> list[tuple[str, str]]:
         if isinstance(node, dict):
             own = node.get("command") or node.get("bash") or node.get("powershell")
             if isinstance(own, str):
+                # Exec form (claude): the program in `command`, what it runs in `args`.
+                args = node.get("args")
+                if isinstance(args, list) and args:
+                    return [" ".join([own, *map(str, args)])]
                 return [own]
             return [c for child in node.values() if isinstance(child, (list, dict)) for c in commands(child)]
         if isinstance(node, list):

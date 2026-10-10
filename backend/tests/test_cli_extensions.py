@@ -332,3 +332,22 @@ def test_a_hook_summary_never_carries_a_credential(command: str, secret: str) ->
     summary = cli_extensions._summary(command)
     assert secret not in summary
     assert "***" in summary
+
+
+def test_the_windows_exec_form_guard_hook_is_owned_by_navide(tmp_path: Path) -> None:
+    """On Windows the Guard hook is ``cmd.exe`` with the script in ``args``.
+
+    Read off ``command`` alone it looked like the user's own hook.
+    """
+    script = r"C:\Users\me\AppData\Roaming\Navide\navide-guard.cmd"
+    _json(tmp_path / ".claude" / "settings.json", {
+        "hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "cmd.exe", "args": ["/d", "/c", script]}]}],
+            "SessionStart": [{"hooks": [{"type": "command", "command": "cmd.exe", "args": ["/c", "mine.cmd"]}]}],
+        },
+    })
+
+    items = _by(cli_extensions.scan(tmp_path, runner=_no_cli).items, "claude")
+
+    owners = {item.name: item.owner for item in items.values() if item.kind == "hook"}
+    assert owners == {"PreToolUse": "navide", "SessionStart": "user"}
