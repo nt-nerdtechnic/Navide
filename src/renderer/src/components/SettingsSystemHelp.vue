@@ -57,17 +57,16 @@ const tabs: TabRow[] = [
   { key: 'security', navKey: 'guard.nav' },
   { key: 'channels', navKey: 'channels.nav' },
   { key: 'cloud', navKey: 'settings.nav.crossDevice' },
-  { key: 'mcp', groupKey: 'settings.nav.group.integration', groupSpan: 6, navKey: 'settings.nav.mcp' },
+  { key: 'mcp', groupKey: 'settings.nav.group.integration', groupSpan: 4, navKey: 'settings.nav.mcp' },
   { key: 'skills', navKey: 'settings.nav.skills' },
   { key: 'prompts', navKey: 'settings.nav.prompts' },
   { key: 'memory', navKey: 'settings.nav.memory' },
-  // Extensions and Marketplace sit in INTEGRATIONS after Memory — all six
-  // read off the third `.s-nav-group` in SettingsModal.vue. The execution
-  // policy is not a page of its own: it is the editable block at the top of
-  // Extensions.
-  { key: 'extensions', navKey: 'settings.nav.extensions' },
+  // Navide Plugins and Navide Marketplace open SYSTEM — all five read off the
+  // fourth `.s-nav-group` in SettingsModal.vue. The execution policy is not a
+  // page of its own: it is the editable block at the top of Navide Plugins.
+  { key: 'extensions', groupKey: 'settings.nav.group.system', groupSpan: 5, navKey: 'settings.nav.extensions' },
   { key: 'marketplace', navKey: 'settings.nav.marketplace' },
-  { key: 'shortcuts', groupKey: 'settings.nav.group.system', groupSpan: 3, navKey: 'settings.nav.keybindings' },
+  { key: 'shortcuts', navKey: 'settings.nav.keybindings' },
   { key: 'updates', navKey: 'settings.nav.updates' },
   { key: 'help', navKey: 'settings.nav.help' },
 ]
@@ -331,13 +330,13 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.skills') },
       { label: t('settings.nav.prompts') },
       { label: t('settings.nav.memory') },
-      { label: t('settings.nav.extensions') },
-      { label: t('settings.nav.marketplace') },
     ],
   },
   {
     title: t('settings.nav.group.system'),
     items: [
+      { label: t('settings.nav.extensions') },
+      { label: t('settings.nav.marketplace') },
       { label: t('settings.nav.keybindings') },
       { label: t('settings.nav.updates') },
       { label: t('settings.nav.help') },

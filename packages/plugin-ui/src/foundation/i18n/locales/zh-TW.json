@@ -325,7 +325,7 @@
       "tab-shortcut": "問題 (⌘⇧M)"
     },
     "pluginViews": {
-      "unavailable": "此檢視由外掛提供，目前無法開啟。"
+      "unavailable": "此檢視由 Navide 外掛提供，目前無法開啟。"
     },
     "plans": {
       "stage-in-review": "審查中",
@@ -517,17 +517,17 @@
         "markdown": "Markdown",
         "errors": {
           "generic": "未知後端錯誤（{code}）",
-          "backend-error": "後端外掛程式執行失敗。",
+          "backend-error": "Navide 外掛後端執行失敗。",
           "backend-unavailable": "後端服務目前無法使用。",
           "invalid-argument": "無效的請求參數。",
-          "invalid-activation": "外掛程式啟用狀態無效。",
-          "invalid-runtime": "外掛程式執行階段無效。",
-          "capability-denied": "外掛程式功能權限已被拒絕。",
-          "resource-limit": "外掛程式已超過資源限制。",
+          "invalid-activation": "Navide 外掛啟用狀態無效。",
+          "invalid-runtime": "Navide 外掛執行階段無效。",
+          "capability-denied": "Navide 外掛功能權限已被拒絕。",
+          "resource-limit": "Navide 外掛已超過資源限制。",
           "not-ready": "後端服務尚未就緒。",
-          "plugin-error": "外掛程式後端發生錯誤。",
+          "plugin-error": "Navide 外掛後端發生錯誤。",
           "timeout": "操作逾時。",
-          "plugin-stopping": "外掛程式正在停止中。",
+          "plugin-stopping": "Navide 外掛正在停止中。",
           "user-cancelled": "操作已由使用者取消。",
           "protocol-error": "通訊協定錯誤。",
           "conflict": "檔案發生衝突，請重新整理後再試。",
@@ -1160,8 +1160,8 @@
           "summary": "編輯全域 agent 政策、選擇工作區的來源、審閱 repository 的建議設定，並修復損毀的政策儲存。"
         },
         "marketplace": {
-          "title": "市集",
-          "summary": "搜尋擴充功能登錄庫並安裝擴充功能，含發佈者信任與能力確認。"
+          "title": "Navide 市集",
+          "summary": "搜尋 Navide 外掛登錄庫並安裝 Navide 外掛，含發佈者信任與能力確認。"
         },
         "help-mcp": {
           "title": "MCP 說明",
@@ -1339,9 +1339,9 @@
       "devUnpacked": "未簽章的本機資料夾，僅限開發者模式",
       "nativeBackends": {
         "title": "原生後端",
-        "description": "部分擴充功能內含原生程式。Navide 會把它放在沒有網路的沙盒裡執行：它只能讀取你一起開啟的工作區，也只能在你允許的地方修改檔案。在你打開下方開關之前，不會執行任何原生程式。",
-        "enable": "允許第三方擴充功能執行原生後端",
-        "empty": "目前沒有安裝任何含原生後端的擴充功能。",
+        "description": "部分 Navide 外掛內含原生程式。Navide 會把它放在沒有網路的沙盒裡執行：它只能讀取你一起開啟的工作區，也只能在你允許的地方修改檔案。在你打開下方開關之前，不會執行任何原生程式。",
+        "enable": "允許第三方 Navide 外掛執行原生後端",
+        "empty": "目前沒有安裝任何含原生後端的 Navide 外掛。",
         "allow": "允許",
         "disable": "停用",
         "enable_plugin": "啟用",
@@ -1375,11 +1375,11 @@
       },
       "restore": "還原",
       "candidateReady": "更新 {version} 已就緒",
-      "restartPlugin": "重新啟動擴充功能",
+      "restartPlugin": "重新啟動 Navide 外掛",
       "rollback": {
         "toBundled": "回復為內建版本",
         "toVersion": "回復到 {version}",
-        "title": "回復擴充功能",
+        "title": "回復 Navide 外掛",
         "confirm": "回復",
         "confirmFactory": "要將 {id} 回復為 Navide 內建的版本嗎？你安裝的套件會保留為待啟用版本，之後可以重新啟動切回。",
         "confirmPrevious": "要將 {id} 回復到 {version} 嗎？目前的版本會保留為待啟用版本，之後可以重新啟動切回。",
@@ -1397,19 +1397,19 @@
       },
       "installed": "已安裝",
       "sensitive": "敏感權限",
-      "empty": "尚未安裝任何擴充功能。",
+      "empty": "尚未安裝任何 Navide 外掛。",
       "permissionDetails": "權限與授予",
-      "plansRiskNote": "此插件有自己的後端程式，以您的使用者權限執行，沒有沙盒。它處理目前專案的計畫文件：從往上找到的 Git 儲存庫根目錄起（含其下的巢狀儲存庫），任何深度的 .agent-team、.claude、.cursor 與 docs 底下的 plans／reports 類資料夾、根目錄的 .plans，以及這些資料夾的 .history（只讀）。讀取與寫入計畫文件都由此插件的後端直接進行；刪除與改名仍經由 Navide 進行。",
-      "searchPlaceholder": "搜尋擴充功能",
+      "plansRiskNote": "此 Navide 外掛有自己的後端程式，以您的使用者權限執行，沒有沙盒。它處理目前專案的計畫文件：從往上找到的 Git 儲存庫根目錄起（含其下的巢狀儲存庫），任何深度的 .agent-team、.claude、.cursor 與 docs 底下的 plans／reports 類資料夾、根目錄的 .plans，以及這些資料夾的 .history（只讀）。讀取與寫入計畫文件都由此 Navide 外掛的後端直接進行；刪除與改名仍經由 Navide 進行。",
+      "searchPlaceholder": "搜尋 Navide 外掛",
       "search": "搜尋",
       "install": "安裝",
       "marketplace": {
         "installing": "安裝中…",
         "incompatibleInstalledDetail": "已安裝的 {version} 需要 Navide {min} 以上（目前是 {current}），更新 Navide 前可能無法正常運作。",
-        "loading": "正在載入擴充功能…",
-        "loadFailed": "無法載入市集：{error}",
-        "noExtensions": "目前還沒有已發佈的擴充功能。",
-        "noResults": "沒有符合「{query}」的擴充功能。",
+        "loading": "正在載入 Navide 外掛…",
+        "loadFailed": "無法載入 Navide 市集：{error}",
+        "noExtensions": "目前還沒有已發佈的 Navide 外掛。",
+        "noResults": "沒有符合「{query}」的 Navide 外掛。",
         "sortLabel": "排序方式",
         "sort": {
           "downloads": "下載最多",
@@ -1423,40 +1423,40 @@
         "update": "更新",
         "updateTo": "更新到 {version}",
         "uninstall": "解除安裝",
-        "back": "返回市集",
+        "back": "返回 Navide 市集",
         "loadingDetail": "正在載入詳細資訊…",
-        "detailFailed": "無法載入這個擴充功能：{error}",
+        "detailFailed": "無法載入這個 Navide 外掛：{error}",
         "publisher": "發佈者",
         "rating": "★ {average}（{count} 則評分）",
         "noRating": "尚無評分",
         "permissions": "權限",
         "noPermissions": "這個版本沒有宣告任何權限。",
         "readme": "詳細說明",
-        "noReadme": "這個擴充功能沒有 README。",
+        "noReadme": "這個 Navide 外掛沒有 README。",
         "versions": "版本",
         "yanked": "已撤回",
         "unavailable": "此平台不可用",
         "unavailableDetail": "版本 {version} 沒有針對此平台（{host}）發佈；可用平台：{targets}。",
-        "uninstallConfirmTitle": "要解除安裝擴充功能嗎？",
-        "uninstallConfirmBody": "將從這台裝置移除 {name}。之後仍可從市集重新安裝。",
+        "uninstallConfirmTitle": "要解除安裝 Navide 外掛嗎？",
+        "uninstallConfirmBody": "將從這台裝置移除 {name}。之後仍可從 Navide 市集重新安裝。",
         "updatesCount": "可用更新：{count} 個",
         "retry": "重試",
         "featured": "精選",
         "clearSearch": "清除搜尋",
         "showAllCategories": "顯示所有分類",
         "noResultsHint": "換個關鍵字，或瀏覽所有分類。",
-        "noExtensionsHint": "發布者上架擴充功能後，就會出現在這裡。",
-        "loadFailedTitle": "無法連上市集",
-        "loadFailedHint": "請檢查網路連線後重試；已安裝的擴充功能不受影響。",
+        "noExtensionsHint": "發布者上架 Navide 外掛後，就會出現在這裡。",
+        "loadFailedTitle": "無法連上 Navide 市集",
+        "loadFailedHint": "請檢查網路連線後重試；已安裝的 Navide 外掛不受影響。",
         "errorDetails": "詳細資訊",
         "info": "資訊",
-        "detailTabs": "擴充功能詳細內容",
+        "detailTabs": "Navide 外掛詳細內容",
         "installVersion": "安裝 {version}",
         "versionLabel": "版本 {version}",
         "otherTarget": "不適用此平台（{target}）",
         "updateAvailableVersion": "有可用更新：{version}",
         "openLinkTitle": "開啟外部連結？",
-        "openLinkBody": "這個連結由擴充功能的發行者提供，將在瀏覽器中開啟：",
+        "openLinkBody": "這個連結由 Navide 外掛的發行者提供，將在瀏覽器中開啟：",
         "openLink": "開啟連結",
         "repository": "原始碼庫",
         "homepage": "首頁",
@@ -1481,7 +1481,7 @@
           "themes": "主題",
           "ai": "AI",
           "other": "其他",
-          "extension-packs": "擴充套件組合"
+          "extension-packs": "Navide 外掛組合"
         },
         "hideIncompatible": "隱藏不相容",
         "loadMore": "載入更多",
@@ -1505,7 +1505,7 @@
         "publisherRiskUnsigned": "{publisher} 的套件 {id} 沒有 Registry 簽章。信任這個發佈者後，Navide 會執行它的程式碼。",
         "sensitiveHeading": "敏感權限",
         "publisherTitle": "信任發行者",
-        "permissionsTitle": "確認擴充功能權限",
+        "permissionsTitle": "確認 Navide 外掛權限",
         "publisherRisk": "信任發行者 {publisher}，以便安裝 {id}。有效的 Registry 簽章只能證明套件內容未被竄改，並不代表你願意執行這個發行者的程式碼。",
         "backendRisk": "{name} 內含原生後端執行檔，該執行檔會以你的使用者帳號所擁有的作業系統權限執行。",
         "sensitiveRisk": "{name} 要求敏感權限：{capabilities}。",
@@ -1525,18 +1525,18 @@
       "incompatibleInstalled": "需要 Navide ≥ {version}",
       "incompatibleReason": "這個版本宣告需要 Navide {version} 以上。它仍保持啟用，但在你更新 Navide 前可能無法正常運作。",
       "pack": {
-        "countsLine": "共 {total} 個擴充功能 · {ready} 個將安裝 · {installed} 個已安裝 · {skipped} 個略過",
-        "badge": "擴充套件組合",
+        "countsLine": "共 {total} 個 Navide 外掛 · {ready} 個將安裝 · {installed} 個已安裝 · {skipped} 個略過",
+        "badge": "Navide 外掛組合",
         "install": "安裝組合（{count}）",
-        "membersTitle": "這個組合包含的擴充功能",
+        "membersTitle": "這個組合包含的 Navide 外掛",
         "membersNote": "每個成員都會各自驗證、各自確認。安裝組合不會授予任何你沒看過的權限。",
         "membersBadge": "組合 · {count} 個成員",
         "includes": "包含：{members}",
-        "summaryTitle": "安裝「{name}」：共 {total} 個擴充功能，{count} 個要檢視",
-        "summaryNote": "下列每個擴充功能都會各自驗證、各自確認。組合本身不要求任何權限。",
-        "review": "檢視 {count} 個擴充功能",
+        "summaryTitle": "安裝「{name}」：共 {total} 個 Navide 外掛，{count} 個要檢視",
+        "summaryNote": "下列每個 Navide 外掛都會各自驗證、各自確認。組合本身不要求任何權限。",
+        "review": "檢視 {count} 個 Navide 外掛",
         "finish": "完成",
-        "reviewTitle": "安裝「{name}」：檢視 {count} 個擴充功能",
+        "reviewTitle": "安裝「{name}」：檢視 {count} 個 Navide 外掛",
         "verifying": "驗證中…",
         "noSensitive": "{name} 沒有要求敏感權限。",
         "confirmMember": "確認並安裝",
@@ -1544,7 +1544,7 @@
         "cancelPack": "取消組合",
         "partialNote": "略過或取消的成員不會安裝；已經安裝的成員會保留（可以個別解除安裝）。",
         "doneTitle": "「{name}」：已完成",
-        "restartNote": "新安裝的擴充功能會列在「擴充功能」頁，可在那裡啟動。",
+        "restartNote": "新安裝的 Navide 外掛會列在「Navide 外掛」頁，可在那裡啟動。",
         "close": "關閉",
         "status": {
           "ready": "將逐一檢視",
@@ -1562,11 +1562,11 @@
           "failed": "失敗"
         },
         "uninstallTitle": "解除安裝「{name}」？",
-        "uninstallBody": "這會移除組合本身。除非你在下方勾選，否則其中的擴充功能會保留。",
-        "uninstallMembersHint": "只因這個組合而安裝的擴充功能：",
+        "uninstallBody": "這會移除組合本身。除非你在下方勾選，否則其中的 Navide 外掛會保留。",
+        "uninstallMembersHint": "只因這個組合而安裝的 Navide 外掛：",
         "uninstallOnly": "只解除安裝組合",
-        "uninstallWithMembers": "解除安裝組合與 {count} 個擴充功能",
-        "noPermissionsOfItsOwn": "這個組合本身不授予任何權限；其中每個擴充功能會在安裝時各自請求權限。"
+        "uninstallWithMembers": "解除安裝組合與 {count} 個 Navide 外掛",
+        "noPermissionsOfItsOwn": "這個組合本身不授予任何權限；其中每個 Navide 外掛會在安裝時各自請求權限。"
       }
     },
     "extensionsPolicy": {
@@ -1817,7 +1817,7 @@
       "appearance": "🎨 外觀",
       "accounts": "🔑 帳號",
       "shortcuts": "⌨️ 快捷鍵",
-      "extensions": "🧩 擴充功能",
+      "extensions": "🧩 Navide 外掛",
       "executionPolicy": "🛡️ 執行政策"
     },
     "nav": {
@@ -1826,7 +1826,7 @@
       "group": {
         "general": "一般",
         "accountsAgents": "帳號與代理",
-        "integration": "整合",
+        "integration": "Agent 資產",
         "system": "系統"
       },
       "general": "一般",
@@ -1846,8 +1846,8 @@
       "memory": "記憶",
       "sharing": "設定共享",
       "analyzer": "分析器",
-      "extensions": "擴充功能",
-      "marketplace": "市集",
+      "extensions": "Navide 外掛",
+      "marketplace": "Navide 市集",
       "executionPolicy": "執行政策",
       "statusBadges": "狀態徽章",
       "voice": "語音輸入",
@@ -2001,11 +2001,11 @@
               "more": "本頁第 3 章"
             },
             "extensions": {
-              "what": "外掛執行時套用的執行政策，以及隨附與已安裝的外掛",
+              "what": "Navide 外掛執行時套用的執行政策，以及隨附與已安裝的 Navide 外掛",
               "more": "本頁第 4 章"
             },
             "marketplace": {
-              "what": "搜尋擴充功能登錄庫並從中安裝",
+              "what": "搜尋 Navide 外掛登錄庫並從中安裝",
               "more": "本頁第 4 章"
             },
             "shortcuts": {
@@ -2097,7 +2097,7 @@
           "appearance": {
             "theme": "<strong>主題</strong> — 五種內建：Dark (GitHub)、Midnight、Forest、Light、High Contrast，預設是 Dark (GitHub)。",
             "colors": "<strong>自訂顏色</strong> — 八個可覆寫的色彩 token（背景、表面、文字、次要文字、邊框、強調、成功、危險）。覆寫疊在目前主題之上，<strong>換主題時保留</strong>；<em>↺ 重設為預設值</em> 還原。",
-            "uiScale": "<strong>介面縮放</strong> — 在 <strong>外觀 ▸ 其他</strong> 區塊的第一列，控制項是<strong>下拉選單</strong>而不是滑桿，六段 80%／90%／100%／110%／125%／150%，預設 100%，快捷鍵 <kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd>。它走的是 Electron 的頁面縮放而不是 CSS 變數，所以文字、圖示、邊框、間距會一起變，而且由主行程套用到<strong>每一個視窗</strong>，外掛視窗也算。它和面板字級是<strong>兩條獨立的軸</strong>：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 只改終端機<strong>內容</strong>的字級（整個視窗的 CLI 面板共用同一個值），介面縮放改的是外面那層殼；兩者是<strong>相乘</strong>的，就像瀏覽器的頁面縮放疊在網站自己的字級上。",
+            "uiScale": "<strong>介面縮放</strong> — 在 <strong>外觀 ▸ 其他</strong> 區塊的第一列，控制項是<strong>下拉選單</strong>而不是滑桿，六段 80%／90%／100%／110%／125%／150%，預設 100%，快捷鍵 <kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd>。它走的是 Electron 的頁面縮放而不是 CSS 變數，所以文字、圖示、邊框、間距會一起變，而且由主行程套用到<strong>每一個視窗</strong>，Navide 外掛視窗也算。它和面板字級是<strong>兩條獨立的軸</strong>：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 只改終端機<strong>內容</strong>的字級（整個視窗的 CLI 面板共用同一個值），介面縮放改的是外面那層殼；兩者是<strong>相乘</strong>的，就像瀏覽器的頁面縮放疊在網站自己的字級上。",
             "restore": "<strong>還原視窗</strong> — 下次啟動時重開上次結束時開著的工作區視窗。"
           },
           "callout": {
@@ -2221,7 +2221,7 @@
           }
         },
         "s4": {
-          "title": "快捷鍵、更新、分析器、擴充功能",
+          "title": "快捷鍵、更新、分析器、Navide 外掛",
           "h1": "快捷鍵",
           "p1": "表格四欄：<em>命令</em>、<em>快捷鍵</em>、<em>生效條件</em>（生效情境）、<em>來源</em>。",
           "shortcuts": {
@@ -2278,15 +2278,15 @@
             "models": "<strong>Model manager</strong>（Ollama 模式） — 輸入模型名稱按 <em>⬇ 下載</em> 下載，有進度條；下方列出已安裝的模型（名稱、參數量、大小），可逐一刪除。",
             "benchmark": "<strong>Model benchmark</strong> — 對所有本機模型跑四項任務：技術棧偵測（輸出 JSON）、工作區一句話摘要、從文件清單挑最相關的一筆、解析 CLI 輸出並抽出問題與選項。結果表逐項打勾並附耗時，<strong>四題至少過三題（≥75%）</strong>才算通過；沒過的模型會從模型下拉選單裡藏起來。"
           },
-          "h4": "擴充功能",
-          "p6": "政策那一塊底下才是外掛清單，分<strong>兩段</strong>：<strong>內建</strong>（隨附套件，例如 內建 Git，可停用後再 <em>還原</em>）與 <strong>已安裝</strong>（自行安裝的，列出敏感能力與相依，可 <em>移除</em>）。兩段的每一列底下都會多一行<em>宣告的權限</em> 與 <em>此版本的授權</em>，寫明這個版本實際被授予什麼；對不到授權時以淡色寫「尚無相符的授權」。<strong>搜尋登錄庫並安裝新套件已經是另一個分頁「市集」</strong>，不在這裡。",
-          "p7": "安裝<strong>最多兩道確認</strong>，只在需要時出現，而且在確認之前不會寫入任何檔案：發佈者還沒被信任時先問「信任發佈者」——畫面明說<em>有效的簽章只證明套件沒被竄改，不代表你願意執行這個發佈者的程式</em>；套件帶有需要確認的風險時再問「確認外掛權限」，列出它要求的敏感能力，並在帶有原生後端執行檔時特別警告。兩者都不需要時直接安裝。",
+          "h4": "Navide 外掛",
+          "p6": "政策那一塊底下才是 Navide 外掛清單，分<strong>兩段</strong>：<strong>內建</strong>（隨附套件，例如 內建 Git，可停用後再 <em>還原</em>）與 <strong>已安裝</strong>（自行安裝的，列出敏感能力與相依，可 <em>移除</em>）。兩段的每一列底下都會多一行<em>宣告的權限</em> 與 <em>此版本的授權</em>，寫明這個版本實際被授予什麼；對不到授權時以淡色寫「尚無相符的授權」。<strong>搜尋登錄庫並安裝新套件已經是另一個分頁「Navide 市集」</strong>，不在這裡。",
+          "p7": "安裝<strong>最多兩道確認</strong>，只在需要時出現，而且在確認之前不會寫入任何檔案：發佈者還沒被信任時先問「信任發佈者」——畫面明說<em>有效的簽章只證明套件沒被竄改，不代表你願意執行這個發佈者的程式</em>；套件帶有需要確認的風險時再問「確認 Navide 外掛權限」，列出它要求的敏感能力，並在帶有原生後端執行檔時特別警告。兩者都不需要時直接安裝。",
           "extRollback": "Host 留著可以回去的版本時，那一列會多一顆「{toBundled}」或「{toVersion}」：確認後退回被它取代的那個套件，再用「{restart}」完成切換。回復被拒或失敗時，畫面顯示 Host 自己給的原因（已翻譯）；失敗時會把先卸下的畫面還原。",
-          "extPrerelease": "每個擴充功能的列上有「{prerelease}」勾選，逐一決定要不要收預覽版；市集的版本清單會標出哪些是預覽版，也能直接安裝。",
-          "extNative": "<strong>{native}</strong>：第三方擴充功能可以附帶自己的後端程式，預設不會執行。要先打開「{nativeEnable}」，再對那個擴充功能的那一個版本按「{allow}」。它在沒有網路的沙盒裡跑（macOS 用 Seatbelt、Linux 用 bubblewrap），只能讀你一起開的工作區、只能在你允許的地方寫檔；程式或權限一有變動就要重新允許。Windows 目前不支援。",
-          "marketplace": "「{marketplace}」分頁：可搜尋、篩分類、依下載數／更新時間／評分排序、隱藏不相容的，最上面最多三個「{featured}」。詳情頁有 README、變更記錄與版本清單，旁邊列出權限與相容性；評分在這裡只能看，要評分或檢舉得到登錄庫網站登入後操作。標著「{pack}」的可以用「{packInstall}」一次裝一整組；移除一組時，別的組還在用的成員不會被移掉。<code>navide://</code> 連結只會打開那個擴充功能的詳情頁，按不按安裝永遠由你決定。",
+          "extPrerelease": "每個 Navide 外掛的列上有「{prerelease}」勾選，逐一決定要不要收預覽版；Navide 市集的版本清單會標出哪些是預覽版，也能直接安裝。",
+          "extNative": "<strong>{native}</strong>：第三方 Navide 外掛可以附帶自己的後端程式，預設不會執行。要先打開「{nativeEnable}」，再對那個 Navide 外掛的那一個版本按「{allow}」。它在沒有網路的沙盒裡跑（macOS 用 Seatbelt、Linux 用 bubblewrap），只能讀你一起開的工作區、只能在你允許的地方寫檔；程式或權限一有變動就要重新允許。Windows 目前不支援。",
+          "marketplace": "「{marketplace}」分頁：可搜尋、篩分類、依下載數／更新時間／評分排序、隱藏不相容的，最上面最多三個「{featured}」。詳情頁有 README、變更記錄與版本清單，旁邊列出權限與相容性；評分在這裡只能看，要評分或檢舉得到登錄庫網站登入後操作。標著「{pack}」的可以用「{packInstall}」一次裝一整組；移除一組時，別的組還在用的成員不會被移掉。<code>navide://</code> 連結只會打開那個 Navide 外掛的詳情頁，按不按安裝永遠由你決定。",
           "mirror": "<strong>下載鏡像</strong>：每個版本的檔案同時放在 GitHub Release 與 <code>dl.navide.dev</code>（同樣的位元，附 sha256 可比對）。<strong>更新來源預設就是鏡像</strong>——app 一啟動就把 feed 指到 <code>dl.navide.dev</code>，GitHub 是備援。只有遇到<strong>網路層失敗</strong>（連不上、逾時、5xx／429）才會退回 GitHub，退過之後<strong>這個 session 就一直用 GitHub</strong>，重開 app 才會回到鏡像。<strong>404 與簽章／checksum 錯誤不會退回</strong>——兩邊放的是同一份檔，換過去只會同樣失敗，照原樣回報才有用。",
-          "policyIntro": "<strong>執行政策</strong>決定外掛的後端可以執行什麼。它<strong>不是獨立分頁</strong>，而是擴充功能分頁最上面那一塊，帶自己的層級徽章（使用者＋工作區）與政策檔路徑。最上面先顯示<em>目前生效的政策</em>：來源、模式，以及狀態 <em>生效中</em>／<em>已過期</em>／<em>無法使用</em>／<em>損壞</em>。",
+          "policyIntro": "<strong>執行政策</strong>決定 Navide 外掛的後端可以執行什麼。它<strong>不是獨立分頁</strong>，而是 Navide 外掛分頁最上面那一塊，帶自己的層級徽章（使用者＋工作區）與政策檔路徑。最上面先顯示<em>目前生效的政策</em>：來源、模式，以及狀態 <em>生效中</em>／<em>已過期</em>／<em>無法使用</em>／<em>損壞</em>。",
           "policy": {
             "hostDefault": "<strong>Host 預設值</strong> — 內建的最小權限基準，標著<strong>唯讀</strong>。即使使用者政策的儲存區整個不見了它仍然可用，所以永遠有一條退路。",
             "user": "<strong>使用者政策</strong> — 全域那一份，工作區選 User 來源時用的就是它，沒建過會寫「尚未建立」。三種模式：<em>完整</em>、<em>允許清單</em>、<em>拒絕清單</em>；可設「系統命名空間」與「Shell 可執行檔」，後者<strong>只收最上層可執行檔名稱</strong>，不接受路徑或 shell 運算式。",
@@ -2296,7 +2296,7 @@
             "failClosed": "任何一種不健康狀態都是<strong>失敗關閉</strong>：在你明確選一個可用來源或修好它之前，什麼都不會被放行。連「存不確定」也一樣——訊息是「無法確認政策變更結果。政策仍維持失敗關閉，請重新檢查」。"
           },
           "policyNote": "要一次清掉所有 repository 來源 pin，用「重設所有政策來源選擇」，同樣要勾確認。它<strong>不會</strong>修改或刪除任何 repository 政策檔案，只是讓每個工作區之後重新依全域 Host 預設值或使用者政策解析。",
-          "extNote": "外掛後端出狀況時的分界：<strong>只有協定訊框（request／response／cancel）滿了才會終止那個後端</strong>；Host 通知滿了只是丟棄並計數，不會把整個外掛拖垮。乾淨結束的後端會把原因記下來，不再無聲消失。"
+          "extNote": "Navide 外掛後端出狀況時的分界：<strong>只有協定訊框（request／response／cancel）滿了才會終止那個後端</strong>；Host 通知滿了只是丟棄並計數，不會把整個 Navide 外掛拖垮。乾淨結束的後端會把原因記下來，不再無聲消失。"
         },
         "s5": {
           "title": "Navide Cloud",
@@ -3242,13 +3242,13 @@
           }
         },
         "s10": {
-          "title": "Plans 是一個外掛程式（以及它失敗時的樣子）",
-          "p1": "側欄的 Plans 分頁與 Plan 視窗都由打包外掛程式 <code>navide.plans</code> 繪製，在<strong>設定 ▸ 擴充功能</strong>的 <em>內建</em> 區列得到它：id、版本、啟用中／已移除／無法使用 徽章、manifest 權限與套件版本。介面上任何地方都不會寫 “v2” 這兩個字——唯一的例外是下面這塊復原面板。",
+          "title": "Plans 是一個 Navide 外掛（以及它失敗時的樣子）",
+          "p1": "側欄的 Plans 分頁與 Plan 視窗都由隨附的 Navide 外掛 <code>navide.plans</code> 繪製，在<strong>設定 ▸ Navide 外掛</strong>的 <em>內建</em> 區列得到它：id、版本、啟用中／已移除／無法使用 徽章、manifest 權限與套件版本。介面上任何地方都不會寫 “v2” 這兩個字——唯一的例外是下面這塊復原面板。",
           "p2": "切換 App 主題時 Plans 的畫面會即時跟著換，不必重開視窗。",
           "h1": "Plans 起不來時：Legacy recovery",
-          "p3": "外掛程式這次啟動失敗時，Plans 分頁會換成灰底的 <strong>Legacy recovery</strong> 標籤，底下掛回舊版計畫面板，中間一行寫著原因：<em>本次啟動已停用 Plans v2（{'{'}原因{'}'}）。</em>常見的原因字串有 <code>forced</code>（環境變數 <code>NAVIDE_PLANS_RECOVERY=legacy</code> 指定的）、<code>storage-migration-failure</code>（存放紀錄讀不到或轉不過去），以及後端啟動失敗的訊息。",
+          "p3": "Navide 外掛這次啟動失敗時，Plans 分頁會換成灰底的 <strong>Legacy recovery</strong> 標籤，底下掛回舊版計畫面板，中間一行寫著原因：<em>本次啟動已停用 Plans v2（{'{'}原因{'}'}）。</em>常見的原因字串有 <code>forced</code>（環境變數 <code>NAVIDE_PLANS_RECOVERY=legacy</code> 指定的）、<code>storage-migration-failure</code>（存放紀錄讀不到或轉不過去），以及後端啟動失敗的訊息。",
           "list": {
-            "retry": "<strong>重試 Plans v2</strong>——把外掛程式重新武裝，下一次開 Plans 時再生一次後端。<strong>整個 session 只有 2 次額度，而且是先扣再試</strong>：按下去就算一次，成敗都不退。額度用完後這個 session 就固定留在舊版面板，要再試只能重開 app。",
+            "retry": "<strong>重試 Plans v2</strong>——把 Navide 外掛重新武裝，下一次開 Plans 時再生一次後端。<strong>整個 session 只有 2 次額度，而且是先扣再試</strong>：按下去就算一次，成敗都不退。額度用完後這個 session 就固定留在舊版面板，要再試只能重開 app。",
             "repair": "<strong>修復儲存紀錄</strong>——只有原因是 <code>storage-migration-failure</code> 時才出現。修好之後畫面<strong>仍然留在復原狀態</strong>，訊息會寫 <em>儲存紀錄已修復，重啟 Navide 即可離開舊版復原模式。</em>；本來就沒壞的話會回 <em>儲存紀錄可正常讀取，無需修復。</em>"
           },
           "p4": "被 <code>NAVIDE_PLANS_RECOVERY=legacy</code> 強制、或這個 session 沒有完整的 v2 套件時，「重試」會直接拒絕並把原因寫在旁邊，不會浪費額度。"
@@ -4407,7 +4407,7 @@
               "keys": "⌘5、⌘⇧D"
             }
           },
-          "note": "<kbd class=\"wph-kbd\">⌘B</kbd> 收合整條側欄。安裝的外掛可能再增加分頁。",
+          "note": "<kbd class=\"wph-kbd\">⌘B</kbd> 收合整條側欄。安裝的 Navide 外掛可能再增加分頁。",
           "h2": "「代理」分頁的三層結構",
           "p1": "由上而下是<strong>工作區列 → 群組列 → 面板列</strong>。",
           "rows": {
@@ -4606,7 +4606,7 @@
         },
         "s1": {
           "title": "方向一：Navide 提供給 CLI agent 的工具",
-          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>61 個</strong>（核心 55 個，加上計畫外掛註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
+          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>61 個</strong>（核心 55 個，加上Navide 外掛「Plans」註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
           "h1": "計畫文件",
           "planTools": {
             "plan_list": "列出這個工作區的所有計畫，含階段與待辦進度",
@@ -4802,7 +4802,7 @@
             "legend": {
               "nav": {
                 "label": "設定側欄",
-                "text": "MCP 在「整合」這一組底下，與技能、Prompt 技能、記憶並列。"
+                "text": "MCP 在「Agent 資產」這一組底下，與技能、Prompt 技能、記憶並列。"
               },
               "actions": {
                 "label": "頂列動作",
@@ -4864,9 +4864,9 @@
               "what": "切到計畫文件清單。"
             },
             "plugin": {
-              "name": "外掛自訂",
+              "name": "Navide 外掛自訂",
               "where": "分頁列尾端",
-              "what": "外掛提供的分頁。外掛沒帶圖示時就顯示這顆菱形當替身。"
+              "what": "Navide 外掛提供的分頁。Navide 外掛沒帶圖示時就顯示這顆菱形當替身。"
             },
             "collapse": {
               "where": "分頁列最右",
@@ -5961,7 +5961,7 @@
             "menubar": "Windows 與 Linux 的<strong>原生選單列預設是收起來的</strong>，按 <kbd class=\"cph-kbd\">Alt</kbd> 叫出來，免得跟自繪的標題列疊成上下兩條。",
             "appMenu": "這兩個平台沒有 macOS 那種 App 選單，所以 <em>Settings…</em>、<em>Check for Updates…</em>、<em>Quit</em> 都改放在 <strong>File</strong> 選單裡。",
             "closeItem": "<strong>Window</strong> 選單多一項 <em>Close</em> 用來關視窗。macOS 沒有這一項，因為那裡的 <kbd class=\"cph-kbd\">⌘W</kbd> 留給了關閉面板。",
-            "pluginWindows": "由外掛畫出來的視窗（Git 視窗是其中之一）在 Windows 與 Linux 上用的是<strong>系統原生的視窗框</strong>，不是自繪的那一組：那些視窗裡跑的是外掛自己的內容，接不到主程式的橋接，畫不出自己的按鈕。"
+            "pluginWindows": "由 Navide 外掛畫出來的視窗（Git 視窗是其中之一）在 Windows 與 Linux 上用的是<strong>系統原生的視窗框</strong>，不是自繪的那一組：那些視窗裡跑的是 Navide 外掛自己的內容，接不到主程式的橋接，畫不出自己的按鈕。"
           },
           "h2": "關掉最後一個視窗會先問你",
           "p2": "在 Windows 與 Linux 上，關掉最後一個視窗等於結束整個 App。所以 Navide 在視窗真的關掉<strong>之前</strong>就先問一次，這樣按取消才還來得及——等視窗關掉才問的話，取消只會留下一個沒有視窗、卻還在跑的程式。對話框裡有「不再顯示此提醒」，勾了就不會再問，之後可以在設定裡的「關閉前確認」把它打開回來。",

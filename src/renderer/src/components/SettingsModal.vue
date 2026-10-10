@@ -810,7 +810,7 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'credentials',
     section: 'credentials',
     title: t('settings.search.item.credentials.title'),
-    group: t('settings.nav.group.integration'),
+    group: t('settings.nav.group.accountsAgents'),
     summary: t('settings.search.item.credentials.summary'),
     keywords: 'credentials keys secrets token ssh keychain keyring git helper scan risk reminder 憑證 金鑰 密鑰 鑰匙圈 掃描 風險 提醒',
   },
@@ -1053,24 +1053,24 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free resource manager 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出 資源',
   },
   {
-    // The policy editor is a block on the Extensions page now, so the hit opens
+    // The policy editor is a block on the Navide Plugins page now, so the hit opens
     // that page and scrolls to the block; the section id is unchanged.
     id: 'execution-policy',
     tab: 'extensions',
     section: 'execution-policy',
     title: t('settings.search.item.execution-policy.title'),
-    group: t('settings.nav.group.integration'),
+    group: t('settings.nav.group.system'),
     summary: t('settings.search.item.execution-policy.summary'),
-    keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性',
+    keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性 extension extensions plugin plugins 擴充 擴充功能 外掛 Navide 外掛 拡張機能 プラグイン',
   },
   {
     id: 'marketplace',
     tab: 'marketplace',
     section: 'marketplace',
     title: t('settings.search.item.marketplace.title'),
-    group: t('settings.nav.group.integration'),
+    group: t('settings.nav.group.system'),
     summary: t('settings.search.item.marketplace.summary'),
-    keywords: 'marketplace extension extensions plugin plugins registry search browse install publisher signed unsigned trust 市集 擴充 擴充功能 外掛 搜尋 瀏覽 安裝 發佈者 簽章 信任',
+    keywords: 'marketplace extension extensions plugin plugins registry search browse install publisher signed unsigned trust 市集 擴充 擴充功能 外掛 搜尋 瀏覽 安裝 發佈者 簽章 信任 Navide 市集 拡張機能 プラグイン マーケットプレイス',
   },
   {
     id: 'help-mcp',
@@ -2547,6 +2547,11 @@ watch(activeTab, (tab) => {
                   <NavideCloudMark variant="solid" class="nvc-nav-mark" />
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.credentials')" :active="activeTab === 'credentials'" :badge="credentialsHighCount" @select="activeTab = 'credentials'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.2" cy="10.8" r="2.6"/><path d="M7.1 9 13 3.1M10.9 5.2l1.7 1.7M9 7.1l1.4 1.4"/></svg>
+                </template>
+              </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
@@ -2561,11 +2566,6 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3.2h4.2v4.2H3zM8.8 3.2H13v4.2H8.8zM3 9H7.2v3.8H3z"/><path d="M10.9 9v3.8M9 10.9h3.8"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.credentials')" :active="activeTab === 'credentials'" :badge="credentialsHighCount" @select="activeTab = 'credentials'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.2" cy="10.8" r="2.6"/><path d="M7.1 9 13 3.1M10.9 5.2l1.7 1.7M9 7.1l1.4 1.4"/></svg>
-                </template>
-              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.prompts')" :active="activeTab === 'prompts'" @select="activeTab = 'prompts'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.6" y="2.6" width="12.8" height="10.8" rx="1.6"/><path d="M4.6 6.2 6.8 8.2l-2.2 2"/><path d="M8.6 10.4h3"/></svg>
@@ -2576,6 +2576,10 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 2.6h6.1l3.5 3.5v7.3H3.2Z"/><path d="M9.1 2.7v3.5h3.5"/><path d="M5.4 8.4h5.2M5.4 10.7h3.4"/></svg>
                 </template>
               </SettingsNavItem>
+            </div>
+
+            <div class="s-nav-group">
+              <div class="s-nav-group-title">{{ $t('settings.nav.group.system') }}</div>
               <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" :badge="pluginUpdates.count.value" @select="activeTab = 'extensions'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
@@ -2586,10 +2590,6 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 5.4h10.8l-.8 7.1a1.2 1.2 0 0 1-1.2 1.1H4.6a1.2 1.2 0 0 1-1.2-1.1L2.6 5.4Z"/><path d="M5.8 7.2V4.6a2.2 2.2 0 0 1 4.4 0v2.6"/></svg>
                 </template>
               </SettingsNavItem>
-            </div>
-
-            <div class="s-nav-group">
-              <div class="s-nav-group-title">{{ $t('settings.nav.group.system') }}</div>
               <SettingsNavItem :label="$t('settings.nav.keybindings')" :active="activeTab === 'keybindings'" @select="activeTab = 'keybindings'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.3" y="3.8" width="13.4" height="8.4" rx="1.4"/><path d="M4 6.4h0.01M6.4 6.4h0.01M8.8 6.4h0.01M11.2 6.4h0.01M4 8.8h0.01M11.2 8.8h0.01M6 10.6h4"/></svg>
