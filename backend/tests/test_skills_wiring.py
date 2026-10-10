@@ -921,3 +921,27 @@ def test_every_shared_root_reader_is_declared() -> None:
     )
     # Verified 2026-08-15 against each binary / official docs.
     assert readers == ["codex", "copilot", "cursor", "grok", "muse", "opencode"]
+
+
+def test_a_home_level_shim_never_adopts_into_the_users_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shim that stands in for the whole $HOME (muse) adopts nothing.
+
+    Anything a tool in the pane writes to ``~`` — a cloned repo, a shell rc
+    file — lands in the shim; promoting it would reach the user's real home
+    and login shell.
+    """
+    muse = SkillsWiring(root_env="HOME", reads_shared_root=True, skills_rel=(".agents", "skills"))
+    (tmp_path / "home" / ".agents").mkdir(parents=True)
+    _skill(tmp_path / "managed", "alpha")
+    monkeypatch.setattr(skills_wiring, "panes_root", lambda: tmp_path / "panes")
+    root, _ = _root(tmp_path, muse, agent_key="muse")
+    (Path(root) / ".zshrc").write_text("pane", encoding="utf-8")
+    (Path(root) / ".agents" / "notes").mkdir()
+
+    _root(tmp_path, muse, agent_key="muse")
+
+    assert not (tmp_path / "home" / ".zshrc").exists()
+    assert not (tmp_path / "home" / ".agents" / "notes").exists()
+    assert (Path(root) / ".zshrc").read_text(encoding="utf-8") == "pane"

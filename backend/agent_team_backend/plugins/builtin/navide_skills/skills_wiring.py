@@ -228,9 +228,12 @@ def prepare_root(
             existing and wiring.isolated_panes_home
             and root.parent.resolve() == home.joinpath(*wiring.isolated_panes_home).resolve()
         )
+        # A root that stands in for the whole $HOME is never adopted from, as
+        # in pane_home._mirror: what a tool writes to ``~`` there (a cloned
+        # repo, a shell rc file) is not ours to promote into the real home.
         _materialise(
             root, real_root, wiring.skills_rel, sources, suppressed,
-            adopt=ours, mirror_home=not isolated,
+            adopt=ours and bool(wiring.root_home), mirror_home=not isolated,
         )
         return str(root)
     except Exception as err:  # noqa: BLE001 - optional wiring must never block spawn
