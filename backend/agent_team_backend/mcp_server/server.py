@@ -6678,6 +6678,39 @@ async def mcp_list(ctx: Context) -> dict[str, Any]:
     return {"servers": servers, **reflected}
 
 
+@server.tool()
+async def cli_extensions_list(ctx: Context) -> dict[str, Any]:
+    """List the CLI extensions each AI CLI installed for itself.
+
+    These are the CLIs' own add-ons, not Navide plugins (see
+    docs/en-US/glossary.md): Claude plugins and mods, Codex plugins and
+    hooks, Copilot and Droid plugins, opencode and Kilo plugins, Pi
+    extensions, Qwen extensions, and every CLI's hooks. The same inventory
+    Settings → CLI Extensions shows. Read it before telling the user a CLI
+    has, or lacks, an add-on. Read-only: installing, enabling or removing a
+    CLI extension is the user's decision and there is no tool here for it.
+
+    Returns {vendors, items}. `vendors` is every CLI with an extension system
+    ({cli, label, supported, note, count}); `supported: false` means Navide
+    cannot read where that CLI keeps them yet. Each item is {cli, id, name,
+    version, kind (plugin / mod / extension / hook / package), type_label
+    (the vendor's own name), scope, enabled, exec_tier (L1 text assets, L2
+    subprocess such as hooks and MCP, L3 code inside the CLI's own process),
+    capabilities, native_consent (what the CLI itself asks before running
+    it), owner (navide when Navide installed it), evidence (inferred when
+    capabilities were read off source text)}.
+
+    Names and metadata only: no paths and no hook command lines, which can
+    name scripts, hosts and tokens. A global inventory: it does not vary by
+    workspace.
+    """
+    from agent_team_backend import cli_extensions
+
+    _resolve_caller(ctx)
+    inventory = await asyncio.to_thread(cli_extensions.scan)
+    return inventory.public_dict()
+
+
 async def _credentials_scan_result() -> dict[str, Any]:
     from agent_team_backend import credentials_scan
 

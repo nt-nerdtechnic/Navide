@@ -33,6 +33,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .. import osplat
+from .base import ExtensionsSource, ExtensionsSpec  # noqa: F401
 from .base import (
     AccountSwitchSpec,
     Dep,
@@ -1377,7 +1378,17 @@ _PORTABLE_SHADOWING_SETTINGS = tuple(
 )
 
 
+# Where this CLI keeps the extensions it installed for itself (read-only
+# inventory, cli_extensions). Verified 2026-10-10 against the installed
+# binary's --help and the files on disk.
+_EXTENSIONS = ExtensionsSpec(sources=(
+    ExtensionsSource("plugins-json", (".claude", "plugins", "installed_plugins.json"), "Claude plugin",
+        settings=(".claude", "settings.json"), mod_label="Claude mod"),
+    ExtensionsSource("hooks", (".claude", "settings.json"), "Claude hook", section=("hooks",)),
+))
+
 SPEC = VendorSpec(
+    extensions=_EXTENSIONS,
     key="claude",
     # Official standalone CLI network requirements (verified 2026-09-21):
     # https://code.claude.com/docs/en/network-config#network-access-requirements

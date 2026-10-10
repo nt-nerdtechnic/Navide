@@ -11776,6 +11776,18 @@ async def evolve_badges(session: "Session", msg_id: str, msg_type: str, payload:
     )
 
 
+# ── CLI extensions (cli_extensions.*) ──────────────────────────────────────
+# The read-only inventory behind Settings → CLI Extensions. Scanning reads
+# files and at most a declared listing command with a timeout, so a thread
+# keeps it off the loop.
+@handler("cli_extensions.list")
+async def cli_extensions_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import cli_extensions
+
+    inventory = await asyncio.to_thread(cli_extensions.scan)
+    await session.send_json(make_response(msg_id, msg_type, inventory.as_dict()))
+
+
 # ── Voice input (voice.*) ───────────────────────────────────────────────────
 # Handlers live in voice_handlers; the sidecar and model in stt_service. Both
 # stay inert until one of these messages arrives.

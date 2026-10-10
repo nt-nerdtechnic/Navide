@@ -30,6 +30,7 @@ import time
 
 import psutil
 
+from .base import ExtensionsSource, ExtensionsSpec  # noqa: F401
 from .base import AccountSwitchSpec, Dep, McpWiring, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
 from ..applog import app_data_dir
 from ..skills_store import SkillsStore
@@ -1578,7 +1579,16 @@ def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
     return (root,)
 
 
+# Where this CLI keeps the extensions it installed for itself (read-only
+# inventory, cli_extensions). Verified 2026-10-10 against the installed
+# binary's --help and the files on disk.
+_EXTENSIONS = ExtensionsSpec(sources=(
+    ExtensionsSource("codex-config", (".codex", "config.toml"), "Codex plugin", section=("plugins",)),
+    ExtensionsSource("hooks", (".codex", "hooks.json"), "Codex hook", section=("hooks",), native_consent="hook-trust"),
+))
+
 SPEC = VendorSpec(
+    extensions=_EXTENSIONS,
     key="codex",
     # Built-in OpenAI API and ChatGPT service defaults (verified 2026-09-21):
     # https://learn.chatgpt.com/docs/config-file/config-sample
