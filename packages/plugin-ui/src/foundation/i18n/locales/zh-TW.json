@@ -9981,6 +9981,7 @@
   "pipelineEditor": {
     "error": {
       "pipeline-running": "這條 pipeline 正在執行，目前無法修改。請先中止或等執行結束。",
+      "pipeline-not-found": "找不到這條 pipeline，可能已在別處被刪除。請改選其他 pipeline。",
       "export-failed": "匯出失敗：{message}",
       "role-entry-invalid": "{key}：項目缺少 key 或 system prompt",
       "command-failed": "執行沒有接受這個指令。",

@@ -200,7 +200,9 @@ export function usePipelineGraphEditor(
     const locked = refuseWhileLocked()
     if (locked) return locked
     const cmd = from.value.at(-1)
-    if (!cmd || pending.value) return { ok: true }
+    if (!cmd) return { ok: true }
+    // Stepping now would restore a graph the queued write is about to replace.
+    if (pending.value) return { ok: false, error: { code: 'WRITE_PENDING', message: 'an edit is still saving' } }
     const target = direction === 'undo' ? cmd.before : cmd.after
     const inverse = direction === 'undo' ? cmd.undoOps : cmd.redoOps
     graph.value = target

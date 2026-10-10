@@ -150,3 +150,13 @@ async def test_gate_and_restart_from_go_to_the_window(ui_calls: list[dict[str, A
     assert (await plan_mcp.pipeline_restart_from(_ctx(), ""))["error_code"] == "missing_argument"
     for action in ("ui.pipeline.gate_pass", "ui.pipeline.gate_reject", "ui.pipeline.restart_from"):
         assert action in plan_mcp._UI_INVOKE_SLOW_ACTIONS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op", ["get", "apply", "set"])
+async def test_unknown_pipeline_is_a_clear_not_found(wired: SimpleNamespace, op: str) -> None:
+    out = await plan_mcp.pipeline_graph(
+        _ctx(), op, pipeline_id="no-such-pipeline", ops=GATE, graph={"version": 1, "nodes": [], "edges": []}
+    )
+    assert out["ok"] is False and out["error_code"] == "not_found", out
+    assert out["error"] == "pipeline not found: no-such-pipeline"

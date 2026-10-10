@@ -174,6 +174,27 @@ describe('PipelineEditor', () => {
     expect(server.stored().nodes.some((n) => n.id === 'be')).toBe(false)
   })
 
+  it('ignores a keyboard undo made while an edit is still saving, without a toast', async () => {
+    const { w, server } = await mountEditor()
+    await w.find('.lane-card[data-node-id="be"]').trigger('keydown', { key: 'Delete' })
+    await flushPromises()
+    let release!: () => void
+    const held = new Promise<void>((r) => { release = r })
+    const send = server.mock.backend.send
+    ;(server.mock.backend as { send: unknown }).send = async (type: string, payload: Record<string, unknown> = {}) => {
+      if (type === 'pipelines.graph.apply') await held
+      return send(type, payload)
+    }
+    await w.find('.lane-card[data-node-id="fe"]').trigger('keydown', { key: 'Delete' })
+    const before = useNotify().toasts.value.length
+    await w.find('.pe').trigger('keydown', { key: 'z', metaKey: true })
+    await flushPromises()
+    release()
+    await flushPromises()
+    expect(useNotify().toasts.value.slice(before)).toEqual([])
+    expect(server.stored().nodes.some((n) => n.id === 'be' || n.id === 'fe')).toBe(false)
+  })
+
   it('switches to the canvas when a loop badge is clicked and remembers the view', async () => {
     const { w } = await mountEditor()
     await w.find('.lane-card[data-node-id="review"] .pnc-badge').trigger('click')

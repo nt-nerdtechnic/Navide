@@ -121,6 +121,17 @@ describe('usePipelineGraphEditor', () => {
     expect(editor.undoLabel.value).toBe('Two')
   })
 
+  it('refuses undo while a write is pending, so callers can tell nothing happened', async () => {
+    const { editor, server } = await setup()
+    await editor.execute('One', [rename('n-01-0', 'One')])
+    const saving = editor.execute('Two', [rename('n-01-0', 'Two')])
+    const undo = await editor.undo()
+    await saving
+    expect(undo).toMatchObject({ ok: false, error: { code: 'WRITE_PENDING' } })
+    expect(label(server.stored(), 'n-01-0')).toBe('Two')
+    expect(editor.undoLabel.value).toBe('Two')
+  })
+
   it('adopts an external edit and drops the history it would clobber', async () => {
     const { editor, server } = await setup()
     await editor.execute('Rename', [rename('n-01-0', 'Plan')])
