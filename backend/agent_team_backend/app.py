@@ -2398,16 +2398,50 @@ async def _stop_log_watcher() -> None:
     _credential_watcher = None
 
 
+def _default_pool_reading(loop: asyncio.AbstractEventLoop) -> dict[str, int]:
+    """The shared default executor's size and backlog. It is created lazily,
+    so before the first to_thread it reads as empty. Private attributes of
+    ThreadPoolExecutor — read-only, and the caller drops the reading on error."""
+    executor = getattr(loop, "_default_executor", None)
+    if executor is None:
+        return {"threads": 0, "max_workers": 0, "queued": 0}
+    return {
+        "threads": len(executor._threads),  # noqa: SLF001
+        "max_workers": int(executor._max_workers),  # noqa: SLF001
+        "queued": int(executor._work_queue.qsize()),  # noqa: SLF001
+    }
+
+
+async def _loop_lag_ms(loop: asyncio.AbstractEventLoop) -> float:
+    """How long a callback waits behind the work already queued on the loop."""
+    started = time.monotonic()
+    ran = loop.create_future()
+    loop.call_soon(ran.set_result, None)
+    await ran
+    return round((time.monotonic() - started) * 1000, 3)
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     # backend_log is deliberately absent: the absolute path carries the account
     # name, and this is the one route that answers without a credential. The
     # clients that need it read it from the ws settings.paths reply instead.
-    return {
+    body: dict[str, Any] = {
         "status": "ok",
         "version": __version__,
         "started_at": STARTED_AT,
     }
+    # A load reading for diagnosing starvation. Measuring must never cost the
+    # route its answer, so any failure just leaves the block out.
+    try:
+        loop = asyncio.get_running_loop()
+        body["diagnostics"] = {
+            "loop_lag_ms": await _loop_lag_ms(loop),
+            "default_pool": _default_pool_reading(loop),
+        }
+    except Exception as err:  # noqa: BLE001 — fail open
+        log.debug("health diagnostics unavailable: %s", err)
+    return body
 
 
 # Font mimes served inline (specimen @font-face fetch, /fs/page subresources).
