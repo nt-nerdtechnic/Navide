@@ -3754,15 +3754,19 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 @dblclick.stop="startWorkspaceRename(ws.path)"
               >{{ ws.label }}</span>
               <span class="ws-count" v-bind="countBadgeAttrs(wsCountStates.get(ws.path))">{{ wsLiveCounts.get(ws.path) ?? 0 }} / {{ ws.count }}</span>
-              <button
+              <!-- Display-only: the panel opens from the ⋯ and right-click
+                   menus. The click is swallowed so it does not switch the
+                   workspace either. -->
+              <span
                 class="ws-evolve"
                 data-test="evolve-badge"
+                role="img"
                 :data-state="evolveStateOf(ws.path)"
                 :title="$t('evolve.badge.title', { state: evolveLabelOf(ws.path) })"
                 :aria-label="$t('evolve.badge.title', { state: evolveLabelOf(ws.path) })"
-                @click.stop="openEvolveFor(ws.path)"
+                @click.stop
                 @dblclick.stop
-              ><span aria-hidden="true">✦</span></button>
+              ><span aria-hidden="true">✦</span></span>
             </span>
             <span class="ws-path" v-truncate>{{ ws.displayPath }}</span>
           </span>
@@ -6099,7 +6103,8 @@ button.icon-btn.muted:hover {
   font-weight: 400;
   font-size: var(--font-3xs);
   font-variant-numeric: tabular-nums;
-  cursor: pointer;
+  line-height: 15px;
+  cursor: default;
 }
 .ws-evolve[data-state='on'] {
   background: var(--success-muted);

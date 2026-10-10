@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Workspace self-evolution ("自我優化") panel: one workspace's switch, time,
 // execution unit, CLI, budget, permission scope, rules, last result and
-// history. Opened from the sidebar heading (badge, ⋯ menu, right-click menu)
+// history. Opened from the sidebar heading (⋯ menu, right-click menu)
 // and from the Schedule panel's read-only system job row.
 //
 // Everything is per workspace: every request names `workspace`, and nothing
