@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { expect, it } from 'vitest'
 
 // mermaid 12 lays out flowchart, state, class and ER diagrams with ELK and
@@ -28,7 +28,7 @@ function sourceFiles(dir: string): string[] {
 const calls = roots.flatMap(sourceFiles).flatMap((path) => {
   const source = readFileSync(path, 'utf8')
   return [...source.matchAll(/mermaid\.initialize\(\{([^}]*)\}\)/g)].map((match) => ({
-    file: relative(repositoryRoot, path),
+    file: relative(repositoryRoot, path).split(sep).join('/'),
     options: match[1],
   }))
 })
