@@ -610,6 +610,16 @@ class TerminalService:
             final_env.update(env)
         for key in env_remove or ():
             final_env.pop(key, None)
+        # Settings → Resource limits: a per-session marker a detached server
+        # inherits, so it can be listed after this pane is gone. Inert, and
+        # skipped entirely when the user turned tracking off.
+        from . import detached_servers, resource_limits
+
+        pane_mark = detached_servers.new_mark() if resource_limits.track_detached(resource_limits.current()) else ""
+        if pane_mark:
+            final_env[detached_servers.MARK_ENV] = pane_mark
+            metadata = metadata if metadata is not None else {}
+            metadata["pane_mark"] = pane_mark
 
         try:
             risk_context = risk_runtime_context(final_env, cwd)
@@ -781,6 +791,14 @@ class TerminalService:
             return fg == osplat.process_tree.group_of(session.proc.pid)
         except (ProcessLookupError, PermissionError):
             return None
+
+    def live_pane_marks(self) -> set[str]:
+        """The detached-server markers of every live session."""
+        return {
+            str(s.metadata.get("pane_mark"))
+            for s in self._sessions.values()
+            if not s.closed and s.metadata.get("pane_mark")
+        }
 
     def list_session_ids(self) -> list[str]:
         """Ids of all live (not closed) sessions."""

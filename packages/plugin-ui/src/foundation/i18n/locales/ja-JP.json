@@ -986,6 +986,28 @@
     "open-diff-in-editor": "差分をエディターで開く"
   },
   "settings": {
+    "limits": {
+      "hint": "Navide と、Navide が起動するエージェントがこのマシンに過負荷をかけないための任意の制限です。変更するまで、どの項目もオフ、または Navide の従来の動作のままです。",
+      "test-workers": "新しいペインのテストワーカー数を制限",
+      "test-workers-hint": "新しいペインに NAVIDE_TEST_MAX_WORKERS が渡されます。この変数を読むリポジトリ（このリポジトリの vitest 設定は読みます）は、テストを最大その数のワーカーで実行するため、複数のペインが同時にテストしても CPU を使い切りません。既に開いているペインは元の環境のままです。",
+      "test-workers-value": "テスト実行あたりの最大ワーカー数",
+      "evolve-reclaim": "タイムアウトした自己進化ペインを回収",
+      "evolve-reclaim-hint": "自己進化の実行が制限時間を過ぎても報告しない場合、アイドルになりこの時間が経過した時点でそのペインを回収します（ワンクリックで再開できるカードになり、閉じられはしません）。オフにすると、従来どおりそのようなペインを開いたままにします。",
+      "evolve-reclaim-value": "タイムアウト後の分数",
+      "detached": "閉じたペインが残したサーバーを追跡",
+      "detached-hint": "新しいペインには動作に影響しない NAVIDE_PANE_MARK 変数が付きます。エージェントがバックグラウンドで起動した開発サーバーはこれを引き継ぐため、ペインが閉じた後もここに一覧表示できます。「停止」を押さない限り、何も停止されません。",
+      "detached-find": "残ったサーバーを探す",
+      "detached-empty": "閉じたペインが残したサーバーはありません。",
+      "detached-stop": "停止",
+      "detached-meta": "{cwd} · {size} · {since} から",
+      "detached-failed": "リクエストを完了できませんでした。",
+      "focused-reclaim": "フォーカス中のペインも、操作がなければ回収",
+      "focused-reclaim-hint": "アイドル回収（上記）は各ウィンドウでフォーカス中のペインを回収しないため、そのペインの CLI はどれだけ放置しても動き続けます。オンにすると、この時間入力も出力もないフォーカス中のペインも回収します（ワンクリックで再開できるカードになり、閉じられはしません）。回答待ちや未送信のテキストがあるペインは引き続き保持されます。",
+      "focused-reclaim-value": "操作がない時間（時間）",
+      "spotlight": "Spotlight のインデックス",
+      "spotlight-hint": "Spotlight は node_modules と Navide 自身の隠しフォルダをもともとスキップしますが、リポジトリ内のビルド出力（dist、out、build）や追加の worktree はインデックスするため、エージェントがビルドやテストをしている間ずっと負荷がかかることがあります。Navide はこの設定を変更しません。これらのフォルダは、Spotlight の検索プライバシーリストにご自身で追加してください。",
+      "spotlight-open": "Spotlight 設定を開く"
+    },
     "search": {
       "placeholder": "設定を検索…",
       "item": {
@@ -6581,6 +6603,7 @@
     },
     "section": {
       "general-behavior": "一般的な動作",
+      "resource-limits": "リソース制限",
       "notifications": "通知",
       "settings-management": "設定の管理",
       "theme": "テーマ",

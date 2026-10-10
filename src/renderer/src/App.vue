@@ -130,7 +130,8 @@ import { vTruncate } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
-import { reclaimBlockedBy, namedReclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
+import { reclaimBlockedBy, focusedReclaimBlockedBy, namedReclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
+import { useResourceLimits } from './composables/useResourceLimits'
 import { reclaimRefusalReason, reclaimRequestPaneIds, type ReclaimRefusal } from './lib/paneReclaimRequest'
 import { findConsecutiveQuestionBlocks, findSentinel } from '@navide/terminal'
 import {
@@ -1253,6 +1254,8 @@ const confirmBeforeCloseWorkspace = makeStickyBool('agentTeam.confirmCloseWorksp
 // conversation is one click away rather than gone.
 const idleReclaimEnabled = makeStickyBool('agentTeam.idleReclaim', true)
 const idleReclaimMinutes = makeStickyStr('agentTeam.idleReclaimMinutes', '30')
+// Settings → Resource limits: also reclaim the focused pane after N hours (0 = never).
+const { focusedReclaimHours } = useResourceLimits()
 // Non-null once main starts tearing the app down. Quitting runs into seconds
 // (a capped wait for a starting backend, then its SIGTERM grace), and the
 // window is still on screen for all of it.
@@ -16250,8 +16253,9 @@ function paneHeldByStageRouter(paneId: string): boolean {
 }
 
 function paneReclaimable(pane: ActivePane, now: number): boolean {
-  return reclaimBlockedBy(
-    reclaimCandidate(pane), idleReclaimThresholdMs(idleReclaimMinutes.value), now
+  return focusedReclaimBlockedBy(
+    reclaimCandidate(pane), idleReclaimThresholdMs(idleReclaimMinutes.value),
+    focusedReclaimHours.value * 3_600_000, now
   ) === null
 }
 

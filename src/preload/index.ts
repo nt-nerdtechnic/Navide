@@ -657,6 +657,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
   /** Open one legal page in the default browser; the URL is main's, not the caller's. */
   openLegal: (route: LegalRoute): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('legal:open', route),
+  /** Open Spotlight's privacy settings (macOS); the destination is main's. */
+  openSpotlightSettings: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('system:open-spotlight-settings'),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   stabilizeDroppedPaths: (paths: string[]): Promise<{ ok: boolean; paths: string[] }> =>
     ipcRenderer.invoke('drop:stabilize', paths),

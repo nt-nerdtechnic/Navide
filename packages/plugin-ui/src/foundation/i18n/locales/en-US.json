@@ -986,6 +986,28 @@
       "open-diff-in-editor": "Open diff in editor"
   },
   "settings": {
+    "limits": {
+      "hint": "Optional limits that keep Navide and the agents it runs from overloading this machine. Each one is off, or at Navide's previous behavior, until you change it.",
+      "test-workers": "Cap test-runner workers in new panes",
+      "test-workers-hint": "New panes get NAVIDE_TEST_MAX_WORKERS. Repos that read it (this repo's vitest config does) run tests with at most that many workers, so several panes testing at once don't saturate the CPU. Panes already open keep their environment.",
+      "test-workers-value": "Maximum workers per test run",
+      "evolve-reclaim": "Reclaim self-evolution panes that time out",
+      "evolve-reclaim-hint": "When a self-evolution run passes its time limit without reporting, its pane is reclaimed (turned into a card you can resume with one click, never closed) once it is idle and this long has passed. Turn off to leave such panes running, as before.",
+      "evolve-reclaim-value": "Minutes after the timeout",
+      "detached": "Keep track of servers closed panes leave behind",
+      "detached-hint": "New panes get an inert NAVIDE_PANE_MARK variable. A dev server an agent started in the background inherits it, so after its pane is gone it can be listed here. Nothing is stopped unless you click Stop.",
+      "detached-find": "Find leftover servers",
+      "detached-empty": "No servers left behind by closed panes.",
+      "detached-stop": "Stop",
+      "detached-meta": "{cwd} · {size} · since {since}",
+      "detached-failed": "Could not complete the request.",
+      "focused-reclaim": "Also reclaim the focused pane when it sits untouched",
+      "focused-reclaim-hint": "Idle reclaim (above) never takes the pane each window has in focus, so that pane keeps its CLI running however long it sits. With this on, a focused pane nobody has typed in or received output in for this long is reclaimed too — turned into a card you can resume with one click, never closed. A pane waiting for an answer or holding unsent text is still kept.",
+      "focused-reclaim-value": "Hours untouched",
+      "spotlight": "Spotlight indexing",
+      "spotlight-hint": "Spotlight already skips node_modules and Navide's own hidden folders, but it indexes build output (dist, out, build) and extra worktrees in your repos, which can keep it busy while agents build and test. Navide does not change this for you: add those folders under Spotlight's search privacy list yourself.",
+      "spotlight-open": "Open Spotlight settings"
+    },
     "search": {
       "placeholder": "Search settings…",
       "item": {
@@ -6581,6 +6603,7 @@
     },
     "section": {
       "general-behavior": "General behavior",
+      "resource-limits": "Resource limits",
       "notifications": "Notifications",
       "settings-management": "Settings management",
       "theme": "Theme",

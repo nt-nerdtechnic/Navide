@@ -215,6 +215,7 @@ declare global {
         subject?: string,
       ) => Promise<{ nonce: string; expires: string; mac: string } | null>
       openLegal: (route: LegalRoute) => Promise<{ ok: boolean; error?: string }>
+      openSpotlightSettings: () => Promise<{ ok: boolean; error?: string }>
       onSwitchEditorSidebar: (cb: (sidebar: string) => void) => void
       onOpenEditorDiff: (cb: (params: Record<string, string>) => void) => void
       readKeybindings: () => Promise<{ ok: boolean; content?: string; error?: string }>
