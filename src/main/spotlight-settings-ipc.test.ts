@@ -1,3 +1,4 @@
+import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 
 import { registerSpotlightSettingsIpc, SPOTLIGHT_SETTINGS_URL } from './spotlight-settings-ipc'
@@ -7,15 +8,15 @@ import { registerSpotlightSettingsIpc, SPOTLIGHT_SETTINGS_URL } from './spotligh
 // fixed in main — the renderer cannot name a URL — and only an app window may
 // ask, the same rule shell:openExternal applies.
 function setup(opts: { trusted?: boolean; mac?: boolean; fail?: boolean } = {}) {
-  const handlers = new Map<string, (event: unknown) => Promise<unknown>>()
+  const handlers = new Map<string, (event: IpcMainInvokeEvent) => Promise<unknown>>()
   const openExternal = vi.fn(async (_url: string) => {
     if (opts.fail) throw new Error('no handler')
   })
   registerSpotlightSettingsIpc(
-    { handle: (channel: string, fn: (event: unknown) => Promise<unknown>) => void handlers.set(channel, fn) },
+    { handle: (channel: string, fn: (event: IpcMainInvokeEvent) => Promise<unknown>) => void handlers.set(channel, fn) } as unknown as Pick<IpcMain, 'handle'>,
     { openExternal, isTrusted: () => opts.trusted ?? true, isMac: () => opts.mac ?? true },
   )
-  return { invoke: () => handlers.get('system:open-spotlight-settings')!({}), openExternal }
+  return { invoke: () => handlers.get('system:open-spotlight-settings')!({} as IpcMainInvokeEvent), openExternal }
 }
 
 describe('system:open-spotlight-settings', () => {

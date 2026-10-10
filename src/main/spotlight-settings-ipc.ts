@@ -4,18 +4,20 @@
 // .metadata_never_index is no longer honored by current macOS. The destination
 // is fixed here, like legal:open — the renderer cannot name a URL.
 
+import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+
 import { UNTRUSTED_SENDER } from './ipcSender'
 
 export const SPOTLIGHT_SETTINGS_URL = 'x-apple.systempreferences:com.apple.Spotlight-Settings.extension'
 
 interface Deps {
   openExternal: (url: string) => Promise<void>
-  isTrusted: (event: never) => boolean
+  isTrusted: (event: IpcMainInvokeEvent) => boolean
   isMac: () => boolean
 }
 
 export function registerSpotlightSettingsIpc(
-  ipc: { handle: (channel: string, fn: (event: never) => Promise<unknown>) => void },
+  ipc: Pick<IpcMain, 'handle'>,
   deps: Deps,
 ): void {
   ipc.handle('system:open-spotlight-settings', async (event) => {
