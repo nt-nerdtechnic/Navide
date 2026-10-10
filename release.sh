@@ -88,7 +88,7 @@ CURRENT="$(node -p "require('./package.json').version")"
 echo ""
 echo "Release: $CURRENT -> $VERSION"
 echo "Source:  $(git rev-parse --short HEAD)"
-echo "Target:  nt-nerdtechnic/Navide"
+echo "Target:  Navide-dev/Navide"
 printf "Prepare %s? [y/N]: " "$TAG"
 read -r confirmed || confirmed=""
 if [[ ! "$confirmed" =~ ^[Yy]$ ]]; then
@@ -170,7 +170,7 @@ if [[ "$publish" =~ ^[Yy]$ ]]; then
   git push origin "$TAG"
   echo "Pushed source and tag. GitHub Actions builds every platform into a draft"
   echo "release, mirrors it to dl.navide.dev, and only then publishes it:"
-  echo "https://github.com/nt-nerdtechnic/Navide/actions"
+  echo "https://github.com/Navide-dev/Navide/actions"
   echo "If a job fails, $TAG stays a draft: fix the cause and use \"Re-run failed jobs\""
   echo "(RELEASING.md, \"After the tag push\")."
 else

@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 60
     environment:
       name: production
-      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+      url: https://github.com/Navide-dev/Navide/releases/latest
 
     steps:
       - name: Check out tagged source
@@ -244,7 +244,7 @@ jobs:
     timeout-minutes: 45
     environment:
       name: production
-      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+      url: https://github.com/Navide-dev/Navide/releases/latest
 
     steps:
       - name: Check out tagged source
@@ -461,7 +461,7 @@ jobs:
     timeout-minutes: 45
     environment:
       name: production
-      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+      url: https://github.com/Navide-dev/Navide/releases/latest
 
     steps:
       - name: Check out tagged source
@@ -613,7 +613,7 @@ jobs:
     timeout-minutes: 75
     environment:
       name: production
-      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+      url: https://github.com/Navide-dev/Navide/releases/latest
     # Git-for-Windows bash on every step, so the Linux job's shell idioms
     # (find/wc/test, arrays, process substitution) carry over unchanged.
     defaults:
@@ -784,7 +784,7 @@ jobs:
     timeout-minutes: 90
     environment:
       name: production
-      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+      url: https://github.com/Navide-dev/Navide/releases/latest
     defaults:
       run:
         shell: bash

@@ -33,7 +33,7 @@ Worth knowing before you invest time:
   its own.
 
 **If you want to build a plugin, please get in touch first** — open a thread in
-[GitHub Discussions](https://github.com/nt-nerdtechnic/Navide/discussions)
+[GitHub Discussions](https://github.com/Navide-dev/Navide/discussions)
 (use **Ideas**). Tell us what surface you want to extend and which capabilities
 it needs. That is also the route for requesting a new capability namespace. We
 would rather shape the API around a real plugin than have you build against

@@ -7,7 +7,7 @@
   "desktopName": "navide.desktop",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nt-nerdtechnic/Navide.git"
+    "url": "https://github.com/Navide-dev/Navide.git"
   },
   "main": "out/main/index.js",
   "packageManager": "pnpm@10.0.0",
@@ -95,7 +95,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "nt-nerdtechnic",
+        "owner": "Navide-dev",
         "repo": "Navide",
         "releaseType": "release"
       }
