@@ -2268,7 +2268,7 @@ async def _start_log_watcher() -> None:
     # Best-effort install of every vendor's CLI hooks, pointing them at this
     # backend for reliable "agent active / turn complete / parked on a prompt"
     # signals that buffer scanning cannot give. Each installer no-ops when its
-    # CLI is not set up on this machine, and failure is non-fatal — the orchestrator
+    # CLI's config root is absent, and failure is non-fatal — the orchestrator
     # falls back to log-tail + sentinel detection.
     for _key, _spec in _CLI_VENDORS.items():
         if _spec.install_hooks is None:

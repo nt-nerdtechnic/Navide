@@ -392,28 +392,3 @@ def test_an_unreadable_settings_file_is_left_untouched(tmp_path, content) -> Non
     assert result["reason"] == "settings.json unparseable"
     assert settings_file.read_text(encoding="utf-8") == content
     assert not (tmp_path / "settings.json.pre-agent-team.bak").exists()
-
-
-@pytest.mark.parametrize("binary", ["", "/usr/local/bin/claude"])
-def test_a_missing_config_root_is_created_only_when_claude_is_installed(
-    tmp_path, monkeypatch, binary
-) -> None:
-    """Without Claude installed there is no config root to write hooks into.
-
-    Creating one would leave a ~/.claude behind for a CLI the user does not
-    have. An installed Claude that has never run still gets its hooks, so its
-    first pane has turn detection.
-    """
-    from agent_team_backend import ai_chat_cli_engine
-    from agent_team_backend.claude_hooks import install_hooks
-
-    config_dir = tmp_path / "claude-config"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-    monkeypatch.setattr(ai_chat_cli_engine, "resolve_cli_binary", lambda engine="claude": binary)
-    port_file = tmp_path / "port"
-    port_file.write_text("1234")
-
-    result = install_hooks(str(port_file))
-
-    assert result["installed"] is bool(binary)
-    assert config_dir.exists() is bool(binary)

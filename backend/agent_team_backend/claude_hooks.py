@@ -430,15 +430,6 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
     they feed activity detection, which has nothing to do with push delivery.
     """
     path = settings_file or settings_path()
-    # No config root and no Claude installed: writing would create ~/.claude
-    # for a CLI the user does not have. An installed Claude that has never
-    # run still gets its hooks, so its first pane has turn detection.
-    if settings_file is None and not path.parent.is_dir():
-        from .ai_chat_cli_engine import resolve_cli_binary
-
-        if not resolve_cli_binary("claude"):
-            return {"installed": False, "path": str(path), "reason": "claude not installed"}
-
     # Refuse to write over a file that is not a JSON object. _read_settings
     # reports it as an empty dict, and merging into that would replace every
     # setting the user has with nothing but our hooks.
