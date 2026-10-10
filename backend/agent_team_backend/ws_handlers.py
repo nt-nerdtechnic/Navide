@@ -3888,6 +3888,35 @@ async def _sync_selection_ok(
 
 
 # ── Recent workspaces (workspace.*) ─────────────────────────────────────────
+def _live_pane_workspaces_for_recent() -> list[str]:
+    """Workspaces with a live CLI pane — open somewhere, so never trimmed."""
+    from . import app
+
+    try:
+        terminals = app.get_terminals()
+        sessions = list(getattr(terminals, "_sessions", {}).values())
+    except Exception:  # noqa: BLE001 — protection is best-effort, never fatal
+        return []
+    out: list[str] = []
+    for s in sessions:
+        try:
+            if s.closed:
+                continue
+            meta = s.metadata if isinstance(s.metadata, dict) else {}
+            out.append(str(meta.get("workspace_path") or s.cwd))
+        except AttributeError:
+            continue
+    return out
+
+
+def _recent_payload() -> dict:
+    """The Recent list plus its safety bound, as every workspace.* reply sends it."""
+    from . import app
+
+    store = app.recent_workspaces_store
+    return {"recent": store.list(), **store.info()}
+
+
 @handler("workspace.list_recent")
 async def workspace_list_recent(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -3895,13 +3924,13 @@ async def workspace_list_recent(session: "Session", msg_id: str, msg_type: str, 
     # list() reads the JSON file and os.path.isdir()s every recent path; a stale
     # or slow path would block the event loop. Offload it like the other fs
     # handlers so it can't stall other requests.
-    recent = await asyncio.to_thread(app.recent_workspaces_store.list)
+    payload = await asyncio.to_thread(_recent_payload)
     await session.send_json(
         make_response(
             msg_id,
             msg_type,
             {
-                "recent": recent,
+                **payload,
                 "path": str(app.recent_workspaces_store.path),
             },
         )
@@ -3912,10 +3941,14 @@ async def workspace_list_recent(session: "Session", msg_id: str, msg_type: str, 
 async def workspace_touch(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    # Workspaces open in the asking window (its own list, which knows
+    # pane-less ones) and anywhere a CLI pane runs are never trimmed.
+    open_paths = [p for p in payload.get("open") or [] if isinstance(p, str)]
     app.recent_workspaces_store.touch(
         payload["path"],
         state=payload.get("state", ""),
         task=payload.get("task", ""),
+        keep=[*open_paths, *_live_pane_workspaces_for_recent()],
     )
     # Re-seed the display-name mirror from the project document, which is the
     # truth for it. The entry this touch just created — a workspace dropped
@@ -3939,12 +3972,30 @@ async def workspace_touch(session: "Session", msg_id: str, msg_type: str, payloa
             app.recent_workspaces_store.set_name(payload["path"], project.display_name)
 
     await asyncio.to_thread(_reseed_display_name_mirror)
-    recent = app.recent_workspaces_store.list()
+    data = _recent_payload()
     await session.send_json(
-        make_response(msg_id, msg_type, {"recent": recent})
+        make_response(msg_id, msg_type, data)
     )
     await app.broadcast(
-        make_event("workspace.recent_changed", {"recent": recent, "reason": "touch"})
+        make_event("workspace.recent_changed", {**data, "reason": "touch"})
+    )
+
+
+@handler("workspace.set_recent_limit")
+async def workspace_set_recent_limit(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    try:
+        app.recent_workspaces_store.set_limit(
+            payload.get("limit"), keep=_live_pane_workspaces_for_recent()
+        )
+    except ValueError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", str(err)))
+        return
+    data = _recent_payload()
+    await session.send_json(make_response(msg_id, msg_type, data))
+    await app.broadcast(
+        make_event("workspace.recent_changed", {**data, "reason": "limit"})
     )
 
 
@@ -9779,6 +9830,7 @@ def _mirror_pipeline_state(project: "Project") -> None:
             project.workspace_path,
             state=project.state,
             task=project.task_description,
+            keep=_live_pane_workspaces_for_recent(),
         )
         recent = app.recent_workspaces_store.list()
     except Exception:  # noqa: BLE001 — a badge must not fail a pipeline
