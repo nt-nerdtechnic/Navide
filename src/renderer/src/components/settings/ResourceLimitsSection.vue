@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { useBackend } from '../../composables/useBackend'
 import {
   EVOLVE_RECLAIM_DEFAULT_MINUTES,
   EVOLVE_RECLAIM_MAX_MINUTES,
   EVOLVE_RECLAIM_MIN_MINUTES,
   setEvolveReclaimMinutes,
   setTestMaxWorkers,
+  setTrackDetached,
   TEST_MAX_WORKERS_MAX,
   TEST_MAX_WORKERS_MIN,
   TEST_MAX_WORKERS_ON_DEFAULT,
@@ -21,8 +24,12 @@ import ToggleSwitch from './ToggleSwitch.vue'
  * Navide had before it) by default, and the backend fails open on anything it
  * cannot read — see composables/useResourceLimits.ts.
  */
+const props = defineProps<{
+  backend: Pick<ReturnType<typeof useBackend>, 'send'>
+}>()
+
 const { t } = useI18n()
-const { testMaxWorkers, evolveReclaimMinutes } = useResourceLimits()
+const { testMaxWorkers, evolveReclaimMinutes, trackDetached } = useResourceLimits()
 
 function onTestWorkersToggle(on: boolean): void {
   setTestMaxWorkers(on ? TEST_MAX_WORKERS_ON_DEFAULT : 0)
@@ -32,6 +39,55 @@ function onTestWorkersValue(event: Event): void {
   const input = event.target as HTMLInputElement
   // An out-of-range entry is not stored; put the field back to what is.
   if (!setTestMaxWorkers(Number(input.value))) input.value = String(testMaxWorkers.value)
+}
+
+// ── servers left behind by closed panes ─────────────────────────────────────
+// Listed only when asked (the scan reads every orphaned process's environment)
+// and stopped only by a click; the backend re-checks identity before signalling.
+interface Leftover { pid: number; started_at: number; command: string; cwd: string; rss: number }
+const leftovers = ref<Leftover[]>([])
+const searched = ref(false)
+const detachedBusy = ref(false)
+const detachedError = ref('')
+
+async function request<T>(type: string, payload: Record<string, unknown>): Promise<(T & { ok?: boolean; error?: string }) | null> {
+  try {
+    const res = await props.backend.send<T & { ok?: boolean; error?: string }>(type, payload)
+    if (!res.ok) {
+      detachedError.value = res.error?.message ?? t('settings.limits.detached-failed')
+      return null
+    }
+    return res.payload ?? null
+  } catch (err) {
+    detachedError.value = err instanceof Error ? err.message : String(err)
+    return null
+  }
+}
+
+async function findLeftovers(): Promise<void> {
+  detachedBusy.value = true
+  detachedError.value = ''
+  const body = await request<{ items: Leftover[] }>('limits.detached.list', {})
+  detachedBusy.value = false
+  leftovers.value = body?.items ?? []
+  searched.value = body !== null
+}
+
+async function stopLeftover(item: Leftover): Promise<void> {
+  detachedBusy.value = true
+  detachedError.value = ''
+  const body = await request<object>('limits.detached.stop', { pid: item.pid, started_at: item.started_at })
+  detachedBusy.value = false
+  if (body?.ok) leftovers.value = leftovers.value.filter((x) => x.pid !== item.pid)
+  else if (body) detachedError.value = body.error ?? t('settings.limits.detached-failed')
+}
+
+function leftoverMeta(item: Leftover): string {
+  return t('settings.limits.detached-meta', {
+    cwd: item.cwd || '—',
+    size: `${Math.round(item.rss / (1024 * 1024))} MB`,
+    since: new Date(item.started_at * 1000).toLocaleString(),
+  })
 }
 
 function onEvolveReclaimToggle(on: boolean): void {
@@ -112,10 +168,48 @@ function onEvolveReclaimValue(event: Event): void {
           />
         </template>
       </SettingRow>
+      <SettingRow
+        data-settings-section="limits-detached"
+        :title="t('settings.limits.detached')"
+        :description="t('settings.limits.detached-hint')"
+      >
+        <template #control>
+          <ToggleSwitch
+            :model-value="trackDetached"
+            :aria-label="t('settings.limits.detached')"
+            data-testid="limit-detached-toggle"
+            @update:model-value="setTrackDetached"
+          />
+        </template>
+      </SettingRow>
+      <div v-if="trackDetached" class="rl-detached">
+        <button type="button" :disabled="detachedBusy" data-testid="limit-detached-find" @click="findLeftovers">
+          {{ t('settings.limits.detached-find') }}
+        </button>
+        <p v-if="detachedError" class="rl-error" role="alert" data-testid="limit-detached-error">{{ detachedError }}</p>
+        <p v-if="searched && leftovers.length === 0" class="rl-hint" data-testid="limit-detached-empty">
+          {{ t('settings.limits.detached-empty') }}
+        </p>
+        <div v-for="item in leftovers" :key="item.pid" class="rl-row" data-testid="limit-detached-row">
+          <div class="rl-row-text">
+            <code class="rl-cmd">{{ item.command }}</code>
+            <span class="rl-meta">PID {{ item.pid }} · {{ leftoverMeta(item) }}</span>
+          </div>
+          <button type="button" :disabled="detachedBusy" data-testid="limit-detached-stop" @click="stopLeftover(item)">
+            {{ t('settings.limits.detached-stop') }}
+          </button>
+        </div>
+      </div>
     </SettingsCard>
   </SettingsSection>
 </template>
 
 <style scoped>
 .rl-hint { margin: 0 0 8px; font-size: var(--font-row-desc); color: var(--text-secondary); line-height: 1.4; }
+.rl-error { margin: 8px 0; font-size: var(--font-row-desc); color: var(--danger-fg); }
+.rl-detached { padding: 8px 12px 12px; }
+.rl-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border-muted); }
+.rl-row-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.rl-cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-row-desc); }
+.rl-meta { font-size: var(--font-row-desc); color: var(--text-secondary); }
 </style>

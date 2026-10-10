@@ -24,6 +24,21 @@ TEST_WORKERS_ENV = "NAVIDE_TEST_MAX_WORKERS"
 TEST_WORKERS_MAX = 64
 
 
+# The app installs the live store's reader at startup (set_settings_reader);
+# code with no handle on the store (terminals) asks current(). Before that,
+# and in tests that do not install one, every limit reads its default.
+_settings_reader: Callable[[], Mapping[str, Any]] = dict
+
+
+def set_settings_reader(reader: Callable[[], Mapping[str, Any]]) -> None:
+    global _settings_reader
+    _settings_reader = reader
+
+
+def current() -> Mapping[str, Any]:
+    return read_settings(_settings_reader)
+
+
 def read_settings(get: Callable[[], Mapping[str, Any]]) -> Mapping[str, Any]:
     """The settings snapshot, or an empty one when the store cannot answer."""
     try:
@@ -66,6 +81,17 @@ def evolve_timeout_reclaim_minutes(settings: Mapping[str, Any]) -> int:
     """Grace before a timed-out run's pane is reclaimed, or 0 for never."""
     value = _int_setting(settings, EVOLVE_RECLAIM_KEY, low=0, high=EVOLVE_RECLAIM_MAX_MINUTES)
     return EVOLVE_RECLAIM_DEFAULT_MINUTES if value is None else value
+
+
+# Mark each new pane's environment so a server it leaves behind can be listed
+# (detached_servers). On by default: the marker is one inert variable, and the
+# list is only ever built when the user asks for it.
+TRACK_DETACHED_KEY = "agentTeam.limits.trackDetachedServers"
+
+
+def track_detached(settings: Mapping[str, Any]) -> bool:
+    """False only for an explicit off; anything unreadable keeps the default."""
+    return settings.get(TRACK_DETACHED_KEY) not in (False, 0, "0", "false")
 
 
 def spawn_env(settings: Mapping[str, Any]) -> dict[str, str]:

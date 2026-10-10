@@ -36,6 +36,7 @@ from . import mem_probe
 from . import osplat
 from . import portable_credentials
 from . import push_delivery
+from . import resource_limits
 from . import subagent_tracker
 from .analyzer import DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL
 from .analyzer import (
@@ -2115,6 +2116,9 @@ async def _start_log_watcher() -> None:
             ui_settings_store.get().get(push_delivery.DISABLED_SETTING_KEY) or []
         )
     )
+    # Settings → Resource limits, for code with no handle on the store
+    # (terminals marks new panes for the leftover-server list).
+    resource_limits.set_settings_reader(lambda: ui_settings_store.get())
     # Per-pane watch files hold message text in the clear and belong to panes
     # that died with the previous process. Only a startup sweep ever removes
     # the ones a killed backend left behind.

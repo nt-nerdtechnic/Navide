@@ -7,23 +7,25 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 import { i18n } from '@navide/plugin-ui/foundation'
 import { settingsGet } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 
 import ResourceLimitsSection from '../ResourceLimitsSection.vue'
+import { createMockBackend } from '../../../composables/__tests__/mockBackend'
 import {
   EVOLVE_RECLAIM_KEY,
+  TRACK_DETACHED_KEY,
   TEST_MAX_WORKERS_KEY,
   _resetResourceLimitsForTest,
 } from '../../../composables/useResourceLimits'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-function mountSection() {
-  return mount(ResourceLimitsSection, { global: { plugins: [i18n] } })
+function mountSection(mock = createMockBackend()) {
+  return mount(ResourceLimitsSection, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
 }
 
 describe('Resource limits — test-runner worker cap', () => {
@@ -98,11 +100,78 @@ describe('Resource limits — evolve timeout reclaim', () => {
   })
 })
 
+describe('Resource limits — servers left behind by closed panes', () => {
+  beforeEach(() => {
+    __resetSettingsForTest()
+    _resetResourceLimitsForTest()
+  })
+
+  const leftover = { pid: 4242, started_at: 1700000000.5, command: 'next-server PORT=3219', cwd: '/repo', rss: 47185920 }
+
+  it('tracks by default, writes nothing, and scans nothing until asked', () => {
+    const mock = createMockBackend()
+    const w = mountSection(mock)
+    expect(w.get('[data-testid="limit-detached-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(settingsGet(TRACK_DETACHED_KEY, 'unset')).toBe('unset')
+    expect(mock.sent.some((m) => m.type === 'limits.detached.list')).toBe(false)
+  })
+
+  it('switching it off stores false and hides the list', async () => {
+    const w = mountSection()
+    await w.get('[data-testid="limit-detached-toggle"]').trigger('click')
+    expect(settingsGet(TRACK_DETACHED_KEY, true)).toBe(false)
+    expect(w.find('[data-testid="limit-detached-find"]').exists()).toBe(false)
+  })
+
+  it('lists leftovers on request and stops one only when clicked', async () => {
+    const mock = createMockBackend()
+    mock.setResponse('limits.detached.list', { ok: true, enabled: true, items: [leftover] })
+    mock.setResponse('limits.detached.stop', { ok: true })
+    const w = mountSection(mock)
+
+    await w.get('[data-testid="limit-detached-find"]').trigger('click')
+    await flushPromises()
+    const rows = w.findAll('[data-testid="limit-detached-row"]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('next-server PORT=3219')
+    expect(rows[0].text()).toContain('/repo')
+    expect(mock.sent.some((m) => m.type === 'limits.detached.stop')).toBe(false)
+
+    await rows[0].get('[data-testid="limit-detached-stop"]').trigger('click')
+    await flushPromises()
+    const stop = mock.sent.filter((m) => m.type === 'limits.detached.stop')
+    expect(stop.map((m) => m.payload)).toEqual([{ pid: 4242, started_at: 1700000000.5 }])
+    expect(w.findAll('[data-testid="limit-detached-row"]')).toHaveLength(0)
+  })
+
+  it('says so when nothing is left behind', async () => {
+    const mock = createMockBackend()
+    mock.setResponse('limits.detached.list', { ok: true, enabled: true, items: [] })
+    const w = mountSection(mock)
+    await w.get('[data-testid="limit-detached-find"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="limit-detached-empty"]').exists()).toBe(true)
+  })
+
+  it('keeps the row and shows why when a stop is refused', async () => {
+    const mock = createMockBackend()
+    mock.setResponse('limits.detached.list', { ok: true, enabled: true, items: [leftover] })
+    mock.setResponse('limits.detached.stop', { ok: false, error: 'that process has already exited' })
+    const w = mountSection(mock)
+    await w.get('[data-testid="limit-detached-find"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="limit-detached-stop"]').trigger('click')
+    await flushPromises()
+    expect(w.findAll('[data-testid="limit-detached-row"]')).toHaveLength(1)
+    expect(w.get('[data-testid="limit-detached-error"]').text()).toContain('already exited')
+  })
+})
+
 describe('Resource limits — placement', () => {
   it('sits in Settings → General', () => {
     const modal = readFileSync(resolve(here, '../../SettingsModal.vue'), 'utf8')
     const general = modal.slice(modal.indexOf(`v-show="activeTab === 'general'"`), modal.indexOf(`v-show="activeTab === 'appearance'"`))
-    expect(general).toContain('<ResourceLimitsSection')
+    expect(general).toContain('<ResourceLimitsSection :backend="backend"')
   })
 
   it.each(['en-US', 'zh-TW', 'ja-JP'] as const)('has its strings in %s', (locale) => {
@@ -115,6 +184,11 @@ describe('Resource limits — placement', () => {
       'settings.limits.evolve-reclaim',
       'settings.limits.evolve-reclaim-hint',
       'settings.limits.evolve-reclaim-value',
+      'settings.limits.detached',
+      'settings.limits.detached-hint',
+      'settings.limits.detached-find',
+      'settings.limits.detached-empty',
+      'settings.limits.detached-stop',
     ]) {
       expect(i18n.global.te(key, locale), `${locale}: ${key}`).toBe(true)
     }

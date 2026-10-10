@@ -993,7 +993,14 @@
       "test-workers-value": "Maximum workers per test run",
       "evolve-reclaim": "Reclaim self-evolution panes that time out",
       "evolve-reclaim-hint": "When a self-evolution run passes its time limit without reporting, its pane is reclaimed (turned into a card you can resume with one click, never closed) once it is idle and this long has passed. Turn off to leave such panes running, as before.",
-      "evolve-reclaim-value": "Minutes after the timeout"
+      "evolve-reclaim-value": "Minutes after the timeout",
+      "detached": "Keep track of servers closed panes leave behind",
+      "detached-hint": "New panes get an inert NAVIDE_PANE_MARK variable. A dev server an agent started in the background inherits it, so after its pane is gone it can be listed here. Nothing is stopped unless you click Stop.",
+      "detached-find": "Find leftover servers",
+      "detached-empty": "No servers left behind by closed panes.",
+      "detached-stop": "Stop",
+      "detached-meta": "{cwd} · {size} · since {since}",
+      "detached-failed": "Could not complete the request."
     },
     "search": {
       "placeholder": "Search settings…",

@@ -25,6 +25,7 @@ def _ts_const(name: str) -> str:
 def test_keys_match() -> None:
     assert _ts_const("TEST_MAX_WORKERS_KEY") == repr(resource_limits.TEST_WORKERS_KEY)
     assert _ts_const("EVOLVE_RECLAIM_KEY") == repr(resource_limits.EVOLVE_RECLAIM_KEY)
+    assert _ts_const("TRACK_DETACHED_KEY") == repr(resource_limits.TRACK_DETACHED_KEY)
 
 
 def test_defaults_and_bounds_match() -> None:

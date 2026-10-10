@@ -3747,7 +3747,7 @@ watch(activeTab, (tab) => {
             </SettingsCard>
           </SettingsSection>
 
-          <ResourceLimitsSection />
+          <ResourceLimitsSection :backend="backend" />
 
           <SettingsSection :label="$t('settings.section.settings-management')">
             <SettingsCard data-settings-section="settings-management">

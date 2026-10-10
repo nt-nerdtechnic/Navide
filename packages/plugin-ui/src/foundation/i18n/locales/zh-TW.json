@@ -993,7 +993,14 @@
       "test-workers-value": "每次測試最多 worker 數",
       "evolve-reclaim": "回收逾時的自我進化 pane",
       "evolve-reclaim-hint": "自我進化 run 超過時限卻沒回報時，等它閒置且超過這段時間後回收它的 pane（變成點一下就能接續的卡片，不會關閉）。關掉就和以前一樣讓這類 pane 繼續開著。",
-      "evolve-reclaim-value": "逾時後幾分鐘"
+      "evolve-reclaim-value": "逾時後幾分鐘",
+      "detached": "追蹤已關閉 pane 遺留的伺服器",
+      "detached-hint": "新開的 pane 會帶一個不影響任何行為的 NAVIDE_PANE_MARK 變數。agent 在背景啟動的開發伺服器會繼承它，所以 pane 關掉後還能在這裡列出來。除非你按「停止」，否則不會停掉任何程序。",
+      "detached-find": "尋找遺留的伺服器",
+      "detached-empty": "沒有已關閉 pane 遺留的伺服器。",
+      "detached-stop": "停止",
+      "detached-meta": "{cwd} · {size} · 自 {since} 起",
+      "detached-failed": "無法完成這個請求。"
     },
     "search": {
       "placeholder": "搜尋設定…",

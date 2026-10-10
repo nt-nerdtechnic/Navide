@@ -10247,6 +10247,44 @@ async def manual_pane_release_pty(session: "Session", msg_id: str, msg_type: str
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
+# ── Settings → Resource limits: servers panes left behind ──────────────────
+# Host window only: the list shows other processes' commands and folders, and
+# stop signals one. Both run only when the user asks (detached_servers).
+
+
+@handler("limits.detached.list")
+async def limits_detached_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import detached_servers, resource_limits
+
+    if not session.host_authenticated:
+        await session.send_json(make_error(msg_id, msg_type, "UNAUTHORIZED", "Host session is not authenticated"))
+        return
+    enabled = resource_limits.track_detached(resource_limits.current())
+    items: list[dict[str, Any]] = []
+    if enabled:
+        try:
+            items = await asyncio.to_thread(detached_servers.find, session.terminals.live_pane_marks())
+        except Exception as err:  # noqa: BLE001 — a failed scan lists nothing
+            log.warning("leftover-server scan failed: %s", err)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "enabled": enabled, "items": items}))
+
+
+@handler("limits.detached.stop")
+async def limits_detached_stop(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import detached_servers
+
+    if not session.host_authenticated:
+        await session.send_json(make_error(msg_id, msg_type, "UNAUTHORIZED", "Host session is not authenticated"))
+        return
+    result = await asyncio.to_thread(
+        detached_servers.stop,
+        int(payload["pid"]),
+        float(payload["started_at"]),
+        live=session.terminals.live_pane_marks(),
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 @handler("manual_pane.session")
 async def manual_pane_session(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app

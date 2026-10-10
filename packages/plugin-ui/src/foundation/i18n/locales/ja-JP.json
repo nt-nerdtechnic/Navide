@@ -993,7 +993,14 @@
       "test-workers-value": "テスト実行あたりの最大ワーカー数",
       "evolve-reclaim": "タイムアウトした自己進化ペインを回収",
       "evolve-reclaim-hint": "自己進化の実行が制限時間を過ぎても報告しない場合、アイドルになりこの時間が経過した時点でそのペインを回収します（ワンクリックで再開できるカードになり、閉じられはしません）。オフにすると、従来どおりそのようなペインを開いたままにします。",
-      "evolve-reclaim-value": "タイムアウト後の分数"
+      "evolve-reclaim-value": "タイムアウト後の分数",
+      "detached": "閉じたペインが残したサーバーを追跡",
+      "detached-hint": "新しいペインには動作に影響しない NAVIDE_PANE_MARK 変数が付きます。エージェントがバックグラウンドで起動した開発サーバーはこれを引き継ぐため、ペインが閉じた後もここに一覧表示できます。「停止」を押さない限り、何も停止されません。",
+      "detached-find": "残ったサーバーを探す",
+      "detached-empty": "閉じたペインが残したサーバーはありません。",
+      "detached-stop": "停止",
+      "detached-meta": "{cwd} · {size} · {since} から",
+      "detached-failed": "リクエストを完了できませんでした。"
     },
     "search": {
       "placeholder": "設定を検索…",

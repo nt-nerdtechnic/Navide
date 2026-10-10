@@ -26,6 +26,10 @@ export const EVOLVE_RECLAIM_DEFAULT_MINUTES = 30
 export const EVOLVE_RECLAIM_MIN_MINUTES = 1
 export const EVOLVE_RECLAIM_MAX_MINUTES = 24 * 60
 
+/** Mark new panes so servers they leave behind can be listed; on unless
+ *  explicitly off. See resource_limits.TRACK_DETACHED_KEY. */
+export const TRACK_DETACHED_KEY = 'agentTeam.limits.trackDetachedServers'
+
 /** An integer in [low, high] read from settings; anything else is `fallback`. */
 function readInt(key: string, fallback: number, low: number, high: number): number {
   const raw = settingsGet<unknown>(key, fallback)
@@ -53,7 +57,15 @@ function intLimit(key: string, fallback: number, low: number, high: number): Int
 const testMaxWorkers = intLimit(TEST_MAX_WORKERS_KEY, 0, 0, TEST_MAX_WORKERS_MAX)
 const evolveReclaimMinutes = intLimit(EVOLVE_RECLAIM_KEY, EVOLVE_RECLAIM_DEFAULT_MINUTES, 0, EVOLVE_RECLAIM_MAX_MINUTES)
 
+function readTrackDetached(): boolean {
+  const raw = settingsGet<unknown>(TRACK_DETACHED_KEY, true)
+  return !(raw === false || raw === 0 || raw === '0' || raw === 'false')
+}
+
+const trackDetached = ref(readTrackDetached())
+
 onSettingsChanged((keys) => {
+  if (keys.includes(TRACK_DETACHED_KEY)) trackDetached.value = readTrackDetached()
   for (const limit of limits) {
     if (keys.includes(limit.key)) limit.value.value = readInt(limit.key, limit.fallback, limit.low, limit.high)
   }
@@ -75,11 +87,17 @@ export function setEvolveReclaimMinutes(next: number): boolean {
   return setIntLimit(evolveReclaimMinutes, next)
 }
 
+export function setTrackDetached(on: boolean): void {
+  trackDetached.value = on
+  settingsSet(TRACK_DETACHED_KEY, on)
+}
+
 export function useResourceLimits() {
-  return { testMaxWorkers: testMaxWorkers.value, evolveReclaimMinutes: evolveReclaimMinutes.value }
+  return { testMaxWorkers: testMaxWorkers.value, evolveReclaimMinutes: evolveReclaimMinutes.value, trackDetached }
 }
 
 /** Test hook: re-read every limit from the (reset) settings cache. */
 export function _resetResourceLimitsForTest(): void {
+  trackDetached.value = readTrackDetached()
   for (const limit of limits) limit.value.value = readInt(limit.key, limit.fallback, limit.low, limit.high)
 }
