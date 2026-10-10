@@ -4,7 +4,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
-## [0.2.19] — 2026-10-10 — signed release
+## [0.2.19] — 2026-10-11 — signed release
 
 ### Added
 
