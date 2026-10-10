@@ -10358,5 +10358,17 @@
       "over_budget": "Self-evolution over budget · {workspace}",
       "over-budget-body": "This run passed 1.5× its token budget; Navide sent one interrupt."
     }
+  },
+  "recentWorkspaces": {
+    "search-placeholder": "Search recent workspaces",
+    "group-open": "Open & pinned",
+    "group-recent": "Earlier",
+    "show-more": "Show more ({count} left)",
+    "no-match": "No workspace matches “{query}”.",
+    "trimmed": "{count} older entries were removed by the history limit. You can change it in Settings → General.",
+    "limit-title": "Recent workspaces limit",
+    "limit-hint": "Recent keeps every workspace you open until you remove it. This is only a storage safety bound: when it is reached the oldest entries go first, and open or pinned workspaces are never removed.",
+    "limit-off": "No limit",
+    "limit-on": "Keep up to"
   }
 }

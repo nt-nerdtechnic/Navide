@@ -10358,5 +10358,17 @@
       "over_budget": "自己改善が予算超過 · {workspace}",
       "over-budget-body": "この実行は token 予算の 1.5 倍を超えたため、Navide が一度中断を送りました。"
     }
+  },
+  "recentWorkspaces": {
+    "search-placeholder": "最近のワークスペースを検索",
+    "group-open": "起動中・固定済み",
+    "group-recent": "その他の履歴",
+    "show-more": "さらに表示（残り {count} 件）",
+    "no-match": "「{query}」に一致するワークスペースはありません。",
+    "trimmed": "履歴の上限により古い項目 {count} 件が削除されました。「設定 → 一般」で変更できます。",
+    "limit-title": "最近のワークスペースの上限",
+    "limit-hint": "「最近使用した項目」は、削除するまで開いたワークスペースをすべて保持します。これは保存領域の安全上限にすぎません。上限に達すると古い項目から削除され、起動中や固定済みのワークスペースは削除されません。",
+    "limit-off": "上限なし",
+    "limit-on": "最大保持数"
   }
 }

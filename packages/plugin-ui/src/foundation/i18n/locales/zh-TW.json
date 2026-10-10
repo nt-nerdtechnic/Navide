@@ -10358,5 +10358,17 @@
       "over_budget": "自我優化超出預算 · {workspace}",
       "over-budget-body": "這次執行超過 1.5 倍 token 預算，Navide 已送出一次中斷。"
     }
+  },
+  "recentWorkspaces": {
+    "search-placeholder": "搜尋最近的工作區",
+    "group-open": "已開啟與已釘選",
+    "group-recent": "其他最近開啟",
+    "show-more": "顯示更多（剩 {count} 筆）",
+    "no-match": "沒有符合「{query}」的工作區。",
+    "trimmed": "有 {count} 筆較舊的紀錄因歷史上限被移除，可在「設定 → 一般」調整。",
+    "limit-title": "最近工作區保留上限",
+    "limit-hint": "「最近」會保留每個開過的工作區，直到你手動移除。這只是儲存安全上限：達到上限時先移除最舊的紀錄，已開啟與已釘選的工作區永遠不會被移除。",
+    "limit-off": "不設上限",
+    "limit-on": "最多保留"
   }
 }
