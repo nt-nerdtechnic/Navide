@@ -9981,6 +9981,7 @@
   "pipelineEditor": {
     "error": {
       "pipeline-running": "このパイプラインは実行中のため、今は変更できません。先に中止するか、実行の終了を待ってください。",
+      "pipeline-not-found": "このパイプラインは見つかりません。別の場所で削除された可能性があります。ほかのパイプラインを選んでください。",
       "export-failed": "エクスポートに失敗しました：{message}",
       "role-entry-invalid": "{key}：key または system prompt がありません",
       "command-failed": "実行がこのコマンドを受け付けませんでした。",

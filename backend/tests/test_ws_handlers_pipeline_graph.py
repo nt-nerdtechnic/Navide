@@ -133,3 +133,19 @@ async def test_node_states_are_stored_and_broadcast(monkeypatch):
     bad = _Session()
     await ws_handlers.pipeline_node_states(bad, "2", "pipeline.node_states", {"workspace_path": "/w", "nodes": []})
     assert _code(bad.last) == "BAD_REQUEST"
+
+
+@pytest.mark.parametrize(
+    ("handler", "msg_type", "extra"),
+    [
+        (ws_handlers.pipelines_graph_get, "pipelines.graph.get", {}),
+        (ws_handlers.pipelines_graph_apply, "pipelines.graph.apply", {"ops": GATE_OPS}),
+        (ws_handlers.pipelines_graph_set, "pipelines.graph.set", {"graph": {"version": 1, "nodes": [], "edges": []}}),
+    ],
+)
+async def test_unknown_pipeline_is_pipeline_not_found(wired, handler, msg_type, extra):
+    s = _Session()
+    await handler(s, "1", msg_type, {"pipeline_id": "no-such-pipeline", **extra})
+    assert _code(s.last) == "PIPELINE_NOT_FOUND", s.last
+    assert "no-such-pipeline" in s.last["error"]["message"]
+    assert wired.events == []

@@ -6024,8 +6024,16 @@ async def stages_reset(session: "Session", msg_id: str, msg_type: str, payload: 
 async def pipelines_graph_get(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    out = app.stages_store.get_graph(payload.get("pipeline_id") or None)
+    try:
+        out = app.stages_store.get_graph(payload.get("pipeline_id") or None)
+    except KeyError as err:
+        await session.send_json(_pipeline_not_found(msg_id, msg_type, err))
+        return
     await session.send_json(make_response(msg_id, msg_type, out))
+
+
+def _pipeline_not_found(msg_id: str, msg_type: str, err: KeyError) -> dict:
+    return make_error(msg_id, msg_type, "PIPELINE_NOT_FOUND", str(err.args[0] if err.args else err))
 
 
 async def _write_graph(session: "Session", msg_id: str, msg_type: str, payload: dict, write: Any, reason: str) -> None:
@@ -6043,6 +6051,9 @@ async def _write_graph(session: "Session", msg_id: str, msg_type: str, payload: 
         out = write(pipeline_id)
     except GraphError as err:
         await session.send_json(make_error(msg_id, msg_type, "GRAPH_INVALID", str(err), {"errors": err.errors}))
+        return
+    except KeyError as err:
+        await session.send_json(_pipeline_not_found(msg_id, msg_type, err))
         return
     await session.send_json(make_response(msg_id, msg_type, out))
     await _broadcast_graph_change(out, reason)

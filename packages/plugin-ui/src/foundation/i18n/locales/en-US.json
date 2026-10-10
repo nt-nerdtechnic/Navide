@@ -9981,6 +9981,7 @@
   "pipelineEditor": {
     "error": {
       "pipeline-running": "This pipeline is running, so it cannot be changed right now. Abort or finish the run first.",
+      "pipeline-not-found": "This pipeline no longer exists. It may have been deleted elsewhere; pick another pipeline.",
       "export-failed": "Export failed: {message}",
       "role-entry-invalid": "{key}: entry has no key or system prompt",
       "command-failed": "The run did not accept that command.",

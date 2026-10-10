@@ -37,6 +37,7 @@ import {
   type LaneBadge,
 } from '../../lib/pipelineGraphEdits'
 import { applyGraphOps, DEFAULT_MAX_LOOPS, MAX_LOOPS_CEILING } from '../../lib/pipelineGraph'
+import { backendErrorText } from '../../lib/pipelineErrors'
 import PipelineSwimlane, { type LaneTarget } from './PipelineSwimlane.vue'
 import PipelineCanvas from './PipelineCanvas.vue'
 import PipelinePalette from './PipelinePalette.vue'
@@ -158,7 +159,7 @@ function explain(err: EditorError): string {
     return t('pipelineEditor.error.invalid', { detail: first })
   }
   if (err.code === 'TRANSPORT') return t('pipelineEditor.error.transport', { message: err.message })
-  return err.message || t('pipelineEditor.error.unknown')
+  return backendErrorText(t, err, 'pipelineEditor.error.unknown')
 }
 async function apply(label: string, ops: GraphOp[], undoOps?: GraphOp[]): Promise<boolean> {
   const result = await editor.execute(label, ops, undoOps)
