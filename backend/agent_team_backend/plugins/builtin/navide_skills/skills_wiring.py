@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from agent_team_backend import osplat
@@ -267,6 +267,7 @@ def sync_project_dir(
         planted = _read_manifest(target)
         if not sources and not planted and not target.is_dir():
             return False
+        ours = not target.is_dir()
         target.mkdir(parents=True, exist_ok=True)
         wanted = {source.name: source for source in sources}
         # Remove what we planted before and no longer want; never anything else.
@@ -291,7 +292,13 @@ def sync_project_dir(
             link.symlink_to(source, target_is_directory=True)
             planted.add(name)
         _write_manifest(target, planted)
-        _exclude_from_git(target)
+        if ours:
+            _exclude_from_git(target)
+        elif planted:
+            # The directory is the user's: hide only what we put in it, so
+            # their own untracked skills stay visible in git status.
+            for name in sorted({*planted, MANIFEST_FILE}):
+                _exclude_from_git(target / name, directory=False)
         return bool(sources)
     except Exception as err:  # noqa: BLE001 - optional wiring must never block spawn
         log.warning("Managed-skills project directory for %s failed: %s", agent_key, err)
@@ -555,10 +562,17 @@ def _resolve(path: Path) -> Path:
         return path
 
 
-def _exclude_from_git(target: Path) -> None:
-    """Keep our links out of the user's git status, best effort."""
+def _exclude_from_git(target: Path, *, directory: bool = True) -> None:
+    """Keep our links out of the user's git status, best effort.
+
+    The walk stops at the home directory: a home that is itself a dotfiles
+    repo does not own the workspaces under it.
+    """
     root = target
+    home = Path.home().resolve()
     for candidate in [target, *target.parents]:
+        if candidate.resolve() == home:
+            return
         if (candidate / ".git").is_dir():
             root = candidate
             break
@@ -569,10 +583,11 @@ def _exclude_from_git(target: Path) -> None:
         rel = target.relative_to(root).as_posix()
     except ValueError:
         return
-    line = f"/{rel}/"
+    line = f"/{rel}/" if directory else f"/{rel}"
     try:
         existing = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
-        if line in existing.splitlines():
+        lines = existing.splitlines()
+        if line in lines or (not directory and f"/{PurePosixPath(rel).parent}/" in lines):
             return
         exclude.parent.mkdir(parents=True, exist_ok=True)
         prefix = "" if not existing or existing.endswith("\n") else "\n"

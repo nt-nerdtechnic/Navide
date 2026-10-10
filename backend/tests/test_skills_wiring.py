@@ -945,3 +945,38 @@ def test_a_home_level_shim_never_adopts_into_the_users_home(
     assert not (tmp_path / "home" / ".zshrc").exists()
     assert not (tmp_path / "home" / ".agents" / "notes").exists()
     assert (Path(root) / ".zshrc").read_text(encoding="utf-8") == "pane"
+
+
+def test_project_dir_never_hides_a_users_own_skills_directory_from_git(tmp_path: Path) -> None:
+    """Excluding the whole directory would hide the user's untracked skills.
+
+    When the directory was already there, only what Navide planted is
+    excluded.
+    """
+    _skill(tmp_path / "managed", "alpha")
+    cwd = tmp_path / "repo"
+    (cwd / ".git" / "info").mkdir(parents=True)
+    (cwd / ".cursor" / "skills" / "theirs").mkdir(parents=True)
+
+    _sync(tmp_path, cwd)
+
+    lines = (cwd / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines()
+    assert "/.cursor/skills/" not in lines
+    assert sorted(lines) == ["/.cursor/skills/.navide-links", "/.cursor/skills/alpha"]
+
+
+def test_project_dir_never_writes_the_exclude_of_a_home_directory_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A home that is itself a dotfiles repo does not own the workspaces in it."""
+    _skill(tmp_path / "managed", "alpha")
+    home = tmp_path / "home"
+    (home / ".git" / "info").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    cwd = home / "work" / "project"
+    cwd.mkdir(parents=True)
+
+    _sync(tmp_path, cwd)
+
+    assert (cwd / ".cursor" / "skills" / "alpha").is_symlink()
+    assert not (home / ".git" / "info" / "exclude").exists()
