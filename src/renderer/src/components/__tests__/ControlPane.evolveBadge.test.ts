@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // Workspace self-evolution entry on the sidebar heading: each heading has its
-// own badge (on / running / off / failed) and the badge, the ⋯ menu row and
-// the right-click menu row all open the panel of THAT heading's workspace.
+// own display-only badge (on / running / off / failed); the ⋯ menu row and
+// the right-click menu row open the panel of THAT heading's workspace.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { effectScope, ref } from 'vue'
@@ -154,11 +154,22 @@ describe('ControlPane – workspace self-evolution entry', () => {
     expect(badgeOf(wrapper, 1).attributes('aria-label')).toBe('evolve.badge.title:已啟用')
   })
 
-  it('opens the clicked heading workspace panel from the badge, without switching workspace', async () => {
+  it('keeps the badge display-only: click and keys open nothing and switch nothing', async () => {
+    setEvolveBadge(B, badge({ enabled: true }))
     wrapper = mountWith()
-    await badgeOf(wrapper, 1).trigger('click')
-    expect(useEvolveBadges().panelWorkspace.value).toBe(B)
+    await flushPromises()
+    const b = badgeOf(wrapper, 1)
+    expect(b.element.tagName).toBe('SPAN')
+    expect(b.attributes('role')).not.toBe('button')
+    expect(b.attributes('tabindex')).toBeUndefined()
+    await b.trigger('click')
+    await b.trigger('dblclick')
+    await b.trigger('keydown', { key: 'Enter' })
+    await b.trigger('keydown', { key: ' ' })
+    expect(useEvolveBadges().panelWorkspace.value).toBeNull()
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    expect(b.attributes('data-state')).toBe('on')
+    expect(b.text()).toBe('✦')
   })
 
   it('opens it from the ⋯ menu', async () => {
