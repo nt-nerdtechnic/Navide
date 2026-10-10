@@ -268,3 +268,20 @@ def test_missing_folder_is_never_trimmed_away_by_itself(store: RecentWorkspacesS
     (tmp_path / "a").rmdir()
     store.touch(_mkdir(tmp_path, "b"))
     assert [(e["name"], e["exists"]) for e in store.list()] == [("b", True), ("a", False)]
+
+
+def test_stored_max_size_mirrors_the_limit_for_older_builds(tmp_path: Path) -> None:
+    # v0.2.17 and earlier cap at the stored max_size. Mirroring the limit there
+    # keeps a downgrade from cutting the list back to the old default of 20.
+    from agent_team_backend.recent_workspaces import _KV_KEY
+
+    path = tmp_path / "recent.json"
+    _seed(path, [], max_size=20)
+    store = RecentWorkspacesStore(path=path)
+    stored = lambda: store._db.kv_get(_KV_KEY)["max_size"]  # noqa: E731
+    store.touch(_mkdir(tmp_path, "a"))
+    assert stored() == 1000
+    store.set_limit(300)
+    assert stored() == 300
+    store.set_limit(None)  # off: old builds have no "off", so give them the default bound
+    assert stored() == 1000

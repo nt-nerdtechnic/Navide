@@ -11,7 +11,8 @@ first, and the count is recorded so the UI can say something was trimmed.
 
 Documents written before ``limit`` existed carry ``max_size: 20``. That was a
 default nobody could change, so it is ignored rather than honoured — honouring
-it would keep silently dropping the entries this exists to protect.
+it would keep silently dropping the entries this exists to protect. It is still
+written, as a mirror of ``limit``, because those older builds read it.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ log = logging.getLogger("agent_team_backend.recent_workspaces")
 
 RECENT_FILE = "recent-workspaces.json"
 _KV_KEY = "recent_workspaces"
-DEFAULT_MAX_SIZE = 20  # legacy field, still written by older versions; ignored
+DEFAULT_MAX_SIZE = 20  # legacy default; the stored max_size is never read back
 DEFAULT_LIMIT = 1000
 
 
@@ -75,6 +76,9 @@ class RecentWorkspacesStore:
         return data
 
     def _write(self, doc: dict[str, Any]) -> None:
+        # Older builds cap at the stored max_size and know no "off"; mirror the
+        # limit there so a downgrade does not cut the list back to 20.
+        doc["max_size"] = self._limit(doc) or DEFAULT_LIMIT
         self._db.kv_set(_KV_KEY, doc, now=int(time.time()))
 
     @staticmethod
