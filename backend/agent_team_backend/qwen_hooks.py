@@ -42,6 +42,7 @@ from .claude_hooks import (
     _read_settings,
     _write_settings,
 )
+from .claude_hooks import uninstall_hooks as _uninstall_marked_hooks
 
 log = logging.getLogger("agent_team_backend.qwen_hooks")
 
@@ -162,3 +163,18 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
     log.info("installed Qwen hooks → %s (events=%d, port_file=%s)",
              path, added, port_file)
     return {"installed": True, "path": str(path), "events": added, "port_file": port_file}
+
+
+def uninstall_hooks(settings_file: Path | None = None) -> dict[str, Any]:
+    """Remove our hook entries from Qwen's settings.json; leave the rest alone.
+
+    A file that does not parse is left untouched, as install_hooks does.
+    """
+    path = settings_file or settings_path()
+    if path.is_file():
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            log.warning("qwen settings.json unparseable (%s); leaving it alone", err)
+            return {"removed": False, "path": str(path), "reason": "settings.json unparseable"}
+    return _uninstall_marked_hooks(settings_file=path)

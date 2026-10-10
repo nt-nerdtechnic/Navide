@@ -146,3 +146,17 @@ def install_hooks(port_file: str, hooks_directory: Path | None = None) -> dict[s
 
     log.info("installed Copilot hook → %s (port_file=%s)", path, port_file)
     return {"installed": True, "path": str(path), "events": 2, "port_file": port_file}
+
+
+def uninstall_hooks(hooks_directory: Path | None = None) -> dict[str, Any]:
+    """Delete our hook file. Other files in the directory are the user's."""
+    path = (hooks_directory or hooks_dir()) / _HOOK_FILENAME
+    if not path.is_file():
+        return {"removed": False, "path": str(path), "reason": "hook file absent"}
+    try:
+        path.unlink()
+    except OSError as err:
+        log.warning("could not remove copilot hook file: %s", err)
+        return {"removed": False, "path": str(path), "error": str(err)}
+    log.info("removed Copilot hook → %s", path)
+    return {"removed": True, "path": str(path)}
