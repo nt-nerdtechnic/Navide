@@ -430,6 +430,18 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
     they feed activity detection, which has nothing to do with push delivery.
     """
     path = settings_file or settings_path()
+    # Refuse to write over a file that is not a JSON object. _read_settings
+    # reports it as an empty dict, and merging into that would replace every
+    # setting the user has with nothing but our hooks.
+    if path.is_file():
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            parsed = err
+        if not isinstance(parsed, dict):
+            log.warning("claude settings.json unparseable (%s); leaving it alone", parsed)
+            return {"installed": False, "path": str(path), "reason": "settings.json unparseable"}
+
     settings = _read_settings(path)
     hooks_section = settings.get("hooks")
     if not isinstance(hooks_section, dict):

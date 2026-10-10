@@ -370,3 +370,25 @@ def test_a_windows_install_writes_powershell_and_says_so(tmp_path, monkeypatch) 
     rewake = [h for h in entries if h.get("asyncRewake")]
     assert rewake, "the rewake waiter was not installed"
     assert "[Console]::OpenStandardError()" in rewake[0]["command"]
+
+
+@pytest.mark.parametrize("content", ['{"model": "opus", // a comment\n}', "[1, 2]"])
+def test_an_unreadable_settings_file_is_left_untouched(tmp_path, content) -> None:
+    """A settings.json that does not parse to an object is the user's, not ours.
+
+    Reading it as an empty dict and writing back would replace every setting
+    the user has with nothing but our hooks.
+    """
+    from agent_team_backend.claude_hooks import install_hooks
+
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(content, encoding="utf-8")
+    port_file = tmp_path / "port"
+    port_file.write_text("1234")
+
+    result = install_hooks(str(port_file), settings_file=settings_file)
+
+    assert result["installed"] is False
+    assert result["reason"] == "settings.json unparseable"
+    assert settings_file.read_text(encoding="utf-8") == content
+    assert not (tmp_path / "settings.json.pre-agent-team.bak").exists()
