@@ -317,3 +317,18 @@ def test_the_settings_page_message_is_registered() -> None:
     from agent_team_backend import ws_handlers
 
     assert ws_handlers._REGISTRY["cli_extensions.list"] is ws_handlers.cli_extensions_list
+
+
+@pytest.mark.parametrize("command, secret", [
+    ("curl -H 'Authorization: Bearer sk-live-abcdef123456' https://h", "sk-live-abcdef123456"),
+    ('curl -H "X-Api-Key: k3y-v4lue-9999" https://h', "k3y-v4lue-9999"),
+    ("GITHUB_TOKEN=ghp_abcdefghijklmnop1234 /bin/hook", "ghp_abcdefghijklmnop1234"),
+    ("export API_SECRET='s3cr3t-v4lue' && run", "s3cr3t-v4lue"),
+    ("notify --password hunter2hunter2", "hunter2hunter2"),
+    ("post https://h/x?token=abcd1234efgh", "abcd1234efgh"),
+    ("send xoxb-1234-5678-abcdefghijkl", "xoxb-1234-5678-abcdefghijkl"),
+])
+def test_a_hook_summary_never_carries_a_credential(command: str, secret: str) -> None:
+    summary = cli_extensions._summary(command)
+    assert secret not in summary
+    assert "***" in summary

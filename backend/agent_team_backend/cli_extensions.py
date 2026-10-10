@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .native_mcp import _home, _mask_args, _strip_jsonc
+from .native_mcp import REDACTED_SECRET, _home, _mask_args, _strip_jsonc
 from .osplat import paths as platform_paths
 
 log = logging.getLogger("agent_team_backend.cli_extensions")
@@ -58,6 +58,16 @@ _NAVIDE_HOOK_RE = re.compile(r"agent-team-hook|X-Agent-Team-Event|Agent-Team[/\\
 #: Hook events whose handler sees, and may veto or rewrite, a tool call.
 _TOOL_EVENT_RE = re.compile(r"pre_?tool|beforeshell|beforemcp|permission|tool\.check", re.I)
 _PROMPT_EVENT_RE = re.compile(r"prompt", re.I)
+
+#: Credential shapes a shell command line carries that ``_mask_args`` (built
+#: for MCP argv) does not see once the line is split on spaces: a quoted
+#: header, an Authorization scheme, and tokens recognisable by their prefix.
+_SECRET_IN_COMMAND: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)((?:proxy-)?authorization\s*:\s*(?:bearer|basic|token|digest)?\s*)[^\s'\"]+"),
+    re.compile(r"(?i)(\bbearer\s+)[^\s'\"]+"),
+    re.compile(r"(?i)((?:[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|passw(?:or)?d|auth)[A-Za-z0-9_-]*)\s*[:=]\s*['\"]?)[^\s'\"]+"),
+    re.compile(r"()\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})"),
+)
 
 #: What a piece of in-process code can reach, read off its source text.
 _CAPABILITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -674,6 +684,8 @@ def _summary(command: str) -> str:
     lines = [line.strip() for line in command.splitlines() if line.strip()]
     meaningful = [line for line in lines if not line.startswith(("#", "rem "))] or lines
     first = meaningful[0] if meaningful else ""
+    for pattern in _SECRET_IN_COMMAND:
+        first = pattern.sub(lambda m: m.group(1) + REDACTED_SECRET, first)
     masked = " ".join(_mask_args(tuple(first.split(" "))))
     return masked if len(masked) <= _DETAIL_MAX else masked[: _DETAIL_MAX - 1] + "…"
 
