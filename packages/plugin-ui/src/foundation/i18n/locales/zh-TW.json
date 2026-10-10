@@ -986,6 +986,46 @@
       "open-diff-in-editor": "在編輯器開啟這個差異"
   },
   "settings": {
+    "cliExtensions": {
+      "intro": "列出每個 AI CLI 自己安裝的 CLI 擴充（Claude plugin、Claude mod、Codex hook、Pi extension……），以及它們能碰到什麼。Navide 只讀取，這裡不會安裝、啟用或修改任何東西。Navide 外掛另有專頁。",
+      "summary": "{total} 個 CLI 擴充 · 其中 {l3} 個是在 CLI 程序內執行的程式碼",
+      "machineWide": "每家 CLI 整台機器只有一份：Navide 裡這家 CLI 的每個 pane、每個帳號，都會載入同一套。",
+      "rescan": "重新掃描",
+      "loading": "掃描中…",
+      "loadFailed": "無法讀取 CLI 擴充：{error}",
+      "empty": "沒有找到 CLI 擴充。",
+      "unsupported": "Navide 還讀不到這家 CLI 存放 CLI 擴充的位置。",
+      "invalid": "無法讀取：{error}",
+      "disabled": "已停用",
+      "ownerNavide": "Navide 安裝",
+      "inferred": "推定",
+      "inferredHint": "這些能力是從原始碼文字推定的，CLI 的 manifest 沒有宣告。",
+      "tier": {
+        "L1": "L1 文字資產",
+        "L2": "L2 子程序",
+        "L3": "L3 程序內程式碼"
+      },
+      "tierHint": {
+        "L1": "只有指令、說明之類的文字，不會自己執行。",
+        "L2": "會以子程序執行命令（hook、MCP、LSP），權限跟你的使用者帳號一樣。",
+        "L3": "在 CLI 自己的程序裡執行，權限跟 CLI 一樣，而且不會跳出權限提示。"
+      },
+      "capability": {
+        "exec": "執行指令",
+        "network": "連網",
+        "fs": "讀寫檔案",
+        "intercept-tools": "攔截工具呼叫",
+        "rewrite-prompt": "改寫 prompt",
+        "ui": "畫介面",
+        "telemetry": "Telemetry"
+      },
+      "consent": {
+        "none": "CLI 執行前不會先詢問",
+        "hook-trust": "CLI 會先要求你信任這個 hook",
+        "capability-approve": "CLI 會先要求你核准它的能力",
+        "hot-reload": "熱重載前，每個 session 會詢問一次"
+      }
+    },
     "limits": {
       "hint": "選用的限制，避免 Navide 與它啟動的 agent 把這台電腦壓垮。每一項在你調整之前都是關閉，或維持 Navide 原本的行為。",
       "test-workers": "限制新 pane 的測試 worker 數",
@@ -1011,6 +1051,10 @@
     "search": {
       "placeholder": "搜尋設定…",
       "item": {
+        "cliExtensions": {
+          "title": "CLI 擴充",
+          "summary": "每個 AI CLI 自己安裝的 CLI 擴充與 hook、執行等級與能力（唯讀）。"
+        },
         "cli-agents-list": {
           "title": "CLI Agents 清單",
           "summary": "啟用、停用與排序 CLI agent，並在每列直接看到安裝、權限、push 與帳號現況。"
@@ -1837,6 +1881,7 @@
       "crossDevice": "Navide Cloud",
       "accounts": "帳號",
       "cliAgents": "CLI Agents",
+      "cliExtensions": "CLI 擴充",
       "roles": "角色",
       "pipelines": "流程",
       "mcp": "MCP",
@@ -1917,14 +1962,14 @@
         "intro": "設定視窗的十九個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗、用量統計與資源維護這些散在主畫面之外的系統面。",
         "s1": {
           "title": "設定總覽",
-          "p1": "設定視窗用 <kbd class=\"syh-kbd\">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。左側側欄分四組，共 <strong>22 個分頁</strong>。",
+          "p1": "設定視窗用 <kbd class=\"syh-kbd\">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。左側側欄分四組，共 <strong>23 個分頁</strong>。",
           "h1": "搜尋框",
           "p2": "側欄標題底下有一個搜尋框，提示字是 <code>搜尋設定…</code>。它<strong>跨分頁</strong>比對設定項的標題、所屬區塊與關鍵字（使用目前介面語言與已收錄的關鍵字），最多列 8 筆；點一筆會切到那個分頁並捲到對應區塊（「儲存空間」那筆例外：它會關掉設定、直接開「資源控管」），沒命中時顯示 <code>找不到相符設定</code>。<kbd class=\"syh-kbd\">Esc</kbd> 清空。",
           "callout": {
             "title": "搜尋索引不是全覆蓋",
             "text": "索引是一份人工維護的清單，<strong>{layout}、{notifications}、{security}、{channels} 這四個分頁沒有任何條目</strong>，搜尋不到它們裡面的東西，得自己點進去。CLI Agents 的條目點下去會直接打開某一家的設定抽屜（見「CLI Agent 與帳號」分頁）。"
           },
-          "h2": "二十二個分頁",
+          "h2": "二十三個分頁",
           "tabTable": {
             "group": "分組",
             "tab": "分頁",
@@ -1970,6 +2015,10 @@
             },
             "cliAgents": {
               "what": "各家 CLI 的安裝、啟動參數、權限模式",
+              "more": "本面板的「CLI Agent 與帳號」分頁"
+            },
+            "cliExtensions": {
+              "what": "每個 AI CLI 自己安裝的 CLI 擴充與 hook（唯讀盤點）",
               "more": "本面板的「CLI Agent 與帳號」分頁"
             },
             "analyzer": {
@@ -4606,7 +4655,7 @@
         },
         "s1": {
           "title": "方向一：Navide 提供給 CLI agent 的工具",
-          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>61 個</strong>（核心 55 個，加上Navide 外掛「Plans」註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
+          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>62 個</strong>（核心 56 個，加上 Navide 外掛「Plans」註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
           "h1": "計畫文件",
           "planTools": {
             "plan_list": "列出這個工作區的所有計畫，含階段與待辦進度",
@@ -4647,6 +4696,7 @@
             "workspace_switch": "把自己所在的視窗切到它本來就持有的另一個專案；被切走的專案，它的 pane 會繼續跑。視窗裡有 pipeline 正在跑時會拒絕，因為切換會中止它",
             "prompt_list": "使用者在「設定 → Prompt 技能」存的提示技能有哪些；唯讀，新增與編輯是使用者的事",
             "mcp_list": "Navide 自己連的 MCP server 與各家 CLI 自己設定的 server 各有哪些，含連線狀態與工具數量；唯讀，跟「設定 → MCP」看到的是同一份",
+            "cli_extensions_list": "每個 AI CLI 自己安裝的 CLI 擴充與 hook：種類、執行等級、能力，以及是誰裝的。只有名稱與中繼資料；唯讀，跟「設定 → CLI 擴充」看到的是同一份",
             "credentials_list": "掃描盤點到的憑證，只含類型與名稱，絕不含值",
             "credentials_findings": "憑證風險發現與嚴重度、提醒狀態；唯讀"
           },

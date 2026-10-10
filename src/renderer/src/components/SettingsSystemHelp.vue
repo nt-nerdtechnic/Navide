@@ -42,7 +42,7 @@ interface StageRow {
   stageSpan?: number
 }
 
-// ── 1 · The twenty-two tabs ──────────────────────────────────────────────
+// ── 1 · The twenty-three tabs ──────────────────────────────────────────────
 const tabs: TabRow[] = [
   { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 7, navKey: 'settings.nav.general' },
   { key: 'appearance', navKey: 'settings.nav.appearance' },
@@ -51,8 +51,9 @@ const tabs: TabRow[] = [
   { key: 'layout', navKey: 'settings.nav.layout' },
   { key: 'notifications', navKey: 'settings.nav.notifications' },
   { key: 'voice', navKey: 'settings.nav.voice' },
-  { key: 'accounts', groupKey: 'settings.nav.group.accountsAgents', groupSpan: 6, navKey: 'settings.nav.accounts' },
+  { key: 'accounts', groupKey: 'settings.nav.group.accountsAgents', groupSpan: 7, navKey: 'settings.nav.accounts' },
   { key: 'cliAgents', navKey: 'settings.nav.cliAgents' },
+  { key: 'cliExtensions', navKey: 'settings.nav.cliExtensions' },
   { key: 'analyzer', navKey: 'settings.nav.analyzer' },
   { key: 'security', navKey: 'guard.nav' },
   { key: 'channels', navKey: 'channels.nav' },
@@ -293,7 +294,7 @@ const navLegend = computed(() => mockLegend('nav', ['search', 'groups', 'active'
 const resourceLegend = computed(() => mockLegend('resource', ['totals', 'rows', 'actions']))
 
 // The nav exactly as SettingsModal.vue renders it: four groups,
-// twenty-two pages, in this order. Labels come from the same `settings.nav.*`
+// twenty-three pages, in this order. Labels come from the same `settings.nav.*`
 // keys the real nav reads, so renaming a page renames it here.
 //
 // Drawing this is what caught the prose claiming four groups and sixteen
@@ -317,6 +318,7 @@ const settingsGroups = computed(() => [
     items: [
       { label: t('settings.nav.accounts') },
       { label: t('settings.nav.cliAgents') },
+      { label: t('settings.nav.cliExtensions') },
       { label: t('settings.nav.analyzer') },
       { label: t('guard.nav') },
       { label: t('channels.nav') },

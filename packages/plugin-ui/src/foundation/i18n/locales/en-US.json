@@ -986,6 +986,46 @@
       "open-diff-in-editor": "Open diff in editor"
   },
   "settings": {
+    "cliExtensions": {
+      "intro": "Each AI CLI's own CLI extensions — Claude plugins and mods, Codex hooks, Pi extensions and the rest — and what they can reach. Navide only reads them: nothing here installs, enables or changes anything. Navide plugins have their own page.",
+      "summary": "{total} CLI extensions · {l3} with code inside the CLI's own process",
+      "machineWide": "One set per CLI for the whole machine: every Navide pane and account of that CLI loads the same ones.",
+      "rescan": "Rescan",
+      "loading": "Scanning…",
+      "loadFailed": "Could not read CLI extensions: {error}",
+      "empty": "No CLI extensions found.",
+      "unsupported": "Navide cannot read where this CLI keeps its CLI extensions yet.",
+      "invalid": "Could not read: {error}",
+      "disabled": "Disabled",
+      "ownerNavide": "Installed by Navide",
+      "inferred": "inferred",
+      "inferredHint": "Read off the source text; the CLI's manifest does not state these.",
+      "tier": {
+        "L1": "L1 text assets",
+        "L2": "L2 subprocess",
+        "L3": "L3 in-process code"
+      },
+      "tierHint": {
+        "L1": "Instructions and other text only; nothing runs on its own.",
+        "L2": "Runs commands as a subprocess (hooks, MCP, LSP) with your user's permissions.",
+        "L3": "Runs inside the CLI's own process with the CLI's permissions, and no permission prompt."
+      },
+      "capability": {
+        "exec": "Runs commands",
+        "network": "Network",
+        "fs": "Files",
+        "intercept-tools": "Intercepts tool calls",
+        "rewrite-prompt": "Rewrites prompts",
+        "ui": "Draws UI",
+        "telemetry": "Telemetry"
+      },
+      "consent": {
+        "none": "The CLI asks nothing before running it",
+        "hook-trust": "The CLI asks you to trust the hook first",
+        "capability-approve": "The CLI asks you to approve its capabilities first",
+        "hot-reload": "Asked once per session before hot reload"
+      }
+    },
     "limits": {
       "hint": "Optional limits that keep Navide and the agents it runs from overloading this machine. Each one is off, or at Navide's previous behavior, until you change it.",
       "test-workers": "Cap test-runner workers in new panes",
@@ -1011,6 +1051,10 @@
     "search": {
       "placeholder": "Search settings…",
       "item": {
+        "cliExtensions": {
+          "title": "CLI Extensions",
+          "summary": "Each AI CLI's own CLI extensions and hooks, with execution tier and capabilities (read-only)."
+        },
         "cli-agents-list": {
           "title": "CLI Agents List",
           "summary": "Enable, disable and reorder the CLI agents, and read each one's install, permission, push and account state off its row."
@@ -1837,6 +1881,7 @@
       "crossDevice": "Navide Cloud",
       "accounts": "Accounts",
       "cliAgents": "CLI Agents",
+      "cliExtensions": "CLI Extensions",
       "roles": "Roles",
       "pipelines": "Pipelines",
       "mcp": "MCP",
@@ -1917,14 +1962,14 @@
         "intro": "What each of the nineteen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
         "s1": {
           "title": "Settings overview",
-          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>22 tabs</strong> in total.",
+          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>23 tabs</strong> in total.",
           "h1": "The search field",
           "p2": "Below the sidebar heading is a search field with the placeholder <code>Search settings…</code>. It matches setting titles, their section and their keywords <strong>across tabs</strong> (using the current interface language and indexed keywords), listing at most 8 results; clicking one switches to that tab and scrolls to the section (with one exception: \"Storage\" closes settings and opens the Resource Manager directly). With no match it shows <code>No matching settings</code>. <kbd class=\"syh-kbd\">Esc</kbd> clears it.",
           "callout": {
             "title": "The search index is not exhaustive",
             "text": "The index is a hand-maintained list, and <strong>the {layout}, {notifications}, {security} and {channels} tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself. A CLI Agents entry opens one CLI's settings drawer directly (see the \"CLI Agents & Accounts\" topic)."
           },
-          "h2": "The twenty-two tabs",
+          "h2": "The twenty-three tabs",
           "tabTable": {
             "group": "Group",
             "tab": "Tab",
@@ -1970,6 +2015,10 @@
             },
             "cliAgents": {
               "what": "Installation, launch arguments and permission mode for each CLI",
+              "more": "the \"CLI agents & accounts\" topic"
+            },
+            "cliExtensions": {
+              "what": "Each AI CLI's own CLI extensions and hooks (a read-only inventory)",
               "more": "the \"CLI agents & accounts\" topic"
             },
             "analyzer": {
@@ -4606,7 +4655,7 @@
         },
         "s1": {
           "title": "Direction 1: the tools Navide gives CLI agents",
-          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>61</strong> of them today (55 core, plus the 6 the Plans Navide plugin registers), alongside 3 read-only resources and 3 prompt templates.",
+          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>62</strong> of them today (56 core, plus the 6 the Plans Navide plugin registers), alongside 3 read-only resources and 3 prompt templates.",
           "h1": "Plan documents",
           "planTools": {
             "plan_list": "List every plan in this workspace, with its stage and todo progress",
@@ -4647,6 +4696,7 @@
             "workspace_switch": "Switch my own window to another project it already holds; panes of the project being left keep running. Refused while a pipeline is running in that window, because switching would abort it",
             "prompt_list": "The prompt skills the user keeps in Settings → Prompts; read-only, since creating and editing them is the user's job",
             "mcp_list": "Which MCP servers Navide connects to and which each CLI keeps in its own config, with live state and tool counts; read-only, and the same list Settings → MCP shows",
+            "cli_extensions_list": "Each AI CLI's own CLI extensions and hooks: type, execution tier, capabilities and who installed them. Names and metadata only; read-only, the same inventory Settings → CLI Extensions shows",
             "credentials_list": "Credentials the scan inventoried, with kind and label only; never a value",
             "credentials_findings": "Credential risk findings with severity and reminder state; read-only"
           },

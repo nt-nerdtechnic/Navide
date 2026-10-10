@@ -109,6 +109,7 @@ import GitAccountsPane from './GitAccountsPane.vue'
 import CliAccountsPane from './CliAccountsPane.vue'
 import CliManagementPanel from './CliManagementPanel.vue'
 import CliRiskRangesPane from './CliRiskRangesPane.vue'
+import CliExtensionsPane from './CliExtensionsPane.vue'
 import type { useCliProfiles } from '../composables/useCliProfiles'
 import KeyboardShortcutsEditor from './KeyboardShortcutsEditor.vue'
 import CliMessagingHelp from './CliMessagingHelp.vue'
@@ -234,7 +235,7 @@ const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0
 /** Active high-risk credential findings, shown as the nav badge. */
 const credentialsHighCount = ref(0)
 
-type Tab = 'mcp' | 'skills' | 'credentials' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'security' | 'help'
+type Tab = 'mcp' | 'skills' | 'credentials' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'cliExtensions' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'security' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -270,6 +271,10 @@ const helpTopicOrder: HelpTopic[] = [
   'icons',
 ]
 const activeTab = ref<Tab>(props.initialTab ?? 'general')
+// The CLI Extensions page scans every CLI's files, so it mounts on first visit
+// and stays mounted after that.
+const visitedCliExtensions = ref(activeTab.value === 'cliExtensions')
+watch(activeTab, (tab) => { if (tab === 'cliExtensions') visitedCliExtensions.value = true })
 // initialTab is only read once at mount by the ref initializer above; when the
 // modal is already open and a new tab is requested (e.g. the ui.settings.open
 // action), react to the prop changing too.
@@ -722,6 +727,15 @@ interface SettingsSearchItem {
 
 const settingsSearchQuery = ref('')
 const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
+  {
+    id: 'cli-extensions',
+    tab: 'cliExtensions',
+    section: 'cli-extensions',
+    title: t('settings.search.item.cliExtensions.title'),
+    group: t('settings.nav.group.accountsAgents'),
+    summary: t('settings.search.item.cliExtensions.summary'),
+    keywords: 'cli extension extensions plugin plugins mod mods hook hooks marketplace claude codex copilot droid muse opencode kilo pi cursor grok kimi qwen inventory capability CLI 擴充 外掛 插件 擴展 hook 能力 盤點 CLI 拡張 プラグイン フック',
+  },
   {
     id: 'cli-agents-list',
     tab: 'cliAgents',
@@ -1512,6 +1526,8 @@ const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: k
   // Order and the disabled list are persisted per workspace (project.json),
   // with the global KV as the fallback default — so this page is both.
   cliAgents: { scope: 'userWorkspace', storage: 'localStorage' },
+  // Each CLI's own files, read in place; the cards show their paths.
+  cliExtensions: { scope: 'user', storage: 'cliFiles' },
   general: { scope: 'user', storage: 'localStorage' },
   // Neither half of this page is a local setting: the access token is in
   // the credential vault and the authorization rules live on the server,
@@ -2525,6 +2541,11 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.3" y="5" width="9.4" height="7" rx="1.6"/><path d="M8 2.3V5"/><circle cx="8" cy="2.1" r="0.6"/><path d="M6 8.3v0.01M10 8.3v0.01"/></svg>
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.cliExtensions')" :active="activeTab === 'cliExtensions'" @select="activeTab = 'cliExtensions'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="5.2" width="7.2" height="7.2" rx="1.4"/><path d="M9.8 7.4h1.6a1.2 1.2 0 0 0 0-2.4h-.2V3.6M12.6 8.8v2.4a1.2 1.2 0 0 1-1.2 1.2H9.8"/></svg>
+                </template>
+              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.analyzer')" :active="activeTab === 'analyzer'" @select="activeTab = 'analyzer'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.2C6.6 2.2 4.2 2.8 4.2 4.8 2.7 5.1 2.7 7.3 4.2 7.8c0 2 1.9 2.6 3.8 2.1"/><path d="M8 3.2c1.4-1 3.8-.4 3.8 1.6 1.5.3 1.5 2.5 0 3 0 2-1.9 2.6-3.8 2.1"/><path d="M8 3.2v9.6"/></svg>
@@ -3092,6 +3113,16 @@ watch(activeTab, (tab) => {
             </div>
           </div>
 
+        </div>
+
+        <!-- ══ CLI EXTENSIONS TAB ══ -->
+        <div v-show="activeTab === 'cliExtensions'" class="s-body s-body--bleed" data-settings-section="cli-extensions">
+          <h1 class="s-page-title">{{ $t('settings.nav.cliExtensions') }}</h1>
+          <div class="settings-meta-row">
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.cliExtensions.scope) }}</span>
+          </div>
+          <!-- Mounted on first visit only: the scan reads every CLI's files. -->
+          <CliExtensionsPane v-if="visitedCliExtensions" :backend="props.backend" />
         </div>
 
         <!-- ══ CLI AGENTS TAB ══ -->
