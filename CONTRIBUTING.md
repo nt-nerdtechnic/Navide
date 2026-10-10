@@ -173,6 +173,12 @@ for suite ownership, provider isolation, contract coverage and diagnostics.
 - Follow PEP 8.
 - Run `uv --project backend run pytest backend/tests` before committing.
 
+**UI text and docs**
+- Follow the [glossary](docs/en-US/glossary.md): "Navide plugin" and "Navide
+  Marketplace" for Navide's own packages, "CLI extension" for an AI CLI's own,
+  "Agent Assets" for skills, MCP, prompts and memory. Never write plugin,
+  extension or marketplace bare; a locale test fails the build if you do.
+
 **Adding a CLI agent**
 - Follow [`docs/adding-a-cli-vendor.md`](docs/adding-a-cli-vendor.md). An
   integration is two vendor spec files plus registration — never an
