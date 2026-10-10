@@ -12,7 +12,7 @@ import { invokeCommand } from '@navide/plugin-ui/shared'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import type { useBackend } from '../../composables/useBackend'
 import type { Role } from '../../composables/useRoles'
-import { usePipelineGraphEditor, type EditorError } from '../../composables/usePipelineGraphEditor'
+import { usePipelineGraphEditor, type EditorError, type EditResult } from '../../composables/usePipelineGraphEditor'
 import {
   layerGraph,
   type GraphEdge,
@@ -408,19 +408,21 @@ function onKey(e: KeyboardEvent): void {
   const mod = e.metaKey || e.ctrlKey
   if (mod && e.key.toLowerCase() === 'z') {
     e.preventDefault()
-    void (e.shiftKey ? editor.redo() : editor.undo()).then((r) => { if (!r.ok) notify.toast(explain(r.error), { type: 'error' }) })
+    void (e.shiftKey ? editor.redo() : editor.undo()).then(reportStep)
   } else if (mod && e.key.toLowerCase() === 'y') {
     e.preventDefault()
-    void editor.redo().then((r) => { if (!r.ok) notify.toast(explain(r.error), { type: 'error' }) })
+    void editor.redo().then(reportStep)
   }
 }
 async function undo(): Promise<void> {
-  const r = await editor.undo()
-  if (!r.ok) notify.toast(explain(r.error), { type: 'error' })
+  reportStep(await editor.undo())
 }
 async function redo(): Promise<void> {
-  const r = await editor.redo()
-  if (!r.ok) notify.toast(explain(r.error), { type: 'error' })
+  reportStep(await editor.redo())
+}
+/** An undo/redo pressed while an edit is still saving did nothing — not a failure to report. */
+function reportStep(r: EditResult): void {
+  if (!r.ok && r.error.code !== 'WRITE_PENDING') notify.toast(explain(r.error), { type: 'error' })
 }
 
 /** Esc, innermost first: the quick-add popover, then the inspector. */
