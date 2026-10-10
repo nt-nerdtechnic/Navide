@@ -139,14 +139,14 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'ja-JP': '「設定 → 一般 → リソース制限」を追加しました。どの項目も変更するまでは従来どおりです。新しいペインのテスト worker 数の上限、閉じたペインが残したまま動いているサーバーの一覧とワンクリック停止、フォーカス中でも何時間も操作のないペインの回収（クリックで再開）、タイムアウトした自己改善のペインを猶予後に回収。macOS では Spotlight のプライバシー設定を開くボタンから、ビルド出力をインデックスの対象外にできます。',
       },
       {
-        'zh-TW': '關掉的 pane 不會再留下還在跑的 CLI 程序：結束失敗會被察覺並補清，重新接回的 pane 也找得到原本的程序，關閉 Navide 時讓 Claude 有時間正常結束，逾時的指令會連同子程序一起停止。pane 上的聊天室標籤改顯示綁定的聊天室名稱；工作區標題上的 ✦ 徽章只顯示狀態，設定改從標題的「⋯」選單或右鍵選單打開。',
-        'en-US': 'Closed panes no longer leave CLI processes running: a failed kill is noticed and cleaned up, a reattached pane’s processes are still found, quitting Navide gives Claude time to shut down cleanly, and a timed-out command stops along with its children. The chat chip on a pane now shows the bound chat’s name, and the ✦ badge on a workspace heading only shows status; open its settings from the heading’s ⋯ menu or right-click menu.',
-        'ja-JP': '閉じたペインが CLI のプロセスを残さなくなりました。終了の失敗を検知して後片付けし、再接続したペインのプロセスも見つけ、Navide の終了時は Claude が正常に終了する時間を確保し、タイムアウトしたコマンドは子プロセスごと止めます。ペインのチャットのラベルには紐づいたチャットの名前が表示されます。ワークスペース見出しの ✦ バッジは状態の表示だけになり、設定は見出しの「⋯」メニューか右クリックメニューから開きます。',
+        'zh-TW': '關掉的 pane 不會再留下還在跑的 CLI 程序：結束失敗會被察覺並補清，重新接回的 pane 也找得到原本的程序，關閉 Navide 時讓 Claude 有時間正常結束，逾時的指令會連同子程序一起停止；App 關閉期間錯過的排程，補跑時不會再重複執行兩次。pane 上的聊天室標籤改顯示綁定的聊天室名稱；工作區標題上的 ✦ 徽章只顯示狀態，設定改從標題的「⋯」選單或右鍵選單打開。',
+        'en-US': 'Closed panes no longer leave CLI processes running: a failed kill is noticed and cleaned up, a reattached pane’s processes are still found, quitting Navide gives Claude time to shut down cleanly, and a timed-out command stops along with its children; a schedule that missed runs while the app was closed no longer fires twice when it catches up. The chat chip on a pane now shows the bound chat’s name, and the ✦ badge on a workspace heading only shows status; open its settings from the heading’s ⋯ menu or right-click menu.',
+        'ja-JP': '閉じたペインが CLI のプロセスを残さなくなりました。終了の失敗を検知して後片付けし、再接続したペインのプロセスも見つけ、Navide の終了時は Claude が正常に終了する時間を確保し、タイムアウトしたコマンドは子プロセスごと止めます。アプリを閉じている間に実行されなかったスケジュールが、後から追いつくときに 2 回実行されることもなくなりました。ペインのチャットのラベルには紐づいたチャットの名前が表示されます。ワークスペース見出しの ✦ バッジは状態の表示だけになり、設定は見出しの「⋯」メニューか右クリックメニューから開きます。',
       },
       {
-        'zh-TW': '更安全：Navide 不會再覆寫讀不懂的 Claude settings.json、不會再把檔案搬進你的家目錄、不會再讓 Codex 的 config.toml 越長越大、不會把你自己的 Cursor 技能藏起來不讓 git 看到、搬移舊資料時會保留真正的對話紀錄檔，也補上 Cursor 技能清單的路徑漏洞。',
-        'en-US': 'Safer: Navide no longer overwrites a Claude settings.json it cannot read, no longer moves files into your home folder, stops growing Codex’s config.toml, no longer hides your own Cursor skills from git, keeps the real session file when migrating old data, and closes a path issue in the Cursor skills manifest.',
-        'ja-JP': 'より安全に：Navide は読み取れない Claude の settings.json を上書きしなくなり、ホームフォルダーにファイルを移動しなくなり、Codex の config.toml が増え続けることもなくなりました。自分の Cursor スキルを git から隠すこともなく、古いデータの移行時は本来のセッションファイルを残し、Cursor スキルの一覧ファイルのパスの問題も修正しました。',
+        'zh-TW': '更安全：Navide 不會再覆寫讀不懂的 Claude settings.json、不會再把檔案搬進你的家目錄、不會再讓 Codex 的 config.toml 越長越大、不會把你自己的 Cursor 技能藏起來不讓 git 看到、搬移舊資料時會保留真正的對話紀錄檔，也補上 Cursor 技能清單的路徑漏洞；從 pane 裡啟動 Navide 時，也不會再把你的家目錄誤當成專案（技能與 MCP 設定都已修正）。',
+        'en-US': 'Safer: Navide no longer overwrites a Claude settings.json it cannot read, no longer moves files into your home folder, stops growing Codex’s config.toml, no longer hides your own Cursor skills from git, keeps the real session file when migrating old data, and closes a path issue in the Cursor skills manifest. When Navide is started from inside a pane, it no longer mistakes your home folder for a project (fixed in skills and MCP wiring).',
+        'ja-JP': 'より安全に：Navide は読み取れない Claude の settings.json を上書きしなくなり、ホームフォルダーにファイルを移動しなくなり、Codex の config.toml が増え続けることもなくなりました。自分の Cursor スキルを git から隠すこともなく、古いデータの移行時は本来のセッションファイルを残し、Cursor スキルの一覧ファイルのパスの問題も修正しました。ペインの中から Navide を起動しても、ホームフォルダーをプロジェクトと取り違えなくなりました（スキルと MCP の設定の両方を修正）。',
       },
       {
         'zh-TW': 'Navide 的程式碼庫搬到 GitHub 的 Navide-dev/Navide，更新的備援來源與「說明」選單的連結都已指向新位置，更新仍優先走下載鏡像。Plans 的圖表改用 mermaid 12，版面與配色維持原樣；Electron、fastapi、anthropic、websockets 等相依套件也一併更新。',

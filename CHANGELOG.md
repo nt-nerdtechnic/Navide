@@ -23,8 +23,10 @@ All notable released changes to Navide will be documented in this file. The form
 ### Fixed
 
 - Closed panes no longer leave CLI processes running: a refused terminal kill is treated as a failure and swept, a reattached pane's PTYs are found under its earlier ids, quitting finishes its sweep within main's kill timer so Claude can shut down cleanly, and a timed-out `shell.run` stops its whole process group.
+- A scheduled job that missed runs while the app was closed no longer fires twice when the catch-up and the regular tick reach it together.
 - The channel chip on a pane shows the bound chat's name instead of repeating the pane's.
 - Navide no longer overwrites a Claude `settings.json` it cannot parse, no longer moves files a tool wrote into the Muse pane home into your real home folder, stops adding a hook trust block to `~/.codex/config.toml` for every pane (and keeps that file's permissions), no longer hides your own Cursor skills from `git status`, keeps the real session file when a legacy copy replaces it during migration, and reads only plain names from the Cursor skills links manifest so a crafted entry cannot remove a link elsewhere on disk.
+- When Navide is started from inside a pane, it no longer mistakes your real home folder for a project: the skills git-exclude walk and the MCP project config both check the real home, not the pane's `$HOME`.
 - Settings → CLI Extensions masks credentials in hook command lines and recognises Navide's Windows Guard hook as Navide's.
 - Pipeline graph: undo and redo wait for a pending save, and an unknown pipeline is reported as not found.
 
