@@ -14,7 +14,11 @@ import { settingsGet } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 
 import ResourceLimitsSection from '../ResourceLimitsSection.vue'
-import { TEST_MAX_WORKERS_KEY, _resetResourceLimitsForTest } from '../../../composables/useResourceLimits'
+import {
+  EVOLVE_RECLAIM_KEY,
+  TEST_MAX_WORKERS_KEY,
+  _resetResourceLimitsForTest,
+} from '../../../composables/useResourceLimits'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -65,6 +69,35 @@ describe('Resource limits — test-runner worker cap', () => {
   })
 })
 
+describe('Resource limits — evolve timeout reclaim', () => {
+  beforeEach(() => {
+    __resetSettingsForTest()
+    _resetResourceLimitsForTest()
+  })
+
+  it('is on at 30 minutes by default without writing anything', () => {
+    const w = mountSection()
+    expect(w.get('[data-testid="limit-evolve-reclaim-toggle"]').attributes('aria-checked')).toBe('true')
+    expect((w.get('[data-testid="limit-evolve-reclaim-value"]').element as HTMLInputElement).value).toBe('30')
+    expect(settingsGet(EVOLVE_RECLAIM_KEY, 'unset')).toBe('unset')
+  })
+
+  it('switching it off stores 0, which the backend reads as never', async () => {
+    const w = mountSection()
+    await w.get('[data-testid="limit-evolve-reclaim-toggle"]').trigger('click')
+    expect(settingsGet(EVOLVE_RECLAIM_KEY, -1)).toBe(0)
+    expect(w.find('[data-testid="limit-evolve-reclaim-value"]').exists()).toBe(false)
+  })
+
+  it('stores a changed grace', async () => {
+    const w = mountSection()
+    const input = w.get('[data-testid="limit-evolve-reclaim-value"]')
+    await input.setValue('90')
+    await input.trigger('change')
+    expect(settingsGet(EVOLVE_RECLAIM_KEY, 0)).toBe(90)
+  })
+})
+
 describe('Resource limits — placement', () => {
   it('sits in Settings → General', () => {
     const modal = readFileSync(resolve(here, '../../SettingsModal.vue'), 'utf8')
@@ -79,6 +112,9 @@ describe('Resource limits — placement', () => {
       'settings.limits.test-workers',
       'settings.limits.test-workers-hint',
       'settings.limits.test-workers-value',
+      'settings.limits.evolve-reclaim',
+      'settings.limits.evolve-reclaim-hint',
+      'settings.limits.evolve-reclaim-value',
     ]) {
       expect(i18n.global.te(key, locale), `${locale}: ${key}`).toBe(true)
     }

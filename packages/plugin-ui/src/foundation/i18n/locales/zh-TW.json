@@ -990,7 +990,10 @@
       "hint": "選用的限制，避免 Navide 與它啟動的 agent 把這台電腦壓垮。每一項在你調整之前都是關閉，或維持 Navide 原本的行為。",
       "test-workers": "限制新 pane 的測試 worker 數",
       "test-workers-hint": "新開的 pane 會帶 NAVIDE_TEST_MAX_WORKERS。有讀這個變數的 repo（本 repo 的 vitest 設定有讀）跑測試時最多只用這麼多 worker，多個 pane 同時跑測試也不會把 CPU 吃滿。已開的 pane 維持原本的環境。",
-      "test-workers-value": "每次測試最多 worker 數"
+      "test-workers-value": "每次測試最多 worker 數",
+      "evolve-reclaim": "回收逾時的自我進化 pane",
+      "evolve-reclaim-hint": "自我進化 run 超過時限卻沒回報時，等它閒置且超過這段時間後回收它的 pane（變成點一下就能接續的卡片，不會關閉）。關掉就和以前一樣讓這類 pane 繼續開著。",
+      "evolve-reclaim-value": "逾時後幾分鐘"
     },
     "search": {
       "placeholder": "搜尋設定…",

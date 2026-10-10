@@ -19,6 +19,13 @@ export const TEST_MAX_WORKERS_MAX = 64
 /** What switching the cap on starts from. */
 export const TEST_MAX_WORKERS_ON_DEFAULT = 4
 
+/** Minutes after an evolve run times out before its pane is reclaimed; 0 is
+ *  never. See resource_limits.EVOLVE_RECLAIM_KEY — the defaults must match. */
+export const EVOLVE_RECLAIM_KEY = 'agentTeam.limits.evolveTimeoutReclaimMinutes'
+export const EVOLVE_RECLAIM_DEFAULT_MINUTES = 30
+export const EVOLVE_RECLAIM_MIN_MINUTES = 1
+export const EVOLVE_RECLAIM_MAX_MINUTES = 24 * 60
+
 /** An integer in [low, high] read from settings; anything else is `fallback`. */
 function readInt(key: string, fallback: number, low: number, high: number): number {
   const raw = settingsGet<unknown>(key, fallback)
@@ -44,6 +51,7 @@ function intLimit(key: string, fallback: number, low: number, high: number): Int
 
 // 0 = off is inside the accepted range so "off" round-trips as a stored value.
 const testMaxWorkers = intLimit(TEST_MAX_WORKERS_KEY, 0, 0, TEST_MAX_WORKERS_MAX)
+const evolveReclaimMinutes = intLimit(EVOLVE_RECLAIM_KEY, EVOLVE_RECLAIM_DEFAULT_MINUTES, 0, EVOLVE_RECLAIM_MAX_MINUTES)
 
 onSettingsChanged((keys) => {
   for (const limit of limits) {
@@ -63,8 +71,12 @@ export function setTestMaxWorkers(next: number): boolean {
   return setIntLimit(testMaxWorkers, next)
 }
 
+export function setEvolveReclaimMinutes(next: number): boolean {
+  return setIntLimit(evolveReclaimMinutes, next)
+}
+
 export function useResourceLimits() {
-  return { testMaxWorkers: testMaxWorkers.value }
+  return { testMaxWorkers: testMaxWorkers.value, evolveReclaimMinutes: evolveReclaimMinutes.value }
 }
 
 /** Test hook: re-read every limit from the (reset) settings cache. */

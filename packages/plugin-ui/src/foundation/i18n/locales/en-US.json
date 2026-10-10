@@ -990,7 +990,10 @@
       "hint": "Optional limits that keep Navide and the agents it runs from overloading this machine. Each one is off, or at Navide's previous behavior, until you change it.",
       "test-workers": "Cap test-runner workers in new panes",
       "test-workers-hint": "New panes get NAVIDE_TEST_MAX_WORKERS. Repos that read it (this repo's vitest config does) run tests with at most that many workers, so several panes testing at once don't saturate the CPU. Panes already open keep their environment.",
-      "test-workers-value": "Maximum workers per test run"
+      "test-workers-value": "Maximum workers per test run",
+      "evolve-reclaim": "Reclaim self-evolution panes that time out",
+      "evolve-reclaim-hint": "When a self-evolution run passes its time limit without reporting, its pane is reclaimed (turned into a card you can resume with one click, never closed) once it is idle and this long has passed. Turn off to leave such panes running, as before.",
+      "evolve-reclaim-value": "Minutes after the timeout"
     },
     "search": {
       "placeholder": "Search settings…",

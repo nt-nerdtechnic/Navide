@@ -54,6 +54,20 @@ def test_worker_cap(settings: Mapping[str, Any]) -> int:
     return _int_setting(settings, TEST_WORKERS_KEY, low=1, high=TEST_WORKERS_MAX) or 0
 
 
+# Reclaim (never close) a self-evolution pane whose run timed out without
+# reporting, this many minutes after the timeout. 0 is off. The default is on:
+# the run is already over, and a reclaimed pane resumes with one click.
+EVOLVE_RECLAIM_KEY = "agentTeam.limits.evolveTimeoutReclaimMinutes"
+EVOLVE_RECLAIM_DEFAULT_MINUTES = 30
+EVOLVE_RECLAIM_MAX_MINUTES = 24 * 60
+
+
+def evolve_timeout_reclaim_minutes(settings: Mapping[str, Any]) -> int:
+    """Grace before a timed-out run's pane is reclaimed, or 0 for never."""
+    value = _int_setting(settings, EVOLVE_RECLAIM_KEY, low=0, high=EVOLVE_RECLAIM_MAX_MINUTES)
+    return EVOLVE_RECLAIM_DEFAULT_MINUTES if value is None else value
+
+
 def spawn_env(settings: Mapping[str, Any]) -> dict[str, str]:
     """Env a new pane gets from the enabled limits — empty when none are on."""
     env: dict[str, str] = {}

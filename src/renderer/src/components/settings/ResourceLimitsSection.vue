@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import {
+  EVOLVE_RECLAIM_DEFAULT_MINUTES,
+  EVOLVE_RECLAIM_MAX_MINUTES,
+  EVOLVE_RECLAIM_MIN_MINUTES,
+  setEvolveReclaimMinutes,
   setTestMaxWorkers,
   TEST_MAX_WORKERS_MAX,
   TEST_MAX_WORKERS_MIN,
@@ -18,7 +22,7 @@ import ToggleSwitch from './ToggleSwitch.vue'
  * cannot read — see composables/useResourceLimits.ts.
  */
 const { t } = useI18n()
-const { testMaxWorkers } = useResourceLimits()
+const { testMaxWorkers, evolveReclaimMinutes } = useResourceLimits()
 
 function onTestWorkersToggle(on: boolean): void {
   setTestMaxWorkers(on ? TEST_MAX_WORKERS_ON_DEFAULT : 0)
@@ -28,6 +32,19 @@ function onTestWorkersValue(event: Event): void {
   const input = event.target as HTMLInputElement
   // An out-of-range entry is not stored; put the field back to what is.
   if (!setTestMaxWorkers(Number(input.value))) input.value = String(testMaxWorkers.value)
+}
+
+function onEvolveReclaimToggle(on: boolean): void {
+  setEvolveReclaimMinutes(on ? EVOLVE_RECLAIM_DEFAULT_MINUTES : 0)
+}
+
+function onEvolveReclaimValue(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const next = Number(input.value)
+  // 0 means never, which the switch expresses; the field only takes a grace.
+  if (next < EVOLVE_RECLAIM_MIN_MINUTES || !setEvolveReclaimMinutes(next)) {
+    input.value = String(evolveReclaimMinutes.value)
+  }
 }
 </script>
 
@@ -62,6 +79,36 @@ function onTestWorkersValue(event: Event): void {
             :value="testMaxWorkers"
             data-testid="limit-test-workers-value"
             @change="onTestWorkersValue"
+          />
+        </template>
+      </SettingRow>
+      <SettingRow
+        data-settings-section="limits-evolve-reclaim"
+        :title="t('settings.limits.evolve-reclaim')"
+        :description="t('settings.limits.evolve-reclaim-hint')"
+      >
+        <template #control>
+          <ToggleSwitch
+            :model-value="evolveReclaimMinutes > 0"
+            :aria-label="t('settings.limits.evolve-reclaim')"
+            data-testid="limit-evolve-reclaim-toggle"
+            @update:model-value="onEvolveReclaimToggle"
+          />
+        </template>
+      </SettingRow>
+      <SettingRow
+        v-if="evolveReclaimMinutes > 0"
+        data-settings-section="limits-evolve-reclaim-value"
+        :title="t('settings.limits.evolve-reclaim-value')"
+      >
+        <template #control>
+          <input
+            type="number"
+            :min="EVOLVE_RECLAIM_MIN_MINUTES"
+            :max="EVOLVE_RECLAIM_MAX_MINUTES"
+            :value="evolveReclaimMinutes"
+            data-testid="limit-evolve-reclaim-value"
+            @change="onEvolveReclaimValue"
           />
         </template>
       </SettingRow>

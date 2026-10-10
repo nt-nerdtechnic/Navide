@@ -404,6 +404,18 @@ class _Store:
             ).fetchall()
         return [_row(r) for r in rows]
 
+    def timed_out_unreclaimed(self, workspace: str) -> list[dict[str, Any]]:
+        """Timed-out runs that still hold a pane nobody tried to reclaim."""
+        db = self.db(workspace, create=False)
+        if db is None:
+            return []
+        with db.transaction() as cur:
+            rows = cur.execute(
+                "SELECT * FROM evolve_runs WHERE status = 'timeout' AND reclaimed IS NULL"
+                " AND pane_id != '' ORDER BY started_at"
+            ).fetchall()
+        return [_row(r) for r in rows]
+
     def count_since(self, workspace: str, since_ms: int) -> int:
         db = self.db(workspace, create=False)
         if db is None:
@@ -567,10 +579,14 @@ def _now_ms() -> int:
 
 
 class EvolveService:
-    def __init__(self, databases: Any, *, host: Any = None, clock: Any = None) -> None:
+    def __init__(self, databases: Any, *, host: Any = None, clock: Any = None, limits: Any = None) -> None:
         self.store = _Store(databases)
         self.host = host or LiveHost()
         self._clock = clock or _now_ms
+        #: Settings → Resource limits reader (the shared UI settings snapshot).
+        self._limits = limits or dict
+        #: Run ids whose timeout reclaim has been started by this process.
+        self._timeout_reclaims: set[str] = set()
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._side: set[asyncio.Task] = set()
@@ -966,7 +982,11 @@ class EvolveService:
         finished = {**run, **fields}
         await self._notice(workspace, "finished", finished)
         await self._changed(workspace)
-        if run["mode"] == "auto" and run["pane_id"]:
+        # A timed-out run whose pane the timeout reclaim already took (or is
+        # taking) is not reclaimed twice: the second attempt would find a
+        # placeholder, be refused every time, and record reclaimed=False.
+        already = run.get("reclaimed") is not None or run_id in self._timeout_reclaims
+        if run["mode"] == "auto" and run["pane_id"] and not already:
             self._spawn(self._reclaim(workspace, run_id, run["pane_id"]))
         return {"ok": True, "run_id": run_id, "status": status}
 
@@ -1021,6 +1041,7 @@ class EvolveService:
             running = await asyncio.to_thread(self.store.running, workspace)
             for run in running:
                 await self._watch_run(workspace, settings, run, now)
+            await self._reclaim_timed_out(workspace, now)
             live = {workspace + "\0" + r["id"] for r in running}
             for key in [k for k in self._idle if k not in live and k.startswith(workspace + "\0")]:
                 del self._idle[key]
@@ -1030,6 +1051,22 @@ class EvolveService:
                 )
                 if settings.get("enabled"):
                     self._spawn(self.start_run(workspace, "catch_up"))
+
+    async def _reclaim_timed_out(self, workspace: str, now: int) -> None:
+        """Reclaim the pane of a run that timed out and never reported, once
+        the grace from Settings → Resource limits has passed (0 = never)."""
+        from . import resource_limits
+
+        grace = resource_limits.evolve_timeout_reclaim_minutes(resource_limits.read_settings(self._limits))
+        if grace <= 0:
+            return
+        for run in await asyncio.to_thread(self.store.timed_out_unreclaimed, workspace):
+            if run["mode"] != "auto" or run["id"] in self._timeout_reclaims:
+                continue
+            if now - int(run.get("ended_at") or now) < grace * 60_000:
+                continue
+            self._timeout_reclaims.add(run["id"])
+            self._spawn(self._reclaim(workspace, run["id"], run["pane_id"]))
 
     async def _watch_run(self, workspace: str, settings: dict[str, Any], run: dict[str, Any], now: int) -> None:
         fields: dict[str, Any] = {}
@@ -1100,7 +1137,7 @@ def get_service() -> EvolveService:
     if _service is None:
         from . import app
 
-        _service = EvolveService(app.workspace_databases)
+        _service = EvolveService(app.workspace_databases, limits=lambda: app.ui_settings_store.get())
     return _service
 
 
