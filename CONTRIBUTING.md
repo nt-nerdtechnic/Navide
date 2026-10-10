@@ -19,27 +19,27 @@ Thank you for your interest in contributing!
 
 ## Asking Questions / 提問
 
-Usage questions and open-ended ideas belong in [GitHub Discussions](https://github.com/nt-nerdtechnic/Navide/discussions) — use **Q&A** for help and **Ideas** for early proposals. Issues are reserved for confirmed bugs and concrete feature requests.
+Usage questions and open-ended ideas belong in [GitHub Discussions](https://github.com/Navide-dev/Navide/discussions) — use **Q&A** for help and **Ideas** for early proposals. Issues are reserved for confirmed bugs and concrete feature requests.
 
-> 使用問題與尚未成形的想法請到 [GitHub Discussions](https://github.com/nt-nerdtechnic/Navide/discussions)（Q&A 提問、Ideas 討論構想）；Issue 保留給已確認的 bug 與具體的功能需求。
+> 使用問題與尚未成形的想法請到 [GitHub Discussions](https://github.com/Navide-dev/Navide/discussions)（Q&A 提問、Ideas 討論構想）；Issue 保留給已確認的 bug 與具體的功能需求。
 
 ---
 
 ## Reporting Bugs / 回報 Bug
 
-Please open a [GitHub Issue](https://github.com/nt-nerdtechnic/Navide/issues/new?template=bug_report.yml) using the bug report template.
+Please open a [GitHub Issue](https://github.com/Navide-dev/Navide/issues/new?template=bug_report.yml) using the bug report template.
 Include a clear description, steps to reproduce, and any relevant logs or screenshots.
 
-> 請開 [GitHub Issue](https://github.com/nt-nerdtechnic/Navide/issues/new?template=bug_report.yml) 並填寫 bug 回報模板，包含重現步驟與相關 log。
+> 請開 [GitHub Issue](https://github.com/Navide-dev/Navide/issues/new?template=bug_report.yml) 並填寫 bug 回報模板，包含重現步驟與相關 log。
 
 ---
 
 ## Requesting Features / 功能建議
 
-Open a [GitHub Issue](https://github.com/nt-nerdtechnic/Navide/issues/new?template=feature_request.yml) with the feature request template.
+Open a [GitHub Issue](https://github.com/Navide-dev/Navide/issues/new?template=feature_request.yml) with the feature request template.
 Describe the problem you are trying to solve and the solution you have in mind.
 
-> 請開 [GitHub Issue](https://github.com/nt-nerdtechnic/Navide/issues/new?template=feature_request.yml) 並描述你想解決的問題與建議的解法。
+> 請開 [GitHub Issue](https://github.com/Navide-dev/Navide/issues/new?template=feature_request.yml) 並描述你想解決的問題與建議的解法。
 
 ---
 
@@ -49,7 +49,7 @@ Describe the problem you are trying to solve and the solution you have in mind.
 for the packaged Plans fixture, and macOS 13+ on Apple silicon, Linux x64, or Windows x64
 
 ```bash
-git clone https://github.com/nt-nerdtechnic/Navide.git
+git clone https://github.com/Navide-dev/Navide.git
 cd Navide
 
 pnpm install
