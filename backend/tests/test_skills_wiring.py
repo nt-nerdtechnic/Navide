@@ -968,11 +968,17 @@ def test_project_dir_never_hides_a_users_own_skills_directory_from_git(tmp_path:
 def test_project_dir_never_writes_the_exclude_of_a_home_directory_repo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A home that is itself a dotfiles repo does not own the workspaces in it."""
+    """A home that is itself a dotfiles repo does not own the workspaces in it.
+
+    The home is the user's real one (``real_home``), not ``$HOME``: that is
+    ignored on Windows, where ``Path.home()`` reads USERPROFILE, and it is a
+    shim's home when Navide was launched from inside a shimmed pane.
+    """
     _skill(tmp_path / "managed", "alpha")
     home = tmp_path / "home"
     (home / ".git" / "info").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(skills_wiring, "real_home", lambda: home)
+    monkeypatch.setenv("HOME", str(tmp_path / "inherited-shim-home"))
     cwd = home / "work" / "project"
     cwd.mkdir(parents=True)
 
