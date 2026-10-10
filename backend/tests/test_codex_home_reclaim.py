@@ -374,3 +374,36 @@ async def test_startup_sweep_reclaims_orphan_codex_homes(
     await app._reclaim_orphan_codex_homes()
 
     assert calls == ["swept"]
+
+
+def test_reclaim_drops_the_hook_trust_it_seeded_for_that_home(tmp_path: Path) -> None:
+    """Seeded ``hooks.state`` rows are keyed on the pane home's path.
+
+    Left behind after the home is gone they can never match again, so
+    ``~/.codex/config.toml`` grew by one set per pane, forever.
+    """
+    import tomllib
+
+    manager, real, _ = _manager(tmp_path)
+    real_key = codex_vendor._toml_escape(str(real / "hooks.json"))
+    (real / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
+    original = (
+        'model = "x"\n\n'
+        f'[hooks.state."{real_key}:stop:0:0"]\n'
+        'trusted_hash = "sha256:aaaa"\n'
+    )
+    (real / "config.toml").write_text(original, encoding="utf-8")
+    keep = manager.prepare(PANE_B)
+    assert manager.seed_hook_trust(keep) == 1
+    home = manager.prepare(PANE_A)
+    assert manager.seed_hook_trust(home) == 1
+
+    assert manager.reclaim(PANE_A) is True
+
+    state = tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))["hooks"]["state"]
+    assert sorted(state) == sorted([
+        f'{real / "hooks.json"}:stop:0:0',
+        f'{keep / "hooks.json"}:stop:0:0',
+    ])
+    assert manager.reclaim(PANE_B) is True
+    assert (real / "config.toml").read_text(encoding="utf-8").rstrip("\n") == original.rstrip("\n")

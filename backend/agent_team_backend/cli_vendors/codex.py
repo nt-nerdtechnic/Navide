@@ -1200,7 +1200,40 @@ class CodexHomeManager:
         if auth.is_file() and not auth.is_symlink():
             return False
         shutil.rmtree(pane_home)
+        self._drop_hook_trust(pane_home)
         return True
+
+    def _drop_hook_trust(self, pane_home: Path) -> None:
+        """Remove the ``hooks.state`` rows `seed_hook_trust` wrote for a home.
+
+        They are keyed on that home's path, so once it is gone they can never
+        match again and would only pile up in the user's config.toml.
+        """
+        config = self.real_home / "config.toml"
+        prefix = f"{pane_home / 'hooks.json'}:"
+        try:
+            text = config.read_text(encoding="utf-8")
+        except OSError:
+            return
+        block = re.compile(
+            r'\n*^\[hooks\.state\."((?:[^"\\]|\\.)*)"\]\s*\n\s*trusted_hash\s*=\s*"[^"\n]*"[ \t]*\n?',
+            flags=re.MULTILINE,
+        )
+        kept = block.sub(
+            lambda m: "\n" if _toml_unescape(m.group(1)).startswith(prefix) else m.group(0),
+            text,
+        )
+        if kept == text:
+            return
+        # Through the resolved path: a dotfiles symlink stays a symlink.
+        target = config.resolve()
+        tmp = target.with_name(target.name + ".navide-tmp")
+        try:
+            tmp.write_text(kept, encoding="utf-8")
+            os.replace(tmp, target)
+        except OSError as err:
+            tmp.unlink(missing_ok=True)
+            log.warning("dropping codex hook trust for %s failed: %s", pane_home, err)
 
     def sweep_orphans(self) -> list[str]:
         """Reclaim every pane home no pane needs. Runs once at backend start.
