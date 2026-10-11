@@ -1267,6 +1267,29 @@ async def test_a_refused_delivery_is_acked_as_failed(broadcasts):
         await link.stop()
 
 
+async def test_an_unconfirmed_delivery_is_acked_as_delivered_with_its_reason(broadcasts):
+    """The text went in but the CLI has not shown it yet. "failed" would make
+    the far sender resend work that may already be running, so the ack says
+    delivered and carries the caveat as its reason."""
+    agent_messaging.register("p1", "reviewer", "/tmp/proj-a", agent_key="claude")
+    server = FakeServer()
+    link = await _connected(server)
+    try:
+        conn = server.opened[0]
+        await conn.push({"type": "messages.pending", "payload": _pending()})
+        await _until(lambda: bool(broadcasts))
+        link.note_delivery_result("pa:mcp:deadbeef", False, '{"key": "delivery-unconfirmed"}')
+        await _until(lambda: bool(conn.acks))
+        assert conn.acks[0] == {
+            "msgKey": "pa:mcp:deadbeef",
+            "state": "delivered",
+            "reason": "delivery-unconfirmed",
+            "paneId": "p1",
+        }
+    finally:
+        await link.stop()
+
+
 async def test_an_unresolvable_target_is_acked_as_failed_without_delivering(broadcasts):
     server = FakeServer()
     link = await _connected(server)

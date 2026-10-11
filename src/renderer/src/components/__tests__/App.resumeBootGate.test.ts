@@ -83,9 +83,28 @@ describe('deliverAgentMessage does not vouch for a resumed CLI on growth alone',
     expect(body).toContain('await cliSignalSince(paneId, typedAt')
   })
 
-  it("fails the message as inject-failed when the CLI never shows it", () => {
+  it('reports it unconfirmed — not failed — when the CLI never shows it', () => {
+    // Failing it told the sender to resend work that may already be running.
     const body = fn(appSource, 'deliverAgentMessage')
     const wait = body.indexOf('await cliSignalSince(paneId, typedAt')
-    expect(body.slice(wait, wait + 600)).toContain("return { failed: { key: 'inject-failed' } }")
+    expect(body.slice(wait, wait + 600)).toContain('return { unconfirmed: true }')
+    expect(body).not.toContain("key: 'inject-failed'")
   })
+
+  it('confirms it later from the user record the transcript reader reports', () => {
+    const consume = appSource.indexOf('if (isInjectedMessageText(ev.text)) {')
+    expect(consume).toBeGreaterThan(-1)
+    expect(appSource.slice(consume, consume + 300)).toContain('messaging.confirmDelivery(ev.pane_id, ev.text)')
+  })
+})
+
+describe('the delivery-unconfirmed reason reads as a caveat in every locale', () => {
+  for (const locale of ['en-US', 'zh-TW', 'ja-JP']) {
+    it(locale, () => {
+      const messages = JSON.parse(readFileSync(
+        resolve(process.cwd(), `packages/plugin-ui/src/foundation/i18n/locales/${locale}.json`), 'utf8',
+      ))
+      expect(messages.msg['reason-delivery-unconfirmed']).toBeTruthy()
+    })
+  }
 })

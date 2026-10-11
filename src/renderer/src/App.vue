@@ -2441,7 +2441,7 @@ async function deliverAgentMessage(
   paneId: string,
   text: string,
   shouldAbort?: () => boolean,
-): Promise<boolean | null | { failed: MessageReason }> {
+): Promise<boolean | null | { failed: MessageReason } | { unconfirmed: true }> {
   // Hold the badge on RUNNING until the recipient's log shows the message
   // consumed — released in the agent.activity handler, fused inside
   // useTerminal. Marked BEFORE the Enter, not after: an idle CLI writes the
@@ -2495,11 +2495,14 @@ async function deliverAgentMessage(
   // A resumed CLI that has not spoken since its spawn may still be repainting,
   // and that repaint is all a growth-only echo or submit observed — the
   // 2026-10-10 open_target message was reported delivered that way while the
-  // repaint had wiped it. Only the CLI reading it back counts then.
+  // repaint had wiped it. Only the CLI reading it back counts then. Without
+  // that it is reported unconfirmed, not failed: the text and its Enter did go
+  // out, and a sender told "failed" resends work that may already be running.
+  // Its user record arriving later still confirms it (messaging.confirmDelivery).
   if (unconfirmed && !injectionVerified(outcome.echo ?? null, outcome.submit ?? null)) {
     if (!(await cliSignalSince(paneId, typedAt, RESUME_CONSUME_WAIT_MS))) {
       paneRefs[paneId]?.clearDeliveredPending?.()
-      return { failed: { key: 'inject-failed' } }
+      return { unconfirmed: true }
     }
   }
   await sleep(1500)
@@ -13785,6 +13788,8 @@ backend.on('agent.activity', (raw) => {
       // delivered-pending — one record releases one delivery.
       if (isInjectedMessageText(ev.text)) {
         paneRefs[ev.pane_id]?.clearDeliveredPending?.()
+        // ...and the late confirmation of one reported unconfirmed.
+        messaging.confirmDelivery(ev.pane_id, ev.text)
       } else {
         setPaneAutoName(ev.pane_id, deriveAutoName(ev.text))
         requestLlmPaneName(ev.pane_id, ev.text)
