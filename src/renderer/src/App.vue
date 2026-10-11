@@ -175,6 +175,7 @@ import {
   SUBMIT_CONFIRM_MS, SUBMIT_SCREEN_LINES, TAIL_MATCH_LEN
 } from './lib/injectEcho'
 import { failedInjectReleasesHold } from './lib/deliveryHold'
+import { resumeBootHold } from './lib/resumeBoot'
 import {
   awaitEcho, awaitInputUnblocked, createInputBlockTracker, needsInputWait, PROBE_SESSION_GONE
 } from './lib/ptyInputBlock'
@@ -2557,6 +2558,16 @@ function messagingHoldKey(
   const parkedOnQuestion = status === 'awaiting' && awaitingKind === 'question'
   if (status !== 'running' && status !== 'idle' && !parkedOnQuestion) return 'not-ready'
   if (pane.injectionStatus === 'scheduled' || pane.kickoffStatus === 'pending') return 'starting'
+  // A resumed CLI reloads its transcript in silence, which the badge reads as
+  // idle; a message typed then is wiped by the resume repaint and the repaint
+  // passes for its echo. Hold until the CLI itself says it is up.
+  if (resumeBootHold({
+    hasPty: !!paneRefs[paneId]?.sessionId,
+    resumeSpawnedAt: Number(paneRefs[paneId]?.resumeSpawnedAt ?? 0),
+    pushReady: pushReadyPanes.has(paneId),
+    lastSignalAt: Math.max(paneTurnCompleteAt.get(paneId) ?? 0, paneLastActiveAt.get(paneId) ?? 0),
+    now: Date.now(),
+  })) return 'starting'
   // The composer may still be holding the text of a push whose submit failed
   // and whose clear was not confirmed. The typed path would paste the next
   // envelope after it and submit both as one. That text only leaves the box
