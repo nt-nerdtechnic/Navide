@@ -29,7 +29,13 @@ describe('messagingHoldKey holds a resuming CLI as starting', () => {
     expect(body).toContain('hasPty: !!')
     expect(body).toContain('resumeSpawnedAt')
     expect(body).toContain('pushReady: pushReadyPanes.has(paneId)')
-    expect(body).toContain('lastSignalAt: Math.max(paneTurnCompleteAt.get(paneId) ?? 0, paneLastActiveAt.get(paneId) ?? 0)')
+    expect(body).toContain('lastSignalAt: paneCliSignalAt(paneId)')
+  })
+
+  it('reads the CLI clock as the newer of its activity and its turn end', () => {
+    const body = fn(appSource, 'paneCliSignalAt')
+    expect(body).toContain('paneTurnCompleteAt.get(paneId)')
+    expect(body).toContain('paneLastActiveAt.get(paneId)')
   })
 
   it("answers 'starting', ahead of the typing and turn holds", () => {
@@ -58,5 +64,28 @@ describe('useTerminal stamps a resume only when it creates the PTY', () => {
 
   it('is exposed to App through the pane ref', () => {
     expect(paneSource).toContain('resumeSpawnedAt: terminal.resumeSpawnedAt')
+  })
+})
+
+describe('deliverAgentMessage does not vouch for a resumed CLI on growth alone', () => {
+  it('collects the echo and submit evidence of the typed message', () => {
+    const body = fn(appSource, 'deliverAgentMessage')
+    expect(body).toContain('echo?: EchoEvidence | null')
+    expect(body).toContain('submit?: SubmitEvidence | null')
+  })
+
+  it('samples the resume state before typing, then waits for the CLI to show it received it', () => {
+    const body = fn(appSource, 'deliverAgentMessage')
+    const sampled = body.indexOf('resumeUnconfirmed({')
+    expect(sampled).toBeGreaterThan(-1)
+    expect(sampled).toBeLessThan(body.indexOf('await injectPane('))
+    expect(body).toContain('injectionVerified(outcome.echo ?? null, outcome.submit ?? null)')
+    expect(body).toContain('await cliSignalSince(paneId, typedAt')
+  })
+
+  it("fails the message as inject-failed when the CLI never shows it", () => {
+    const body = fn(appSource, 'deliverAgentMessage')
+    const wait = body.indexOf('await cliSignalSince(paneId, typedAt')
+    expect(body.slice(wait, wait + 600)).toContain("return { failed: { key: 'inject-failed' } }")
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RESUME_BOOT_MAX_MS, resumeBootHold } from '../resumeBoot'
+import { RESUME_BOOT_MAX_MS, resumeBootHold, resumeUnconfirmed } from '../resumeBoot'
 
 // cli_send(open_target=True) to a reclaimed pane, 2026-10-10 15:11Z
 // (msg_key …:mcp:a938424d0a241404, pane 發版-0.2.18執行). The open spawned
@@ -54,5 +54,20 @@ describe('resumeBootHold — a resumed CLI is not ready because it went quiet', 
     // A resume parked for a hidden tab reads idle on the badge while it has no
     // PTY at all; typing into it can only fail.
     expect(resumeBootHold({ ...base, hasPty: false, resumeSpawnedAt: 0, now: TYPED })).toBe(true)
+  })
+})
+
+describe('resumeUnconfirmed — weak evidence is not enough until the CLI has spoken', () => {
+  it('is unconfirmed after a resume spawn with no CLI signal since', () => {
+    expect(resumeUnconfirmed({ resumeSpawnedAt: SPAWN, lastSignalAt: 0 })).toBe(true)
+    expect(resumeUnconfirmed({ resumeSpawnedAt: SPAWN, lastSignalAt: SPAWN - 1 })).toBe(true)
+  })
+
+  it('is confirmed by a signal newer than the spawn', () => {
+    expect(resumeUnconfirmed({ resumeSpawnedAt: SPAWN, lastSignalAt: SESSION_START })).toBe(false)
+  })
+
+  it('never applies to a fresh spawn or a reattach', () => {
+    expect(resumeUnconfirmed({ resumeSpawnedAt: 0, lastSignalAt: 0 })).toBe(false)
   })
 })

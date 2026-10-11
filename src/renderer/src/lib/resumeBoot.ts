@@ -47,3 +47,16 @@ export function resumeBootHold(input: ResumeBootInput): boolean {
   return input.now - input.resumeSpawnedAt < RESUME_BOOT_MAX_MS
 }
 
+/** How long a typed message to a still-unconfirmed resume waits for the CLI to
+ *  show it received it (its user record, read back as pane activity) before it
+ *  is failed. Generous: the incident pane was under a load average of 80. */
+export const RESUME_CONSUME_WAIT_MS = 30_000
+
+/** True while nothing from the resumed CLI has been seen since its spawn. Past
+ *  the boot hold that still happens — the hold gives up at RESUME_BOOT_MAX_MS,
+ *  and a push channel can be announced while the screen is still repainting —
+ *  and then buffer growth is exactly what the CLI's own repaint produces, so it
+ *  cannot vouch for a delivery. */
+export function resumeUnconfirmed(input: { resumeSpawnedAt: number; lastSignalAt: number }): boolean {
+  return input.resumeSpawnedAt > 0 && input.lastSignalAt <= input.resumeSpawnedAt
+}
